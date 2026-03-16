@@ -1,0 +1,689 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum IdentityStatus {
+  PENDING
+  ACTIVE
+  SUSPENDED
+  REVOKED
+  RECOVERED
+}
+
+enum CredentialStatus {
+  ACTIVE
+  SUSPENDED
+  REVOKED
+  EXPIRED
+}
+
+enum VerificationStatus {
+  PENDING
+  VERIFIED
+  FAILED
+  EXPIRED
+}
+
+enum AuditAction {
+  IDENTITY_CREATED
+  IDENTITY_UPDATED
+  IDENTITY_RECOVERED
+  IDENTITY_SUSPENDED
+  IDENTITY_REVOKED
+  CREDENTIAL_ISSUED
+  CREDENTIAL_VERIFIED
+  CREDENTIAL_REVOKED
+  CREDENTIAL_SUSPENDED
+  VERIFICATION_REQUESTED
+  VERIFICATION_COMPLETED
+  VERIFICATION_FAILED
+  DELEGATION_GRANTED
+  DELEGATION_REVOKED
+  SCHEMA_PROPOSED
+  SCHEMA_APPROVED
+  SCHEMA_REJECTED
+  TEE_ATTESTATION_VERIFIED
+  GOV_API_CALLED
+  AUTH_LOGIN
+  AUTH_LOGOUT
+  AUTH_FAILED
+  RATE_LIMIT_HIT
+  SIGNING_KEY_ROTATED
+}
+
+enum SchemaStatus {
+  DRAFT
+  PROPOSED
+  APPROVED
+  DEPRECATED
+}
+
+model Identity {
+  id              String         @id @default(uuid())
+  did             String         @unique
+  publicKey       String
+  keyVersion      String         @default("v1")
+  keyAlgorithm    String         @default("ES256")
+  verificationMethod String?     // e.g. "did:zeroid:abc#key-1" — DID doc verificationMethod id
+  recoveryHash    String
+  displayName     String?
+  metadata        Json?
+  status          IdentityStatus @default(PENDING)
+  teeAttested     Boolean        @default(false)
+  teeAttestationId String?
+  governmentVerified Boolean     @default(false)
+  governmentRefId String?
+  delegatedTo     String[]
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  credentials     Credential[]
+  verificationsRequested Verification[] @relation("verifier")
+  verificationsSubject   Verification[] @relation("subject")
+  auditLogs       AuditLog[]
+  schemaProposals SchemaGovernance[]
+  sessions        Session[]
+  aiAgents        AIAgent[]
+
+  @@index([did])
+  @@index([status])
+  @@index([createdAt])
+  @@map("identities")
+}
+
+model Credential {
+  id              String           @id @default(uuid())
+  credentialType  String
+  schemaId        String?
+  issuerId        String
+  subjectId       String
+  claims          Json
+  claimsHash      String
+  proof           Json?
+  zkProofId       String?
+  expiresAt       DateTime?
+  status          CredentialStatus @default(ACTIVE)
+  revocationReason String?
+  issuedAt        DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  subject         Identity         @relation(fields: [subjectId], references: [id])
+  schema          SchemaGovernance? @relation(fields: [schemaId], references: [id])
+  verifications   Verification[]
+
+  @@index([subjectId])
+  @@index([issuerId])
+  @@index([credentialType])
+  @@index([status])
+  @@index([expiresAt])
+  @@map("credentials")
+}
+
+model Verification {
+  id              String             @id @default(uuid())
+  credentialId    String?
+  verifierId      String
+  subjectId       String
+  verificationType String
+  zkProofData     Json?
+  teeAttestation  Json?
+  result          VerificationStatus @default(PENDING)
+  resultDetails   Json?
+  requestedAt     DateTime           @default(now())
+  completedAt     DateTime?
+
+  credential      Credential?        @relation(fields: [credentialId], references: [id])
+  verifier        Identity           @relation("verifier", fields: [verifierId], references: [id])
+  subject         Identity           @relation("subject", fields: [subjectId], references: [id])
+
+  @@index([verifierId])
+  @@index([subjectId])
+  @@index([result])
+  @@index([requestedAt])
+  @@map("verifications")
+}
+
+model AuditLog {
+  id              String       @id @default(uuid())
+  identityId      String?
+  action          AuditAction
+  resourceType    String
+  resourceId      String
+  ipAddress       String?
+  userAgent       String?
+  details         Json?
+  previousState   Json?
+  newState        Json?
+  timestamp       DateTime     @default(now())
+
+  identity        Identity?    @relation(fields: [identityId], references: [id])
+
+  @@index([identityId])
+  @@index([action])
+  @@index([resourceType, resourceId])
+  @@index([timestamp])
+  @@map("audit_logs")
+}
+
+model SchemaGovernance {
+  id              String       @id @default(uuid())
+  name            String
+  version         String
+  description     String
+  schemaDefinition Json
+  proposedBy      String
+  status          SchemaStatus @default(DRAFT)
+  approvalVotes   Int          @default(0)
+  rejectionVotes  Int          @default(0)
+  voters          String[]
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  proposer        Identity     @relation(fields: [proposedBy], references: [id])
+  credentials     Credential[]
+
+  @@unique([name, version])
+  @@index([status])
+  @@index([proposedBy])
+  @@map("schema_governance")
+}
+
+model Session {
+  id              String   @id @default(uuid())
+  identityId      String
+  tokenHash       String   @unique
+  ipAddress       String?
+  userAgent       String?
+  expiresAt       DateTime
+  createdAt       DateTime @default(now())
+
+  identity        Identity @relation(fields: [identityId], references: [id])
+
+  @@index([identityId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+model RevocationRegistry {
+  id              String   @id @default(uuid())
+  credentialId    String   @unique
+  revokedAt       DateTime @default(now())
+  reason          String
+  revokedBy       String
+
+  @@index([credentialId])
+  @@index([revokedAt])
+  @@map("revocation_registry")
+}
+
+// ═══════════════════════════════════════════════════════════════
+// ENTERPRISE EXPANSION — AI, Regulatory, Cross-Chain, Agents
+// ═══════════════════════════════════════════════════════════════
+
+enum RiskLevel {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum AgentStatus {
+  ACTIVE
+  SUSPENDED
+  REVOKED
+  PENDING_APPROVAL
+}
+
+enum ComplianceScreeningResult {
+  CLEAR
+  POTENTIAL_MATCH
+  CONFIRMED_MATCH
+  FALSE_POSITIVE
+  UNDER_REVIEW
+}
+
+enum WebhookStatus {
+  ACTIVE
+  PAUSED
+  FAILING
+  DISABLED
+}
+
+enum BridgeStatus {
+  INITIATED
+  SOURCE_CONFIRMED
+  RELAYING
+  DESTINATION_CONFIRMED
+  COMPLETED
+  FAILED
+  ROLLED_BACK
+}
+
+// ── AI Agent Identity ──────────────────────────────────────────
+
+model AIAgent {
+  id              String       @id @default(uuid())
+  agentDid        String       @unique
+  name            String
+  description     String?
+  operatorId      String
+  agentType       String       // llm, autonomous, bot, iot
+  capabilities    Json         // array of capability objects
+  delegationChain Json?        // parent agent chain
+  maxDelegationDepth Int       @default(3)
+  reputationScore Float        @default(50.0)
+  status          AgentStatus  @default(PENDING_APPROVAL)
+  humanApprovalRequired Boolean @default(true)
+  rateLimitPerMinute Int       @default(60)
+  metadata        Json?
+  lastActiveAt    DateTime?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  operator        Identity     @relation(fields: [operatorId], references: [id])
+  agentActions    AgentAction[]
+  agentCredentials AgentCredential[]
+
+  @@index([operatorId])
+  @@index([status])
+  @@index([agentType])
+  @@index([reputationScore])
+  @@map("ai_agents")
+}
+
+model AgentAction {
+  id              String    @id @default(uuid())
+  agentId         String
+  actionType      String    // verify, issue, delegate, transfer
+  targetResource  String?
+  parameters      Json?
+  riskScore       Float     @default(0)
+  requiresApproval Boolean  @default(false)
+  approved        Boolean?
+  approvedBy      String?
+  result          Json?
+  executedAt      DateTime?
+  createdAt       DateTime  @default(now())
+
+  agent           AIAgent   @relation(fields: [agentId], references: [id])
+
+  @@index([agentId])
+  @@index([actionType])
+  @@index([requiresApproval, approved])
+  @@index([createdAt])
+  @@map("agent_actions")
+}
+
+model AgentCredential {
+  id              String    @id @default(uuid())
+  agentId         String
+  credentialType  String
+  capabilities    String[]
+  issuedAt        DateTime  @default(now())
+  expiresAt       DateTime
+  status          CredentialStatus @default(ACTIVE)
+
+  agent           AIAgent   @relation(fields: [agentId], references: [id])
+
+  @@index([agentId])
+  @@index([status])
+  @@map("agent_credentials")
+}
+
+// ── AI Risk & Fraud Detection ─────────────────────────────────
+
+model RiskAssessment {
+  id              String     @id @default(uuid())
+  entityId        String
+  entityType      String     // identity, credential, agent, transaction
+  compositeScore  Float
+  identityRisk    Float?
+  credentialRisk  Float?
+  transactionRisk Float?
+  networkRisk     Float?
+  behavioralRisk  Float?
+  level           RiskLevel
+  factors         Json       // detailed risk factor breakdown
+  explanation     String     // human-readable explanation
+  decision        String     // approve, review, reject, escalate
+  jurisdictionId  String?
+  modelVersion    String     @default("v1.0")
+  assessedAt      DateTime   @default(now())
+
+  alerts          ComplianceAlert[]
+
+  @@index([entityId, entityType])
+  @@index([level])
+  @@index([assessedAt])
+  @@index([decision])
+  @@map("risk_assessments")
+}
+
+model BehavioralProfile {
+  id              String   @id @default(uuid())
+  identityId      String   @unique
+  keystrokeProfile Json?
+  mouseProfile    Json?
+  touchProfile    Json?
+  deviceFingerprints Json?
+  sessionPatterns Json?
+  baselineScore   Float    @default(0)
+  lastUpdated     DateTime @default(now())
+  createdAt       DateTime @default(now())
+
+  @@index([identityId])
+  @@map("behavioral_profiles")
+}
+
+// ── Compliance & Sanctions ────────────────────────────────────
+
+model ComplianceScreening {
+  id              String                   @id @default(uuid())
+  entityId        String
+  entityType      String
+  screeningType   String                   // sanctions, pep, adverse_media
+  queryName       String
+  queryDetails    Json?
+  result          ComplianceScreeningResult @default(UNDER_REVIEW)
+  matchScore      Float?
+  matches         Json?                    // matched list entries
+  reviewedBy      String?
+  reviewNotes     String?
+  listsChecked    String[]                 // OFAC, EU, UN, UAE
+  screenedAt      DateTime                 @default(now())
+  reviewedAt      DateTime?
+  nextScreeningDue DateTime?
+
+  @@index([entityId, entityType])
+  @@index([result])
+  @@index([screenedAt])
+  @@index([nextScreeningDue])
+  @@map("compliance_screenings")
+}
+
+model ComplianceAlert {
+  id              String     @id @default(uuid())
+  assessmentId    String?
+  alertType       String     // sanctions_match, risk_threshold, regulatory_change, suspicious_pattern
+  severity        RiskLevel
+  title           String
+  description     String
+  entityId        String?
+  entityType      String?
+  actionRequired  Boolean    @default(true)
+  acknowledged    Boolean    @default(false)
+  acknowledgedBy  String?
+  resolvedAt      DateTime?
+  metadata        Json?
+  createdAt       DateTime   @default(now())
+
+  assessment      RiskAssessment? @relation(fields: [assessmentId], references: [id])
+
+  @@index([severity])
+  @@index([acknowledged])
+  @@index([createdAt])
+  @@index([alertType])
+  @@map("compliance_alerts")
+}
+
+model JurisdictionCompliance {
+  id              String   @id @default(uuid())
+  identityId      String
+  jurisdictionCode String  // UAE, EU, US, SG, UK, BH, SA
+  requiredCredentials Json
+  heldCredentials Json
+  complianceScore Float    @default(0)
+  gapAnalysis     Json?
+  dataResidency   String?  // where data is stored for this jurisdiction
+  lastAssessed    DateTime @default(now())
+
+  @@unique([identityId, jurisdictionCode])
+  @@index([identityId])
+  @@index([jurisdictionCode])
+  @@index([complianceScore])
+  @@map("jurisdiction_compliance")
+}
+
+model RegulatoryReport {
+  id              String   @id @default(uuid())
+  reportType      String   // SAR, CTR, STR, DSAR, AUDIT
+  jurisdictionCode String
+  entityId        String
+  entityType      String
+  reportData      Json
+  filingReference String?
+  filedAt         DateTime?
+  status          String   @default("draft") // draft, filed, acknowledged, amended
+  generatedBy     String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([reportType])
+  @@index([jurisdictionCode])
+  @@index([entityId])
+  @@index([status])
+  @@map("regulatory_reports")
+}
+
+model ConsentRecord {
+  id              String   @id @default(uuid())
+  identityId      String
+  purpose         String
+  scope           String[]
+  grantedAt       DateTime @default(now())
+  expiresAt       DateTime?
+  revokedAt       DateTime?
+  legalBasis      String   // consent, legitimate_interest, legal_obligation
+  dataCategories  String[]
+  processorId     String?
+
+  @@index([identityId])
+  @@index([purpose])
+  @@index([revokedAt])
+  @@map("consent_records")
+}
+
+// ── Enterprise Integration ────────────────────────────────────
+
+model APIKey {
+  id              String   @id @default(uuid())
+  organizationId  String
+  name            String
+  keyHash         String   @unique
+  keyPrefix       String   // first 8 chars for identification
+  scopes          String[] // credentials.read, verification.write, etc.
+  environment     String   @default("sandbox") // sandbox, production
+  rateLimitPerMinute Int   @default(60)
+  ipAllowlist     String[]
+  lastUsedAt      DateTime?
+  expiresAt       DateTime?
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  organization    Organization @relation(fields: [organizationId], references: [id])
+  usageLogs       APIUsageLog[]
+
+  @@index([keyHash])
+  @@index([organizationId])
+  @@index([isActive])
+  @@map("api_keys")
+}
+
+model Organization {
+  id              String   @id @default(uuid())
+  name            String
+  domain          String?  @unique
+  plan            String   @default("starter") // starter, growth, enterprise
+  jurisdictions   String[]
+  settings        Json?
+  billingEmail    String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  apiKeys         APIKey[]
+  webhooks        Webhook[]
+  members         OrganizationMember[]
+
+  @@index([domain])
+  @@map("organizations")
+}
+
+model OrganizationMember {
+  id              String   @id @default(uuid())
+  organizationId  String
+  identityId      String
+  role            String   @default("viewer") // viewer, operator, admin, compliance_officer, auditor
+  permissions     String[]
+  invitedAt       DateTime @default(now())
+  joinedAt        DateTime?
+
+  organization    Organization @relation(fields: [organizationId], references: [id])
+
+  @@unique([organizationId, identityId])
+  @@index([identityId])
+  @@map("organization_members")
+}
+
+model Webhook {
+  id              String        @id @default(uuid())
+  organizationId  String
+  url             String
+  secret          String
+  events          String[]      // credential.issued, verification.completed, etc.
+  status          WebhookStatus @default(ACTIVE)
+  failureCount    Int           @default(0)
+  lastDeliveredAt DateTime?
+  lastStatusCode  Int?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  organization    Organization  @relation(fields: [organizationId], references: [id])
+  deliveries      WebhookDelivery[]
+
+  @@index([organizationId])
+  @@index([status])
+  @@map("webhooks")
+}
+
+model WebhookDelivery {
+  id              String   @id @default(uuid())
+  webhookId       String
+  eventType       String
+  payload         Json
+  statusCode      Int?
+  responseBody    String?
+  responseTimeMs  Int?
+  attempt         Int      @default(1)
+  success         Boolean  @default(false)
+  deliveredAt     DateTime @default(now())
+  nextRetryAt     DateTime?
+
+  webhook         Webhook  @relation(fields: [webhookId], references: [id])
+
+  @@index([webhookId])
+  @@index([success])
+  @@index([deliveredAt])
+  @@map("webhook_deliveries")
+}
+
+model APIUsageLog {
+  id              String   @id @default(uuid())
+  apiKeyId        String
+  endpoint        String
+  method          String
+  statusCode      Int
+  responseTimeMs  Int
+  requestSize     Int?
+  responseSize    Int?
+  ipAddress       String?
+  timestamp       DateTime @default(now())
+
+  apiKey          APIKey   @relation(fields: [apiKeyId], references: [id])
+
+  @@index([apiKeyId])
+  @@index([endpoint])
+  @@index([timestamp])
+  @@map("api_usage_logs")
+}
+
+// ── Cross-Chain Bridge ────────────────────────────────────────
+
+model BridgeTransaction {
+  id                String       @id @default(uuid())
+  credentialId      String
+  sourceChain       String
+  destinationChain  String
+  sourceAddress     String
+  destinationAddress String
+  credentialHash    String
+  status            BridgeStatus @default(INITIATED)
+  sourceTxHash      String?
+  destinationTxHash String?
+  relayerAddress    String?
+  fee               String?      // in wei
+  fraudProofWindow  DateTime?
+  initiatedAt       DateTime     @default(now())
+  completedAt       DateTime?
+  failureReason     String?
+
+  @@index([credentialId])
+  @@index([sourceChain, destinationChain])
+  @@index([status])
+  @@index([initiatedAt])
+  @@map("bridge_transactions")
+}
+
+// ── Credential Marketplace ────────────────────────────────────
+
+model MarketplaceIssuer {
+  id              String   @id @default(uuid())
+  identityId      String   @unique
+  name            String
+  description     String?
+  website         String?
+  jurisdictions   String[]
+  specializations String[]
+  trustScore      Float    @default(50.0)
+  credentialsIssued Int    @default(0)
+  verificationsCompleted Int @default(0)
+  averageIssuanceTimeSec Int?
+  isVerified      Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  listings        MarketplaceListing[]
+
+  @@index([trustScore])
+  @@index([isVerified])
+  @@map("marketplace_issuers")
+}
+
+model MarketplaceListing {
+  id              String   @id @default(uuid())
+  issuerId        String
+  schemaId        String?
+  credentialType  String
+  title           String
+  description     String
+  price           String?  // in AETH tokens, null = free
+  stakingRequired String?  // minimum stake
+  jurisdictions   String[]
+  requirements    Json?    // what documents/proofs are needed
+  estimatedTimeMin Int?
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  issuer          MarketplaceIssuer @relation(fields: [issuerId], references: [id])
+
+  @@index([issuerId])
+  @@index([credentialType])
+  @@index([isActive])
+  @@map("marketplace_listings")
+}

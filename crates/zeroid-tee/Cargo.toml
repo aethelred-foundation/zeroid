@@ -1,0 +1,12 @@
+[package]
+name = "zeroid-tee"
+version = "0.1.0"
+edition = "2021"
+description = "TEE attestation and secure credential verification for ZeroID"
+license = "Apache-2.0"
+
+[dependencies]
+# No external dependencies — TEE crate is self-contained
+
+[dev-dependencies]
+# No external test dependencies needed
