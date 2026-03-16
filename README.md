@@ -6,7 +6,7 @@
     <a href="https://github.com/aethelred-foundation/zeroid/actions/workflows/ci-cd.yml"><img src="https://img.shields.io/github/actions/workflow/status/aethelred-foundation/zeroid/ci-cd.yml?branch=main&style=flat-square&label=CI" alt="CI"></a>
     <a href="https://codecov.io/gh/aethelred-foundation/zeroid"><img src="https://img.shields.io/codecov/c/github/aethelred-foundation/zeroid?style=flat-square&label=coverage" alt="Coverage"></a>
     <a href="docs/security"><img src="https://img.shields.io/badge/audit-ZK_circuit_%2B_contract_review-informational?style=flat-square" alt="Audit"></a>
-    <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="License"></a>
+    <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square" alt="License"></a>
   </p>
   <p>
     <img src="https://img.shields.io/badge/TypeScript-5.3-3178C6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript">
@@ -16,9 +16,9 @@
     <img src="https://img.shields.io/badge/snarkjs-latest-blueviolet?style=flat-square" alt="snarkjs">
   </p>
   <p>
-    <a href="https://zeroid.aethelred.io">App</a> &middot;
-    <a href="https://docs.aethelred.io/zeroid">Docs</a> &middot;
-    <a href="https://api.zeroid.aethelred.io/docs">API Reference</a> &middot;
+    <a href="https://aethelred.io">App</a> &middot;
+    <a href="https://docs.aethelred.io">Docs</a> &middot;
+    <a href="https://api.aethelred.io/zeroid/docs">API Reference</a> &middot;
     <a href="https://discord.gg/aethelred">Discord</a>
   </p>
 </div>
@@ -434,13 +434,13 @@ GET  /v1/compliance/jurisdiction/:code # Get jurisdiction rules
 ### WebSocket
 
 ```javascript
-const ws = new WebSocket('wss://api.zeroid.aethelred.io/ws');
+const ws = new WebSocket('wss://api.aethelred.io/zeroid/ws');
 
 ws.send(JSON.stringify({ method: 'subscribe', channel: 'credentials', filter: { issuer: 'did:aethelred:...' } }));
 ws.send(JSON.stringify({ method: 'subscribe', channel: 'revocations' }));
 ```
 
-Full reference: [api.zeroid.aethelred.io/docs](https://api.zeroid.aethelred.io/docs)
+Full reference: [api.aethelred.io/zeroid/docs](https://api.aethelred.io/zeroid/docs)
 
 ---
 
@@ -466,7 +466,7 @@ We welcome contributions. Please see the [Contributing Guide](CONTRIBUTING.md) b
 
 ## License
 
-MIT — see [LICENSE](LICENSE) for details.
+Apache 2.0 — see [LICENSE](LICENSE) for details.
 
 ---
 
@@ -477,8 +477,8 @@ MIT — see [LICENSE](LICENSE) for details.
 ---
 
 <p align="center">
-  <a href="https://zeroid.aethelred.io">App</a> &middot;
-  <a href="https://docs.aethelred.io/zeroid">Docs</a> &middot;
+  <a href="https://aethelred.io">App</a> &middot;
+  <a href="https://docs.aethelred.io">Docs</a> &middot;
   <a href="https://discord.gg/aethelred">Discord</a> &middot;
   <a href="https://twitter.com/aethelred">Twitter</a> &middot;
   <a href="mailto:support@aethelred.io">Support</a>
