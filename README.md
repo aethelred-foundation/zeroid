@@ -16,7 +16,7 @@
     <img src="https://img.shields.io/badge/snarkjs-latest-blueviolet?style=flat-square" alt="snarkjs">
   </p>
   <p>
-    <a href="https://aethelred.io">App</a> &middot;
+    <a href="https://zeroid.aethelred.io">App</a> &middot;
     <a href="https://docs.aethelred.io">Docs</a> &middot;
     <a href="https://api.aethelred.io/zeroid/docs">API Reference</a> &middot;
     <a href="https://discord.gg/aethelred">Discord</a>
@@ -477,7 +477,7 @@ Apache 2.0 — see [LICENSE](LICENSE) for details.
 ---
 
 <p align="center">
-  <a href="https://aethelred.io">App</a> &middot;
+  <a href="https://zeroid.aethelred.io">App</a> &middot;
   <a href="https://docs.aethelred.io">Docs</a> &middot;
   <a href="https://discord.gg/aethelred">Discord</a> &middot;
   <a href="https://twitter.com/aethelred">Twitter</a> &middot;
