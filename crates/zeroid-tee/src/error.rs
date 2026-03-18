@@ -1,7 +1,6 @@
 /// Error types for the ZeroID TEE crate.
 ///
 /// All fallible operations in this crate return `Result<T, ZeroIdTeeError>`.
-
 use std::fmt;
 
 /// Top-level error type for the ZeroID TEE crate.
@@ -79,10 +78,7 @@ impl fmt::Display for ZeroIdTeeError {
             Self::CredentialExpired {
                 credential_id,
                 expired_at,
-            } => write!(
-                f,
-                "credential {credential_id} expired at {expired_at}"
-            ),
+            } => write!(f, "credential {credential_id} expired at {expired_at}"),
             Self::InvalidSchema(msg) => write!(f, "invalid schema: {msg}"),
             Self::CryptoError(msg) => write!(f, "crypto error: {msg}"),
             Self::InvalidMerkleProof(msg) => write!(f, "invalid merkle proof: {msg}"),

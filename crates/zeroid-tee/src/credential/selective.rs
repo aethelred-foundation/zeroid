@@ -2,7 +2,6 @@
 ///
 /// Allows a credential holder to reveal only a subset of attributes while
 /// proving membership in the full credential via a Merkle proof.
-
 use crate::crypto::hash::keccak256;
 use crate::crypto::merkle::{build_tree, generate_proof, verify_proof, MerkleProof};
 use crate::error::{Result, ZeroIdTeeError};
@@ -135,9 +134,7 @@ pub fn create_disclosure_proof(
             .iter()
             .position(|(name, _)| name == attr_name)
             .ok_or_else(|| {
-                ZeroIdTeeError::CredentialError(format!(
-                    "attribute not found: {attr_name}"
-                ))
+                ZeroIdTeeError::CredentialError(format!("attribute not found: {attr_name}"))
             })?;
 
         revealed.push(attributes.entries[idx].clone());
@@ -153,10 +150,7 @@ pub fn create_disclosure_proof(
 }
 
 /// Verify a selective disclosure proof against a known credential root.
-pub fn verify_disclosure_proof(
-    expected_root: &[u8; 32],
-    proof: &DisclosureProof,
-) -> Result<bool> {
+pub fn verify_disclosure_proof(expected_root: &[u8; 32], proof: &DisclosureProof) -> Result<bool> {
     if proof.revealed.len() != proof.proofs.len() {
         return Err(ZeroIdTeeError::InvalidMerkleProof(
             "revealed attributes and proofs count mismatch".into(),
@@ -296,9 +290,7 @@ mod tests {
     fn verify_disclosure_proof_all_attributes() {
         let attrs = sample_attributes();
         let root = compute_credential_root(&attrs).unwrap();
-        let req = DisclosureRequest::new(
-            attrs.entries.iter().map(|(n, _)| n.clone()).collect(),
-        );
+        let req = DisclosureRequest::new(attrs.entries.iter().map(|(n, _)| n.clone()).collect());
         let proof = create_disclosure_proof(&attrs, &req).unwrap();
         assert!(verify_disclosure_proof(&root, &proof).unwrap());
     }

@@ -2,7 +2,6 @@
 ///
 /// The [`AttestationVerifier`] checks reports against platform policies and
 /// a set of known-good enclave measurements.
-
 use crate::attestation::policy::AttestationPolicy;
 use crate::attestation::report::{AttestationReport, Platform};
 use crate::error::{Result, ZeroIdTeeError};
@@ -59,11 +58,7 @@ impl AttestationVerifier {
     /// 3. The enclave measurement is in the trusted set (if any are registered).
     ///
     /// On success, returns a copy of the report with `is_valid` set to `true`.
-    pub fn verify(
-        &self,
-        report: &AttestationReport,
-        now: u64,
-    ) -> Result<AttestationReport> {
+    pub fn verify(&self, report: &AttestationReport, now: u64) -> Result<AttestationReport> {
         if report.platform == Platform::Unknown {
             return Err(ZeroIdTeeError::UnsupportedPlatform(
                 "cannot verify Unknown platform".into(),

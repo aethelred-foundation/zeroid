@@ -3,7 +3,6 @@
 /// Provides a simulation of SGX sealing: data is encrypted with an
 /// enclave-derived key so it can be persisted and later restored only by the
 /// same enclave.
-
 use crate::crypto::hash::{keccak256, sha256};
 use crate::error::{Result, ZeroIdTeeError};
 
@@ -45,11 +44,7 @@ fn compute_tag(sealing_key: &[u8; 32], plaintext: &[u8], aad: &[u8]) -> [u8; 32]
 ///
 /// Optional additional authenticated data (`aad`) is integrity-protected but
 /// not encrypted.
-pub fn seal(
-    sealing_key: &[u8; 32],
-    plaintext: &[u8],
-    aad: &[u8],
-) -> SealedData {
+pub fn seal(sealing_key: &[u8; 32], plaintext: &[u8], aad: &[u8]) -> SealedData {
     let ciphertext: Vec<u8> = plaintext
         .iter()
         .enumerate()

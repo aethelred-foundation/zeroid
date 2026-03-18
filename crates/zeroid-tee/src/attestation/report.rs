@@ -2,7 +2,6 @@
 ///
 /// An [`AttestationReport`] represents a signed statement from a TEE platform
 /// asserting properties about an enclave (measurement, operator, etc.).
-
 use crate::crypto::hash::keccak256;
 use crate::error::{Result, ZeroIdTeeError};
 

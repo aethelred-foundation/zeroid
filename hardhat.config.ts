@@ -21,17 +21,17 @@ const config: HardhatUserConfig = {
   networks: {
     hardhat: {
       chainId: 31337,
-    },
+    } as any,
     aethelredTestnet: {
       url: process.env.TESTNET_RPC_URL ?? 'https://rpc.testnet.aethelred.io',
       accounts: process.env.DEPLOYER_KEY ? [process.env.DEPLOYER_KEY] : [],
       chainId: 7001,
-    },
+    } as any,
     aethelredMainnet: {
       url: process.env.MAINNET_RPC_URL ?? 'https://rpc.aethelred.io',
       accounts: process.env.DEPLOYER_KEY ? [process.env.DEPLOYER_KEY] : [],
       chainId: 7000,
-    },
+    } as any,
   },
   gasReporter: {
     enabled: process.env.REPORT_GAS === 'true',

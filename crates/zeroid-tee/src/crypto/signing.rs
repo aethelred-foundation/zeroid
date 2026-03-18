@@ -5,7 +5,6 @@
 /// of this crate; instead we model signatures as hash-based MACs over the
 /// message hash and a private key, which lets us exercise the signing /
 /// verification API surface without pulling in external curve libraries.
-
 use crate::crypto::hash::{keccak256, sha256};
 use crate::error::{Result, ZeroIdTeeError};
 
@@ -59,11 +58,7 @@ pub fn sign(private_key: &PrivateKey, message: &[u8]) -> Signature {
 ///
 /// Returns `Ok(true)` if valid, `Ok(false)` if the signature does not match,
 /// or `Err` if the inputs are malformed.
-pub fn verify(
-    public_key: &PublicKey,
-    message: &[u8],
-    signature: &Signature,
-) -> Result<bool> {
+pub fn verify(public_key: &PublicKey, message: &[u8], signature: &Signature) -> Result<bool> {
     if public_key.0[0] != 0x02 && public_key.0[0] != 0x03 {
         return Err(ZeroIdTeeError::InvalidSignature(
             "invalid public key prefix".into(),

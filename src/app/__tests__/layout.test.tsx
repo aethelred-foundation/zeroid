@@ -1,4 +1,5 @@
 import React from 'react';
+import { jest } from '@jest/globals';
 import { render, screen } from '@testing-library/react';
 
 // Mock next/font/google
