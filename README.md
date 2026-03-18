@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="ZeroID Logo Final.png" alt="ZeroID" width="200" />
+  <img src="README-logo.png" alt="ZeroID" width="200" />
   <h1>ZeroID</h1>
   <p><strong>Self-sovereign identity. Zero-knowledge proofs. TEE-verified credentials.</strong></p>
   <p>
