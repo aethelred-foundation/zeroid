@@ -1,5 +1,5 @@
-"use client";
 // @ts-nocheck
+"use client";
 
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
@@ -204,7 +204,7 @@ export default function VerificationPage() {
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -10 }}
             >
-              <SelectiveDisclosureBuilder />
+              <SelectiveDisclosureBuilder requestedAttributes={[]} onComplete={() => {}} />
             </motion.div>
           )}
 
@@ -249,7 +249,7 @@ export default function VerificationPage() {
                           </div>
                         </div>
                         <div className="flex items-center gap-3">
-                          <StatusBadge status={verification.status} />
+                          <StatusBadge status={verification.status as any} />
                           <span className="text-xs text-[var(--text-tertiary)]">
                             {new Date(
                               verification.timestamp,
@@ -277,6 +277,7 @@ export default function VerificationPage() {
               {selectedProof && (
                 <div className="mt-6">
                   <ProofVisualization
+                    proof={{} as any}
                     proofId={selectedProof}
                     onClose={() => setSelectedProof(null)}
                   />

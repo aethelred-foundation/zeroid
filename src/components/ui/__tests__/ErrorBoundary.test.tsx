@@ -28,7 +28,7 @@ afterAll(() => {
 });
 
 // Component that throws an error
-function ThrowingComponent({ message }: { message?: string }) {
+function ThrowingComponent({ message }: { message?: string }): React.JSX.Element {
   throw new Error(message || "Test error");
 }
 

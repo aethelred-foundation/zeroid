@@ -296,9 +296,9 @@ export default function IdentityPage() {
                         </div>
                       ) : (
                         <div className="space-y-2">
-                          {delegates?.map((delegate) => (
+                          {delegates?.map((d) => (
                             <div
-                              key={delegate.address}
+                              key={d.delegate}
                               className="flex items-center justify-between p-3 bg-[var(--surface-secondary)] rounded-xl"
                             >
                               <div className="flex items-center gap-3">
@@ -307,16 +307,16 @@ export default function IdentityPage() {
                                 </div>
                                 <div>
                                   <code className="text-sm font-mono">
-                                    {delegate.address.slice(0, 6)}...
-                                    {delegate.address.slice(-4)}
+                                    {d.delegate.slice(0, 6)}...
+                                    {d.delegate.slice(-4)}
                                   </code>
                                   <div className="text-xs text-[var(--text-tertiary)]">
-                                    {delegate.permissions.join(", ")}
+                                    Expires: {new Date(Number(d.expiry) * 1000).toLocaleDateString()}
                                   </div>
                                 </div>
                               </div>
                               <button
-                                onClick={() => revokeDelegate(delegate.address)}
+                                onClick={() => revokeDelegate(d.delegate)}
                                 className="btn-ghost btn-sm text-status-revoked"
                               >
                                 Revoke

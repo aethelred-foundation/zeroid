@@ -188,7 +188,64 @@ async function post<T>(
 // Public API Client
 // ============================================================================
 
+// ============================================================================
+// Generic HTTP Methods (used by hooks for arbitrary endpoints)
+// ============================================================================
+
+/**
+ * Generic GET request. Accepts a path and optional query params.
+ * Supports both `get<T>(path)` and `get<T>(path, params)` signatures.
+ */
+async function genericGet<T>(
+  path: string,
+  params?: Record<string, string | number>,
+): Promise<T> {
+  return get<T>(path, params);
+}
+
+/**
+ * Generic POST request. Accepts a path, body, and optional auth token.
+ */
+async function genericPost<T>(
+  path: string,
+  body?: unknown,
+  authToken?: string,
+): Promise<T> {
+  return post<T>(path, body ?? {}, authToken);
+}
+
+/**
+ * Generic PUT request.
+ */
+async function genericPut<T>(
+  path: string,
+  body?: unknown,
+  authToken?: string,
+): Promise<T> {
+  const result = await request<T>("PUT", path, { body, authToken });
+  return result.data as T;
+}
+
+/**
+ * Generic DELETE request.
+ */
+async function genericDel<T = void>(
+  path: string,
+  authToken?: string,
+): Promise<T> {
+  const result = await request<T>("DELETE", path, { authToken });
+  return result.data as T;
+}
+
 export const apiClient = {
+  // --------------------------------------------------------------------------
+  // Generic HTTP Methods
+  // --------------------------------------------------------------------------
+  get: genericGet,
+  post: genericPost,
+  put: genericPut,
+  del: genericDel,
+
   // --------------------------------------------------------------------------
   // Health
   // --------------------------------------------------------------------------

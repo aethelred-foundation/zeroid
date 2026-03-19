@@ -8,7 +8,7 @@
 import { useCallback } from "react";
 import { useAccount, useReadContract, useWriteContract } from "wagmi";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { type Address, type Hash, parseEther } from "viem";
+import { type Address, type Hash } from "viem";
 import { toast } from "sonner";
 import { apiClient } from "@/lib/api/client";
 import {
@@ -207,8 +207,8 @@ export function useVote() {
       return writeContractAsync({
         address: GOVERNANCE_ADDRESS as Address,
         abi: GOVERNANCE_ABI,
-        functionName: fnName,
-        args,
+        functionName: fnName as any,
+        args: args as any,
       });
     },
     onSuccess: () => {

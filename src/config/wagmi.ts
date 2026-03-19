@@ -28,9 +28,9 @@ const WALLETCONNECT_PROJECT_ID =
 
 /** No-op storage adapter for server-side rendering. */
 export const noopStorage = {
-  getItem: () => null as string | null,
-  setItem: () => {},
-  removeItem: () => {},
+  getItem: (_key?: string) => null as string | null,
+  setItem: (_key?: string, _value?: string) => {},
+  removeItem: (_key?: string) => {},
 };
 
 /** SSR-safe storage adapter: uses localStorage in browsers, no-ops on server. */

@@ -327,7 +327,7 @@ describe("IdentityCard", () => {
       ...mockIdentity,
       verificationStatus: "unknown_status" as any,
     };
-    render(<IdentityCard identity={unknownStatusIdentity} />);
+    render(<IdentityCard identity={unknownStatusIdentity as any} />);
     expect(screen.getByText("Unverified")).toBeInTheDocument();
   });
 

@@ -60,7 +60,7 @@ jest.mock("@/components/layout/AppLayout", () => ({
   ),
 }));
 
-const mockUseIdentity = jest.fn(() => ({
+const mockUseIdentity = jest.fn((): any => ({
   identity: {
     did: "did:aethelred:zeroid:0x1234",
     status: "Active",

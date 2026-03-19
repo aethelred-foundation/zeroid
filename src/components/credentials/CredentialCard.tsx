@@ -1,5 +1,5 @@
-"use client";
 // @ts-nocheck
+"use client";
 
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
@@ -29,7 +29,7 @@ interface CredentialCardProps {
 }
 
 const statusConfig: Record<
-  VerificationStatus,
+  string,
   { label: string; badge: string; color: string; icon: typeof ShieldCheck }
 > = {
   verified: {
@@ -92,9 +92,9 @@ export default function CredentialCard({
 }: CredentialCardProps) {
   const [isExpanded, setIsExpanded] = useState(false);
 
-  const status = statusConfig[credential.status] ?? statusConfig.unverified;
+  const status = statusConfig[credential.status as unknown as string] ?? statusConfig.unverified;
   const StatusIcon = status.icon;
-  const SchemaIcon = schemaIcons[credential.schemaType] ?? FileText;
+  const SchemaIcon = schemaIcons[credential.schemaType ?? ''] ?? FileText;
   const expiringSoon = isExpiringSoon(credential.expiresAt);
 
   return (
@@ -117,11 +117,11 @@ export default function CredentialCard({
             className={`
               relative w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0
               ${
-                credential.status === "verified"
+                (credential.status as unknown as string) === "verified"
                   ? "bg-status-verified/10"
-                  : credential.status === "pending"
+                  : (credential.status as unknown as string) === "pending"
                     ? "bg-status-pending/10"
-                    : credential.status === "revoked"
+                    : (credential.status as unknown as string) === "revoked"
                       ? "bg-status-revoked/10"
                       : "bg-[var(--surface-tertiary)]"
               }
@@ -130,16 +130,16 @@ export default function CredentialCard({
             <Shield className={`w-6 h-6 ${status.color}`} />
             <motion.div
               className={`absolute -top-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-[var(--surface-elevated)] ${
-                credential.status === "verified"
+                (credential.status as unknown as string) === "verified"
                   ? "bg-status-verified"
-                  : credential.status === "pending"
+                  : (credential.status as unknown as string) === "pending"
                     ? "bg-status-pending"
-                    : credential.status === "revoked"
+                    : (credential.status as unknown as string) === "revoked"
                       ? "bg-status-revoked"
                       : "bg-[var(--text-tertiary)]"
               }`}
               animate={
-                credential.status === "pending"
+                (credential.status as unknown as string) === "pending"
                   ? { scale: [1, 1.3, 1], opacity: [1, 0.7, 1] }
                   : {}
               }
@@ -248,18 +248,18 @@ export default function CredentialCard({
 
               {/* Actions */}
               <div className="flex items-center gap-2 pt-2">
-                {onVerify && credential.status !== "verified" && (
+                {onVerify && (credential.status as unknown as string) !== "verified" && (
                   <button
-                    onClick={() => onVerify(credential.id)}
+                    onClick={() => onVerify(credential.id ?? credential.hash)}
                     className="btn-primary btn-sm flex-1"
                   >
                     <ShieldCheck className="w-3.5 h-3.5" />
                     Verify
                   </button>
                 )}
-                {onRevoke && credential.status === "verified" && (
+                {onRevoke && (credential.status as unknown as string) === "verified" && (
                   <button
-                    onClick={() => onRevoke(credential.id)}
+                    onClick={() => onRevoke(credential.id ?? credential.hash)}
                     className="btn-danger btn-sm flex-1"
                   >
                     <ShieldAlert className="w-3.5 h-3.5" />

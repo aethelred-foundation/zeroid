@@ -172,9 +172,9 @@ export function useBridgeCredential() {
         abi: BRIDGE_ABI,
         functionName: "inititateBridge",
         args: [
-          request.credentialId,
+          request.credentialId as `0x${string}`,
           BigInt(request.destinationChainId),
-          request.recipientAddress ?? address,
+          (request.recipientAddress ?? address) as `0x${string}`,
           request.preservePrivacy,
         ],
       });

@@ -1,5 +1,5 @@
-"use client";
 // @ts-nocheck
+"use client";
 
 import { useState, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
@@ -84,7 +84,8 @@ function formatTimestamp(ts: string | number): { date: string; time: string } {
 }
 
 export default function AuditTimeline({ did, limit = 50 }: AuditTimelineProps) {
-  const { events, isLoading, error } = useAudit(did, limit);
+  const { auditLog: events, isLoading } = useAudit();
+  const error = null;
   const [filterType, setFilterType] = useState<AuditEventType | "all">("all");
   const [showFilter, setShowFilter] = useState(false);
 

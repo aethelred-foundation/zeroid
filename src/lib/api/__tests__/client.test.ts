@@ -19,7 +19,7 @@ import { ZeroIDApiError, apiClient } from "@/lib/api/client";
 // ---------------------------------------------------------------------------
 
 // Mock withRetry so tests are fast (no real exponential backoff)
-const mockWithRetry = jest.fn(async (fn: () => Promise<unknown>) => fn());
+const mockWithRetry = jest.fn(async (fn: () => Promise<unknown>, _retries?: number) => fn());
 const mockWithTimeout = jest.fn(
   async <T>(promise: Promise<T>, _ms: number, _msg?: string): Promise<T> =>
     promise,
@@ -316,9 +316,9 @@ describe("retry behaviour", () => {
   it("retries GET requests on failure", async () => {
     let attempt = 0;
     mockWithRetry.mockImplementation(
-      async (fn: () => Promise<unknown>, retries: number) => {
+      async (fn: () => Promise<unknown>, retries?: number) => {
         let lastErr: unknown;
-        for (let i = 0; i <= retries; i++) {
+        for (let i = 0; i <= (retries ?? 0); i++) {
           try {
             return await fn();
           } catch (err) {

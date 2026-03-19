@@ -18,11 +18,18 @@ import {
 } from "@/config/constants";
 import type {
   ZKCircuitType,
-  ZKProof,
   ZKProofInput,
   ProofHistoryEntry,
   ProofProgress,
 } from "@/types";
+
+/** Local proof shape produced by snarkjs Groth16 fullProve */
+interface ZKProof {
+  circuitType: ZKCircuitType;
+  proof: unknown;
+  publicSignals: string[];
+  generatedAt: number;
+}
 
 // ---------------------------------------------------------------------------
 // Progress state for proof generation

@@ -107,13 +107,13 @@ export function useSelectAttributes(requestId: string | undefined) {
 
       const userCredentials = await apiClient.get<AttributeSelection[]>(
         `/v1/credentials/${address}/attributes`,
-        { params: { schemaIds: request.requiredCredentials.join(",") } },
+        { schemaIds: request.credentialHash },
       );
 
       return {
         request,
         availableAttributes: userCredentials,
-        requiredAttributes: request.requiredAttributes,
+        requiredAttributes: request.requestedAttributes,
       };
     },
     enabled: !!requestId && !!address,

@@ -1,5 +1,5 @@
-"use client";
 // @ts-nocheck
+"use client";
 
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
@@ -14,10 +14,18 @@ import {
 import type { ZKProof } from "@/types";
 
 interface ProofVisualizationProps {
-  proof: ZKProof;
+  proof: ZKProof & {
+    hash?: string;
+    protocol?: string;
+    curve?: string;
+    createdAt?: string | number;
+    publicInputCount?: number;
+  };
+  proofId?: string;
   isVerifying?: boolean;
   isVerified?: boolean;
   showDetails?: boolean;
+  onClose?: () => void;
 }
 
 export default function ProofVisualization({

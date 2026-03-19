@@ -163,7 +163,7 @@ describe("useRegisterAgent", () => {
       name: "TestBot",
       description: "A test agent",
       ownerAddress: mockAddress,
-      capabilities: [],
+      capabilities: [] as any[],
       delegationPolicy: {
         allowSubDelegation: false,
         maxDepth: 1,
@@ -172,7 +172,7 @@ describe("useRegisterAgent", () => {
         expirySeconds: 3600,
       },
       maxAutonomyLevel: "supervised" as const,
-    };
+    } as any;
 
     await act(async () => {
       await result.current.mutateAsync(config);

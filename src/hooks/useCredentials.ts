@@ -29,7 +29,7 @@ export function useCredentials(status?: CredentialStatus) {
   const { address } = useAccount();
 
   const params = new URLSearchParams();
-  if (status) params.set("status", status);
+  if (status !== undefined) params.set("status", String(status));
 
   return useQuery({
     queryKey: ["credentials", address, status],
@@ -51,8 +51,8 @@ export function useCredentialDetails(credentialId: string | undefined) {
   const { data: onChainHash, isLoading: isHashLoading } = useReadContract({
     address: CREDENTIAL_REGISTRY_ADDRESS as Address,
     abi: CREDENTIAL_REGISTRY_ABI,
-    functionName: "credentialHash",
-    args: credentialId ? [credentialId] : undefined,
+    functionName: "credentialHash" as any,
+    args: credentialId ? [credentialId] as any : undefined,
     query: { enabled: !!credentialId },
   });
 
@@ -72,7 +72,7 @@ export function useCredentialDetails(credentialId: string | undefined) {
     isHashLoading,
     isIntegrityValid:
       apiQuery.data && onChainHash
-        ? apiQuery.data.contentHash === onChainHash
+        ? apiQuery.data.contentHash === (onChainHash as unknown as string)
         : undefined,
   };
 }
@@ -125,8 +125,8 @@ export function useRevokeCredential() {
       const hash = await writeContractAsync({
         address: CREDENTIAL_REGISTRY_ADDRESS as Address,
         abi: CREDENTIAL_REGISTRY_ABI,
-        functionName: "revokeCredential",
-        args: [credentialId],
+        functionName: "revokeCredential" as any,
+        args: [credentialId] as any,
       });
 
       // Notify API to update cached status

@@ -920,7 +920,7 @@ describe("DataTable", () => {
       );
       const th = container.querySelector("th");
       expect(th?.style.width).toBe("200px");
-      const td = container.querySelector("tbody td");
+      const td = container.querySelector("tbody td") as HTMLElement | null;
       expect(td?.style.width).toBe("200px");
     });
 

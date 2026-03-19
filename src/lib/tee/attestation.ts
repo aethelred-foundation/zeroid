@@ -208,8 +208,8 @@ export function isAttestationFresh(attestation: TEEAttestation): boolean {
   if (now >= attestation.expiresAt) return false;
 
   // Check platform-specific freshness
-  const platformKey = TEEPlatform[
-    attestation.platform
+  const platformKey = TEEPlatformLabels[
+    attestation.platform as keyof typeof TEEPlatformLabels
   ] as keyof typeof TEE_FRESHNESS_REQUIREMENTS;
   const maxAge = TEE_FRESHNESS_REQUIREMENTS[platformKey];
   if (maxAge === undefined) return false;
@@ -218,8 +218,8 @@ export function isAttestationFresh(attestation: TEEAttestation): boolean {
   return age <= maxAge;
 }
 
-// Re-export the enum so callers don't need a separate import
-const TEEPlatform = {
+// Platform label lookup
+const TEEPlatformLabels = {
   0: "Unknown",
   1: "IntelSGX",
   2: "AMDSEV",
