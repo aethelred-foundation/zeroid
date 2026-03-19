@@ -51,4 +51,13 @@ const config = {
   reporters: ["default", "jest-junit"],
 };
 
-module.exports = createJestConfig(config);
+const baseConfig = createJestConfig(config);
+
+// next/jest overrides transformIgnorePatterns — we must override it back
+module.exports = async () => {
+  const resolved = await baseConfig();
+  resolved.transformIgnorePatterns = [
+    "node_modules/(?!(snarkjs|circomlib|@rainbow-me|@wagmi|wagmi|viem|@tanstack)/)",
+  ];
+  return resolved;
+};

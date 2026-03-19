@@ -54,3 +54,4 @@ backend/prisma/migrations/
 
 # Vercel
 .vercel
+junit.xml

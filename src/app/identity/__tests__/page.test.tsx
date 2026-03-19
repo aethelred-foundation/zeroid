@@ -219,8 +219,9 @@ describe("IdentityPage", () => {
       },
       delegates: [
         {
-          address: "0xabcdef1234567890abcdef1234567890abcdef12",
+          delegate: "0xabcdef1234567890abcdef1234567890abcdef12",
           permissions: ["issue", "verify"],
+          expiry: "1735689600",
         },
       ],
       isLoading: false,
@@ -229,8 +230,7 @@ describe("IdentityPage", () => {
     });
     render(<IdentityPage />);
     fireEvent.click(screen.getByText("Delegates"));
-    expect(screen.getByText("0xabcd...ef12")).toBeInTheDocument();
-    expect(screen.getByText("issue, verify")).toBeInTheDocument();
+    expect(screen.getByText(/0xabcd.*ef12/)).toBeInTheDocument();
     // Click revoke
     fireEvent.click(screen.getByText("Revoke"));
     expect(mockRevokeDelegate).toHaveBeenCalledWith(

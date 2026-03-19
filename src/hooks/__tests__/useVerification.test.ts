@@ -271,7 +271,8 @@ describe("useVerification hooks", () => {
       const verificationRequest = {
         id: "vreq-1",
         requiredCredentials: ["schema-1"],
-        requiredAttributes: ["fullName", "nationality"],
+        requestedAttributes: ["fullName", "nationality"],
+        credentialHash: "schema-1",
       };
       const userAttributes = [
         { key: "fullName", value: "Alice", credentialHash: "0xcred1" },
