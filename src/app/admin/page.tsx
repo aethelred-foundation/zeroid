@@ -348,8 +348,6 @@ const categoryColors: Record<string, string> = {
   webhooks: "text-identity-chrome",
   team: "text-blue-400",
   audit: "text-identity-steel",
-  team: "text-identity-steel",
-  audit: "text-zero-400",
 };
 
 // ============================================================

@@ -134,7 +134,7 @@ describe("IdentityPage", () => {
   });
 
   it("shows connect wallet message when not connected", () => {
-    mockUseAccount.mockReturnValue({ address: undefined, isConnected: false });
+    mockUseAccount.mockReturnValue({ address: undefined as any, isConnected: false });
     render(<IdentityPage />);
     expect(screen.getByText("Connect Your Wallet")).toBeInTheDocument();
   });

@@ -259,7 +259,7 @@ describe("GovernancePage", () => {
   it("computes pass rate as 0 when proposals array is empty", () => {
     mockUseGovernance.mockReturnValue({
       proposals: [],
-      votingPower: null,
+      votingPower: null as any,
       isLoading: false,
     });
     render(<GovernancePage />);
@@ -294,8 +294,8 @@ describe("GovernancePage", () => {
 
   it("handles null proposals gracefully", () => {
     mockUseGovernance.mockReturnValue({
-      proposals: null,
-      votingPower: null,
+      proposals: null as any,
+      votingPower: null as any,
       isLoading: false,
     });
     render(<GovernancePage />);
@@ -313,7 +313,7 @@ describe("GovernancePage", () => {
 
     // Now change proposals to null — selectedProposal is still '1' in component state
     mockUseGovernance.mockReturnValue({
-      proposals: null,
+      proposals: null as any,
       votingPower: 5000,
       isLoading: false,
     });
