@@ -52,7 +52,7 @@ export function useCredentialDetails(credentialId: string | undefined) {
     address: CREDENTIAL_REGISTRY_ADDRESS as Address,
     abi: CREDENTIAL_REGISTRY_ABI,
     functionName: "credentialHash" as any,
-    args: credentialId ? [credentialId] as any : undefined,
+    args: credentialId ? ([credentialId] as any) : undefined,
     query: { enabled: !!credentialId },
   });
 

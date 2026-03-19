@@ -214,7 +214,9 @@ describe("useVerification hooks", () => {
       await act(async () => {
         await result.current.mutateAsync({
           requestId: "vreq-1",
-          selectedAttributes: [{ key: "fullName", credentialHash: "0xcred1" }] as any,
+          selectedAttributes: [
+            { key: "fullName", credentialHash: "0xcred1" },
+          ] as any,
           proofData: "0xzkproof_data",
         });
       });

@@ -204,7 +204,10 @@ export default function VerificationPage() {
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -10 }}
             >
-              <SelectiveDisclosureBuilder requestedAttributes={[]} onComplete={() => {}} />
+              <SelectiveDisclosureBuilder
+                requestedAttributes={[]}
+                onComplete={() => {}}
+              />
             </motion.div>
           )}
 

@@ -311,7 +311,10 @@ export default function IdentityPage() {
                                     {d.delegate.slice(-4)}
                                   </code>
                                   <div className="text-xs text-[var(--text-tertiary)]">
-                                    Expires: {new Date(Number(d.expiry) * 1000).toLocaleDateString()}
+                                    Expires:{" "}
+                                    {new Date(
+                                      Number(d.expiry) * 1000,
+                                    ).toLocaleDateString()}
                                   </div>
                                 </div>
                               </div>

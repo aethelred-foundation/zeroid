@@ -92,9 +92,11 @@ export default function CredentialCard({
 }: CredentialCardProps) {
   const [isExpanded, setIsExpanded] = useState(false);
 
-  const status = statusConfig[credential.status as unknown as string] ?? statusConfig.unverified;
+  const status =
+    statusConfig[credential.status as unknown as string] ??
+    statusConfig.unverified;
   const StatusIcon = status.icon;
-  const SchemaIcon = schemaIcons[credential.schemaType ?? ''] ?? FileText;
+  const SchemaIcon = schemaIcons[credential.schemaType ?? ""] ?? FileText;
   const expiringSoon = isExpiringSoon(credential.expiresAt);
 
   return (
@@ -248,24 +250,26 @@ export default function CredentialCard({
 
               {/* Actions */}
               <div className="flex items-center gap-2 pt-2">
-                {onVerify && (credential.status as unknown as string) !== "verified" && (
-                  <button
-                    onClick={() => onVerify(credential.id ?? credential.hash)}
-                    className="btn-primary btn-sm flex-1"
-                  >
-                    <ShieldCheck className="w-3.5 h-3.5" />
-                    Verify
-                  </button>
-                )}
-                {onRevoke && (credential.status as unknown as string) === "verified" && (
-                  <button
-                    onClick={() => onRevoke(credential.id ?? credential.hash)}
-                    className="btn-danger btn-sm flex-1"
-                  >
-                    <ShieldAlert className="w-3.5 h-3.5" />
-                    Revoke
-                  </button>
-                )}
+                {onVerify &&
+                  (credential.status as unknown as string) !== "verified" && (
+                    <button
+                      onClick={() => onVerify(credential.id ?? credential.hash)}
+                      className="btn-primary btn-sm flex-1"
+                    >
+                      <ShieldCheck className="w-3.5 h-3.5" />
+                      Verify
+                    </button>
+                  )}
+                {onRevoke &&
+                  (credential.status as unknown as string) === "verified" && (
+                    <button
+                      onClick={() => onRevoke(credential.id ?? credential.hash)}
+                      className="btn-danger btn-sm flex-1"
+                    >
+                      <ShieldAlert className="w-3.5 h-3.5" />
+                      Revoke
+                    </button>
+                  )}
               </div>
             </div>
           </motion.div>
