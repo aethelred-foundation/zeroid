@@ -1,5 +1,12 @@
 import "@testing-library/jest-dom";
 
+// Polyfill ReadableStream for jsdom (needed by streaming / fetch APIs)
+if (typeof ReadableStream === "undefined") {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { ReadableStream } = require("stream/web");
+  global.ReadableStream = ReadableStream;
+}
+
 // Polyfill TextEncoder/TextDecoder for jsdom
 import { TextEncoder, TextDecoder } from "util";
 
