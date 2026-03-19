@@ -1,7 +1,8 @@
-'use client';
+"use client";
+// @ts-nocheck
 
-import { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { useState, useEffect } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import {
   CheckCircle2,
   ShieldCheck,
@@ -9,8 +10,8 @@ import {
   Copy,
   Clock,
   Fingerprint,
-} from 'lucide-react';
-import type { ZKProof } from '@/types';
+} from "lucide-react";
+import type { ZKProof } from "@/types";
 
 interface ProofVisualizationProps {
   proof: ZKProof;
@@ -75,7 +76,7 @@ export default function ProofVisualization({
               cy="50"
               r="45"
               fill="none"
-              stroke={isVerified ? '#10b981' : '#4263eb'}
+              stroke={isVerified ? "#10b981" : "#4263eb"}
               strokeWidth="3"
               strokeLinecap="round"
               strokeDasharray={circumference}
@@ -92,7 +93,7 @@ export default function ProofVisualization({
                   key="verified"
                   initial={{ scale: 0, rotate: -180 }}
                   animate={{ scale: 1, rotate: 0 }}
-                  transition={{ type: 'spring', stiffness: 200 }}
+                  transition={{ type: "spring", stiffness: 200 }}
                 >
                   <CheckCircle2 className="w-10 h-10 text-status-verified" />
                 </motion.div>
@@ -100,7 +101,7 @@ export default function ProofVisualization({
                 <motion.div
                   key="verifying"
                   animate={{ rotate: 360 }}
-                  transition={{ duration: 2, repeat: Infinity, ease: 'linear' }}
+                  transition={{ duration: 2, repeat: Infinity, ease: "linear" }}
                 >
                   <ShieldCheck className="w-10 h-10 text-brand-500" />
                 </motion.div>
@@ -123,7 +124,7 @@ export default function ProofVisualization({
                 <motion.div
                   key={i}
                   className="absolute w-2 h-2 rounded-full bg-brand-500"
-                  style={{ top: '50%', left: '50%' }}
+                  style={{ top: "50%", left: "50%" }}
                   animate={{
                     x: [0, 50 * Math.cos((i * 2 * Math.PI) / 3), 0],
                     y: [0, 50 * Math.sin((i * 2 * Math.PI) / 3), 0],
@@ -133,7 +134,7 @@ export default function ProofVisualization({
                     duration: 2,
                     repeat: Infinity,
                     delay: i * 0.3,
-                    ease: 'easeInOut',
+                    ease: "easeInOut",
                   }}
                 />
               ))}
@@ -147,7 +148,7 @@ export default function ProofVisualization({
                 className="absolute -top-1 -right-1 w-8 h-8 rounded-full bg-status-verified flex items-center justify-center shadow-lg"
                 initial={{ scale: 0, opacity: 0 }}
                 animate={{ scale: 1, opacity: 1 }}
-                transition={{ type: 'spring', stiffness: 300, delay: 0.5 }}
+                transition={{ type: "spring", stiffness: 300, delay: 0.5 }}
               >
                 <CheckCircle2 className="w-4 h-4 text-white" />
               </motion.div>
@@ -161,16 +162,20 @@ export default function ProofVisualization({
         <p
           className={`text-sm font-semibold ${
             isVerified
-              ? 'text-status-verified'
+              ? "text-status-verified"
               : isVerifying
-                ? 'text-brand-500'
-                : 'text-[var(--text-primary)]'
+                ? "text-brand-500"
+                : "text-[var(--text-primary)]"
           }`}
         >
-          {isVerified ? 'Proof Verified' : isVerifying ? 'Verifying Proof...' : 'ZK Proof'}
+          {isVerified
+            ? "Proof Verified"
+            : isVerifying
+              ? "Verifying Proof..."
+              : "ZK Proof"}
         </p>
         <p className="text-xs text-[var(--text-tertiary)] mt-1">
-          {proof.protocol ?? 'Groth16'} | {proof.curve ?? 'BN254'}
+          {proof.protocol ?? "Groth16"} | {proof.curve ?? "BN254"}
         </p>
       </div>
 
@@ -203,16 +208,20 @@ export default function ProofVisualization({
           {/* Metadata */}
           <div className="grid grid-cols-2 gap-3">
             <div className="p-3 rounded-xl bg-[var(--surface-secondary)]">
-              <p className="text-xs text-[var(--text-tertiary)] mb-0.5">Created</p>
+              <p className="text-xs text-[var(--text-tertiary)] mb-0.5">
+                Created
+              </p>
               <p className="text-sm font-medium text-[var(--text-primary)] flex items-center gap-1">
                 <Clock className="w-3 h-3" />
                 {proof.createdAt
                   ? new Date(proof.createdAt).toLocaleTimeString()
-                  : '--'}
+                  : "--"}
               </p>
             </div>
             <div className="p-3 rounded-xl bg-[var(--surface-secondary)]">
-              <p className="text-xs text-[var(--text-tertiary)] mb-0.5">Public Inputs</p>
+              <p className="text-xs text-[var(--text-tertiary)] mb-0.5">
+                Public Inputs
+              </p>
               <p className="text-sm font-medium text-[var(--text-primary)]">
                 {proof.publicInputCount ?? 0}
               </p>

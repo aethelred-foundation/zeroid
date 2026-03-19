@@ -26,22 +26,22 @@ contract EnumerableMapHarness {
     }
 
     function key_at(uint256 index) public view returns (bytes32) {
-        (bytes32 key,) = _map.at(index);
+        (bytes32 key, ) = _map.at(index);
         return key;
     }
 
     function value_at(uint256 index) public view returns (bytes32) {
-        (,bytes32 value) = _map.at(index);
+        (, bytes32 value) = _map.at(index);
         return value;
     }
 
     function tryGet_contains(bytes32 key) public view returns (bool) {
-        (bool contained,) = _map.tryGet(key);
+        (bool contained, ) = _map.tryGet(key);
         return contained;
     }
 
     function tryGet_value(bytes32 key) public view returns (bytes32) {
-        (,bytes32 value) = _map.tryGet(key);
+        (, bytes32 value) = _map.tryGet(key);
         return value;
     }
 

@@ -1,5 +1,5 @@
-import React, { Component, ErrorInfo } from 'react';
-import { AlertTriangle, RefreshCw, Home, Bug } from 'lucide-react';
+import React, { Component, ErrorInfo } from "react";
+import { AlertTriangle, RefreshCw, Home, Bug } from "lucide-react";
 
 // ============================================================
 // Error Boundary Component
@@ -17,7 +17,10 @@ interface ErrorBoundaryState {
   errorId: string | null;
 }
 
-export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
+export class ErrorBoundary extends Component<
+  ErrorBoundaryProps,
+  ErrorBoundaryState
+> {
   constructor(props: ErrorBoundaryProps) {
     super(props);
     this.state = { hasError: false, error: null, errorId: null };
@@ -29,7 +32,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
   }
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    console.error('[ZeroID ErrorBoundary]', {
+    console.error("[ZeroID ErrorBoundary]", {
       error,
       componentStack: errorInfo.componentStack,
       errorId: this.state.errorId,
@@ -43,7 +46,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
   };
 
   handleGoHome = () => {
-    window.location.href = '/';
+    window.location.href = "/";
   };
 
   render() {
@@ -65,7 +68,8 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
               Something went wrong
             </h2>
             <p className="text-sm text-zero-400 mb-2">
-              An unexpected error occurred. This has been logged for investigation.
+              An unexpected error occurred. This has been logged for
+              investigation.
             </p>
 
             {/* Error ID */}
@@ -76,7 +80,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
             )}
 
             {/* Dev-only error details */}
-            {process.env.NODE_ENV === 'development' && this.state.error && (
+            {process.env.NODE_ENV === "development" && this.state.error && (
               <div className="mb-6">
                 <div className="flex items-center gap-1.5 text-xs text-zero-500 mb-1.5">
                   <Bug className="w-3 h-3" />
@@ -86,8 +90,11 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
                   {this.state.error.message}
                   {this.state.error.stack && (
                     <>
-                      {'\n\n'}
-                      {this.state.error.stack.split('\n').slice(1, 5).join('\n')}
+                      {"\n\n"}
+                      {this.state.error.stack
+                        .split("\n")
+                        .slice(1, 5)
+                        .join("\n")}
                     </>
                   )}
                 </pre>

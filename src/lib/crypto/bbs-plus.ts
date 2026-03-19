@@ -106,7 +106,12 @@ export interface VerificationCheck {
 function randomFieldElement(): FieldElement {
   const bytes = new Uint8Array(32);
   crypto.getRandomValues(bytes);
-  return '0x' + Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
+  return (
+    "0x" +
+    Array.from(bytes)
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("")
+  );
 }
 
 /** Hash to field element using SHA-256 */
@@ -122,9 +127,14 @@ async function hashToField(...inputs: string[]): Promise<FieldElement> {
     offset += part.length;
   }
 
-  const hashBuffer = await crypto.subtle.digest('SHA-256', combined);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", combined);
   const hashArray = new Uint8Array(hashBuffer);
-  return '0x' + Array.from(hashArray).map((b) => b.toString(16).padStart(2, '0')).join('');
+  return (
+    "0x" +
+    Array.from(hashArray)
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("")
+  );
 }
 
 /** Compute a domain separation tag */
@@ -143,7 +153,7 @@ async function computeDomainSeparator(
 /** Serialize a map to a deterministic byte string for hashing */
 function serializeMessageMap(messages: Map<number, FieldElement>): string {
   const sorted = Array.from(messages.entries()).sort((a, b) => a[0] - b[0]);
-  return sorted.map(([idx, val]) => `${idx}:${val}`).join('|');
+  return sorted.map(([idx, val]) => `${idx}:${val}`).join("|");
 }
 
 // ============================================================================
@@ -175,23 +185,28 @@ export async function createBlindedCredentialRequest(
   const requestNonce = nonce ?? randomFieldElement();
 
   // Compute Pedersen commitment to blinded messages: C = h0^blinding * prod(h_i^m_i)
-  const commitmentInput = [blindingFactor, ...blindedIndices.map((i) => messages[i])];
+  const commitmentInput = [
+    blindingFactor,
+    ...blindedIndices.map((i) => messages[i]),
+  ];
   const commitment = await hashToField(
-    'BBS+_BLIND_COMMIT',
+    "BBS+_BLIND_COMMIT",
     publicKey.h0,
     ...commitmentInput,
   );
 
   // Proof of knowledge of the blinded messages
-  const challengeInputs = [commitment, requestNonce, serializeMessageMap(
-    new Map(blindedIndices.map((i) => [i, messages[i]])),
-  )];
-  const challenge = await hashToField('BBS+_POK_CHALLENGE', ...challengeInputs);
+  const challengeInputs = [
+    commitment,
+    requestNonce,
+    serializeMessageMap(new Map(blindedIndices.map((i) => [i, messages[i]]))),
+  ];
+  const challenge = await hashToField("BBS+_POK_CHALLENGE", ...challengeInputs);
 
   const responses = await Promise.all(
     blindedIndices.map(async (i) => {
       const r = randomFieldElement();
-      return hashToField('BBS+_POK_RESPONSE', r, messages[i], challenge);
+      return hashToField("BBS+_POK_RESPONSE", r, messages[i], challenge);
     }),
   );
 
@@ -237,19 +252,29 @@ export async function deriveSelectiveDisclosureProof(
   nonce?: FieldElement,
 ): Promise<BBSSelectiveDisclosureProof> {
   if (messages.length !== publicKey.messageCount) {
-    throw new Error('Message count does not match public key');
+    throw new Error("Message count does not match public key");
   }
 
   const proofNonce = nonce ?? randomFieldElement();
-  const domainSep = await computeDomainSeparator(domain, publicKey, messages.length);
+  const domainSep = await computeDomainSeparator(
+    domain,
+    publicKey,
+    messages.length,
+  );
 
   // Randomize signature: A' = A * r1, Abar = A' * (-e) * h0^r1
   const r1 = randomFieldElement();
   const r2 = randomFieldElement();
 
-  const aPrime = await hashToField('BBS+_RANDOMIZE_A', signature.a, r1);
-  const aBar = await hashToField('BBS+_COMPUTE_ABAR', aPrime, signature.e, r1, publicKey.h0);
-  const d = await hashToField('BBS+_COMPUTE_D', aPrime, r2, publicKey.h0);
+  const aPrime = await hashToField("BBS+_RANDOMIZE_A", signature.a, r1);
+  const aBar = await hashToField(
+    "BBS+_COMPUTE_ABAR",
+    aPrime,
+    signature.e,
+    r1,
+    publicKey.h0,
+  );
+  const d = await hashToField("BBS+_COMPUTE_D", aPrime, r2, publicKey.h0);
 
   // Build challenge
   const hiddenIndices = messages
@@ -257,24 +282,33 @@ export async function deriveSelectiveDisclosureProof(
     .filter((i) => !revealIndices.includes(i));
 
   const challengeInput = [
-    aPrime, aBar, d, domainSep, proofNonce,
+    aPrime,
+    aBar,
+    d,
+    domainSep,
+    proofNonce,
     ...revealIndices.map((i) => `${i}:${messages[i]}`),
   ];
-  const proofC = await hashToField('BBS+_PROOF_CHALLENGE', ...challengeInput);
+  const proofC = await hashToField("BBS+_PROOF_CHALLENGE", ...challengeInput);
 
   // Compute responses for hidden messages
   const proofResponses = await Promise.all(
     hiddenIndices.map(async (i) => {
       const randomizer = randomFieldElement();
-      return hashToField('BBS+_PROOF_RESPONSE', randomizer, messages[i], proofC);
+      return hashToField(
+        "BBS+_PROOF_RESPONSE",
+        randomizer,
+        messages[i],
+        proofC,
+      );
     }),
   );
 
   // Include responses for e, r1, r2
   proofResponses.push(
-    await hashToField('BBS+_PROOF_E_RESP', signature.e, proofC, r1),
-    await hashToField('BBS+_PROOF_R1_RESP', r1, proofC),
-    await hashToField('BBS+_PROOF_R2_RESP', r2, proofC),
+    await hashToField("BBS+_PROOF_E_RESP", signature.e, proofC, r1),
+    await hashToField("BBS+_PROOF_R1_RESP", r1, proofC),
+    await hashToField("BBS+_PROOF_R2_RESP", r2, proofC),
   );
 
   const revealedMessages = new Map<number, FieldElement>();
@@ -316,7 +350,13 @@ export async function verifyBBSProof(
     !!proof.d &&
     !!proof.proofC &&
     proof.proofResponses.length > 0;
-  checks.push({ name: 'proof_structure', passed: structureValid, detail: structureValid ? 'All required fields present' : 'Missing proof fields' });
+  checks.push({
+    name: "proof_structure",
+    passed: structureValid,
+    detail: structureValid
+      ? "All required fields present"
+      : "Missing proof fields",
+  });
 
   // Check 2: Domain binding
   const domainSep = await computeDomainSeparator(
@@ -325,26 +365,43 @@ export async function verifyBBSProof(
     publicKey.messageCount,
   );
   const domainValid = domainSep.length > 0;
-  checks.push({ name: 'domain_binding', passed: domainValid, detail: `Domain: ${proof.domain}` });
+  checks.push({
+    name: "domain_binding",
+    passed: domainValid,
+    detail: `Domain: ${proof.domain}`,
+  });
 
   // Check 3: Revealed message indices within bounds
   const indicesValid = proof.revealedIndices.every(
     (i) => i >= 0 && i < publicKey.messageCount,
   );
-  checks.push({ name: 'index_bounds', passed: indicesValid, detail: `${proof.revealedIndices.length} revealed of ${publicKey.messageCount}` });
+  checks.push({
+    name: "index_bounds",
+    passed: indicesValid,
+    detail: `${proof.revealedIndices.length} revealed of ${publicKey.messageCount}`,
+  });
 
   // Check 4: Challenge recomputation
   const challengeInput = [
-    proof.aPrime, proof.aBar, proof.d, domainSep, proof.nonce,
-    ...proof.revealedIndices.map((i) => `${i}:${proof.revealedMessages.get(i)}`),
+    proof.aPrime,
+    proof.aBar,
+    proof.d,
+    domainSep,
+    proof.nonce,
+    ...proof.revealedIndices.map(
+      (i) => `${i}:${proof.revealedMessages.get(i)}`,
+    ),
   ];
-  const recomputedChallenge = await hashToField('BBS+_PROOF_CHALLENGE', ...challengeInput);
+  const recomputedChallenge = await hashToField(
+    "BBS+_PROOF_CHALLENGE",
+    ...challengeInput,
+  );
   const challengeValid = recomputedChallenge === proof.proofC;
-  checks.push({ name: 'challenge_verification', passed: challengeValid });
+  checks.push({ name: "challenge_verification", passed: challengeValid });
 
   // Check 5: Nonce freshness (basic check — nonce should not be empty)
   const nonceValid = !!proof.nonce && proof.nonce.length >= 10;
-  checks.push({ name: 'nonce_freshness', passed: nonceValid });
+  checks.push({ name: "nonce_freshness", passed: nonceValid });
 
   const valid = checks.every((c) => c.passed);
   return { valid, checks };
@@ -372,14 +429,29 @@ export async function generatePresentation(
     String(timestamp),
     ...proofs.map((p) => p.proofC),
   ];
-  const challenge = await hashToField('BBS+_PRESENTATION_CHALLENGE', ...challengeInputs);
+  const challenge = await hashToField(
+    "BBS+_PRESENTATION_CHALLENGE",
+    ...challengeInputs,
+  );
 
   // Optional holder binding proof
   let holderBindingProof: ProofOfKnowledge | undefined;
   if (holderSecret) {
-    const hbCommitment = await hashToField('BBS+_HOLDER_BIND', holderSecret, nonce);
-    const hbChallenge = await hashToField('BBS+_HOLDER_CHALLENGE', hbCommitment, challenge);
-    const hbResponse = await hashToField('BBS+_HOLDER_RESPONSE', holderSecret, hbChallenge);
+    const hbCommitment = await hashToField(
+      "BBS+_HOLDER_BIND",
+      holderSecret,
+      nonce,
+    );
+    const hbChallenge = await hashToField(
+      "BBS+_HOLDER_CHALLENGE",
+      hbCommitment,
+      challenge,
+    );
+    const hbResponse = await hashToField(
+      "BBS+_HOLDER_RESPONSE",
+      holderSecret,
+      hbChallenge,
+    );
 
     holderBindingProof = {
       challenge: hbChallenge,
@@ -406,16 +478,17 @@ export async function generatePresentation(
  * Blind a credential's messages for privacy-preserving storage or transfer.
  * Returns blinded messages and the blinding factors needed to unblind.
  */
-export async function blindCredential(
-  messages: FieldElement[],
-): Promise<{ blindedMessages: FieldElement[]; blindingFactors: FieldElement[] }> {
+export async function blindCredential(messages: FieldElement[]): Promise<{
+  blindedMessages: FieldElement[];
+  blindingFactors: FieldElement[];
+}> {
   const blindingFactors: FieldElement[] = [];
   const blindedMessages: FieldElement[] = [];
 
   for (const message of messages) {
     const factor = randomFieldElement();
     blindingFactors.push(factor);
-    const blinded = await hashToField('BBS+_BLIND_MSG', message, factor);
+    const blinded = await hashToField("BBS+_BLIND_MSG", message, factor);
     blindedMessages.push(blinded);
   }
 
@@ -430,12 +503,12 @@ export async function unblindCredential(
   blindingFactors: FieldElement[],
 ): Promise<FieldElement[]> {
   if (blindedMessages.length !== blindingFactors.length) {
-    throw new Error('Blinded messages and factors length mismatch');
+    throw new Error("Blinded messages and factors length mismatch");
   }
 
   return Promise.all(
     blindedMessages.map((bm, i) =>
-      hashToField('BBS+_UNBLIND_MSG', bm, blindingFactors[i]),
+      hashToField("BBS+_UNBLIND_MSG", bm, blindingFactors[i]),
     ),
   );
 }
@@ -467,10 +540,7 @@ export async function createMultiMessageCommitment(
     commitmentParts.push(`${generators[i]}:${messages[i]}:${factor}`);
   }
 
-  const commitment = await hashToField(
-    'BBS+_MULTI_COMMIT',
-    ...commitmentParts,
-  );
+  const commitment = await hashToField("BBS+_MULTI_COMMIT", ...commitmentParts);
 
   return {
     commitment,
@@ -498,6 +568,6 @@ export async function verifyMultiMessageCommitment(
     );
   }
 
-  const recomputed = await hashToField('BBS+_MULTI_COMMIT', ...commitmentParts);
+  const recomputed = await hashToField("BBS+_MULTI_COMMIT", ...commitmentParts);
   return recomputed === commitment.commitment;
 }

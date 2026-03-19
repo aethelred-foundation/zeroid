@@ -1,8 +1,8 @@
-'use client';
+"use client";
 
-import React, { useState } from 'react';
-import { usePathname } from 'next/navigation';
-import { motion, AnimatePresence } from 'framer-motion';
+import React, { useState } from "react";
+import { usePathname } from "next/navigation";
+import { motion, AnimatePresence } from "framer-motion";
 import {
   Search,
   Bell,
@@ -12,13 +12,13 @@ import {
   AlertTriangle,
   Info,
   CheckCircle,
-} from 'lucide-react';
+} from "lucide-react";
 
-import { WalletButton } from '@/components/ui/WalletButton';
+import { WalletButton } from "@/components/ui/WalletButton";
 
 interface Notification {
   id: string;
-  type: 'success' | 'warning' | 'info';
+  type: "success" | "warning" | "info";
   title: string;
   message: string;
   timestamp: string;
@@ -26,9 +26,30 @@ interface Notification {
 }
 
 const MOCK_NOTIFICATIONS: Notification[] = [
-  { id: '1', type: 'success', title: 'Credential Verified', message: 'Your KYC credential has been verified on-chain.', timestamp: '2 min ago', read: false },
-  { id: '2', type: 'warning', title: 'Credential Expiring', message: 'Your driver license credential expires in 7 days.', timestamp: '1 hr ago', read: false },
-  { id: '3', type: 'info', title: 'Governance Proposal', message: 'New proposal #42 requires your vote.', timestamp: '3 hr ago', read: true },
+  {
+    id: "1",
+    type: "success",
+    title: "Credential Verified",
+    message: "Your KYC credential has been verified on-chain.",
+    timestamp: "2 min ago",
+    read: false,
+  },
+  {
+    id: "2",
+    type: "warning",
+    title: "Credential Expiring",
+    message: "Your driver license credential expires in 7 days.",
+    timestamp: "1 hr ago",
+    read: false,
+  },
+  {
+    id: "3",
+    type: "info",
+    title: "Governance Proposal",
+    message: "New proposal #42 requires your vote.",
+    timestamp: "3 hr ago",
+    read: true,
+  },
 ];
 
 const NOTIFICATION_ICONS: Record<string, React.ReactNode> = {
@@ -38,23 +59,23 @@ const NOTIFICATION_ICONS: Record<string, React.ReactNode> = {
 };
 
 const PAGE_TITLES: Record<string, { title: string; subtitle: string }> = {
-  '/': { title: 'Dashboard', subtitle: 'Overview' },
-  '/identity': { title: 'Identity', subtitle: 'Sovereign ID' },
-  '/credentials': { title: 'Credentials', subtitle: 'Verifiable' },
-  '/verification': { title: 'Verification', subtitle: 'ZK Proofs' },
-  '/governance': { title: 'Governance', subtitle: 'Proposals' },
-  '/audit': { title: 'Audit', subtitle: 'Activity Log' },
-  '/settings': { title: 'Settings', subtitle: 'Configure' },
-  '/ai-compliance': { title: 'AI Compliance', subtitle: 'Intelligence' },
-  '/agent-identity': { title: 'Agent Identity', subtitle: 'AI Agents' },
-  '/analytics': { title: 'Analytics', subtitle: 'Insights' },
-  '/regulatory': { title: 'Regulatory', subtitle: 'Compliance' },
-  '/enterprise': { title: 'Enterprise', subtitle: 'Console' },
-  '/cross-chain': { title: 'Cross-Chain', subtitle: 'Bridge' },
-  '/marketplace': { title: 'Marketplace', subtitle: 'Discover' },
-  '/integrations': { title: 'Integrations', subtitle: 'Connect' },
-  '/revocation': { title: 'Revocation', subtitle: 'Manage' },
-  '/admin': { title: 'Admin', subtitle: 'System' },
+  "/": { title: "Dashboard", subtitle: "Overview" },
+  "/identity": { title: "Identity", subtitle: "Sovereign ID" },
+  "/credentials": { title: "Credentials", subtitle: "Verifiable" },
+  "/verification": { title: "Verification", subtitle: "ZK Proofs" },
+  "/governance": { title: "Governance", subtitle: "Proposals" },
+  "/audit": { title: "Audit", subtitle: "Activity Log" },
+  "/settings": { title: "Settings", subtitle: "Configure" },
+  "/ai-compliance": { title: "AI Compliance", subtitle: "Intelligence" },
+  "/agent-identity": { title: "Agent Identity", subtitle: "AI Agents" },
+  "/analytics": { title: "Analytics", subtitle: "Insights" },
+  "/regulatory": { title: "Regulatory", subtitle: "Compliance" },
+  "/enterprise": { title: "Enterprise", subtitle: "Console" },
+  "/cross-chain": { title: "Cross-Chain", subtitle: "Bridge" },
+  "/marketplace": { title: "Marketplace", subtitle: "Discover" },
+  "/integrations": { title: "Integrations", subtitle: "Connect" },
+  "/revocation": { title: "Revocation", subtitle: "Manage" },
+  "/admin": { title: "Admin", subtitle: "System" },
 };
 
 interface HeaderProps {
@@ -68,7 +89,7 @@ export function Header({ onMenuClick, onSearchClick }: HeaderProps) {
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [notifications, setNotifications] = useState(MOCK_NOTIFICATIONS);
 
-  const pageInfo = PAGE_TITLES[pathname] || { title: 'ZeroID', subtitle: '' };
+  const pageInfo = PAGE_TITLES[pathname] || { title: "ZeroID", subtitle: "" };
   const unreadCount = notifications.filter((n) => !n.read).length;
 
   const markAllRead = () => {
@@ -87,7 +108,10 @@ export function Header({ onMenuClick, onSearchClick }: HeaderProps) {
           <button
             onClick={onMenuClick}
             className="p-2 rounded-xl text-zero-500 hover:text-zero-300 transition-colors lg:hidden"
-            style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.05)' }}
+            style={{
+              background: "rgba(255,255,255,0.03)",
+              border: "1px solid rgba(255,255,255,0.05)",
+            }}
             aria-label="Open menu"
           >
             <Menu className="w-5 h-5" />
@@ -112,14 +136,16 @@ export function Header({ onMenuClick, onSearchClick }: HeaderProps) {
             onClick={onSearchClick}
             className="flex items-center gap-2 px-3.5 py-2 rounded-xl text-zero-500 hover:text-zero-300 transition-all text-[13px] font-body"
             style={{
-              background: 'rgba(255, 255, 255, 0.03)',
-              border: '1px solid rgba(255, 255, 255, 0.05)',
+              background: "rgba(255, 255, 255, 0.03)",
+              border: "1px solid rgba(255, 255, 255, 0.05)",
             }}
           >
             <Search className="w-3.5 h-3.5" />
             <span className="hidden sm:inline text-zero-600">Search</span>
-            <kbd className="hidden sm:flex items-center gap-0.5 px-1.5 py-0.5 text-[9px] text-zero-600 rounded-md font-mono ml-2"
-              style={{ background: 'rgba(255, 255, 255, 0.04)' }}>
+            <kbd
+              className="hidden sm:flex items-center gap-0.5 px-1.5 py-0.5 text-[9px] text-zero-600 rounded-md font-mono ml-2"
+              style={{ background: "rgba(255, 255, 255, 0.04)" }}
+            >
               <Command className="w-2.5 h-2.5" />K
             </kbd>
           </button>
@@ -129,14 +155,17 @@ export function Header({ onMenuClick, onSearchClick }: HeaderProps) {
             <button
               onClick={() => setNotificationsOpen(!notificationsOpen)}
               className="relative p-2.5 rounded-xl text-zero-500 hover:text-zero-300 transition-colors"
-              style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.05)' }}
+              style={{
+                background: "rgba(255,255,255,0.03)",
+                border: "1px solid rgba(255,255,255,0.05)",
+              }}
               aria-label="Notifications"
             >
               <Bell className="w-[16px] h-[16px]" />
               {unreadCount > 0 && (
                 <span
                   className="absolute top-2 right-2 w-[6px] h-[6px] rounded-full bg-chrome-300"
-                  style={{ boxShadow: '0 0 8px rgba(192, 196, 204, 0.5)' }}
+                  style={{ boxShadow: "0 0 8px rgba(192, 196, 204, 0.5)" }}
                 />
               )}
             </button>
@@ -144,7 +173,10 @@ export function Header({ onMenuClick, onSearchClick }: HeaderProps) {
             <AnimatePresence>
               {notificationsOpen && (
                 <>
-                  <div className="fixed inset-0 z-40" onClick={() => setNotificationsOpen(false)} />
+                  <div
+                    className="fixed inset-0 z-40"
+                    onClick={() => setNotificationsOpen(false)}
+                  />
                   <motion.div
                     initial={{ opacity: 0, y: 8, scale: 0.96 }}
                     animate={{ opacity: 1, y: 0, scale: 1 }}
@@ -152,17 +184,26 @@ export function Header({ onMenuClick, onSearchClick }: HeaderProps) {
                     transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
                     className="absolute right-0 top-full mt-3 w-[360px] rounded-2xl overflow-hidden z-50"
                     style={{
-                      background: 'rgba(14, 15, 18, 0.97)',
-                      backdropFilter: 'blur(24px)',
-                      border: '1px solid rgba(255, 255, 255, 0.07)',
-                      boxShadow: '0 24px 64px rgba(0,0,0,0.6)',
+                      background: "rgba(14, 15, 18, 0.97)",
+                      backdropFilter: "blur(24px)",
+                      border: "1px solid rgba(255, 255, 255, 0.07)",
+                      boxShadow: "0 24px 64px rgba(0,0,0,0.6)",
                     }}
                   >
-                    <div className="flex items-center justify-between px-5 py-4"
-                      style={{ borderBottom: '1px solid rgba(255, 255, 255, 0.05)' }}>
-                      <h3 className="text-[14px] font-semibold text-white font-display">Notifications</h3>
+                    <div
+                      className="flex items-center justify-between px-5 py-4"
+                      style={{
+                        borderBottom: "1px solid rgba(255, 255, 255, 0.05)",
+                      }}
+                    >
+                      <h3 className="text-[14px] font-semibold text-white font-display">
+                        Notifications
+                      </h3>
                       {unreadCount > 0 && (
-                        <button onClick={markAllRead} className="text-[11px] text-chrome-400 hover:text-chrome-200 transition-colors font-body">
+                        <button
+                          onClick={markAllRead}
+                          className="text-[11px] text-chrome-400 hover:text-chrome-200 transition-colors font-body"
+                        >
                           Mark all read
                         </button>
                       )}
@@ -170,25 +211,38 @@ export function Header({ onMenuClick, onSearchClick }: HeaderProps) {
 
                     <div className="max-h-80 overflow-y-auto">
                       {notifications.length === 0 ? (
-                        <p className="text-center text-[13px] text-zero-500 py-10 font-body">No notifications</p>
+                        <p className="text-center text-[13px] text-zero-500 py-10 font-body">
+                          No notifications
+                        </p>
                       ) : (
                         notifications.map((n) => (
                           <div
                             key={n.id}
                             className="flex items-start gap-3 px-5 py-3.5 transition-colors hover:bg-white/[0.02]"
                             style={{
-                              borderBottom: '1px solid rgba(255, 255, 255, 0.03)',
-                              background: !n.read ? 'rgba(192, 196, 204, 0.02)' : 'transparent',
+                              borderBottom:
+                                "1px solid rgba(255, 255, 255, 0.03)",
+                              background: !n.read
+                                ? "rgba(192, 196, 204, 0.02)"
+                                : "transparent",
                             }}
                           >
-                            <div className="mt-0.5 shrink-0 w-8 h-8 rounded-xl flex items-center justify-center"
-                              style={{ background: 'rgba(255,255,255,0.04)' }}>
+                            <div
+                              className="mt-0.5 shrink-0 w-8 h-8 rounded-xl flex items-center justify-center"
+                              style={{ background: "rgba(255,255,255,0.04)" }}
+                            >
                               {NOTIFICATION_ICONS[n.type]}
                             </div>
                             <div className="flex-1 min-w-0">
-                              <p className="text-[13px] font-medium text-zero-200 font-body">{n.title}</p>
-                              <p className="text-[11px] text-zero-500 mt-0.5 font-body leading-relaxed">{n.message}</p>
-                              <p className="text-[10px] text-zero-600 mt-1.5 font-mono">{n.timestamp}</p>
+                              <p className="text-[13px] font-medium text-zero-200 font-body">
+                                {n.title}
+                              </p>
+                              <p className="text-[11px] text-zero-500 mt-0.5 font-body leading-relaxed">
+                                {n.message}
+                              </p>
+                              <p className="text-[10px] text-zero-600 mt-1.5 font-mono">
+                                {n.timestamp}
+                              </p>
                             </div>
                             <button
                               onClick={() => dismissNotification(n.id)}

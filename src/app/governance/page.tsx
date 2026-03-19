@@ -1,7 +1,7 @@
-'use client';
+"use client";
 
-import { useState } from 'react';
-import { motion } from 'framer-motion';
+import { useState } from "react";
+import { motion } from "framer-motion";
 import {
   Vote,
   Plus,
@@ -14,33 +14,36 @@ import {
   Shield,
   BarChart3,
   Filter,
-} from 'lucide-react';
-import AppLayout from '@/components/layout/AppLayout';
-import ProposalCard from '@/components/governance/ProposalCard';
-import VotingPanel from '@/components/governance/VotingPanel';
-import { MetricCard } from '@/components/ui/MetricCard';
-import { Modal } from '@/components/ui/Modal';
-import { useGovernance } from '@/hooks/useGovernance';
+} from "lucide-react";
+import AppLayout from "@/components/layout/AppLayout";
+import ProposalCard from "@/components/governance/ProposalCard";
+import VotingPanel from "@/components/governance/VotingPanel";
+import { MetricCard } from "@/components/ui/MetricCard";
+import { Modal } from "@/components/ui/Modal";
+import { useGovernance } from "@/hooks/useGovernance";
 
-type ProposalFilter = 'all' | 'active' | 'passed' | 'rejected' | 'pending';
+type ProposalFilter = "all" | "active" | "passed" | "rejected" | "pending";
 
 export default function GovernancePage() {
   const { proposals, votingPower, isLoading } = useGovernance();
-  const [filter, setFilter] = useState<ProposalFilter>('all');
+  const [filter, setFilter] = useState<ProposalFilter>("all");
   const [selectedProposal, setSelectedProposal] = useState<string | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
 
   const filteredProposals = (proposals ?? []).filter((p: any) => {
-    if (filter === 'all') return true;
+    if (filter === "all") return true;
     return p.status === filter;
   });
 
   const stats = {
     totalProposals: proposals?.length ?? 0,
-    activeProposals: proposals?.filter((p: any) => p.status === 'active').length ?? 0,
+    activeProposals:
+      proposals?.filter((p: any) => p.status === "active").length ?? 0,
     passRate: proposals?.length
       ? Math.round(
-          ((proposals.filter((p: any) => p.status === 'passed').length) / proposals.length) * 100
+          (proposals.filter((p: any) => p.status === "passed").length /
+            proposals.length) *
+            100,
         )
       : 0,
     totalVoters: 342,
@@ -54,7 +57,8 @@ export default function GovernancePage() {
           <div>
             <h1 className="text-2xl font-bold">Governance</h1>
             <p className="text-[var(--text-secondary)] mt-1">
-              Vote on credential schemas, trusted issuers, and protocol parameters
+              Vote on credential schemas, trusted issuers, and protocol
+              parameters
             </p>
           </div>
           <button
@@ -80,7 +84,7 @@ export default function GovernancePage() {
             value={stats.activeProposals}
             icon={<FileText className="w-5 h-5" />}
             iconColor="text-status-pending"
-            trend={{ direction: 'up', value: 'Voting open' }}
+            trend={{ direction: "up", value: "Voting open" }}
           />
           <MetricCard
             label="Pass Rate"
@@ -94,7 +98,7 @@ export default function GovernancePage() {
             value={stats.totalVoters}
             icon={<Users className="w-5 h-5" />}
             iconColor="text-identity-chrome"
-            trend={{ direction: 'up', value: '+18 this month' }}
+            trend={{ direction: "up", value: "+18 this month" }}
           />
         </div>
 
@@ -102,11 +106,11 @@ export default function GovernancePage() {
         <div className="flex items-center gap-2 overflow-x-auto pb-1">
           {(
             [
-              { id: 'all' as const, label: 'All' },
-              { id: 'active' as const, label: 'Active' },
-              { id: 'pending' as const, label: 'Pending' },
-              { id: 'passed' as const, label: 'Passed' },
-              { id: 'rejected' as const, label: 'Rejected' },
+              { id: "all" as const, label: "All" },
+              { id: "active" as const, label: "Active" },
+              { id: "pending" as const, label: "Pending" },
+              { id: "passed" as const, label: "Passed" },
+              { id: "rejected" as const, label: "Rejected" },
             ] as const
           ).map((f) => (
             <button
@@ -114,8 +118,8 @@ export default function GovernancePage() {
               onClick={() => setFilter(f.id)}
               className={`px-4 py-2 rounded-xl text-sm font-medium transition-all whitespace-nowrap ${
                 filter === f.id
-                  ? 'bg-brand-600 text-white'
-                  : 'bg-[var(--surface-secondary)] text-[var(--text-secondary)] hover:bg-[var(--surface-tertiary)]'
+                  ? "bg-brand-600 text-white"
+                  : "bg-[var(--surface-secondary)] text-[var(--text-secondary)] hover:bg-[var(--surface-tertiary)]"
               }`}
             >
               {f.label}
@@ -143,10 +147,12 @@ export default function GovernancePage() {
             ) : (
               <div className="card p-12 text-center">
                 <Vote className="w-12 h-12 mx-auto mb-3 text-[var(--text-tertiary)]" />
-                <h3 className="text-lg font-semibold mb-2">No proposals found</h3>
+                <h3 className="text-lg font-semibold mb-2">
+                  No proposals found
+                </h3>
                 <p className="text-[var(--text-secondary)]">
-                  {filter === 'all'
-                    ? 'Be the first to create a governance proposal'
+                  {filter === "all"
+                    ? "Be the first to create a governance proposal"
                     : `No ${filter} proposals`}
                 </p>
               </div>
@@ -155,9 +161,12 @@ export default function GovernancePage() {
 
           {/* Voting Panel */}
           <div className="col-span-12 lg:col-span-4">
-            {selectedProposal && (proposals ?? []).find((p: any) => p.id === selectedProposal) ? (
+            {selectedProposal &&
+            (proposals ?? []).find((p: any) => p.id === selectedProposal) ? (
               <VotingPanel
-                proposal={proposals!.find((p: any) => p.id === selectedProposal)!}
+                proposal={
+                  proposals!.find((p: any) => p.id === selectedProposal)!
+                }
                 onVoteSubmitted={() => setSelectedProposal(null)}
               />
             ) : (
@@ -171,20 +180,24 @@ export default function GovernancePage() {
 
             {/* Governance Info */}
             <div className="card p-6 mt-4">
-              <h3 className="text-sm font-semibold mb-3">Governance Parameters</h3>
+              <h3 className="text-sm font-semibold mb-3">
+                Governance Parameters
+              </h3>
               <div className="space-y-2.5">
                 {[
-                  { label: 'Quorum', value: '10% of total supply' },
-                  { label: 'Voting Period', value: '7 days' },
-                  { label: 'Timelock', value: '48 hours' },
-                  { label: 'Proposal Threshold', value: '100,000 AETH' },
-                  { label: 'Execution Delay', value: '24 hours' },
+                  { label: "Quorum", value: "10% of total supply" },
+                  { label: "Voting Period", value: "7 days" },
+                  { label: "Timelock", value: "48 hours" },
+                  { label: "Proposal Threshold", value: "100,000 AETH" },
+                  { label: "Execution Delay", value: "24 hours" },
                 ].map((param) => (
                   <div
                     key={param.label}
                     className="flex items-center justify-between text-sm"
                   >
-                    <span className="text-[var(--text-secondary)]">{param.label}</span>
+                    <span className="text-[var(--text-secondary)]">
+                      {param.label}
+                    </span>
                     <span className="font-medium">{param.value}</span>
                   </div>
                 ))}
@@ -203,7 +216,9 @@ export default function GovernancePage() {
       >
         <div className="space-y-4">
           <div>
-            <label className="block text-sm font-medium mb-1.5">Proposal Type</label>
+            <label className="block text-sm font-medium mb-1.5">
+              Proposal Type
+            </label>
             <select className="input">
               <option>Add Credential Schema</option>
               <option>Add Trusted Issuer</option>
@@ -217,7 +232,9 @@ export default function GovernancePage() {
             <input className="input" placeholder="Proposal title..." />
           </div>
           <div>
-            <label className="block text-sm font-medium mb-1.5">Description</label>
+            <label className="block text-sm font-medium mb-1.5">
+              Description
+            </label>
             <textarea
               className="input min-h-[120px] resize-y"
               placeholder="Describe the proposal and its rationale..."

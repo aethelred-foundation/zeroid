@@ -25,9 +25,9 @@ import type {
   VerificationResult,
   Bytes32,
   Address,
-} from '@/types';
-import { API_BASE_URL } from '@/config/constants';
-import { withRetry, withTimeout } from '@/lib/utils';
+} from "@/types";
+import { API_BASE_URL } from "@/config/constants";
+import { withRetry, withTimeout } from "@/lib/utils";
 
 // ============================================================================
 // Configuration
@@ -58,7 +58,7 @@ export class ZeroIDApiError extends Error {
     requestId?: string,
   ) {
     super(message);
-    this.name = 'ZeroIDApiError';
+    this.name = "ZeroIDApiError";
     this.code = code;
     this.statusCode = statusCode;
     this.details = details;
@@ -77,11 +77,14 @@ function generateRequestId(): string {
 }
 
 /** Build full URL from a relative path */
-function buildUrl(path: string, params?: Record<string, string | number>): string {
+function buildUrl(
+  path: string,
+  params?: Record<string, string | number>,
+): string {
   const url = new URL(path, API_BASE_URL);
   if (params) {
     for (const [key, value] of Object.entries(params)) {
-      if (value !== undefined && value !== null && value !== '') {
+      if (value !== undefined && value !== null && value !== "") {
         url.searchParams.set(key, String(value));
       }
     }
@@ -107,13 +110,13 @@ async function request<T>(
   const requestId = generateRequestId();
 
   const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    'X-Request-ID': requestId,
-    Accept: 'application/json',
+    "Content-Type": "application/json",
+    "X-Request-ID": requestId,
+    Accept: "application/json",
   };
 
   if (authToken) {
-    headers['Authorization'] = `Bearer ${authToken}`;
+    headers["Authorization"] = `Bearer ${authToken}`;
   }
 
   const fetchPromise = fetch(buildUrl(path, params), {
@@ -134,7 +137,7 @@ async function request<T>(
   } catch {
     throw new ZeroIDApiError(
       `Failed to parse API response (${response.status})`,
-      'PARSE_ERROR',
+      "PARSE_ERROR",
       response.status,
       undefined,
       requestId,
@@ -142,7 +145,10 @@ async function request<T>(
   }
 
   if (!response.ok || !json.success) {
-    const error = json.error || { code: 'UNKNOWN', message: response.statusText };
+    const error = json.error || {
+      code: "UNKNOWN",
+      message: response.statusText,
+    };
     throw new ZeroIDApiError(
       error.message,
       error.code,
@@ -162,7 +168,7 @@ async function get<T>(
   authToken?: string,
 ): Promise<T> {
   const result = await withRetry(
-    () => request<T>('GET', path, { params, authToken }),
+    () => request<T>("GET", path, { params, authToken }),
     DEFAULT_RETRIES,
   );
   return result.data as T;
@@ -174,7 +180,7 @@ async function post<T>(
   body: unknown,
   authToken?: string,
 ): Promise<T> {
-  const result = await request<T>('POST', path, { body, authToken });
+  const result = await request<T>("POST", path, { body, authToken });
   return result.data as T;
 }
 
@@ -189,7 +195,7 @@ export const apiClient = {
 
   /** Check backend health status */
   async health(): Promise<HealthResponse> {
-    return get<HealthResponse>('/api/v1/health');
+    return get<HealthResponse>("/api/v1/health");
   },
 
   // --------------------------------------------------------------------------
@@ -197,13 +203,27 @@ export const apiClient = {
   // --------------------------------------------------------------------------
 
   /** Fetch an identity profile by DID hash */
-  async getIdentity(didHash: Bytes32, authToken?: string): Promise<IdentityProfile> {
-    return get<IdentityProfile>(`/api/v1/identity/${didHash}`, undefined, authToken);
+  async getIdentity(
+    didHash: Bytes32,
+    authToken?: string,
+  ): Promise<IdentityProfile> {
+    return get<IdentityProfile>(
+      `/api/v1/identity/${didHash}`,
+      undefined,
+      authToken,
+    );
   },
 
   /** Fetch an identity profile by controller address */
-  async getIdentityByAddress(address: Address, authToken?: string): Promise<IdentityProfile | null> {
-    return get<IdentityProfile | null>(`/api/v1/identity/address/${address}`, undefined, authToken);
+  async getIdentityByAddress(
+    address: Address,
+    authToken?: string,
+  ): Promise<IdentityProfile | null> {
+    return get<IdentityProfile | null>(
+      `/api/v1/identity/address/${address}`,
+      undefined,
+      authToken,
+    );
   },
 
   /** Register a new identity */
@@ -211,7 +231,7 @@ export const apiClient = {
     payload: { didUri: string; recoveryHash: Bytes32 },
     authToken?: string,
   ): Promise<{ didHash: Bytes32; txHash: string }> {
-    return post('/api/v1/identity/register', payload, authToken);
+    return post("/api/v1/identity/register", payload, authToken);
   },
 
   // --------------------------------------------------------------------------
@@ -233,8 +253,15 @@ export const apiClient = {
   },
 
   /** Get a single credential by hash */
-  async getCredential(credentialHash: Bytes32, authToken?: string): Promise<Credential> {
-    return get<Credential>(`/api/v1/credentials/${credentialHash}`, undefined, authToken);
+  async getCredential(
+    credentialHash: Bytes32,
+    authToken?: string,
+  ): Promise<Credential> {
+    return get<Credential>(
+      `/api/v1/credentials/${credentialHash}`,
+      undefined,
+      authToken,
+    );
   },
 
   /** List available credential schemas */
@@ -242,10 +269,10 @@ export const apiClient = {
     page = 1,
     pageSize = 20,
   ): Promise<PaginatedResponse<CredentialSchema>> {
-    return get<PaginatedResponse<CredentialSchema>>(
-      '/api/v1/schemas',
-      { page, pageSize },
-    );
+    return get<PaginatedResponse<CredentialSchema>>("/api/v1/schemas", {
+      page,
+      pageSize,
+    });
   },
 
   /** Get a single schema by hash */
@@ -262,7 +289,7 @@ export const apiClient = {
     proof: ZKProof,
     authToken: string,
   ): Promise<ProofVerification> {
-    return post<ProofVerification>('/api/v1/proofs/submit', proof, authToken);
+    return post<ProofVerification>("/api/v1/proofs/submit", proof, authToken);
   },
 
   /** Fetch pending proof requests for the current user */
@@ -271,7 +298,7 @@ export const apiClient = {
     authToken: string,
   ): Promise<ProofRequest[]> {
     return get<ProofRequest[]>(
-      '/api/v1/proofs/requests',
+      "/api/v1/proofs/requests",
       { subject: subjectDidHash },
       authToken,
     );
@@ -295,7 +322,7 @@ export const apiClient = {
 
   /** List available TEE nodes */
   async listTEENodes(): Promise<TEENode[]> {
-    return get<TEENode[]>('/api/v1/tee/nodes');
+    return get<TEENode[]>("/api/v1/tee/nodes");
   },
 
   /** Get attestation details for a specific enclave */
@@ -312,7 +339,7 @@ export const apiClient = {
     },
     authToken: string,
   ): Promise<{ verificationId: string; status: string }> {
-    return post('/api/v1/tee/biometric/verify', payload, authToken);
+    return post("/api/v1/tee/biometric/verify", payload, authToken);
   },
 
   // --------------------------------------------------------------------------
@@ -321,10 +348,17 @@ export const apiClient = {
 
   /** Create a new verification request */
   async createVerificationRequest(
-    payload: Omit<VerificationRequest, 'id' | 'status' | 'createdAt' | 'userConsent'>,
+    payload: Omit<
+      VerificationRequest,
+      "id" | "status" | "createdAt" | "userConsent"
+    >,
     authToken: string,
   ): Promise<VerificationRequest> {
-    return post<VerificationRequest>('/api/v1/verifications', payload, authToken);
+    return post<VerificationRequest>(
+      "/api/v1/verifications",
+      payload,
+      authToken,
+    );
   },
 
   /** Respond to a verification request (consent + proof) */
@@ -349,10 +383,10 @@ export const apiClient = {
     page = 1,
     pageSize = 10,
   ): Promise<PaginatedResponse<Proposal>> {
-    return get<PaginatedResponse<Proposal>>(
-      '/api/v1/governance/proposals',
-      { page, pageSize },
-    );
+    return get<PaginatedResponse<Proposal>>("/api/v1/governance/proposals", {
+      page,
+      pageSize,
+    });
   },
 
   /** Get a single proposal by ID */

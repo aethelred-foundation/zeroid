@@ -6,11 +6,11 @@
  * recommendations, and encrypted report export.
  */
 
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useAccount } from 'wagmi';
-import { toast } from 'sonner';
-import { apiClient } from '@/lib/api/client';
-import type { ISODateString } from '@/types';
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useAccount } from "wagmi";
+import { toast } from "sonner";
+import { apiClient } from "@/lib/api/client";
+import type { ISODateString } from "@/types";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -18,7 +18,7 @@ import type { ISODateString } from '@/types';
 
 export interface PrivacyScore {
   overallScore: number;
-  grade: 'A' | 'B' | 'C' | 'D' | 'F';
+  grade: "A" | "B" | "C" | "D" | "F";
   breakdown: PrivacyBreakdown;
   trend: ScoreTrend;
   lastCalculatedAt: ISODateString;
@@ -35,13 +35,13 @@ export interface PrivacyBreakdown {
 }
 
 export interface ScoreTrend {
-  direction: 'improving' | 'stable' | 'declining';
+  direction: "improving" | "stable" | "declining";
   changePercent: number;
   period: string;
   history: { date: ISODateString; score: number }[];
 }
 
-export type AnalyticsPeriod = '7d' | '30d' | '90d' | '1y' | 'all';
+export type AnalyticsPeriod = "7d" | "30d" | "90d" | "1y" | "all";
 
 export interface CredentialUsageAnalytics {
   period: AnalyticsPeriod;
@@ -114,7 +114,7 @@ export interface DataExposureTimeline {
   totalDisclosures: number;
   uniqueAttributesExposed: number;
   uniqueVerifiers: number;
-  riskLevel: 'low' | 'medium' | 'high';
+  riskLevel: "low" | "medium" | "high";
   highRiskExposures: number;
 }
 
@@ -125,7 +125,7 @@ export interface ExposureEvent {
   verifierName: string;
   credentialSchemaName: string;
   attributesDisclosed: string[];
-  disclosureMethod: 'full' | 'selective' | 'zk_proof';
+  disclosureMethod: "full" | "selective" | "zk_proof";
   purpose: string;
   riskScore: number;
   consentRecordId: string;
@@ -150,7 +150,7 @@ export interface BenchmarkMetric {
 
 export interface PrivacyRecommendation {
   id: string;
-  priority: 'critical' | 'high' | 'medium' | 'low';
+  priority: "critical" | "high" | "medium" | "low";
   category: string;
   title: string;
   description: string;
@@ -162,8 +162,8 @@ export interface PrivacyRecommendation {
 
 export interface AnalyticsExport {
   id: string;
-  format: 'json' | 'csv' | 'pdf';
-  encryptionMethod: 'aes-256-gcm' | 'chacha20-poly1305';
+  format: "json" | "csv" | "pdf";
+  encryptionMethod: "aes-256-gcm" | "chacha20-poly1305";
   downloadUrl: string;
   generatedAt: ISODateString;
   expiresAt: ISODateString;
@@ -176,13 +176,14 @@ export interface AnalyticsExport {
 // ---------------------------------------------------------------------------
 
 const analyticsKeys = {
-  all: ['analytics'] as const,
-  privacy: () => [...analyticsKeys.all, 'privacy'] as const,
-  credentialUsage: (p: AnalyticsPeriod) => [...analyticsKeys.all, 'credential-usage', p] as const,
-  verifiers: () => [...analyticsKeys.all, 'verifiers'] as const,
-  exposure: () => [...analyticsKeys.all, 'exposure'] as const,
-  benchmarks: () => [...analyticsKeys.all, 'benchmarks'] as const,
-  recommendations: () => [...analyticsKeys.all, 'recommendations'] as const,
+  all: ["analytics"] as const,
+  privacy: () => [...analyticsKeys.all, "privacy"] as const,
+  credentialUsage: (p: AnalyticsPeriod) =>
+    [...analyticsKeys.all, "credential-usage", p] as const,
+  verifiers: () => [...analyticsKeys.all, "verifiers"] as const,
+  exposure: () => [...analyticsKeys.all, "exposure"] as const,
+  benchmarks: () => [...analyticsKeys.all, "benchmarks"] as const,
+  recommendations: () => [...analyticsKeys.all, "recommendations"] as const,
 };
 
 // ---------------------------------------------------------------------------
@@ -195,7 +196,7 @@ export function usePrivacyScore() {
   return useQuery({
     queryKey: analyticsKeys.privacy(),
     queryFn: () =>
-      apiClient.get<PrivacyScore>('/api/v1/analytics/privacy-score', {
+      apiClient.get<PrivacyScore>("/api/v1/analytics/privacy-score", {
         owner: address as string,
       }) as unknown as PrivacyScore,
     enabled: !!address,
@@ -207,16 +208,19 @@ export function usePrivacyScore() {
 // Credential Usage
 // ---------------------------------------------------------------------------
 
-export function useCredentialUsageAnalytics(period: AnalyticsPeriod = '30d') {
+export function useCredentialUsageAnalytics(period: AnalyticsPeriod = "30d") {
   const { address } = useAccount();
 
   return useQuery({
     queryKey: analyticsKeys.credentialUsage(period),
     queryFn: () =>
-      apiClient.get<CredentialUsageAnalytics>('/api/v1/analytics/credential-usage', {
-        owner: address as string,
-        period,
-      }) as unknown as CredentialUsageAnalytics,
+      apiClient.get<CredentialUsageAnalytics>(
+        "/api/v1/analytics/credential-usage",
+        {
+          owner: address as string,
+          period,
+        },
+      ) as unknown as CredentialUsageAnalytics,
     enabled: !!address,
     staleTime: 60_000,
   });
@@ -232,7 +236,7 @@ export function useVerifierAnalytics() {
   return useQuery({
     queryKey: analyticsKeys.verifiers(),
     queryFn: () =>
-      apiClient.get<VerifierAnalytics>('/api/v1/analytics/verifiers', {
+      apiClient.get<VerifierAnalytics>("/api/v1/analytics/verifiers", {
         owner: address as string,
       }) as unknown as VerifierAnalytics,
     enabled: !!address,
@@ -250,7 +254,7 @@ export function useDataExposureTimeline() {
   return useQuery({
     queryKey: analyticsKeys.exposure(),
     queryFn: () =>
-      apiClient.get<DataExposureTimeline>('/api/v1/analytics/exposure', {
+      apiClient.get<DataExposureTimeline>("/api/v1/analytics/exposure", {
         owner: address as string,
       }) as unknown as DataExposureTimeline,
     enabled: !!address,
@@ -268,7 +272,7 @@ export function useNetworkBenchmarks() {
   return useQuery({
     queryKey: analyticsKeys.benchmarks(),
     queryFn: () =>
-      apiClient.get<NetworkBenchmarks>('/api/v1/analytics/benchmarks', {
+      apiClient.get<NetworkBenchmarks>("/api/v1/analytics/benchmarks", {
         owner: address as string,
       }) as unknown as NetworkBenchmarks,
     enabled: !!address,
@@ -286,9 +290,12 @@ export function usePrivacyRecommendations() {
   return useQuery({
     queryKey: analyticsKeys.recommendations(),
     queryFn: () =>
-      apiClient.get<PrivacyRecommendation[]>('/api/v1/analytics/recommendations', {
-        owner: address as string,
-      }) as unknown as PrivacyRecommendation[],
+      apiClient.get<PrivacyRecommendation[]>(
+        "/api/v1/analytics/recommendations",
+        {
+          owner: address as string,
+        },
+      ) as unknown as PrivacyRecommendation[],
     enabled: !!address,
     staleTime: 300_000,
   });
@@ -301,23 +308,23 @@ export function usePrivacyRecommendations() {
 export function useExportAnalyticsReport() {
   return useMutation({
     mutationFn: async (params: {
-      format: 'json' | 'csv' | 'pdf';
+      format: "json" | "csv" | "pdf";
       period?: AnalyticsPeriod;
       sections?: string[];
       encryptionKey?: string;
     }): Promise<AnalyticsExport> => {
       return apiClient.post<AnalyticsExport>(
-        '/api/v1/analytics/export',
+        "/api/v1/analytics/export",
         params,
       ) as unknown as AnalyticsExport;
     },
     onSuccess: (data) => {
-      toast.success('Analytics report exported', {
+      toast.success("Analytics report exported", {
         description: `${data.format.toUpperCase()} report (${(data.sizeBytes / 1024).toFixed(1)} KB) — encrypted with ${data.encryptionMethod}`,
       });
     },
     onError: (err: Error) => {
-      toast.error('Export failed', { description: err.message });
+      toast.error("Export failed", { description: err.message });
     },
   });
 }

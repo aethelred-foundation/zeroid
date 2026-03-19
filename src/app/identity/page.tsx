@@ -1,7 +1,7 @@
-'use client';
+"use client";
 
-import { useState } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { useState } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import {
   Shield,
   ShieldCheck,
@@ -19,25 +19,28 @@ import {
   Link2,
   Settings,
   ChevronRight,
-} from 'lucide-react';
-import { useAccount } from 'wagmi';
-import AppLayout from '@/components/layout/AppLayout';
-import IdentityCard from '@/components/identity/IdentityCard';
-import IdentityCreation from '@/components/identity/IdentityCreation';
-import { StatusBadge } from '@/components/ui/StatusBadge';
-import { useIdentity } from '@/hooks/useIdentity';
-import { toast } from 'sonner';
+} from "lucide-react";
+import { useAccount } from "wagmi";
+import AppLayout from "@/components/layout/AppLayout";
+import IdentityCard from "@/components/identity/IdentityCard";
+import IdentityCreation from "@/components/identity/IdentityCreation";
+import { StatusBadge } from "@/components/ui/StatusBadge";
+import { useIdentity } from "@/hooks/useIdentity";
+import { toast } from "sonner";
 
 export default function IdentityPage() {
   const { address, isConnected } = useAccount();
-  const { identity, delegates, isLoading, createIdentity, revokeDelegate } = useIdentity();
+  const { identity, delegates, isLoading, createIdentity, revokeDelegate } =
+    useIdentity();
   const [showCreation, setShowCreation] = useState(false);
-  const [activeTab, setActiveTab] = useState<'overview' | 'delegates' | 'recovery'>('overview');
+  const [activeTab, setActiveTab] = useState<
+    "overview" | "delegates" | "recovery"
+  >("overview");
 
   const copyDID = () => {
     if (identity?.did) {
       navigator.clipboard.writeText(identity.did);
-      toast.success('DID copied to clipboard');
+      toast.success("DID copied to clipboard");
     }
   };
 
@@ -127,17 +130,25 @@ export default function IdentityPage() {
               <div className="border-b border-[var(--border-primary)]">
                 <div className="flex gap-0">
                   {[
-                    { id: 'overview' as const, label: 'Overview', icon: Shield },
-                    { id: 'delegates' as const, label: 'Delegates', icon: Users },
-                    { id: 'recovery' as const, label: 'Recovery', icon: Key },
+                    {
+                      id: "overview" as const,
+                      label: "Overview",
+                      icon: Shield,
+                    },
+                    {
+                      id: "delegates" as const,
+                      label: "Delegates",
+                      icon: Users,
+                    },
+                    { id: "recovery" as const, label: "Recovery", icon: Key },
                   ].map((tab) => (
                     <button
                       key={tab.id}
                       onClick={() => setActiveTab(tab.id)}
                       className={`flex items-center gap-2 px-5 py-4 text-sm font-medium border-b-2 transition-colors ${
                         activeTab === tab.id
-                          ? 'border-brand-500 text-brand-500'
-                          : 'border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+                          ? "border-brand-500 text-brand-500"
+                          : "border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
                       }`}
                     >
                       <tab.icon className="w-4 h-4" />
@@ -149,7 +160,7 @@ export default function IdentityPage() {
 
               <div className="p-6">
                 <AnimatePresence mode="wait">
-                  {activeTab === 'overview' && (
+                  {activeTab === "overview" && (
                     <motion.div
                       key="overview"
                       initial={{ opacity: 0 }}
@@ -165,7 +176,7 @@ export default function IdentityPage() {
                         <div className="mt-1.5 flex items-center gap-2 p-3 bg-[var(--surface-secondary)] rounded-xl">
                           <Hash className="w-4 h-4 text-brand-500 shrink-0" />
                           <code className="text-sm font-mono truncate flex-1">
-                            {identity?.did ?? 'did:aethelred:zeroid:0x...'}
+                            {identity?.did ?? "did:aethelred:zeroid:0x..."}
                           </code>
                           <button
                             onClick={copyDID}
@@ -186,31 +197,37 @@ export default function IdentityPage() {
                       <div className="grid grid-cols-2 gap-4">
                         {[
                           {
-                            label: 'Status',
-                            value: (identity as any)?.status ?? 'Active',
+                            label: "Status",
+                            value: (identity as any)?.status ?? "Active",
                             badge: true,
                           },
                           {
-                            label: 'Created',
+                            label: "Created",
                             value: (identity as any)?.createdAt
-                              ? new Date((identity as any).createdAt).toLocaleDateString()
-                              : 'N/A',
+                              ? new Date(
+                                  (identity as any).createdAt,
+                                ).toLocaleDateString()
+                              : "N/A",
                           },
                           {
-                            label: 'Credentials',
-                            value: ((identity as any)?.credentialCount ?? 0).toString(),
+                            label: "Credentials",
+                            value: (
+                              (identity as any)?.credentialCount ?? 0
+                            ).toString(),
                           },
                           {
-                            label: 'Verifications',
-                            value: ((identity as any)?.verificationCount ?? 0).toString(),
+                            label: "Verifications",
+                            value: (
+                              (identity as any)?.verificationCount ?? 0
+                            ).toString(),
                           },
                           {
-                            label: 'TEE Attestation',
-                            value: 'Intel SGX',
+                            label: "TEE Attestation",
+                            value: "Intel SGX",
                           },
                           {
-                            label: 'Last Active',
-                            value: 'Just now',
+                            label: "Last Active",
+                            value: "Just now",
                           },
                         ].map((item) => (
                           <div key={item.label} className="space-y-1">
@@ -220,7 +237,9 @@ export default function IdentityPage() {
                             {item.badge ? (
                               <StatusBadge status="verified" />
                             ) : (
-                              <div className="text-sm font-medium">{item.value}</div>
+                              <div className="text-sm font-medium">
+                                {item.value}
+                              </div>
                             )}
                           </div>
                         ))}
@@ -236,7 +255,8 @@ export default function IdentityPage() {
                             </div>
                             <div className="text-xs text-[var(--text-tertiary)]">
                               Identity registered on Aethelred L1 at block #
-                              {(identity as any)?.registrationBlock ?? '4,521,089'}
+                              {(identity as any)?.registrationBlock ??
+                                "4,521,089"}
                             </div>
                           </div>
                         </div>
@@ -244,7 +264,7 @@ export default function IdentityPage() {
                     </motion.div>
                   )}
 
-                  {activeTab === 'delegates' && (
+                  {activeTab === "delegates" && (
                     <motion.div
                       key="delegates"
                       initial={{ opacity: 0 }}
@@ -254,7 +274,8 @@ export default function IdentityPage() {
                     >
                       <div className="flex items-center justify-between mb-2">
                         <p className="text-sm text-[var(--text-secondary)]">
-                          Delegates can act on your behalf for specific credential operations.
+                          Delegates can act on your behalf for specific
+                          credential operations.
                         </p>
                         <button className="btn-primary btn-sm">
                           <UserPlus className="w-4 h-4" />
@@ -265,9 +286,12 @@ export default function IdentityPage() {
                       {(delegates ?? []).length === 0 ? (
                         <div className="text-center py-12">
                           <Users className="w-12 h-12 mx-auto mb-3 text-[var(--text-tertiary)]" />
-                          <p className="text-[var(--text-secondary)]">No delegates configured</p>
+                          <p className="text-[var(--text-secondary)]">
+                            No delegates configured
+                          </p>
                           <p className="text-xs text-[var(--text-tertiary)] mt-1">
-                            Add trusted addresses that can manage credentials on your behalf
+                            Add trusted addresses that can manage credentials on
+                            your behalf
                           </p>
                         </div>
                       ) : (
@@ -283,10 +307,11 @@ export default function IdentityPage() {
                                 </div>
                                 <div>
                                   <code className="text-sm font-mono">
-                                    {delegate.address.slice(0, 6)}...{delegate.address.slice(-4)}
+                                    {delegate.address.slice(0, 6)}...
+                                    {delegate.address.slice(-4)}
                                   </code>
                                   <div className="text-xs text-[var(--text-tertiary)]">
-                                    {delegate.permissions.join(', ')}
+                                    {delegate.permissions.join(", ")}
                                   </div>
                                 </div>
                               </div>
@@ -303,7 +328,7 @@ export default function IdentityPage() {
                     </motion.div>
                   )}
 
-                  {activeTab === 'recovery' && (
+                  {activeTab === "recovery" && (
                     <motion.div
                       key="recovery"
                       initial={{ opacity: 0 }}
@@ -319,21 +344,43 @@ export default function IdentityPage() {
                               Social Recovery Configured
                             </div>
                             <div className="text-xs text-[var(--text-secondary)] mt-1">
-                              3 of 5 guardians required to recover your identity.
-                              Last verified 14 days ago.
+                              3 of 5 guardians required to recover your
+                              identity. Last verified 14 days ago.
                             </div>
                           </div>
                         </div>
                       </div>
 
                       <div className="space-y-3">
-                        <h3 className="text-sm font-semibold">Recovery Guardians</h3>
+                        <h3 className="text-sm font-semibold">
+                          Recovery Guardians
+                        </h3>
                         {[
-                          { name: 'Guardian 1', status: 'active', type: 'Wallet' },
-                          { name: 'Guardian 2', status: 'active', type: 'Wallet' },
-                          { name: 'Guardian 3', status: 'active', type: 'Hardware Key' },
-                          { name: 'Guardian 4', status: 'active', type: 'Wallet' },
-                          { name: 'Guardian 5', status: 'pending', type: 'Email' },
+                          {
+                            name: "Guardian 1",
+                            status: "active",
+                            type: "Wallet",
+                          },
+                          {
+                            name: "Guardian 2",
+                            status: "active",
+                            type: "Wallet",
+                          },
+                          {
+                            name: "Guardian 3",
+                            status: "active",
+                            type: "Hardware Key",
+                          },
+                          {
+                            name: "Guardian 4",
+                            status: "active",
+                            type: "Wallet",
+                          },
+                          {
+                            name: "Guardian 5",
+                            status: "pending",
+                            type: "Email",
+                          },
                         ].map((guardian, i) => (
                           <div
                             key={i}
@@ -342,20 +389,26 @@ export default function IdentityPage() {
                             <div className="flex items-center gap-3">
                               <div
                                 className={`w-2 h-2 rounded-full ${
-                                  guardian.status === 'active'
-                                    ? 'bg-status-verified'
-                                    : 'bg-status-pending'
+                                  guardian.status === "active"
+                                    ? "bg-status-verified"
+                                    : "bg-status-pending"
                                 }`}
                               />
                               <div>
-                                <div className="text-sm font-medium">{guardian.name}</div>
+                                <div className="text-sm font-medium">
+                                  {guardian.name}
+                                </div>
                                 <div className="text-xs text-[var(--text-tertiary)]">
                                   {guardian.type}
                                 </div>
                               </div>
                             </div>
                             <StatusBadge
-                              status={guardian.status === 'active' ? 'verified' : 'pending'}
+                              status={
+                                guardian.status === "active"
+                                  ? "verified"
+                                  : "pending"
+                              }
                             />
                           </div>
                         ))}

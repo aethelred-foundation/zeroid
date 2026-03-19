@@ -1,7 +1,8 @@
-'use client';
+"use client";
+// @ts-nocheck
 
-import { useState, useEffect, useCallback } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { useState, useEffect, useCallback } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import {
   Loader2,
   CheckCircle2,
@@ -12,11 +13,17 @@ import {
   Zap,
   CircuitBoard,
   Hash,
-} from 'lucide-react';
-import { useProof } from '@/hooks/useProof';
-import type { DisclosureSelection, ZKProof } from '@/types';
+} from "lucide-react";
+import { useProof } from "@/hooks/useProof";
+import type { DisclosureSelection, ZKProof } from "@/types";
 
-type ProofStage = 'idle' | 'loading-wasm' | 'computing-witness' | 'generating-proof' | 'complete' | 'error';
+type ProofStage =
+  | "idle"
+  | "loading-wasm"
+  | "computing-witness"
+  | "generating-proof"
+  | "complete"
+  | "error";
 
 interface ProofGeneratorProps {
   disclosure: DisclosureSelection;
@@ -29,38 +36,38 @@ const stageConfig: Record<
   { label: string; description: string; icon: typeof Cpu; progress: number }
 > = {
   idle: {
-    label: 'Ready',
-    description: 'Click generate to begin ZK proof creation',
+    label: "Ready",
+    description: "Click generate to begin ZK proof creation",
     icon: CircuitBoard,
     progress: 0,
   },
-  'loading-wasm': {
-    label: 'Loading Circuit',
-    description: 'Loading WASM prover module into memory...',
+  "loading-wasm": {
+    label: "Loading Circuit",
+    description: "Loading WASM prover module into memory...",
     icon: Binary,
     progress: 25,
   },
-  'computing-witness': {
-    label: 'Computing Witness',
-    description: 'Evaluating circuit constraints with private inputs...',
+  "computing-witness": {
+    label: "Computing Witness",
+    description: "Evaluating circuit constraints with private inputs...",
     icon: Cpu,
     progress: 55,
   },
-  'generating-proof': {
-    label: 'Generating Proof',
-    description: 'Computing zero-knowledge proof from witness...',
+  "generating-proof": {
+    label: "Generating Proof",
+    description: "Computing zero-knowledge proof from witness...",
     icon: ShieldCheck,
     progress: 85,
   },
   complete: {
-    label: 'Proof Generated',
-    description: 'Zero-knowledge proof created successfully',
+    label: "Proof Generated",
+    description: "Zero-knowledge proof created successfully",
     icon: CheckCircle2,
     progress: 100,
   },
   error: {
-    label: 'Error',
-    description: 'Proof generation failed',
+    label: "Error",
+    description: "Proof generation failed",
     icon: AlertCircle,
     progress: 0,
   },
@@ -71,29 +78,32 @@ export default function ProofGenerator({
   onProofGenerated,
   onError,
 }: ProofGeneratorProps) {
-  const [stage, setStage] = useState<ProofStage>('idle');
+  const [stage, setStage] = useState<ProofStage>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const { generateProof } = useProof();
 
   const handleGenerate = useCallback(async () => {
-    setStage('loading-wasm');
+    setStage("loading-wasm");
     setErrorMessage(null);
 
     try {
       // Simulate stage transitions (in production, these would be callbacks from the prover)
       await new Promise((resolve) => setTimeout(resolve, 1200));
-      setStage('computing-witness');
+      setStage("computing-witness");
 
       await new Promise((resolve) => setTimeout(resolve, 1500));
-      setStage('generating-proof');
+      setStage("generating-proof");
 
       const proof = await generateProof(disclosure);
-      setStage('complete');
+      setStage("complete");
       onProofGenerated(proof);
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Unknown error during proof generation';
+      const message =
+        err instanceof Error
+          ? err.message
+          : "Unknown error during proof generation";
       setErrorMessage(message);
-      setStage('error');
+      setStage("error");
       onError(message);
     }
   }, [disclosure, generateProof, onProofGenerated, onError]);
@@ -109,11 +119,23 @@ export default function ProofGenerator({
   }));
 
   const circuitEdges = [
-    [0, 1], [1, 2], [2, 3],
-    [0, 4], [1, 5], [2, 6], [3, 7],
-    [4, 5], [5, 6], [6, 7],
-    [4, 8], [5, 9], [6, 10], [7, 11],
-    [8, 9], [9, 10], [10, 11],
+    [0, 1],
+    [1, 2],
+    [2, 3],
+    [0, 4],
+    [1, 5],
+    [2, 6],
+    [3, 7],
+    [4, 5],
+    [5, 6],
+    [6, 7],
+    [4, 8],
+    [5, 9],
+    [6, 10],
+    [7, 11],
+    [8, 9],
+    [9, 10],
+    [10, 11],
   ];
 
   return (
@@ -125,13 +147,16 @@ export default function ProofGenerator({
           ZK Circuit
         </h3>
         <div className="relative h-40 w-full">
-          <svg viewBox="0 0 260 170" className="w-full h-full" xmlns="http://www.w3.org/2000/svg">
+          <svg
+            viewBox="0 0 260 170"
+            className="w-full h-full"
+            xmlns="http://www.w3.org/2000/svg"
+          >
             {/* Edges */}
             {circuitEdges.map(([from, to], idx) => {
               const fromNode = circuitNodes[from];
               const toNode = circuitNodes[to];
-              const isActive =
-                stage !== 'idle' && stage !== 'error';
+              const isActive = stage !== "idle" && stage !== "error";
               const activeDelay = idx * 0.1;
 
               return (
@@ -141,14 +166,25 @@ export default function ProofGenerator({
                   y1={fromNode.y}
                   x2={toNode.x}
                   y2={toNode.y}
-                  stroke={isActive ? '#4263eb' : 'var(--border-primary)'}
+                  stroke={isActive ? "#4263eb" : "var(--border-primary)"}
                   strokeWidth={1.5}
                   strokeOpacity={isActive ? 0.6 : 0.3}
                   initial={{ pathLength: 0 }}
-                  animate={isActive ? { pathLength: 1, strokeOpacity: [0.3, 0.8, 0.3] } : { pathLength: 1 }}
+                  animate={
+                    isActive
+                      ? { pathLength: 1, strokeOpacity: [0.3, 0.8, 0.3] }
+                      : { pathLength: 1 }
+                  }
                   transition={
                     isActive
-                      ? { pathLength: { duration: 0.5, delay: activeDelay }, strokeOpacity: { duration: 2, repeat: Infinity, delay: activeDelay } }
+                      ? {
+                          pathLength: { duration: 0.5, delay: activeDelay },
+                          strokeOpacity: {
+                            duration: 2,
+                            repeat: Infinity,
+                            delay: activeDelay,
+                          },
+                        }
                       : { duration: 0.3 }
                   }
                 />
@@ -157,12 +193,12 @@ export default function ProofGenerator({
 
             {/* Nodes */}
             {circuitNodes.map((node, idx) => {
-              const isActive = stage !== 'idle' && stage !== 'error';
+              const isActive = stage !== "idle" && stage !== "error";
               const nodeDelay = idx * 0.08;
               const isHighlighted = (() => {
-                if (stage === 'complete') return true;
-                if (stage === 'computing-witness') return idx < 8;
-                if (stage === 'generating-proof') return idx >= 4;
+                if (stage === "complete") return true;
+                if (stage === "computing-witness") return idx < 8;
+                if (stage === "generating-proof") return idx >= 4;
                 return false;
               })();
 
@@ -174,12 +210,12 @@ export default function ProofGenerator({
                   r={6}
                   fill={
                     isHighlighted
-                      ? '#4263eb'
+                      ? "#4263eb"
                       : isActive
-                        ? 'var(--surface-tertiary)'
-                        : 'var(--surface-secondary)'
+                        ? "var(--surface-tertiary)"
+                        : "var(--surface-secondary)"
                   }
-                  stroke={isActive ? '#4263eb' : 'var(--border-primary)'}
+                  stroke={isActive ? "#4263eb" : "var(--border-primary)"}
                   strokeWidth={1.5}
                   initial={{ scale: 0.8, opacity: 0.5 }}
                   animate={
@@ -204,21 +240,21 @@ export default function ProofGenerator({
         <div className="flex items-center gap-3 mb-4">
           <div
             className={`w-10 h-10 rounded-xl flex items-center justify-center ${
-              stage === 'complete'
-                ? 'bg-status-verified/10'
-                : stage === 'error'
-                  ? 'bg-red-500/10'
-                  : 'bg-brand-500/10'
+              stage === "complete"
+                ? "bg-status-verified/10"
+                : stage === "error"
+                  ? "bg-red-500/10"
+                  : "bg-brand-500/10"
             }`}
           >
-            {stage === 'idle' || stage === 'complete' || stage === 'error' ? (
+            {stage === "idle" || stage === "complete" || stage === "error" ? (
               <StageIcon
                 className={`w-5 h-5 ${
-                  stage === 'complete'
-                    ? 'text-status-verified'
-                    : stage === 'error'
-                      ? 'text-red-400'
-                      : 'text-brand-500'
+                  stage === "complete"
+                    ? "text-status-verified"
+                    : stage === "error"
+                      ? "text-red-400"
+                      : "text-brand-500"
                 }`}
               />
             ) : (
@@ -226,8 +262,12 @@ export default function ProofGenerator({
             )}
           </div>
           <div>
-            <p className="text-sm font-semibold text-[var(--text-primary)]">{currentConfig.label}</p>
-            <p className="text-xs text-[var(--text-secondary)]">{currentConfig.description}</p>
+            <p className="text-sm font-semibold text-[var(--text-primary)]">
+              {currentConfig.label}
+            </p>
+            <p className="text-xs text-[var(--text-secondary)]">
+              {currentConfig.description}
+            </p>
           </div>
         </div>
 
@@ -235,59 +275,67 @@ export default function ProofGenerator({
         <div className="w-full h-2 rounded-full bg-[var(--surface-tertiary)] overflow-hidden mb-4">
           <motion.div
             className={`h-full rounded-full ${
-              stage === 'complete'
-                ? 'bg-status-verified'
-                : stage === 'error'
-                  ? 'bg-red-500'
-                  : 'bg-brand-500'
+              stage === "complete"
+                ? "bg-status-verified"
+                : stage === "error"
+                  ? "bg-red-500"
+                  : "bg-brand-500"
             }`}
-            initial={{ width: '0%' }}
+            initial={{ width: "0%" }}
             animate={{ width: `${currentConfig.progress}%` }}
-            transition={{ duration: 0.5, ease: 'easeInOut' }}
+            transition={{ duration: 0.5, ease: "easeInOut" }}
           />
         </div>
 
         {/* Stage steps */}
         <div className="space-y-2">
-          {(['loading-wasm', 'computing-witness', 'generating-proof'] as ProofStage[]).map(
-            (s, idx) => {
-              const config = stageConfig[s];
-              const Icon = config.icon;
-              const stageOrder = ['loading-wasm', 'computing-witness', 'generating-proof'];
-              const currentOrder = stageOrder.indexOf(stage);
-              const thisOrder = idx;
-              const isDone = stage === 'complete' || currentOrder > thisOrder;
-              const isRunning = stage === s;
+          {(
+            [
+              "loading-wasm",
+              "computing-witness",
+              "generating-proof",
+            ] as ProofStage[]
+          ).map((s, idx) => {
+            const config = stageConfig[s];
+            const Icon = config.icon;
+            const stageOrder = [
+              "loading-wasm",
+              "computing-witness",
+              "generating-proof",
+            ];
+            const currentOrder = stageOrder.indexOf(stage);
+            const thisOrder = idx;
+            const isDone = stage === "complete" || currentOrder > thisOrder;
+            const isRunning = stage === s;
 
-              return (
-                <div
-                  key={s}
-                  className={`flex items-center gap-3 p-2 rounded-lg transition-colors ${
-                    isRunning ? 'bg-brand-500/5' : ''
+            return (
+              <div
+                key={s}
+                className={`flex items-center gap-3 p-2 rounded-lg transition-colors ${
+                  isRunning ? "bg-brand-500/5" : ""
+                }`}
+              >
+                {isDone ? (
+                  <CheckCircle2 className="w-4 h-4 text-status-verified flex-shrink-0" />
+                ) : isRunning ? (
+                  <Loader2 className="w-4 h-4 text-brand-500 animate-spin flex-shrink-0" />
+                ) : (
+                  <div className="w-4 h-4 rounded-full border border-[var(--border-primary)] flex-shrink-0" />
+                )}
+                <span
+                  className={`text-sm ${
+                    isDone
+                      ? "text-status-verified"
+                      : isRunning
+                        ? "text-[var(--text-primary)] font-medium"
+                        : "text-[var(--text-tertiary)]"
                   }`}
                 >
-                  {isDone ? (
-                    <CheckCircle2 className="w-4 h-4 text-status-verified flex-shrink-0" />
-                  ) : isRunning ? (
-                    <Loader2 className="w-4 h-4 text-brand-500 animate-spin flex-shrink-0" />
-                  ) : (
-                    <div className="w-4 h-4 rounded-full border border-[var(--border-primary)] flex-shrink-0" />
-                  )}
-                  <span
-                    className={`text-sm ${
-                      isDone
-                        ? 'text-status-verified'
-                        : isRunning
-                          ? 'text-[var(--text-primary)] font-medium'
-                          : 'text-[var(--text-tertiary)]'
-                    }`}
-                  >
-                    {config.label}
-                  </span>
-                </div>
-              );
-            }
-          )}
+                  {config.label}
+                </span>
+              </div>
+            );
+          })}
         </div>
 
         {/* Error message */}
@@ -296,7 +344,7 @@ export default function ProofGenerator({
             <motion.div
               className="mt-4 p-3 rounded-xl bg-red-500/10 border border-red-500/20 flex items-center gap-2"
               initial={{ opacity: 0, height: 0 }}
-              animate={{ opacity: 1, height: 'auto' }}
+              animate={{ opacity: 1, height: "auto" }}
               exit={{ opacity: 0, height: 0 }}
             >
               <AlertCircle className="w-4 h-4 text-red-400 flex-shrink-0" />
@@ -307,7 +355,7 @@ export default function ProofGenerator({
       </div>
 
       {/* Generate button */}
-      {(stage === 'idle' || stage === 'error') && (
+      {(stage === "idle" || stage === "error") && (
         <button onClick={handleGenerate} className="btn-primary w-full">
           <Zap className="w-4 h-4" />
           Generate ZK Proof

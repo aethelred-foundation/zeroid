@@ -88,7 +88,7 @@ pub fn generate_proof(layers: &[Vec<[u8; 32]>], index: usize) -> Result<MerklePr
     let mut idx = index;
 
     for layer in layers.iter().take(layers.len() - 1) {
-        let sibling_idx = if idx.is_multiple_of(2) {
+        let sibling_idx = if idx % 2 == 0 {
             if idx + 1 < layer.len() {
                 idx + 1
             } else {
@@ -98,7 +98,7 @@ pub fn generate_proof(layers: &[Vec<[u8; 32]>], index: usize) -> Result<MerklePr
             idx - 1
         };
         siblings.push(layer[sibling_idx]);
-        path_indices.push(!idx.is_multiple_of(2)); // true if current is on the right
+        path_indices.push(idx % 2 != 0); // true if current is on the right
         idx /= 2;
     }
 

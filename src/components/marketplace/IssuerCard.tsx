@@ -1,7 +1,7 @@
-'use client';
+"use client";
 
-import { useState } from 'react';
-import { motion } from 'framer-motion';
+import { useState } from "react";
+import { motion } from "framer-motion";
 import {
   ShieldCheck,
   Star,
@@ -12,13 +12,21 @@ import {
   ArrowRight,
   CheckCircle2,
   Loader2,
-} from 'lucide-react';
+} from "lucide-react";
 
 // ============================================================================
 // Types
 // ============================================================================
 
-type Specialization = 'KYC' | 'Residency' | 'Credit' | 'Employment' | 'Education' | 'Accreditation' | 'AML' | 'Age';
+type Specialization =
+  | "KYC"
+  | "Residency"
+  | "Credit"
+  | "Employment"
+  | "Education"
+  | "Accreditation"
+  | "AML"
+  | "Age";
 
 interface IssuerInfo {
   id: string;
@@ -48,21 +56,27 @@ interface IssuerCardProps {
 // ============================================================================
 
 const SPECIALIZATION_COLORS: Record<Specialization, string> = {
-  KYC: 'text-cyan-400 bg-cyan-500/10',
-  Residency: 'text-violet-400 bg-violet-500/10',
-  Credit: 'text-emerald-400 bg-emerald-500/10',
-  Employment: 'text-blue-400 bg-blue-500/10',
-  Education: 'text-amber-400 bg-amber-500/10',
-  Accreditation: 'text-rose-400 bg-rose-500/10',
-  AML: 'text-red-400 bg-red-500/10',
-  Age: 'text-orange-400 bg-orange-500/10',
+  KYC: "text-cyan-400 bg-cyan-500/10",
+  Residency: "text-violet-400 bg-violet-500/10",
+  Credit: "text-emerald-400 bg-emerald-500/10",
+  Employment: "text-blue-400 bg-blue-500/10",
+  Education: "text-amber-400 bg-amber-500/10",
+  Accreditation: "text-rose-400 bg-rose-500/10",
+  AML: "text-red-400 bg-red-500/10",
+  Age: "text-orange-400 bg-orange-500/10",
 };
 
 // ============================================================================
 // Sub-components
 // ============================================================================
 
-function StarRating({ score, maxScore = 5 }: { score: number; maxScore?: number }) {
+function StarRating({
+  score,
+  maxScore = 5,
+}: {
+  score: number;
+  maxScore?: number;
+}) {
   const fullStars = Math.floor(score);
   const hasHalf = score - fullStars >= 0.5;
   const emptyStars = maxScore - fullStars - (hasHalf ? 1 : 0);
@@ -70,7 +84,10 @@ function StarRating({ score, maxScore = 5 }: { score: number; maxScore?: number 
   return (
     <div className="flex items-center gap-0.5">
       {Array.from({ length: fullStars }, (_, i) => (
-        <Star key={`full-${i}`} className="w-3.5 h-3.5 text-amber-400 fill-amber-400" />
+        <Star
+          key={`full-${i}`}
+          className="w-3.5 h-3.5 text-amber-400 fill-amber-400"
+        />
       ))}
       {hasHalf && (
         <div className="relative w-3.5 h-3.5">
@@ -81,7 +98,10 @@ function StarRating({ score, maxScore = 5 }: { score: number; maxScore?: number 
         </div>
       )}
       {Array.from({ length: emptyStars }, (_, i) => (
-        <Star key={`empty-${i}`} className="w-3.5 h-3.5 text-[var(--surface-tertiary)]" />
+        <Star
+          key={`empty-${i}`}
+          className="w-3.5 h-3.5 text-[var(--surface-tertiary)]"
+        />
       ))}
     </div>
   );
@@ -97,7 +117,7 @@ export default function IssuerCard({
   onRequest,
   loading = false,
   compact = false,
-  className = '',
+  className = "",
 }: IssuerCardProps) {
   const [isHovered, setIsHovered] = useState(false);
 
@@ -115,7 +135,7 @@ export default function IssuerCard({
     );
   }
 
-  const trustScoreNormalized = Math.min(issuer.trustScore / 100 * 5, 5);
+  const trustScoreNormalized = Math.min((issuer.trustScore / 100) * 5, 5);
 
   if (compact) {
     return (
@@ -131,12 +151,18 @@ export default function IssuerCard({
           </div>
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-1.5">
-              <p className="text-sm font-medium text-[var(--text-primary)] truncate">{issuer.name}</p>
-              {issuer.verified && <ShieldCheck className="w-3.5 h-3.5 text-brand-500 flex-shrink-0" />}
+              <p className="text-sm font-medium text-[var(--text-primary)] truncate">
+                {issuer.name}
+              </p>
+              {issuer.verified && (
+                <ShieldCheck className="w-3.5 h-3.5 text-brand-500 flex-shrink-0" />
+              )}
             </div>
             <div className="flex items-center gap-2 mt-0.5">
               <StarRating score={trustScoreNormalized} />
-              <span className="text-[10px] text-[var(--text-tertiary)]">{issuer.trustScore}</span>
+              <span className="text-[10px] text-[var(--text-tertiary)]">
+                {issuer.trustScore}
+              </span>
             </div>
           </div>
         </div>
@@ -166,7 +192,9 @@ export default function IssuerCard({
           </div>
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
-              <h3 className="text-sm font-semibold text-[var(--text-primary)]">{issuer.name}</h3>
+              <h3 className="text-sm font-semibold text-[var(--text-primary)]">
+                {issuer.name}
+              </h3>
               {issuer.verified && (
                 <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-brand-500/10 text-brand-500">
                   Verified Issuer
@@ -176,15 +204,21 @@ export default function IssuerCard({
             {/* Trust score */}
             <div className="flex items-center gap-2 mt-1.5">
               <StarRating score={trustScoreNormalized} />
-              <span className="text-xs font-medium text-[var(--text-primary)]">{issuer.trustScore}</span>
-              <span className="text-[10px] text-[var(--text-tertiary)]">/ 100</span>
+              <span className="text-xs font-medium text-[var(--text-primary)]">
+                {issuer.trustScore}
+              </span>
+              <span className="text-[10px] text-[var(--text-tertiary)]">
+                / 100
+              </span>
             </div>
           </div>
         </div>
 
         {/* Description */}
         {issuer.description && (
-          <p className="text-xs text-[var(--text-secondary)] mb-4 line-clamp-2">{issuer.description}</p>
+          <p className="text-xs text-[var(--text-secondary)] mb-4 line-clamp-2">
+            {issuer.description}
+          </p>
         )}
 
         {/* Stats */}
@@ -209,7 +243,9 @@ export default function IssuerCard({
           </div>
           <div className="p-2.5 rounded-xl bg-[var(--surface-secondary)] text-center">
             <Clock className="w-3.5 h-3.5 text-[var(--text-tertiary)] mx-auto mb-1" />
-            <p className="text-sm font-bold text-[var(--text-primary)]">{issuer.avgIssuanceTime}</p>
+            <p className="text-sm font-bold text-[var(--text-primary)]">
+              {issuer.avgIssuanceTime}
+            </p>
             <p className="text-[8px] text-[var(--text-tertiary)]">Avg Time</p>
           </div>
         </div>
@@ -239,7 +275,7 @@ export default function IssuerCard({
           <div className="flex items-center gap-1.5">
             <Globe className="w-3 h-3 text-[var(--text-tertiary)]" />
             <span className="text-xs text-[var(--text-secondary)]">
-              {issuer.jurisdictions.join(', ')}
+              {issuer.jurisdictions.join(", ")}
             </span>
           </div>
         </div>

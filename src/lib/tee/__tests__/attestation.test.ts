@@ -21,11 +21,11 @@ import {
   getAttestationTypeLabel,
   requestBiometricVerification,
   requestCredentialIssuance,
-} from '@/lib/tee/attestation';
+} from "@/lib/tee/attestation";
 import type {
   NodeSelectionOptions,
   BiometricEnrollPayload,
-} from '@/lib/tee/attestation';
+} from "@/lib/tee/attestation";
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -41,19 +41,21 @@ const mockIsExpired = jest.fn((expiresAt: number) => {
   return now >= expiresAt;
 });
 
-jest.mock('@/lib/utils', () => ({
-  withRetry: (...args: unknown[]) => mockWithRetry(args[0] as () => Promise<unknown>),
-  withTimeout: (...args: unknown[]) => mockWithTimeout(args[0] as Promise<unknown>),
+jest.mock("@/lib/utils", () => ({
+  withRetry: (...args: unknown[]) =>
+    mockWithRetry(args[0] as () => Promise<unknown>),
+  withTimeout: (...args: unknown[]) =>
+    mockWithTimeout(args[0] as Promise<unknown>),
   isExpired: (expiresAt: number) => mockIsExpired(expiresAt),
 }));
 
-jest.mock('@/config/constants', () => ({
-  TEE_SERVICE_URL: 'https://tee.test.local',
+jest.mock("@/config/constants", () => ({
+  TEE_SERVICE_URL: "https://tee.test.local",
   TEE_ENDPOINTS: {
-    NODE_STATUS: '/api/v1/tee/nodes/status',
-    ATTESTATION_VERIFY: '/api/v1/tee/attestation/verify',
-    BIOMETRIC_VERIFY: '/api/v1/tee/biometric/verify',
-    CREDENTIAL_ISSUE: '/api/v1/tee/credential/issue',
+    NODE_STATUS: "/api/v1/tee/nodes/status",
+    ATTESTATION_VERIFY: "/api/v1/tee/attestation/verify",
+    BIOMETRIC_VERIFY: "/api/v1/tee/biometric/verify",
+    CREDENTIAL_ISSUE: "/api/v1/tee/credential/issue",
   },
   TEE_FRESHNESS_REQUIREMENTS: {
     IntelSGX: 86400,
@@ -74,21 +76,21 @@ const NOW_SECONDS = Math.floor(Date.now() / 1000);
 
 function makeNode(overrides: Record<string, unknown> = {}) {
   return {
-    id: 'node-1',
-    operator: '0xoperator1',
+    id: "node-1",
+    operator: "0xoperator1",
     attestation: {
-      enclaveHash: '0xenclave1',
+      enclaveHash: "0xenclave1",
       platform: 1,
       attestedAt: NOW_SECONDS - 3600,
       expiresAt: NOW_SECONDS + 86400,
-      reportDataHash: '0xreport1',
-      nodeOperator: '0xoperator1',
+      reportDataHash: "0xreport1",
+      nodeOperator: "0xoperator1",
       isValid: true,
-      attestationType: 'remote',
+      attestationType: "remote",
     },
     platform: 1,
-    name: 'Node Alpha',
-    region: 'us-east',
+    name: "Node Alpha",
+    region: "us-east",
     isOnline: true,
     uptimePercent: 99.5,
     verificationsProcessed: 1000,
@@ -99,24 +101,24 @@ function makeNode(overrides: Record<string, unknown> = {}) {
 
 function makeAttestation(overrides: Record<string, unknown> = {}) {
   return {
-    enclaveHash: '0xenclave1',
+    enclaveHash: "0xenclave1",
     platform: 1,
     attestedAt: NOW_SECONDS - 3600,
     expiresAt: NOW_SECONDS + 86400,
-    reportDataHash: '0xreport1',
-    nodeOperator: '0xoperator1',
+    reportDataHash: "0xreport1",
+    nodeOperator: "0xoperator1",
     isValid: true,
-    attestationType: 'remote',
+    attestationType: "remote",
     ...overrides,
   };
 }
 
 function makeBiometricPayload(): BiometricEnrollPayload {
   return {
-    subjectDidHash: '0xsubject1',
-    encryptedBiometricData: 'base64data',
-    enclaveHash: '0xenclave1',
-    biometricType: 'fingerprint',
+    subjectDidHash: "0xsubject1",
+    encryptedBiometricData: "base64data",
+    enclaveHash: "0xenclave1",
+    biometricType: "fingerprint",
   };
 }
 
@@ -124,17 +126,19 @@ function makeBiometricPayload(): BiometricEnrollPayload {
 // fetchTEENodes
 // ---------------------------------------------------------------------------
 
-describe('fetchTEENodes', () => {
+describe("fetchTEENodes", () => {
   beforeEach(() => {
     mockFetch.mockReset();
     mockWithRetry.mockClear();
-    mockWithRetry.mockImplementation(async (fn: () => Promise<unknown>) => fn());
+    mockWithRetry.mockImplementation(async (fn: () => Promise<unknown>) =>
+      fn(),
+    );
     mockWithTimeout.mockClear();
     mockWithTimeout.mockImplementation(async <T>(p: Promise<T>) => p);
   });
 
-  it('returns nodes from a successful response', async () => {
-    const nodes = [makeNode(), makeNode({ id: 'node-2' })];
+  it("returns nodes from a successful response", async () => {
+    const nodes = [makeNode(), makeNode({ id: "node-2" })];
     mockFetch.mockResolvedValue({
       ok: true,
       json: async () => ({ nodes }),
@@ -143,11 +147,11 @@ describe('fetchTEENodes', () => {
     const result = await fetchTEENodes();
 
     expect(result).toHaveLength(2);
-    expect(result[0].id).toBe('node-1');
-    expect(result[1].id).toBe('node-2');
+    expect(result[0].id).toBe("node-1");
+    expect(result[1].id).toBe("node-2");
   });
 
-  it('calls fetch with correct URL', async () => {
+  it("calls fetch with correct URL", async () => {
     mockFetch.mockResolvedValue({
       ok: true,
       json: async () => ({ nodes: [] }),
@@ -156,20 +160,22 @@ describe('fetchTEENodes', () => {
     await fetchTEENodes();
 
     expect(mockFetch).toHaveBeenCalledWith(
-      'https://tee.test.local/api/v1/tee/nodes/status',
+      "https://tee.test.local/api/v1/tee/nodes/status",
     );
   });
 
-  it('throws on non-OK HTTP response', async () => {
+  it("throws on non-OK HTTP response", async () => {
     mockFetch.mockResolvedValue({
       ok: false,
       status: 503,
     });
 
-    await expect(fetchTEENodes()).rejects.toThrow('TEE service returned HTTP 503');
+    await expect(fetchTEENodes()).rejects.toThrow(
+      "TEE service returned HTTP 503",
+    );
   });
 
-  it('uses withRetry for retry logic', async () => {
+  it("uses withRetry for retry logic", async () => {
     mockFetch.mockResolvedValue({
       ok: true,
       json: async () => ({ nodes: [] }),
@@ -180,7 +186,7 @@ describe('fetchTEENodes', () => {
     expect(mockWithRetry).toHaveBeenCalled();
   });
 
-  it('uses withTimeout for timeout handling', async () => {
+  it("uses withTimeout for timeout handling", async () => {
     mockFetch.mockResolvedValue({
       ok: true,
       json: async () => ({ nodes: [] }),
@@ -196,7 +202,7 @@ describe('fetchTEENodes', () => {
 // selectBestNode
 // ---------------------------------------------------------------------------
 
-describe('selectBestNode', () => {
+describe("selectBestNode", () => {
   beforeEach(() => {
     mockIsExpired.mockImplementation((expiresAt: number) => {
       const now = Math.floor(Date.now() / 1000);
@@ -204,34 +210,32 @@ describe('selectBestNode', () => {
     });
   });
 
-  it('returns the best node by latency', () => {
+  it("returns the best node by latency", () => {
     const nodes = [
-      makeNode({ id: 'slow', avgLatencyMs: 500 }),
-      makeNode({ id: 'fast', avgLatencyMs: 50 }),
-      makeNode({ id: 'medium', avgLatencyMs: 200 }),
+      makeNode({ id: "slow", avgLatencyMs: 500 }),
+      makeNode({ id: "fast", avgLatencyMs: 50 }),
+      makeNode({ id: "medium", avgLatencyMs: 200 }),
     ];
 
     const result = selectBestNode(nodes);
 
-    expect(result?.id).toBe('fast');
+    expect(result?.id).toBe("fast");
   });
 
-  it('returns null when no nodes are available', () => {
+  it("returns null when no nodes are available", () => {
     expect(selectBestNode([])).toBeNull();
   });
 
-  it('filters out offline nodes', () => {
-    const nodes = [
-      makeNode({ id: 'offline', isOnline: false }),
-    ];
+  it("filters out offline nodes", () => {
+    const nodes = [makeNode({ id: "offline", isOnline: false })];
 
     expect(selectBestNode(nodes)).toBeNull();
   });
 
-  it('filters out nodes with invalid attestation', () => {
+  it("filters out nodes with invalid attestation", () => {
     const nodes = [
       makeNode({
-        id: 'invalid',
+        id: "invalid",
         attestation: { ...makeAttestation(), isValid: false },
       }),
     ];
@@ -239,102 +243,100 @@ describe('selectBestNode', () => {
     expect(selectBestNode(nodes)).toBeNull();
   });
 
-  it('filters out nodes with expired attestation', () => {
+  it("filters out nodes with expired attestation", () => {
     mockIsExpired.mockReturnValue(true);
     const nodes = [makeNode()];
 
     expect(selectBestNode(nodes)).toBeNull();
   });
 
-  it('filters out nodes exceeding maxLatencyMs', () => {
+  it("filters out nodes exceeding maxLatencyMs", () => {
     const nodes = [makeNode({ avgLatencyMs: 6000 })];
 
     expect(selectBestNode(nodes, { maxLatencyMs: 5000 })).toBeNull();
   });
 
-  it('filters out nodes below minUptimePercent', () => {
+  it("filters out nodes below minUptimePercent", () => {
     const nodes = [makeNode({ uptimePercent: 90 })];
 
     expect(selectBestNode(nodes, { minUptimePercent: 95 })).toBeNull();
   });
 
-  it('prefers specified platform when available', () => {
+  it("prefers specified platform when available", () => {
     const nodes = [
-      makeNode({ id: 'sgx', platform: 1, avgLatencyMs: 200 }),
-      makeNode({ id: 'sev', platform: 2, avgLatencyMs: 100 }),
+      makeNode({ id: "sgx", platform: 1, avgLatencyMs: 200 }),
+      makeNode({ id: "sev", platform: 2, avgLatencyMs: 100 }),
     ];
 
     const result = selectBestNode(nodes, { preferredPlatform: 1 });
 
-    expect(result?.id).toBe('sgx');
+    expect(result?.id).toBe("sgx");
   });
 
-  it('falls back to other platforms when preferred is unavailable', () => {
-    const nodes = [
-      makeNode({ id: 'sev', platform: 2, avgLatencyMs: 100 }),
-    ];
+  it("falls back to other platforms when preferred is unavailable", () => {
+    const nodes = [makeNode({ id: "sev", platform: 2, avgLatencyMs: 100 })];
 
     const result = selectBestNode(nodes, { preferredPlatform: 1 });
 
-    expect(result?.id).toBe('sev');
+    expect(result?.id).toBe("sev");
   });
 
-  it('prefers specified region when available', () => {
+  it("prefers specified region when available", () => {
     const nodes = [
-      makeNode({ id: 'us', region: 'us-east', avgLatencyMs: 200 }),
-      makeNode({ id: 'eu', region: 'eu-west', avgLatencyMs: 100 }),
+      makeNode({ id: "us", region: "us-east", avgLatencyMs: 200 }),
+      makeNode({ id: "eu", region: "eu-west", avgLatencyMs: 100 }),
     ];
 
-    const result = selectBestNode(nodes, { preferredRegion: 'us-east' });
+    const result = selectBestNode(nodes, { preferredRegion: "us-east" });
 
-    expect(result?.id).toBe('us');
+    expect(result?.id).toBe("us");
   });
 
-  it('region matching is case-insensitive', () => {
+  it("region matching is case-insensitive", () => {
     const nodes = [
-      makeNode({ id: 'us', region: 'US-East', avgLatencyMs: 200 }),
-      makeNode({ id: 'eu', region: 'eu-west', avgLatencyMs: 100 }),
+      makeNode({ id: "us", region: "US-East", avgLatencyMs: 200 }),
+      makeNode({ id: "eu", region: "eu-west", avgLatencyMs: 100 }),
     ];
 
-    const result = selectBestNode(nodes, { preferredRegion: 'us-east' });
+    const result = selectBestNode(nodes, { preferredRegion: "us-east" });
 
-    expect(result?.id).toBe('us');
+    expect(result?.id).toBe("us");
   });
 
-  it('falls back to other regions when preferred is unavailable', () => {
+  it("falls back to other regions when preferred is unavailable", () => {
     const nodes = [
-      makeNode({ id: 'eu', region: 'eu-west', avgLatencyMs: 100 }),
+      makeNode({ id: "eu", region: "eu-west", avgLatencyMs: 100 }),
     ];
 
-    const result = selectBestNode(nodes, { preferredRegion: 'us-east' });
+    const result = selectBestNode(nodes, { preferredRegion: "us-east" });
 
-    expect(result?.id).toBe('eu');
+    expect(result?.id).toBe("eu");
   });
 
-  it('sorts by uptime when latency difference is within 50ms', () => {
+  it("sorts by uptime when latency difference is within 50ms", () => {
     const nodes = [
-      makeNode({ id: 'low-uptime', avgLatencyMs: 100, uptimePercent: 96 }),
-      makeNode({ id: 'high-uptime', avgLatencyMs: 120, uptimePercent: 99.9 }),
+      makeNode({ id: "low-uptime", avgLatencyMs: 100, uptimePercent: 96 }),
+      makeNode({ id: "high-uptime", avgLatencyMs: 120, uptimePercent: 99.9 }),
     ];
 
     const result = selectBestNode(nodes);
 
     // 20ms diff < 50ms threshold, so uptime wins
-    expect(result?.id).toBe('high-uptime');
+    expect(result?.id).toBe("high-uptime");
   });
 
-  it('sorts by latency when difference exceeds 50ms', () => {
+  it("sorts by latency when difference exceeds 50ms", () => {
     const nodes = [
-      makeNode({ id: 'fast', avgLatencyMs: 50, uptimePercent: 96 }),
-      makeNode({ id: 'slow', avgLatencyMs: 200, uptimePercent: 99.9 }),
+      makeNode({ id: "fast", avgLatencyMs: 50, uptimePercent: 96 }),
+      makeNode({ id: "slow", avgLatencyMs: 200, uptimePercent: 99.9 }),
     ];
 
     const result = selectBestNode(nodes);
 
-    expect(result?.id).toBe('fast');
+    expect(result?.id).toBe("fast");
   });
 
-  it('uses default options when none provided', () => {
+  it("uses default options when none provided", () => {
     const nodes = [makeNode({ avgLatencyMs: 4999, uptimePercent: 95.01 })];
 
     const result = selectBestNode(nodes);
@@ -342,19 +344,34 @@ describe('selectBestNode', () => {
     expect(result).not.toBeNull();
   });
 
-  it('handles combined platform and region preferences', () => {
+  it("handles combined platform and region preferences", () => {
     const nodes = [
-      makeNode({ id: 'match-both', platform: 1, region: 'us-east', avgLatencyMs: 300 }),
-      makeNode({ id: 'match-platform', platform: 1, region: 'eu-west', avgLatencyMs: 100 }),
-      makeNode({ id: 'match-neither', platform: 2, region: 'ap-south', avgLatencyMs: 50 }),
+      makeNode({
+        id: "match-both",
+        platform: 1,
+        region: "us-east",
+        avgLatencyMs: 300,
+      }),
+      makeNode({
+        id: "match-platform",
+        platform: 1,
+        region: "eu-west",
+        avgLatencyMs: 100,
+      }),
+      makeNode({
+        id: "match-neither",
+        platform: 2,
+        region: "ap-south",
+        avgLatencyMs: 50,
+      }),
     ];
 
     const result = selectBestNode(nodes, {
       preferredPlatform: 1,
-      preferredRegion: 'us-east',
+      preferredRegion: "us-east",
     });
 
-    expect(result?.id).toBe('match-both');
+    expect(result?.id).toBe("match-both");
   });
 });
 
@@ -362,63 +379,65 @@ describe('selectBestNode', () => {
 // verifyAttestation
 // ---------------------------------------------------------------------------
 
-describe('verifyAttestation', () => {
+describe("verifyAttestation", () => {
   beforeEach(() => {
     mockFetch.mockReset();
     mockWithRetry.mockClear();
-    mockWithRetry.mockImplementation(async (fn: () => Promise<unknown>) => fn());
+    mockWithRetry.mockImplementation(async (fn: () => Promise<unknown>) =>
+      fn(),
+    );
     mockWithTimeout.mockClear();
     mockWithTimeout.mockImplementation(async <T>(p: Promise<T>) => p);
   });
 
-  it('returns attestation from a successful response', async () => {
+  it("returns attestation from a successful response", async () => {
     const attestation = makeAttestation();
     mockFetch.mockResolvedValue({
       ok: true,
       json: async () => ({ attestation }),
     });
 
-    const result = await verifyAttestation('0xenclave1');
+    const result = await verifyAttestation("0xenclave1");
 
     expect(result).toEqual(attestation);
   });
 
-  it('sends POST with correct body', async () => {
+  it("sends POST with correct body", async () => {
     mockFetch.mockResolvedValue({
       ok: true,
       json: async () => ({ attestation: makeAttestation() }),
     });
 
-    await verifyAttestation('0xenclave_hash');
+    await verifyAttestation("0xenclave_hash");
 
     expect(mockFetch).toHaveBeenCalledWith(
-      'https://tee.test.local/api/v1/tee/attestation/verify',
+      "https://tee.test.local/api/v1/tee/attestation/verify",
       {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ enclaveHash: '0xenclave_hash' }),
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enclaveHash: "0xenclave_hash" }),
       },
     );
   });
 
-  it('throws on non-OK HTTP response', async () => {
+  it("throws on non-OK HTTP response", async () => {
     mockFetch.mockResolvedValue({
       ok: false,
       status: 400,
     });
 
-    await expect(verifyAttestation('0xbad')).rejects.toThrow(
-      'Attestation verification failed: HTTP 400',
+    await expect(verifyAttestation("0xbad")).rejects.toThrow(
+      "Attestation verification failed: HTTP 400",
     );
   });
 
-  it('uses withRetry', async () => {
+  it("uses withRetry", async () => {
     mockFetch.mockResolvedValue({
       ok: true,
       json: async () => ({ attestation: makeAttestation() }),
     });
 
-    await verifyAttestation('0xenclave1');
+    await verifyAttestation("0xenclave1");
 
     expect(mockWithRetry).toHaveBeenCalled();
   });
@@ -428,8 +447,8 @@ describe('verifyAttestation', () => {
 // isAttestationFresh
 // ---------------------------------------------------------------------------
 
-describe('isAttestationFresh', () => {
-  it('returns true for fresh Intel SGX attestation (within 24h)', () => {
+describe("isAttestationFresh", () => {
+  it("returns true for fresh Intel SGX attestation (within 24h)", () => {
     const attestation = makeAttestation({
       platform: 1, // IntelSGX
       attestedAt: NOW_SECONDS - 3600, // 1 hour ago
@@ -439,7 +458,7 @@ describe('isAttestationFresh', () => {
     expect(isAttestationFresh(attestation as any)).toBe(true);
   });
 
-  it('returns false for stale Intel SGX attestation (older than 24h)', () => {
+  it("returns false for stale Intel SGX attestation (older than 24h)", () => {
     const attestation = makeAttestation({
       platform: 1,
       attestedAt: NOW_SECONDS - 90000, // 25 hours ago
@@ -449,7 +468,7 @@ describe('isAttestationFresh', () => {
     expect(isAttestationFresh(attestation as any)).toBe(false);
   });
 
-  it('returns true for fresh AMD SEV attestation (within 24h)', () => {
+  it("returns true for fresh AMD SEV attestation (within 24h)", () => {
     const attestation = makeAttestation({
       platform: 2,
       attestedAt: NOW_SECONDS - 3600,
@@ -459,7 +478,7 @@ describe('isAttestationFresh', () => {
     expect(isAttestationFresh(attestation as any)).toBe(true);
   });
 
-  it('returns false for stale AMD SEV attestation (older than 24h)', () => {
+  it("returns false for stale AMD SEV attestation (older than 24h)", () => {
     const attestation = makeAttestation({
       platform: 2,
       attestedAt: NOW_SECONDS - 90000,
@@ -469,7 +488,7 @@ describe('isAttestationFresh', () => {
     expect(isAttestationFresh(attestation as any)).toBe(false);
   });
 
-  it('returns true for fresh ARM TrustZone attestation (within 12h)', () => {
+  it("returns true for fresh ARM TrustZone attestation (within 12h)", () => {
     const attestation = makeAttestation({
       platform: 3,
       attestedAt: NOW_SECONDS - 36000, // 10 hours ago
@@ -479,7 +498,7 @@ describe('isAttestationFresh', () => {
     expect(isAttestationFresh(attestation as any)).toBe(true);
   });
 
-  it('returns false for stale ARM TrustZone attestation (older than 12h)', () => {
+  it("returns false for stale ARM TrustZone attestation (older than 12h)", () => {
     const attestation = makeAttestation({
       platform: 3,
       attestedAt: NOW_SECONDS - 50000, // ~14 hours ago
@@ -489,7 +508,7 @@ describe('isAttestationFresh', () => {
     expect(isAttestationFresh(attestation as any)).toBe(false);
   });
 
-  it('returns false when attestation has expired', () => {
+  it("returns false when attestation has expired", () => {
     const attestation = makeAttestation({
       platform: 1,
       attestedAt: NOW_SECONDS - 3600,
@@ -499,7 +518,7 @@ describe('isAttestationFresh', () => {
     expect(isAttestationFresh(attestation as any)).toBe(false);
   });
 
-  it('returns false for unknown platform (no freshness requirement)', () => {
+  it("returns false for unknown platform (no freshness requirement)", () => {
     const attestation = makeAttestation({
       platform: 0, // Unknown
       attestedAt: NOW_SECONDS - 100,
@@ -514,29 +533,29 @@ describe('isAttestationFresh', () => {
 // getPlatformLabel
 // ---------------------------------------------------------------------------
 
-describe('getPlatformLabel', () => {
+describe("getPlatformLabel", () => {
   it('returns "Unknown" for platform 0', () => {
-    expect(getPlatformLabel(0)).toBe('Unknown');
+    expect(getPlatformLabel(0)).toBe("Unknown");
   });
 
   it('returns "Intel SGX" for platform 1', () => {
-    expect(getPlatformLabel(1)).toBe('Intel SGX');
+    expect(getPlatformLabel(1)).toBe("Intel SGX");
   });
 
   it('returns "AMD SEV" for platform 2', () => {
-    expect(getPlatformLabel(2)).toBe('AMD SEV');
+    expect(getPlatformLabel(2)).toBe("AMD SEV");
   });
 
   it('returns "ARM TrustZone" for platform 3', () => {
-    expect(getPlatformLabel(3)).toBe('ARM TrustZone');
+    expect(getPlatformLabel(3)).toBe("ARM TrustZone");
   });
 
   it('returns "Unknown" for unrecognized platform', () => {
-    expect(getPlatformLabel(99)).toBe('Unknown');
+    expect(getPlatformLabel(99)).toBe("Unknown");
   });
 
   it('returns "Unknown" for negative platform value', () => {
-    expect(getPlatformLabel(-1)).toBe('Unknown');
+    expect(getPlatformLabel(-1)).toBe("Unknown");
   });
 });
 
@@ -544,25 +563,25 @@ describe('getPlatformLabel', () => {
 // getAttestationTypeLabel
 // ---------------------------------------------------------------------------
 
-describe('getAttestationTypeLabel', () => {
+describe("getAttestationTypeLabel", () => {
   it('returns "Remote Attestation" for "remote"', () => {
-    expect(getAttestationTypeLabel('remote')).toBe('Remote Attestation');
+    expect(getAttestationTypeLabel("remote")).toBe("Remote Attestation");
   });
 
   it('returns "Local Attestation" for "local"', () => {
-    expect(getAttestationTypeLabel('local')).toBe('Local Attestation');
+    expect(getAttestationTypeLabel("local")).toBe("Local Attestation");
   });
 
   it('returns "Self Attestation (Dev)" for "self"', () => {
-    expect(getAttestationTypeLabel('self')).toBe('Self Attestation (Dev)');
+    expect(getAttestationTypeLabel("self")).toBe("Self Attestation (Dev)");
   });
 
   it('returns "Unknown" for unrecognized type', () => {
-    expect(getAttestationTypeLabel('hardware')).toBe('Unknown');
+    expect(getAttestationTypeLabel("hardware")).toBe("Unknown");
   });
 
   it('returns "Unknown" for empty string', () => {
-    expect(getAttestationTypeLabel('')).toBe('Unknown');
+    expect(getAttestationTypeLabel("")).toBe("Unknown");
   });
 });
 
@@ -570,89 +589,91 @@ describe('getAttestationTypeLabel', () => {
 // requestBiometricVerification
 // ---------------------------------------------------------------------------
 
-describe('requestBiometricVerification', () => {
+describe("requestBiometricVerification", () => {
   beforeEach(() => {
     mockFetch.mockReset();
     mockWithTimeout.mockClear();
     mockWithTimeout.mockImplementation(async <T>(p: Promise<T>) => p);
   });
 
-  it('returns success result on HTTP 200', async () => {
+  it("returns success result on HTTP 200", async () => {
     const payload = makeBiometricPayload();
     mockFetch.mockResolvedValue({
       ok: true,
       json: async () => ({
         success: true,
-        verificationId: 'ver-123',
-        biometricHash: '0xbiohash',
+        verificationId: "ver-123",
+        biometricHash: "0xbiohash",
       }),
     });
 
-    const result = await requestBiometricVerification(payload, 'jwt-token');
+    const result = await requestBiometricVerification(payload, "jwt-token");
 
     expect(result.success).toBe(true);
-    expect(result.verificationId).toBe('ver-123');
-    expect(result.biometricHash).toBe('0xbiohash');
-    expect(result.enclaveHash).toBe('0xenclave1');
+    expect(result.verificationId).toBe("ver-123");
+    expect(result.biometricHash).toBe("0xbiohash");
+    expect(result.enclaveHash).toBe("0xenclave1");
   });
 
-  it('sends correct headers including auth token', async () => {
+  it("sends correct headers including auth token", async () => {
     mockFetch.mockResolvedValue({
       ok: true,
-      json: async () => ({ success: true, verificationId: 'ver-1' }),
+      json: async () => ({ success: true, verificationId: "ver-1" }),
     });
 
-    await requestBiometricVerification(makeBiometricPayload(), 'my-token');
+    await requestBiometricVerification(makeBiometricPayload(), "my-token");
 
     expect(mockFetch).toHaveBeenCalledWith(
-      'https://tee.test.local/api/v1/tee/biometric/verify',
+      "https://tee.test.local/api/v1/tee/biometric/verify",
       expect.objectContaining({
-        method: 'POST',
+        method: "POST",
         headers: {
-          'Content-Type': 'application/json',
-          Authorization: 'Bearer my-token',
+          "Content-Type": "application/json",
+          Authorization: "Bearer my-token",
         },
       }),
     );
   });
 
-  it('returns failure result on non-OK response with error body', async () => {
+  it("returns failure result on non-OK response with error body", async () => {
     const payload = makeBiometricPayload();
     mockFetch.mockResolvedValue({
       ok: false,
       status: 422,
-      json: async () => ({ message: 'Invalid biometric data' }),
+      json: async () => ({ message: "Invalid biometric data" }),
     });
 
-    const result = await requestBiometricVerification(payload, 'token');
+    const result = await requestBiometricVerification(payload, "token");
 
     expect(result.success).toBe(false);
-    expect(result.error).toBe('Invalid biometric data');
-    expect(result.verificationId).toBe('');
-    expect(result.enclaveHash).toBe('0xenclave1');
+    expect(result.error).toBe("Invalid biometric data");
+    expect(result.verificationId).toBe("");
+    expect(result.enclaveHash).toBe("0xenclave1");
   });
 
-  it('returns generic error when error body parsing fails', async () => {
+  it("returns generic error when error body parsing fails", async () => {
     const payload = makeBiometricPayload();
     mockFetch.mockResolvedValue({
       ok: false,
       status: 500,
-      json: async () => { throw new Error('parse fail'); },
+      json: async () => {
+        throw new Error("parse fail");
+      },
     });
 
-    const result = await requestBiometricVerification(payload, 'token');
+    const result = await requestBiometricVerification(payload, "token");
 
     expect(result.success).toBe(false);
-    expect(result.error).toBe('Biometric verification failed: HTTP 500');
+    expect(result.error).toBe("Biometric verification failed: HTTP 500");
   });
 
-  it('uses withTimeout for the fetch call', async () => {
+  it("uses withTimeout for the fetch call", async () => {
     mockFetch.mockResolvedValue({
       ok: true,
-      json: async () => ({ success: true, verificationId: 'ver-1' }),
+      json: async () => ({ success: true, verificationId: "ver-1" }),
     });
 
-    await requestBiometricVerification(makeBiometricPayload(), 'token');
+    await requestBiometricVerification(makeBiometricPayload(), "token");
 
     expect(mockWithTimeout).toHaveBeenCalled();
   });
@@ -662,104 +683,111 @@ describe('requestBiometricVerification', () => {
 // requestCredentialIssuance
 // ---------------------------------------------------------------------------
 
-describe('requestCredentialIssuance', () => {
+describe("requestCredentialIssuance", () => {
   beforeEach(() => {
     mockFetch.mockReset();
     mockWithTimeout.mockClear();
     mockWithTimeout.mockImplementation(async <T>(p: Promise<T>) => p);
   });
 
-  it('returns credential and tx hash on success', async () => {
+  it("returns credential and tx hash on success", async () => {
     mockFetch.mockResolvedValue({
       ok: true,
       json: async () => ({
-        credentialHash: '0xcred1',
-        txHash: '0xtx1',
+        credentialHash: "0xcred1",
+        txHash: "0xtx1",
       }),
     });
 
     const result = await requestCredentialIssuance(
-      'ver-123',
-      '0xschema1',
-      { name: 'Alice' },
-      'jwt-token',
+      "ver-123",
+      "0xschema1",
+      { name: "Alice" },
+      "jwt-token",
     );
 
-    expect(result.credentialHash).toBe('0xcred1');
-    expect(result.txHash).toBe('0xtx1');
+    expect(result.credentialHash).toBe("0xcred1");
+    expect(result.txHash).toBe("0xtx1");
   });
 
-  it('sends correct request body', async () => {
+  it("sends correct request body", async () => {
     mockFetch.mockResolvedValue({
       ok: true,
-      json: async () => ({ credentialHash: '0x1', txHash: '0x2' }),
+      json: async () => ({ credentialHash: "0x1", txHash: "0x2" }),
     });
 
-    await requestCredentialIssuance('ver-1', '0xschema', { age: '25' }, 'token');
+    await requestCredentialIssuance(
+      "ver-1",
+      "0xschema",
+      { age: "25" },
+      "token",
+    );
 
     expect(mockFetch).toHaveBeenCalledWith(
-      'https://tee.test.local/api/v1/tee/credential/issue',
+      "https://tee.test.local/api/v1/tee/credential/issue",
       expect.objectContaining({
-        method: 'POST',
+        method: "POST",
         body: JSON.stringify({
-          verificationId: 'ver-1',
-          schemaHash: '0xschema',
-          attributes: { age: '25' },
+          verificationId: "ver-1",
+          schemaHash: "0xschema",
+          attributes: { age: "25" },
         }),
       }),
     );
   });
 
-  it('throws on non-OK response with error message', async () => {
+  it("throws on non-OK response with error message", async () => {
     mockFetch.mockResolvedValue({
       ok: false,
       status: 403,
-      json: async () => ({ message: 'Unauthorized issuer' }),
+      json: async () => ({ message: "Unauthorized issuer" }),
     });
 
     await expect(
-      requestCredentialIssuance('ver-1', '0xschema', {}, 'token'),
-    ).rejects.toThrow('Unauthorized issuer');
+      requestCredentialIssuance("ver-1", "0xschema", {}, "token"),
+    ).rejects.toThrow("Unauthorized issuer");
   });
 
-  it('throws generic error when error body parsing fails', async () => {
+  it("throws generic error when error body parsing fails", async () => {
     mockFetch.mockResolvedValue({
       ok: false,
       status: 500,
-      json: async () => { throw new Error('parse error'); },
+      json: async () => {
+        throw new Error("parse error");
+      },
     });
 
     await expect(
-      requestCredentialIssuance('ver-1', '0xschema', {}, 'token'),
-    ).rejects.toThrow('Credential issuance failed: HTTP 500');
+      requestCredentialIssuance("ver-1", "0xschema", {}, "token"),
+    ).rejects.toThrow("Credential issuance failed: HTTP 500");
   });
 
-  it('includes Authorization header', async () => {
+  it("includes Authorization header", async () => {
     mockFetch.mockResolvedValue({
       ok: true,
-      json: async () => ({ credentialHash: '0x1', txHash: '0x2' }),
+      json: async () => ({ credentialHash: "0x1", txHash: "0x2" }),
     });
 
-    await requestCredentialIssuance('ver-1', '0xschema', {}, 'bearer-test');
+    await requestCredentialIssuance("ver-1", "0xschema", {}, "bearer-test");
 
     expect(mockFetch).toHaveBeenCalledWith(
       expect.any(String),
       expect.objectContaining({
         headers: {
-          'Content-Type': 'application/json',
-          Authorization: 'Bearer bearer-test',
+          "Content-Type": "application/json",
+          Authorization: "Bearer bearer-test",
         },
       }),
     );
   });
 
-  it('uses withTimeout for the fetch call', async () => {
+  it("uses withTimeout for the fetch call", async () => {
     mockFetch.mockResolvedValue({
       ok: true,
-      json: async () => ({ credentialHash: '0x1', txHash: '0x2' }),
+      json: async () => ({ credentialHash: "0x1", txHash: "0x2" }),
     });
 
-    await requestCredentialIssuance('ver-1', '0xschema', {}, 'token');
+    await requestCredentialIssuance("ver-1", "0xschema", {}, "token");
 
     expect(mockWithTimeout).toHaveBeenCalled();
   });

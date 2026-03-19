@@ -1,8 +1,12 @@
-import { Router, Response } from 'express';
-import { AuthenticatedRequest } from '../middleware/auth';
-import { validate, auditQuerySchema, uuidSchema } from '../middleware/validation';
-import { prisma, logger } from '../index';
-import { z } from 'zod';
+import { Router, Response } from "express";
+import { AuthenticatedRequest } from "../middleware/auth";
+import {
+  validate,
+  auditQuerySchema,
+  uuidSchema,
+} from "../middleware/validation";
+import { prisma, logger } from "../index";
+import { z } from "zod";
 
 const router = Router();
 
@@ -10,13 +14,21 @@ const router = Router();
 // GET /api/v1/audit — Query audit logs
 // ---------------------------------------------------------------------------
 router.get(
-  '/',
+  "/",
   validate({ query: auditQuerySchema }),
   async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
       const identity = req.identity!;
-      const { identityId, action, resourceType, resourceId, from, to, page, limit } =
-        req.query as unknown as z.infer<typeof auditQuerySchema>;
+      const {
+        identityId,
+        action,
+        resourceType,
+        resourceId,
+        from,
+        to,
+        page,
+        limit,
+      } = req.query as unknown as z.infer<typeof auditQuerySchema>;
 
       // Users can only view their own audit logs unless they are querying
       // by a resource they have access to
@@ -26,8 +38,8 @@ router.get(
         // Only allow viewing own logs
         if (identityId !== identity.id) {
           res.status(403).json({
-            error: 'Can only view own audit logs',
-            code: 'AUDIT_ACCESS_DENIED',
+            error: "Can only view own audit logs",
+            code: "AUDIT_ACCESS_DENIED",
           });
           return;
         }
@@ -42,14 +54,15 @@ router.get(
 
       if (from || to) {
         where.timestamp = {};
-        if (from) (where.timestamp as Record<string, Date>).gte = new Date(from);
+        if (from)
+          (where.timestamp as Record<string, Date>).gte = new Date(from);
         if (to) (where.timestamp as Record<string, Date>).lte = new Date(to);
       }
 
       const [logs, total] = await Promise.all([
         prisma.auditLog.findMany({
           where,
-          orderBy: { timestamp: 'desc' },
+          orderBy: { timestamp: "desc" },
           skip: (page - 1) * limit,
           take: limit,
           select: {
@@ -77,8 +90,10 @@ router.get(
       });
     } catch (err) {
       const error = err as Error & { statusCode?: number; code?: string };
-      logger.error('audit_query_error', { error: error.message });
-      res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code });
+      logger.error("audit_query_error", { error: error.message });
+      res
+        .status(error.statusCode ?? 500)
+        .json({ error: error.message, code: error.code });
     }
   },
 );
@@ -87,7 +102,7 @@ router.get(
 // GET /api/v1/audit/:id — Get a single audit log entry
 // ---------------------------------------------------------------------------
 router.get(
-  '/:id',
+  "/:id",
   validate({ params: z.object({ id: uuidSchema }) }),
   async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
@@ -98,20 +113,26 @@ router.get(
       });
 
       if (!log) {
-        res.status(404).json({ error: 'Audit log not found', code: 'AUDIT_NOT_FOUND' });
+        res
+          .status(404)
+          .json({ error: "Audit log not found", code: "AUDIT_NOT_FOUND" });
         return;
       }
 
       // Verify access
       if (log.identityId && log.identityId !== identity.id) {
-        res.status(403).json({ error: 'Access denied', code: 'AUDIT_ACCESS_DENIED' });
+        res
+          .status(403)
+          .json({ error: "Access denied", code: "AUDIT_ACCESS_DENIED" });
         return;
       }
 
       res.json({ data: log });
     } catch (err) {
       const error = err as Error & { statusCode?: number; code?: string };
-      res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code });
+      res
+        .status(error.statusCode ?? 500)
+        .json({ error: error.message, code: error.code });
     }
   },
 );
@@ -120,10 +141,18 @@ router.get(
 // GET /api/v1/audit/resource/:type/:id — Get audit trail for a resource
 // ---------------------------------------------------------------------------
 router.get(
-  '/resource/:type/:resourceId',
+  "/resource/:type/:resourceId",
   validate({
     params: z.object({
-      type: z.enum(['identity', 'credential', 'schema', 'verification', 'attestation', 'session', 'government_verification']),
+      type: z.enum([
+        "identity",
+        "credential",
+        "schema",
+        "verification",
+        "attestation",
+        "session",
+        "government_verification",
+      ]),
       resourceId: uuidSchema,
     }),
     query: z.object({
@@ -135,21 +164,34 @@ router.get(
     try {
       const identity = req.identity!;
       const { type, resourceId } = req.params;
-      const { page, limit } = req.query as unknown as { page: number; limit: number };
+      const { page, limit } = req.query as unknown as {
+        page: number;
+        limit: number;
+      };
 
       // Verify the user has access to this resource
-      const hasAccess = await verifyResourceAccess(identity.id, type as string, resourceId as string);
+      const hasAccess = await verifyResourceAccess(
+        identity.id,
+        type as string,
+        resourceId as string,
+      );
       if (!hasAccess) {
-        res.status(403).json({ error: 'Access denied to this resource', code: 'AUDIT_RESOURCE_ACCESS_DENIED' });
+        res.status(403).json({
+          error: "Access denied to this resource",
+          code: "AUDIT_RESOURCE_ACCESS_DENIED",
+        });
         return;
       }
 
-      const where = { resourceType: type as string, resourceId: resourceId as string };
+      const where = {
+        resourceType: type as string,
+        resourceId: resourceId as string,
+      };
 
       const [logs, total] = await Promise.all([
         prisma.auditLog.findMany({
           where,
-          orderBy: { timestamp: 'desc' },
+          orderBy: { timestamp: "desc" },
           skip: (page - 1) * limit,
           take: limit,
         }),
@@ -158,11 +200,18 @@ router.get(
 
       res.json({
         data: logs,
-        pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+        pagination: {
+          page,
+          limit,
+          total,
+          totalPages: Math.ceil(total / limit),
+        },
       });
     } catch (err) {
       const error = err as Error & { statusCode?: number; code?: string };
-      res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code });
+      res
+        .status(error.statusCode ?? 500)
+        .json({ error: error.message, code: error.code });
     }
   },
 );
@@ -171,7 +220,7 @@ router.get(
 // GET /api/v1/audit/summary — Get audit summary / statistics
 // ---------------------------------------------------------------------------
 router.get(
-  '/summary/stats',
+  "/summary/stats",
   async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
       const identity = req.identity!;
@@ -188,17 +237,17 @@ router.get(
           },
         }),
         prisma.auditLog.groupBy({
-          by: ['action'],
+          by: ["action"],
           where: { identityId: identity.id },
           _count: { action: true },
-          orderBy: { _count: { action: 'desc' } },
+          orderBy: { _count: { action: "desc" } },
           take: 10,
         }),
       ]);
 
       const lastActivity = await prisma.auditLog.findFirst({
         where: { identityId: identity.id },
-        orderBy: { timestamp: 'desc' },
+        orderBy: { timestamp: "desc" },
         select: { action: true, timestamp: true, resourceType: true },
       });
 
@@ -221,8 +270,10 @@ router.get(
       });
     } catch (err) {
       const error = err as Error & { statusCode?: number; code?: string };
-      logger.error('audit_summary_error', { error: error.message });
-      res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code });
+      logger.error("audit_summary_error", { error: error.message });
+      res
+        .status(error.statusCode ?? 500)
+        .json({ error: error.message, code: error.code });
     }
   },
 );
@@ -231,12 +282,12 @@ router.get(
 // GET /api/v1/audit/export — Export audit logs as JSON
 // ---------------------------------------------------------------------------
 router.get(
-  '/export/download',
+  "/export/download",
   validate({
     query: z.object({
       from: z.coerce.date(),
       to: z.coerce.date(),
-      format: z.enum(['json']).default('json'),
+      format: z.enum(["json"]).default("json"),
     }),
   }),
   async (req: AuthenticatedRequest, res: Response): Promise<void> => {
@@ -248,8 +299,8 @@ router.get(
       const maxRangeMs = 90 * 24 * 3600_000;
       if (to.getTime() - from.getTime() > maxRangeMs) {
         res.status(400).json({
-          error: 'Export range cannot exceed 90 days',
-          code: 'AUDIT_EXPORT_RANGE_TOO_LARGE',
+          error: "Export range cannot exceed 90 days",
+          code: "AUDIT_EXPORT_RANGE_TOO_LARGE",
         });
         return;
       }
@@ -259,12 +310,15 @@ router.get(
           identityId: identity.id,
           timestamp: { gte: from, lte: to },
         },
-        orderBy: { timestamp: 'asc' },
+        orderBy: { timestamp: "asc" },
         take: 10000, // Hard cap
       });
 
-      res.set('Content-Type', 'application/json');
-      res.set('Content-Disposition', `attachment; filename="audit-${identity.id}-${from.toISOString().split('T')[0]}.json"`);
+      res.set("Content-Type", "application/json");
+      res.set(
+        "Content-Disposition",
+        `attachment; filename="audit-${identity.id}-${from.toISOString().split("T")[0]}.json"`,
+      );
 
       res.json({
         exportedAt: new Date().toISOString(),
@@ -275,7 +329,9 @@ router.get(
       });
     } catch (err) {
       const error = err as Error & { statusCode?: number; code?: string };
-      res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code });
+      res
+        .status(error.statusCode ?? 500)
+        .json({ error: error.message, code: error.code });
     }
   },
 );
@@ -289,18 +345,21 @@ async function verifyResourceAccess(
   resourceId: string,
 ): Promise<boolean> {
   switch (resourceType) {
-    case 'identity':
+    case "identity":
       return resourceId === identityId;
 
-    case 'credential': {
+    case "credential": {
       const cred = await prisma.credential.findUnique({
         where: { id: resourceId },
         select: { issuerId: true, subjectId: true },
       });
-      return cred !== null && (cred.issuerId === identityId || cred.subjectId === identityId);
+      return (
+        cred !== null &&
+        (cred.issuerId === identityId || cred.subjectId === identityId)
+      );
     }
 
-    case 'schema': {
+    case "schema": {
       const schema = await prisma.schemaGovernance.findUnique({
         where: { id: resourceId },
         select: { proposedBy: true },
@@ -308,13 +367,16 @@ async function verifyResourceAccess(
       return schema !== null && schema.proposedBy === identityId;
     }
 
-    case 'verification': {
+    case "verification": {
       const verification = await prisma.verification.findUnique({
         where: { id: resourceId },
         select: { verifierId: true, subjectId: true },
       });
-      return verification !== null &&
-        (verification.verifierId === identityId || verification.subjectId === identityId);
+      return (
+        verification !== null &&
+        (verification.verifierId === identityId ||
+          verification.subjectId === identityId)
+      );
     }
 
     default:

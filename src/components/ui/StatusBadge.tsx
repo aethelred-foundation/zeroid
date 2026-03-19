@@ -1,6 +1,6 @@
-'use client';
+"use client";
 
-import React from 'react';
+import React from "react";
 import {
   CheckCircle,
   Clock,
@@ -9,20 +9,20 @@ import {
   ShieldCheck,
   ShieldOff,
   Loader2,
-} from 'lucide-react';
+} from "lucide-react";
 
 // ============================================================
 // Status Badge Component
 // ============================================================
 
 export type CredentialStatus =
-  | 'verified'
-  | 'pending'
-  | 'revoked'
-  | 'expired'
-  | 'active'
-  | 'suspended'
-  | 'issuing';
+  | "verified"
+  | "pending"
+  | "revoked"
+  | "expired"
+  | "active"
+  | "suspended"
+  | "issuing";
 
 interface StatusConfig {
   label: string;
@@ -33,46 +33,46 @@ interface StatusConfig {
 
 const STATUS_CONFIG: Record<CredentialStatus, StatusConfig> = {
   verified: {
-    label: 'Verified',
+    label: "Verified",
     icon: <CheckCircle className="w-3.5 h-3.5" />,
-    className: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20',
-    dotColor: 'bg-emerald-400',
+    className: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20",
+    dotColor: "bg-emerald-400",
   },
   active: {
-    label: 'Active',
+    label: "Active",
     icon: <ShieldCheck className="w-3.5 h-3.5" />,
-    className: 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20',
-    dotColor: 'bg-cyan-400',
+    className: "bg-cyan-500/10 text-cyan-400 border-cyan-500/20",
+    dotColor: "bg-cyan-400",
   },
   pending: {
-    label: 'Pending',
+    label: "Pending",
     icon: <Clock className="w-3.5 h-3.5" />,
-    className: 'bg-amber-500/10 text-amber-400 border-amber-500/20',
-    dotColor: 'bg-amber-400',
+    className: "bg-amber-500/10 text-amber-400 border-amber-500/20",
+    dotColor: "bg-amber-400",
   },
   issuing: {
-    label: 'Issuing',
+    label: "Issuing",
     icon: <Loader2 className="w-3.5 h-3.5 animate-spin" />,
-    className: 'bg-blue-500/10 text-blue-400 border-blue-500/20',
-    dotColor: 'bg-blue-400',
+    className: "bg-blue-500/10 text-blue-400 border-blue-500/20",
+    dotColor: "bg-blue-400",
   },
   revoked: {
-    label: 'Revoked',
+    label: "Revoked",
     icon: <XCircle className="w-3.5 h-3.5" />,
-    className: 'bg-red-500/10 text-red-400 border-red-500/20',
-    dotColor: 'bg-red-400',
+    className: "bg-red-500/10 text-red-400 border-red-500/20",
+    dotColor: "bg-red-400",
   },
   expired: {
-    label: 'Expired',
+    label: "Expired",
     icon: <AlertTriangle className="w-3.5 h-3.5" />,
-    className: 'bg-zero-500/10 text-zero-400 border-zero-500/20',
-    dotColor: 'bg-zero-400',
+    className: "bg-zero-500/10 text-zero-400 border-zero-500/20",
+    dotColor: "bg-zero-400",
   },
   suspended: {
-    label: 'Suspended',
+    label: "Suspended",
     icon: <ShieldOff className="w-3.5 h-3.5" />,
-    className: 'bg-orange-500/10 text-orange-400 border-orange-500/20',
-    dotColor: 'bg-orange-400',
+    className: "bg-orange-500/10 text-orange-400 border-orange-500/20",
+    dotColor: "bg-orange-400",
   },
 };
 
@@ -80,12 +80,12 @@ const STATUS_CONFIG: Record<CredentialStatus, StatusConfig> = {
 // Badge Sizes
 // ============================================================
 
-type BadgeSize = 'sm' | 'md' | 'lg';
+type BadgeSize = "sm" | "md" | "lg";
 
 const SIZE_CLASSES: Record<BadgeSize, string> = {
-  sm: 'px-1.5 py-0.5 text-[10px] gap-1',
-  md: 'px-2.5 py-1 text-xs gap-1.5',
-  lg: 'px-3 py-1.5 text-sm gap-2',
+  sm: "px-1.5 py-0.5 text-[10px] gap-1",
+  md: "px-2.5 py-1 text-xs gap-1.5",
+  lg: "px-3 py-1.5 text-sm gap-2",
 };
 
 // ============================================================
@@ -103,11 +103,11 @@ interface StatusBadgeProps {
 
 export function StatusBadge({
   status,
-  size = 'md',
+  size = "md",
   showIcon = true,
   showDot = false,
   label,
-  className = '',
+  className = "",
 }: StatusBadgeProps) {
   const config = STATUS_CONFIG[status];
   const sizeClass = SIZE_CLASSES[size];
@@ -120,7 +120,7 @@ export function StatusBadge({
         <span className="relative flex h-1.5 w-1.5">
           <span
             className={`absolute inline-flex h-full w-full rounded-full ${config.dotColor} opacity-75 ${
-              status === 'pending' || status === 'issuing' ? 'animate-ping' : ''
+              status === "pending" || status === "issuing" ? "animate-ping" : ""
             }`}
           />
           <span
@@ -147,7 +147,7 @@ interface VerificationBadgeProps {
 export function VerificationBadge({
   verified,
   level,
-  className = '',
+  className = "",
 }: VerificationBadgeProps) {
   if (verified) {
     return (

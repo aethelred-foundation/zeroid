@@ -17,14 +17,14 @@ By participating, you agree to uphold a welcoming, respectful, and harassment-fr
 
 ### Prerequisites
 
-| Tool | Version |
-|------|---------|
-| Node.js | >= 20.0.0 |
-| Rust | >= 1.75.0 |
-| Circom | >= 2.1.0 |
-| Foundry | latest |
-| Docker + Compose | latest |
-| PostgreSQL | >= 16 |
+| Tool             | Version   |
+| ---------------- | --------- |
+| Node.js          | >= 20.0.0 |
+| Rust             | >= 1.75.0 |
+| Circom           | >= 2.1.0  |
+| Foundry          | latest    |
+| Docker + Compose | latest    |
+| PostgreSQL       | >= 16     |
 
 ### Before Submitting
 

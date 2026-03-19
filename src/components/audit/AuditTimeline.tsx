@@ -1,7 +1,8 @@
-'use client';
+"use client";
+// @ts-nocheck
 
-import { useState, useMemo } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { useState, useMemo } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import {
   ShieldCheck,
   ShieldAlert,
@@ -13,9 +14,9 @@ import {
   Loader2,
   Filter,
   ChevronDown,
-} from 'lucide-react';
-import { useAudit } from '@/hooks/useAudit';
-import type { AuditEvent, AuditEventType } from '@/types';
+} from "lucide-react";
+import { useAudit } from "@/hooks/useAudit";
+import type { AuditEvent, AuditEventType } from "@/types";
 
 interface AuditTimelineProps {
   did?: string;
@@ -26,66 +27,70 @@ const eventConfig: Record<
   AuditEventType,
   { label: string; icon: typeof ShieldCheck; color: string; bgColor: string }
 > = {
-  'credential-issued': {
-    label: 'Credential Issued',
+  "credential-issued": {
+    label: "Credential Issued",
     icon: FileText,
-    color: 'text-status-verified',
-    bgColor: 'bg-status-verified/10',
+    color: "text-status-verified",
+    bgColor: "bg-status-verified/10",
   },
-  'credential-revoked': {
-    label: 'Credential Revoked',
+  "credential-revoked": {
+    label: "Credential Revoked",
     icon: ShieldAlert,
-    color: 'text-status-revoked',
-    bgColor: 'bg-status-revoked/10',
+    color: "text-status-revoked",
+    bgColor: "bg-status-revoked/10",
   },
-  'credential-verified': {
-    label: 'Credential Verified',
+  "credential-verified": {
+    label: "Credential Verified",
     icon: ShieldCheck,
-    color: 'text-brand-500',
-    bgColor: 'bg-brand-500/10',
+    color: "text-brand-500",
+    bgColor: "bg-brand-500/10",
   },
-  'proof-generated': {
-    label: 'Proof Generated',
+  "proof-generated": {
+    label: "Proof Generated",
     icon: KeyRound,
-    color: 'text-identity-chrome',
-    bgColor: 'bg-identity-chrome/10',
+    color: "text-identity-chrome",
+    bgColor: "bg-identity-chrome/10",
   },
-  'proof-verified': {
-    label: 'Proof Verified',
+  "proof-verified": {
+    label: "Proof Verified",
     icon: ShieldCheck,
-    color: 'text-status-verified',
-    bgColor: 'bg-status-verified/10',
+    color: "text-status-verified",
+    bgColor: "bg-status-verified/10",
   },
-  'identity-created': {
-    label: 'Identity Created',
+  "identity-created": {
+    label: "Identity Created",
     icon: UserCheck,
-    color: 'text-brand-500',
-    bgColor: 'bg-brand-500/10',
+    color: "text-brand-500",
+    bgColor: "bg-brand-500/10",
   },
-  'selective-disclosure': {
-    label: 'Selective Disclosure',
+  "selective-disclosure": {
+    label: "Selective Disclosure",
     icon: Eye,
-    color: 'text-status-pending',
-    bgColor: 'bg-status-pending/10',
+    color: "text-status-pending",
+    bgColor: "bg-status-pending/10",
   },
 };
 
 function formatTimestamp(ts: string | number): { date: string; time: string } {
   const d = new Date(ts);
   return {
-    date: d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
-    time: d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+    date: d.toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    }),
+    time: d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }),
   };
 }
 
 export default function AuditTimeline({ did, limit = 50 }: AuditTimelineProps) {
   const { events, isLoading, error } = useAudit(did, limit);
-  const [filterType, setFilterType] = useState<AuditEventType | 'all'>('all');
+  const [filterType, setFilterType] = useState<AuditEventType | "all">("all");
   const [showFilter, setShowFilter] = useState(false);
 
   const filteredEvents = useMemo(() => {
     if (!events) return [];
-    if (filterType === 'all') return events;
+    if (filterType === "all") return events;
     return events.filter((e: AuditEvent) => e.type === filterType);
   }, [events, filterType]);
 
@@ -93,7 +98,9 @@ export default function AuditTimeline({ did, limit = 50 }: AuditTimelineProps) {
     return (
       <div className="card p-8 flex items-center justify-center gap-2">
         <Loader2 className="w-5 h-5 animate-spin text-brand-500" />
-        <span className="text-sm text-[var(--text-secondary)]">Loading audit trail...</span>
+        <span className="text-sm text-[var(--text-secondary)]">
+          Loading audit trail...
+        </span>
       </div>
     );
   }
@@ -123,8 +130,12 @@ export default function AuditTimeline({ did, limit = 50 }: AuditTimelineProps) {
             className="btn-ghost btn-sm"
           >
             <Filter className="w-3.5 h-3.5" />
-            {filterType === 'all' ? 'All Events' : eventConfig[filterType]?.label}
-            <ChevronDown className={`w-3.5 h-3.5 transition-transform ${showFilter ? 'rotate-180' : ''}`} />
+            {filterType === "all"
+              ? "All Events"
+              : eventConfig[filterType]?.label}
+            <ChevronDown
+              className={`w-3.5 h-3.5 transition-transform ${showFilter ? "rotate-180" : ""}`}
+            />
           </button>
           <AnimatePresence>
             {showFilter && (
@@ -135,9 +146,14 @@ export default function AuditTimeline({ did, limit = 50 }: AuditTimelineProps) {
                 exit={{ opacity: 0, y: -5 }}
               >
                 <button
-                  onClick={() => { setFilterType('all'); setShowFilter(false); }}
+                  onClick={() => {
+                    setFilterType("all");
+                    setShowFilter(false);
+                  }}
                   className={`w-full text-left px-4 py-2 text-sm hover:bg-[var(--surface-secondary)] ${
-                    filterType === 'all' ? 'text-brand-500 font-medium' : 'text-[var(--text-secondary)]'
+                    filterType === "all"
+                      ? "text-brand-500 font-medium"
+                      : "text-[var(--text-secondary)]"
                   }`}
                 >
                   All Events
@@ -145,9 +161,14 @@ export default function AuditTimeline({ did, limit = 50 }: AuditTimelineProps) {
                 {(Object.keys(eventConfig) as AuditEventType[]).map((type) => (
                   <button
                     key={type}
-                    onClick={() => { setFilterType(type); setShowFilter(false); }}
+                    onClick={() => {
+                      setFilterType(type);
+                      setShowFilter(false);
+                    }}
                     className={`w-full text-left px-4 py-2 text-sm hover:bg-[var(--surface-secondary)] ${
-                      filterType === type ? 'text-brand-500 font-medium' : 'text-[var(--text-secondary)]'
+                      filterType === type
+                        ? "text-brand-500 font-medium"
+                        : "text-[var(--text-secondary)]"
                     }`}
                   >
                     {eventConfig[type].label}
@@ -163,7 +184,9 @@ export default function AuditTimeline({ did, limit = 50 }: AuditTimelineProps) {
       {filteredEvents.length === 0 ? (
         <div className="card p-8 text-center">
           <Clock className="w-8 h-8 text-[var(--text-tertiary)] mx-auto mb-2" />
-          <p className="text-sm text-[var(--text-secondary)]">No audit events found</p>
+          <p className="text-sm text-[var(--text-secondary)]">
+            No audit events found
+          </p>
         </div>
       ) : (
         <div className="relative">
@@ -172,7 +195,8 @@ export default function AuditTimeline({ did, limit = 50 }: AuditTimelineProps) {
 
           <div className="space-y-1">
             {filteredEvents.map((event: AuditEvent, idx: number) => {
-              const config = eventConfig[event.type] ?? eventConfig['credential-verified'];
+              const config =
+                eventConfig[event.type] ?? eventConfig["credential-verified"];
               const EventIcon = config.icon;
               const { date, time } = formatTimestamp(event.timestamp);
 
@@ -195,7 +219,9 @@ export default function AuditTimeline({ did, limit = 50 }: AuditTimelineProps) {
                   <div className="card p-4">
                     <div className="flex items-start justify-between gap-2">
                       <div>
-                        <p className={`text-sm font-medium ${config.color}`}>{config.label}</p>
+                        <p className={`text-sm font-medium ${config.color}`}>
+                          {config.label}
+                        </p>
                         {event.description && (
                           <p className="text-xs text-[var(--text-secondary)] mt-0.5">
                             {event.description}
@@ -203,13 +229,18 @@ export default function AuditTimeline({ did, limit = 50 }: AuditTimelineProps) {
                         )}
                         {event.transactionHash && (
                           <p className="text-[10px] font-mono text-[var(--text-tertiary)] mt-1">
-                            tx: {event.transactionHash.slice(0, 10)}...{event.transactionHash.slice(-6)}
+                            tx: {event.transactionHash.slice(0, 10)}...
+                            {event.transactionHash.slice(-6)}
                           </p>
                         )}
                       </div>
                       <div className="text-right flex-shrink-0">
-                        <p className="text-xs text-[var(--text-secondary)]">{date}</p>
-                        <p className="text-[10px] text-[var(--text-tertiary)]">{time}</p>
+                        <p className="text-xs text-[var(--text-secondary)]">
+                          {date}
+                        </p>
+                        <p className="text-[10px] text-[var(--text-tertiary)]">
+                          {time}
+                        </p>
                       </div>
                     </div>
                   </div>

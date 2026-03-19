@@ -1,21 +1,27 @@
-import { z } from 'zod';
-import { createLogger, format, transports } from 'winston';
-import crypto from 'crypto';
-import { redis } from '../../index';
+import { z } from "zod";
+import { createLogger, format, transports } from "winston";
+import crypto from "crypto";
+import { redis } from "../../index";
 
-const SUPPORTED_CLIENT_AUTH_METHODS = ['client_secret_basic', 'client_secret_post', 'none'] as const;
-const SUPPORTED_SIGNING_ALGORITHMS = ['RS256', 'PS256'] as const;
-const ALLOW_PUBLIC_OIDC_CLIENTS = process.env.ALLOW_PUBLIC_OIDC_CLIENTS === 'true' && process.env.NODE_ENV !== 'production';
+const SUPPORTED_CLIENT_AUTH_METHODS = [
+  "client_secret_basic",
+  "client_secret_post",
+  "none",
+] as const;
+const SUPPORTED_SIGNING_ALGORITHMS = ["RS256", "PS256"] as const;
+const ALLOW_PUBLIC_OIDC_CLIENTS =
+  process.env.ALLOW_PUBLIC_OIDC_CLIENTS === "true" &&
+  process.env.NODE_ENV !== "production";
 
-type SupportedSigningAlgorithm = typeof SUPPORTED_SIGNING_ALGORITHMS[number];
+type SupportedSigningAlgorithm = (typeof SUPPORTED_SIGNING_ALGORITHMS)[number];
 
 // ---------------------------------------------------------------------------
 // Logger
 // ---------------------------------------------------------------------------
 const logger = createLogger({
-  level: process.env.LOG_LEVEL ?? 'info',
+  level: process.env.LOG_LEVEL ?? "info",
   format: format.combine(format.timestamp(), format.json()),
-  defaultMeta: { service: 'oidc-bridge' },
+  defaultMeta: { service: "oidc-bridge" },
   transports: [new transports.Console()],
 });
 
@@ -26,32 +32,42 @@ export const OIDCClientRegistrationSchema = z.object({
   clientName: z.string().min(1),
   redirectUris: z.array(z.string().url()).min(1),
   postLogoutRedirectUris: z.array(z.string().url()).default([]),
-  grantTypes: z.array(z.enum(['authorization_code', 'client_credentials', 'refresh_token'])).default(['authorization_code']),
-  responseTypes: z.array(z.enum(['code', 'id_token', 'token'])).default(['code']),
-  tokenEndpointAuthMethod: z.enum(SUPPORTED_CLIENT_AUTH_METHODS).default('client_secret_basic'),
-  scopes: z.array(z.string()).default(['openid', 'profile']),
+  grantTypes: z
+    .array(
+      z.enum(["authorization_code", "client_credentials", "refresh_token"]),
+    )
+    .default(["authorization_code"]),
+  responseTypes: z
+    .array(z.enum(["code", "id_token", "token"]))
+    .default(["code"]),
+  tokenEndpointAuthMethod: z
+    .enum(SUPPORTED_CLIENT_AUTH_METHODS)
+    .default("client_secret_basic"),
+  scopes: z.array(z.string()).default(["openid", "profile"]),
   contacts: z.array(z.string().email()).default([]),
   logoUri: z.string().url().optional(),
   policyUri: z.string().url().optional(),
   tosUri: z.string().url().optional(),
   jwksUri: z.string().url().optional(),
   idTokenSignedResponseAlg: z.enum(SUPPORTED_SIGNING_ALGORITHMS).optional(),
-  idTokenEncryptedResponseAlg: z.enum(['RSA-OAEP', 'A256KW']).optional(),
+  idTokenEncryptedResponseAlg: z.enum(["RSA-OAEP", "A256KW"]).optional(),
   requirePkce: z.boolean().default(true),
 });
 
-export type OIDCClientRegistration = z.infer<typeof OIDCClientRegistrationSchema>;
+export type OIDCClientRegistration = z.infer<
+  typeof OIDCClientRegistrationSchema
+>;
 
 export const AuthorizationRequestSchema = z.object({
   clientId: z.string(),
   redirectUri: z.string().url(),
-  responseType: z.enum(['code', 'id_token', 'token']),
+  responseType: z.enum(["code", "id_token", "token"]),
   scope: z.string(),
   state: z.string(),
   nonce: z.string().optional(),
   codeChallenge: z.string().optional(),
-  codeChallengeMethod: z.enum(['S256', 'plain']).optional(),
-  prompt: z.enum(['none', 'login', 'consent', 'select_account']).optional(),
+  codeChallengeMethod: z.enum(["S256", "plain"]).optional(),
+  prompt: z.enum(["none", "login", "consent", "select_account"]).optional(),
   maxAge: z.number().int().positive().optional(),
   acrValues: z.string().optional(),
   claims: z.record(z.unknown()).optional(),
@@ -61,7 +77,11 @@ export const AuthorizationRequestSchema = z.object({
 export type AuthorizationRequest = z.infer<typeof AuthorizationRequestSchema>;
 
 export const TokenRequestSchema = z.object({
-  grantType: z.enum(['authorization_code', 'client_credentials', 'refresh_token']),
+  grantType: z.enum([
+    "authorization_code",
+    "client_credentials",
+    "refresh_token",
+  ]),
   code: z.string().optional(),
   redirectUri: z.string().url().optional(),
   clientId: z.string(),
@@ -79,14 +99,36 @@ export type TokenRequest = z.infer<typeof TokenRequestSchema>;
 // OIDC scopes and claims mapping
 // ---------------------------------------------------------------------------
 const STANDARD_SCOPES: Record<string, string[]> = {
-  openid: ['sub', 'iss', 'aud', 'exp', 'iat', 'auth_time', 'nonce'],
-  profile: ['name', 'family_name', 'given_name', 'middle_name', 'preferred_username', 'picture', 'updated_at'],
-  email: ['email', 'email_verified'],
-  address: ['address'],
-  phone: ['phone_number', 'phone_number_verified'],
-  'zeroid:verified_attributes': ['zk_proof_hash', 'credential_types', 'verification_level', 'tee_attestation_id'],
-  'zeroid:kyc_status': ['kyc_level', 'kyc_provider', 'kyc_verified_at', 'kyc_jurisdiction'],
-  'zeroid:age_verified': ['age_over_18', 'age_over_21', 'age_verification_proof'],
+  openid: ["sub", "iss", "aud", "exp", "iat", "auth_time", "nonce"],
+  profile: [
+    "name",
+    "family_name",
+    "given_name",
+    "middle_name",
+    "preferred_username",
+    "picture",
+    "updated_at",
+  ],
+  email: ["email", "email_verified"],
+  address: ["address"],
+  phone: ["phone_number", "phone_number_verified"],
+  "zeroid:verified_attributes": [
+    "zk_proof_hash",
+    "credential_types",
+    "verification_level",
+    "tee_attestation_id",
+  ],
+  "zeroid:kyc_status": [
+    "kyc_level",
+    "kyc_provider",
+    "kyc_verified_at",
+    "kyc_jurisdiction",
+  ],
+  "zeroid:age_verified": [
+    "age_over_18",
+    "age_over_21",
+    "age_verification_proof",
+  ],
 };
 
 // ---------------------------------------------------------------------------
@@ -130,7 +172,7 @@ interface IssuedToken {
   clientId: string;
   subjectId: string;
   scope: string;
-  tokenType: 'access_token' | 'id_token' | 'refresh_token';
+  tokenType: "access_token" | "id_token" | "refresh_token";
   issuedAt: number;
   expiresAt: number;
   revoked: boolean;
@@ -140,7 +182,10 @@ interface IssuedToken {
 // Redis-backed store (replaces in-memory Maps for multi-instance consistency)
 // ---------------------------------------------------------------------------
 class RedisStore<T> {
-  constructor(private readonly prefix: string, private readonly defaultTtl: number) {}
+  constructor(
+    private readonly prefix: string,
+    private readonly defaultTtl: number,
+  ) {}
 
   private redisKey(key: string): string {
     return `oidc:${this.prefix}:${key}`;
@@ -148,7 +193,12 @@ class RedisStore<T> {
 
   async set(key: string, value: T, ttl?: number): Promise<void> {
     const effectiveTtl = ttl ?? this.defaultTtl;
-    await redis.set(this.redisKey(key), JSON.stringify(value), 'EX', effectiveTtl);
+    await redis.set(
+      this.redisKey(key),
+      JSON.stringify(value),
+      "EX",
+      effectiveTtl,
+    );
   }
 
   async get(key: string): Promise<T | undefined> {
@@ -215,10 +265,10 @@ class RedisStore<T> {
 }
 
 // TTL constants for OIDC state (seconds)
-const OIDC_CLIENT_TTL = 90 * 24 * 3600;       // Registered clients: 90 days
-const OIDC_AUTH_CODE_TTL = 600;                 // Authorization codes: 10 minutes
-const OIDC_SESSION_TTL = 24 * 3600;            // Sessions: 24 hours
-const OIDC_TOKEN_TTL = 3600;                    // Access/ID tokens: 1 hour
+const OIDC_CLIENT_TTL = 90 * 24 * 3600; // Registered clients: 90 days
+const OIDC_AUTH_CODE_TTL = 600; // Authorization codes: 10 minutes
+const OIDC_SESSION_TTL = 24 * 3600; // Sessions: 24 hours
+const OIDC_TOKEN_TTL = 3600; // Access/ID tokens: 1 hour
 const OIDC_REFRESH_TOKEN_TTL = 30 * 24 * 3600; // Refresh tokens: 30 days
 
 // Redis set key for tracking tokens per session (for bulk revocation on logout).
@@ -231,11 +281,23 @@ const sessionTokenSetKey = (sessionId: string) =>
 // OIDCBridge
 // ---------------------------------------------------------------------------
 export class OIDCBridge {
-  private clients = new RedisStore<RegisteredClient>('clients', OIDC_CLIENT_TTL);
-  private authorizationCodes = new RedisStore<AuthorizationCode>('authcodes', OIDC_AUTH_CODE_TTL);
-  private sessions = new RedisStore<OIDCSession>('sessions', OIDC_SESSION_TTL);
-  private issuedTokens = new RedisStore<IssuedToken>('tokens', OIDC_TOKEN_TTL);
-  private refreshTokenMap = new RedisStore<{ tokenId: string; clientId: string; subjectId: string; scope: string; sessionId?: string }>('refresh', OIDC_REFRESH_TOKEN_TTL);
+  private clients = new RedisStore<RegisteredClient>(
+    "clients",
+    OIDC_CLIENT_TTL,
+  );
+  private authorizationCodes = new RedisStore<AuthorizationCode>(
+    "authcodes",
+    OIDC_AUTH_CODE_TTL,
+  );
+  private sessions = new RedisStore<OIDCSession>("sessions", OIDC_SESSION_TTL);
+  private issuedTokens = new RedisStore<IssuedToken>("tokens", OIDC_TOKEN_TTL);
+  private refreshTokenMap = new RedisStore<{
+    tokenId: string;
+    clientId: string;
+    subjectId: string;
+    scope: string;
+    sessionId?: string;
+  }>("refresh", OIDC_REFRESH_TOKEN_TTL);
 
   private readonly issuer: string;
   private readonly signingAlgorithm: SupportedSigningAlgorithm;
@@ -243,10 +305,16 @@ export class OIDCBridge {
   private signingPrivateKey?: crypto.KeyObject;
   private signingPublicKey?: crypto.KeyObject;
 
-  constructor(issuer = process.env.OIDC_ISSUER_URL ?? 'https://id.zeroid.aethelred.network/enterprise/oidc') {
+  constructor(
+    issuer = process.env.OIDC_ISSUER_URL ??
+      "https://id.zeroid.aethelred.network/enterprise/oidc",
+  ) {
     this.issuer = issuer;
     this.signingAlgorithm = this.resolveSigningAlgorithm();
-    logger.info('OIDCBridge initialized', { issuer, signingAlgorithm: this.signingAlgorithm });
+    logger.info("OIDCBridge initialized", {
+      issuer,
+      signingAlgorithm: this.signingAlgorithm,
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -255,7 +323,7 @@ export class OIDCBridge {
   getDiscoveryDocument(): Record<string, unknown> {
     const tokenEndpointAuthMethodsSupported = ALLOW_PUBLIC_OIDC_CLIENTS
       ? [...SUPPORTED_CLIENT_AUTH_METHODS]
-      : SUPPORTED_CLIENT_AUTH_METHODS.filter((method) => method !== 'none');
+      : SUPPORTED_CLIENT_AUTH_METHODS.filter((method) => method !== "none");
 
     return {
       issuer: this.issuer,
@@ -265,14 +333,18 @@ export class OIDCBridge {
       jwks_uri: `${this.issuer}/.well-known/jwks.json`,
       registration_endpoint: `${this.issuer}/register`,
       scopes_supported: Object.keys(STANDARD_SCOPES),
-      response_types_supported: ['code'],
-      grant_types_supported: ['authorization_code', 'client_credentials', 'refresh_token'],
-      subject_types_supported: ['public', 'pairwise'],
+      response_types_supported: ["code"],
+      grant_types_supported: [
+        "authorization_code",
+        "client_credentials",
+        "refresh_token",
+      ],
+      subject_types_supported: ["public", "pairwise"],
       id_token_signing_alg_values_supported: [this.signingAlgorithm],
-      id_token_encryption_alg_values_supported: ['RSA-OAEP', 'A256KW'],
+      id_token_encryption_alg_values_supported: ["RSA-OAEP", "A256KW"],
       token_endpoint_auth_methods_supported: tokenEndpointAuthMethodsSupported,
       claims_supported: [...new Set(Object.values(STANDARD_SCOPES).flat())],
-      code_challenge_methods_supported: ['S256'],
+      code_challenge_methods_supported: ["S256"],
       end_session_endpoint: `${this.issuer}/logout`,
       frontchannel_logout_supported: true,
       backchannel_logout_supported: true,
@@ -281,14 +353,19 @@ export class OIDCBridge {
   }
 
   getJWKS(): Record<string, unknown> {
-    const jwk = this.getSigningPublicKey().export({ format: 'jwk' }) as Record<string, unknown>;
+    const jwk = this.getSigningPublicKey().export({ format: "jwk" }) as Record<
+      string,
+      unknown
+    >;
     return {
-      keys: [{
-        ...jwk,
-        use: 'sig',
-        alg: this.signingAlgorithm,
-        kid: this.getSigningKeyId(),
-      }],
+      keys: [
+        {
+          ...jwk,
+          use: "sig",
+          alg: this.signingAlgorithm,
+          kid: this.getSigningKeyId(),
+        },
+      ],
     };
   }
 
@@ -302,38 +379,42 @@ export class OIDCBridge {
     clientSecretExpiresAt: number;
   }> {
     const parsed = OIDCClientRegistrationSchema.parse(registration);
-    const requestedSigningAlg = parsed.idTokenSignedResponseAlg ?? this.signingAlgorithm;
+    const requestedSigningAlg =
+      parsed.idTokenSignedResponseAlg ?? this.signingAlgorithm;
     if (requestedSigningAlg !== this.signingAlgorithm) {
       throw new OIDCError(
-        'invalid_client_metadata',
+        "invalid_client_metadata",
         `Only ${this.signingAlgorithm} is supported for id_token_signed_response_alg`,
       );
     }
 
-    if (parsed.tokenEndpointAuthMethod === 'none') {
+    if (parsed.tokenEndpointAuthMethod === "none") {
       if (!ALLOW_PUBLIC_OIDC_CLIENTS) {
         throw new OIDCError(
-          'invalid_client_metadata',
-          'Public OIDC clients are disabled. Use client_secret_basic or client_secret_post for enterprise integrations.',
+          "invalid_client_metadata",
+          "Public OIDC clients are disabled. Use client_secret_basic or client_secret_post for enterprise integrations.",
         );
       }
-      if (parsed.grantTypes.includes('client_credentials') || parsed.grantTypes.includes('refresh_token')) {
+      if (
+        parsed.grantTypes.includes("client_credentials") ||
+        parsed.grantTypes.includes("refresh_token")
+      ) {
         throw new OIDCError(
-          'invalid_client_metadata',
-          'Public OIDC clients cannot use client_credentials or refresh_token grants.',
+          "invalid_client_metadata",
+          "Public OIDC clients cannot use client_credentials or refresh_token grants.",
         );
       }
     }
 
-    if (parsed.responseTypes.some((responseType) => responseType !== 'code')) {
+    if (parsed.responseTypes.some((responseType) => responseType !== "code")) {
       throw new OIDCError(
-        'invalid_client_metadata',
-        'Implicit and hybrid OIDC response types are disabled. Use authorization code flow with PKCE.',
+        "invalid_client_metadata",
+        "Implicit and hybrid OIDC response types are disabled. Use authorization code flow with PKCE.",
       );
     }
 
-    const clientId = `zeroid_${crypto.randomBytes(16).toString('hex')}`;
-    const clientSecret = crypto.randomBytes(32).toString('base64url');
+    const clientId = `zeroid_${crypto.randomBytes(16).toString("hex")}`;
+    const clientSecret = crypto.randomBytes(32).toString("base64url");
 
     const client: RegisteredClient = {
       clientId,
@@ -348,7 +429,11 @@ export class OIDCBridge {
 
     await this.clients.set(clientId, client);
 
-    logger.info('oidc_client_registered', { clientId, clientName: parsed.clientName, scopes: parsed.scopes });
+    logger.info("oidc_client_registered", {
+      clientId,
+      clientName: parsed.clientName,
+      scopes: parsed.scopes,
+    });
 
     return {
       clientId,
@@ -361,7 +446,11 @@ export class OIDCBridge {
   // -------------------------------------------------------------------------
   // Authorization endpoint
   // -------------------------------------------------------------------------
-  async authorize(request: AuthorizationRequest, subjectId: string, subjectClaims: Record<string, unknown>): Promise<{
+  async authorize(
+    request: AuthorizationRequest,
+    subjectId: string,
+    subjectClaims: Record<string, unknown>,
+  ): Promise<{
     redirectUrl: string;
     code?: string;
     sessionId: string;
@@ -369,20 +458,23 @@ export class OIDCBridge {
     const parsed = AuthorizationRequestSchema.parse(request);
     const client = await this.clients.get(parsed.clientId);
     if (!client || !client.active) {
-      throw new OIDCError('invalid_client', 'Client not found or inactive');
+      throw new OIDCError("invalid_client", "Client not found or inactive");
     }
 
     if (!client.registration.redirectUris.includes(parsed.redirectUri)) {
-      throw new OIDCError('invalid_redirect_uri', 'Redirect URI not registered');
+      throw new OIDCError(
+        "invalid_redirect_uri",
+        "Redirect URI not registered",
+      );
     }
 
     // Enforce PKCE if required
     if (client.registration.requirePkce && !parsed.codeChallenge) {
-      throw new OIDCError('invalid_request', 'PKCE code_challenge required');
+      throw new OIDCError("invalid_request", "PKCE code_challenge required");
     }
 
-    if (parsed.codeChallengeMethod && parsed.codeChallengeMethod !== 'S256') {
-      throw new OIDCError('invalid_request', 'Only S256 PKCE is supported');
+    if (parsed.codeChallengeMethod && parsed.codeChallengeMethod !== "S256") {
+      throw new OIDCError("invalid_request", "Only S256 PKCE is supported");
     }
 
     // Create session
@@ -398,11 +490,11 @@ export class OIDCBridge {
     });
 
     // Build claims based on requested scopes
-    const requestedScopes = parsed.scope.split(' ');
+    const requestedScopes = parsed.scope.split(" ");
     const claims = this.buildClaims(requestedScopes, subjectId, subjectClaims);
 
-    if (parsed.responseType === 'code') {
-      const code = crypto.randomBytes(32).toString('base64url');
+    if (parsed.responseType === "code") {
+      const code = crypto.randomBytes(32).toString("base64url");
       await this.authorizationCodes.set(code, {
         code,
         clientId: parsed.clientId,
@@ -420,15 +512,26 @@ export class OIDCBridge {
       });
 
       const redirectUrl = new URL(parsed.redirectUri);
-      redirectUrl.searchParams.set('code', code);
-      redirectUrl.searchParams.set('state', parsed.state);
+      redirectUrl.searchParams.set("code", code);
+      redirectUrl.searchParams.set("state", parsed.state);
 
-      logger.info('authorization_code_issued', { clientId: parsed.clientId, sessionId });
+      logger.info("authorization_code_issued", {
+        clientId: parsed.clientId,
+        sessionId,
+      });
       return { redirectUrl: redirectUrl.toString(), code, sessionId };
     }
 
     // Implicit flow (id_token)
-    const idToken = await this.generateToken(parsed.clientId, subjectId, claims, 'id_token', 3600, parsed.scope, sessionId);
+    const idToken = await this.generateToken(
+      parsed.clientId,
+      subjectId,
+      claims,
+      "id_token",
+      3600,
+      parsed.scope,
+      sessionId,
+    );
     const redirectUrl = new URL(parsed.redirectUri);
     redirectUrl.hash = `id_token=${idToken.token}&state=${parsed.state}&token_type=Bearer`;
 
@@ -448,19 +551,22 @@ export class OIDCBridge {
   }> {
     const parsed = TokenRequestSchema.parse(request);
 
-    if (parsed.grantType === 'authorization_code') {
+    if (parsed.grantType === "authorization_code") {
       return this.handleAuthCodeExchange(parsed);
     }
 
-    if (parsed.grantType === 'client_credentials') {
+    if (parsed.grantType === "client_credentials") {
       return this.handleClientCredentials(parsed);
     }
 
-    if (parsed.grantType === 'refresh_token') {
+    if (parsed.grantType === "refresh_token") {
       return this.handleRefreshToken(parsed);
     }
 
-    throw new OIDCError('unsupported_grant_type', `Grant type ${parsed.grantType} not supported`);
+    throw new OIDCError(
+      "unsupported_grant_type",
+      `Grant type ${parsed.grantType} not supported`,
+    );
   }
 
   private async handleAuthCodeExchange(request: TokenRequest): Promise<{
@@ -475,51 +581,82 @@ export class OIDCBridge {
     // If two requests race, only one wins; the loser gets undefined.
     const authCode = await this.authorizationCodes.compareAndSet(
       request.code!,
-      'used',
+      "used",
       false,
       true,
     );
     if (!authCode) {
       // Either the code doesn't exist, is expired, or was already consumed
-      throw new OIDCError('invalid_grant', 'Authorization code not found or already used');
+      throw new OIDCError(
+        "invalid_grant",
+        "Authorization code not found or already used",
+      );
     }
 
     const now = Math.floor(Date.now() / 1000);
     if (authCode.expiresAt < now) {
-      throw new OIDCError('invalid_grant', 'Authorization code expired');
+      throw new OIDCError("invalid_grant", "Authorization code expired");
     }
 
     if (authCode.clientId !== request.clientId) {
-      throw new OIDCError('invalid_grant', 'Client ID mismatch');
+      throw new OIDCError("invalid_grant", "Client ID mismatch");
     }
 
     if (authCode.redirectUri !== request.redirectUri) {
-      throw new OIDCError('invalid_grant', 'Redirect URI mismatch');
+      throw new OIDCError("invalid_grant", "Redirect URI mismatch");
     }
 
     // PKCE verification
     if (authCode.codeChallenge) {
       if (!request.codeVerifier) {
-        throw new OIDCError('invalid_grant', 'Code verifier required');
+        throw new OIDCError("invalid_grant", "Code verifier required");
       }
-      const verified = this.verifyPKCE(request.codeVerifier, authCode.codeChallenge, authCode.codeChallengeMethod ?? 'S256');
+      const verified = this.verifyPKCE(
+        request.codeVerifier,
+        authCode.codeChallenge,
+        authCode.codeChallengeMethod ?? "S256",
+      );
       if (!verified) {
-        throw new OIDCError('invalid_grant', 'PKCE verification failed');
+        throw new OIDCError("invalid_grant", "PKCE verification failed");
       }
     }
 
     // Client authentication
     await this.authenticateClient(request.clientId, request.clientSecret);
 
-    const accessToken = await this.generateToken(authCode.clientId, authCode.subjectId, authCode.claims, 'access_token', 3600, authCode.scope, authCode.sessionId);
-    const idToken = await this.generateToken(authCode.clientId, authCode.subjectId, { ...authCode.claims, nonce: authCode.nonce }, 'id_token', 3600, authCode.scope, authCode.sessionId);
-    const refreshToken = await this.generateRefreshToken(authCode.clientId, authCode.subjectId, authCode.scope, authCode.sessionId);
+    const accessToken = await this.generateToken(
+      authCode.clientId,
+      authCode.subjectId,
+      authCode.claims,
+      "access_token",
+      3600,
+      authCode.scope,
+      authCode.sessionId,
+    );
+    const idToken = await this.generateToken(
+      authCode.clientId,
+      authCode.subjectId,
+      { ...authCode.claims, nonce: authCode.nonce },
+      "id_token",
+      3600,
+      authCode.scope,
+      authCode.sessionId,
+    );
+    const refreshToken = await this.generateRefreshToken(
+      authCode.clientId,
+      authCode.subjectId,
+      authCode.scope,
+      authCode.sessionId,
+    );
 
-    logger.info('tokens_issued', { clientId: authCode.clientId, subjectId: authCode.subjectId });
+    logger.info("tokens_issued", {
+      clientId: authCode.clientId,
+      subjectId: authCode.subjectId,
+    });
 
     return {
       access_token: accessToken.token,
-      token_type: 'Bearer',
+      token_type: "Bearer",
       expires_in: 3600,
       id_token: idToken.token,
       refresh_token: refreshToken,
@@ -535,14 +672,23 @@ export class OIDCBridge {
   }> {
     await this.authenticateClient(request.clientId, request.clientSecret);
 
-    const scope = request.scope ?? 'openid';
-    const accessToken = await this.generateToken(request.clientId, request.clientId, {}, 'access_token', 3600, scope);
+    const scope = request.scope ?? "openid";
+    const accessToken = await this.generateToken(
+      request.clientId,
+      request.clientId,
+      {},
+      "access_token",
+      3600,
+      scope,
+    );
 
-    logger.info('client_credentials_token_issued', { clientId: request.clientId });
+    logger.info("client_credentials_token_issued", {
+      clientId: request.clientId,
+    });
 
     return {
       access_token: accessToken.token,
-      token_type: 'Bearer',
+      token_type: "Bearer",
       expires_in: 3600,
       scope,
     };
@@ -557,24 +703,42 @@ export class OIDCBridge {
   }> {
     // Atomically consume the refresh token: getAndDelete ensures only one
     // concurrent caller can redeem it. The loser gets undefined.
-    const refreshData = await this.refreshTokenMap.getAndDelete(request.refreshToken!);
+    const refreshData = await this.refreshTokenMap.getAndDelete(
+      request.refreshToken!,
+    );
     if (!refreshData) {
-      throw new OIDCError('invalid_grant', 'Refresh token not found or already consumed');
+      throw new OIDCError(
+        "invalid_grant",
+        "Refresh token not found or already consumed",
+      );
     }
 
     if (refreshData.clientId !== request.clientId) {
-      throw new OIDCError('invalid_grant', 'Client mismatch');
+      throw new OIDCError("invalid_grant", "Client mismatch");
     }
 
     await this.authenticateClient(request.clientId, request.clientSecret);
-    const newAccessToken = await this.generateToken(refreshData.clientId, refreshData.subjectId, {}, 'access_token', 3600, refreshData.scope, refreshData.sessionId);
-    const newRefreshToken = await this.generateRefreshToken(refreshData.clientId, refreshData.subjectId, refreshData.scope, refreshData.sessionId);
+    const newAccessToken = await this.generateToken(
+      refreshData.clientId,
+      refreshData.subjectId,
+      {},
+      "access_token",
+      3600,
+      refreshData.scope,
+      refreshData.sessionId,
+    );
+    const newRefreshToken = await this.generateRefreshToken(
+      refreshData.clientId,
+      refreshData.subjectId,
+      refreshData.scope,
+      refreshData.sessionId,
+    );
 
-    logger.info('token_refreshed', { clientId: refreshData.clientId });
+    logger.info("token_refreshed", { clientId: refreshData.clientId });
 
     return {
       access_token: newAccessToken.token,
-      token_type: 'Bearer',
+      token_type: "Bearer",
       expires_in: 3600,
       refresh_token: newRefreshToken,
       scope: refreshData.scope,
@@ -585,8 +749,11 @@ export class OIDCBridge {
   // UserInfo endpoint with selective disclosure
   // -------------------------------------------------------------------------
   async getUserInfo(accessToken: string): Promise<Record<string, unknown>> {
-    const { tokenRecord, payload } = await this.verifyToken(accessToken, 'access_token');
-    const scopes = tokenRecord.scope.split(' ');
+    const { tokenRecord, payload } = await this.verifyToken(
+      accessToken,
+      "access_token",
+    );
+    const scopes = tokenRecord.scope.split(" ");
     const claims: Record<string, unknown> = { sub: tokenRecord.subjectId };
 
     for (const scope of scopes) {
@@ -608,10 +775,12 @@ export class OIDCBridge {
   // -------------------------------------------------------------------------
   // Session management
   // -------------------------------------------------------------------------
-  async frontChannelLogout(sessionId: string): Promise<{ logoutUrls: string[] }> {
+  async frontChannelLogout(
+    sessionId: string,
+  ): Promise<{ logoutUrls: string[] }> {
     const session = await this.sessions.get(sessionId);
     if (!session) {
-      throw new OIDCError('invalid_session', 'Session not found');
+      throw new OIDCError("invalid_session", "Session not found");
     }
 
     session.active = false;
@@ -632,7 +801,10 @@ export class OIDCBridge {
     const client = await this.clients.get(session.clientId);
     const logoutUrls = client?.registration.postLogoutRedirectUris ?? [];
 
-    logger.info('front_channel_logout', { sessionId, clientId: session.clientId });
+    logger.info("front_channel_logout", {
+      sessionId,
+      clientId: session.clientId,
+    });
     return { logoutUrls };
   }
 
@@ -650,18 +822,26 @@ export class OIDCBridge {
       aud: session.clientId,
       iat: Math.floor(Date.now() / 1000),
       jti: crypto.randomUUID(),
-      events: { 'http://schemas.openid.net/event/backchannel-logout': {} },
+      events: { "http://schemas.openid.net/event/backchannel-logout": {} },
       sid: sessionId,
     };
 
-    logger.info('back_channel_logout', { sessionId, clientId: session.clientId, logoutTokenJti: logoutToken.jti });
+    logger.info("back_channel_logout", {
+      sessionId,
+      clientId: session.clientId,
+      logoutTokenJti: logoutToken.jti,
+    });
     return { notified: true };
   }
 
   // -------------------------------------------------------------------------
   // Internal helpers
   // -------------------------------------------------------------------------
-  private buildClaims(scopes: string[], subjectId: string, subjectClaims: Record<string, unknown>): Record<string, unknown> {
+  private buildClaims(
+    scopes: string[],
+    subjectId: string,
+    subjectClaims: Record<string, unknown>,
+  ): Record<string, unknown> {
     const claims: Record<string, unknown> = { sub: subjectId };
 
     for (const scope of scopes) {
@@ -682,13 +862,13 @@ export class OIDCBridge {
     clientId: string,
     subjectId: string,
     claims: Record<string, unknown>,
-    tokenType: IssuedToken['tokenType'],
+    tokenType: IssuedToken["tokenType"],
     ttl: number,
     scope: string,
     sessionId?: string,
   ): Promise<{ token: string; tokenId: string }> {
     const now = Math.floor(Date.now() / 1000);
-    const tokenId = crypto.randomBytes(32).toString('base64url');
+    const tokenId = crypto.randomBytes(32).toString("base64url");
 
     const payload: Record<string, unknown> = {
       iss: this.issuer,
@@ -702,17 +882,21 @@ export class OIDCBridge {
       ...claims,
     };
 
-    const header = Buffer.from(JSON.stringify({
-      alg: this.signingAlgorithm,
-      typ: 'JWT',
-      kid: this.getSigningKeyId(),
-    })).toString('base64url');
-    const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
-    const signature = crypto.sign(
-      'sha256',
-      Buffer.from(`${header}.${body}`),
-      this.getSigningKeyInput(),
-    ).toString('base64url');
+    const header = Buffer.from(
+      JSON.stringify({
+        alg: this.signingAlgorithm,
+        typ: "JWT",
+        kid: this.getSigningKeyId(),
+      }),
+    ).toString("base64url");
+    const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
+    const signature = crypto
+      .sign(
+        "sha256",
+        Buffer.from(`${header}.${body}`),
+        this.getSigningKeyInput(),
+      )
+      .toString("base64url");
     const token = `${header}.${body}.${signature}`;
 
     await this.issuedTokens.set(tokenId, {
@@ -738,81 +922,116 @@ export class OIDCBridge {
     return { token, tokenId };
   }
 
-  private async generateRefreshToken(clientId: string, subjectId: string, scope: string, sessionId?: string): Promise<string> {
-    const refreshToken = crypto.randomBytes(48).toString('base64url');
-    await this.refreshTokenMap.set(refreshToken, { tokenId: refreshToken, clientId, subjectId, scope, sessionId });
+  private async generateRefreshToken(
+    clientId: string,
+    subjectId: string,
+    scope: string,
+    sessionId?: string,
+  ): Promise<string> {
+    const refreshToken = crypto.randomBytes(48).toString("base64url");
+    await this.refreshTokenMap.set(refreshToken, {
+      tokenId: refreshToken,
+      clientId,
+      subjectId,
+      scope,
+      sessionId,
+    });
     return refreshToken;
   }
 
-  private verifyPKCE(codeVerifier: string, codeChallenge: string, method: string): boolean {
-    if (method === 'plain') {
+  private verifyPKCE(
+    codeVerifier: string,
+    codeChallenge: string,
+    method: string,
+  ): boolean {
+    if (method === "plain") {
       return codeVerifier === codeChallenge;
     }
     // S256
-    const hash = crypto.createHash('sha256').update(codeVerifier).digest('base64url');
+    const hash = crypto
+      .createHash("sha256")
+      .update(codeVerifier)
+      .digest("base64url");
     return hash === codeChallenge;
   }
 
-  private async authenticateClient(clientId: string, clientSecret?: string): Promise<void> {
+  private async authenticateClient(
+    clientId: string,
+    clientSecret?: string,
+  ): Promise<void> {
     const client = await this.clients.get(clientId);
     if (!client) {
-      throw new OIDCError('invalid_client', 'Client not found');
+      throw new OIDCError("invalid_client", "Client not found");
     }
     if (!client.active) {
-      throw new OIDCError('invalid_client', 'Client is inactive');
+      throw new OIDCError("invalid_client", "Client is inactive");
     }
-    if (client.registration.tokenEndpointAuthMethod !== 'none' && clientSecret !== client.clientSecret) {
-      throw new OIDCError('invalid_client', 'Client authentication failed');
+    if (
+      client.registration.tokenEndpointAuthMethod !== "none" &&
+      clientSecret !== client.clientSecret
+    ) {
+      throw new OIDCError("invalid_client", "Client authentication failed");
     }
   }
 
   private async verifyToken(
     token: string,
-    expectedTokenType: IssuedToken['tokenType'],
+    expectedTokenType: IssuedToken["tokenType"],
   ): Promise<{ payload: Record<string, unknown>; tokenRecord: IssuedToken }> {
-    const [encodedHeader, encodedPayload, encodedSignature] = token.split('.');
+    const [encodedHeader, encodedPayload, encodedSignature] = token.split(".");
     if (!encodedHeader || !encodedPayload || !encodedSignature) {
-      throw new OIDCError('invalid_token', 'Malformed JWT', 401);
+      throw new OIDCError("invalid_token", "Malformed JWT", 401);
     }
 
     let header: Record<string, unknown>;
     let payload: Record<string, unknown>;
 
     try {
-      header = JSON.parse(Buffer.from(encodedHeader, 'base64url').toString('utf-8')) as Record<string, unknown>;
-      payload = JSON.parse(Buffer.from(encodedPayload, 'base64url').toString('utf-8')) as Record<string, unknown>;
+      header = JSON.parse(
+        Buffer.from(encodedHeader, "base64url").toString("utf-8"),
+      ) as Record<string, unknown>;
+      payload = JSON.parse(
+        Buffer.from(encodedPayload, "base64url").toString("utf-8"),
+      ) as Record<string, unknown>;
     } catch {
-      throw new OIDCError('invalid_token', 'JWT decoding failed', 401);
+      throw new OIDCError("invalid_token", "JWT decoding failed", 401);
     }
 
-    if (header.alg !== this.signingAlgorithm || header.kid !== this.getSigningKeyId()) {
-      throw new OIDCError('invalid_token', 'Unexpected JWT header', 401);
+    if (
+      header.alg !== this.signingAlgorithm ||
+      header.kid !== this.getSigningKeyId()
+    ) {
+      throw new OIDCError("invalid_token", "Unexpected JWT header", 401);
     }
 
-    const signature = Buffer.from(encodedSignature, 'base64url');
+    const signature = Buffer.from(encodedSignature, "base64url");
     const verified = crypto.verify(
-      'sha256',
+      "sha256",
       Buffer.from(`${encodedHeader}.${encodedPayload}`),
       this.getVerificationKeyInput(),
       signature,
     );
 
     if (!verified) {
-      throw new OIDCError('invalid_token', 'JWT signature verification failed', 401);
+      throw new OIDCError(
+        "invalid_token",
+        "JWT signature verification failed",
+        401,
+      );
     }
 
     const tokenId = payload.jti;
-    if (typeof tokenId !== 'string') {
-      throw new OIDCError('invalid_token', 'JWT missing jti', 401);
+    if (typeof tokenId !== "string") {
+      throw new OIDCError("invalid_token", "JWT missing jti", 401);
     }
 
     const tokenRecord = await this.issuedTokens.get(tokenId);
     if (!tokenRecord || tokenRecord.revoked) {
-      throw new OIDCError('invalid_token', 'Token not found or revoked', 401);
+      throw new OIDCError("invalid_token", "Token not found or revoked", 401);
     }
 
     if (tokenRecord.tokenType !== expectedTokenType) {
-      throw new OIDCError('invalid_token', 'Unexpected token type', 401);
+      throw new OIDCError("invalid_token", "Unexpected token type", 401);
     }
 
     const now = Math.floor(Date.now() / 1000);
@@ -821,12 +1040,16 @@ export class OIDCBridge {
     const sub = payload.sub;
     const aud = payload.aud;
 
-    if (typeof exp !== 'number' || exp < now || tokenRecord.expiresAt < now) {
-      throw new OIDCError('invalid_token', 'Token expired', 401);
+    if (typeof exp !== "number" || exp < now || tokenRecord.expiresAt < now) {
+      throw new OIDCError("invalid_token", "Token expired", 401);
     }
 
-    if (iss !== this.issuer || sub !== tokenRecord.subjectId || aud !== tokenRecord.clientId) {
-      throw new OIDCError('invalid_token', 'JWT claims validation failed', 401);
+    if (
+      iss !== this.issuer ||
+      sub !== tokenRecord.subjectId ||
+      aud !== tokenRecord.clientId
+    ) {
+      throw new OIDCError("invalid_token", "JWT claims validation failed", 401);
     }
 
     return { payload, tokenRecord };
@@ -835,16 +1058,16 @@ export class OIDCBridge {
   private resolveSigningAlgorithm(): SupportedSigningAlgorithm {
     const configured = process.env.OIDC_SIGNING_ALG;
     if (!configured) {
-      return 'RS256';
+      return "RS256";
     }
 
-    if (configured === 'RS256' || configured === 'PS256') {
+    if (configured === "RS256" || configured === "PS256") {
       return configured;
     }
 
     throw new OIDCError(
-      'server_error',
-      'OIDC_SIGNING_ALG must be one of RS256 or PS256.',
+      "server_error",
+      "OIDC_SIGNING_ALG must be one of RS256 or PS256.",
       503,
     );
   }
@@ -857,8 +1080,8 @@ export class OIDCBridge {
     const rawPrivateKey = process.env.OIDC_SIGNING_PRIVATE_KEY;
     if (!rawPrivateKey) {
       throw new OIDCError(
-        'server_error',
-        'OIDC_SIGNING_PRIVATE_KEY not configured. OIDC token issuance is disabled until asymmetric signing is configured.',
+        "server_error",
+        "OIDC_SIGNING_PRIVATE_KEY not configured. OIDC token issuance is disabled until asymmetric signing is configured.",
         503,
       );
     }
@@ -891,13 +1114,20 @@ export class OIDCBridge {
       return this.signingKeyId;
     }
 
-    const spki = this.getSigningPublicKey().export({ format: 'der', type: 'spki' });
-    this.signingKeyId = crypto.createHash('sha256').update(spki).digest('base64url').slice(0, 24);
+    const spki = this.getSigningPublicKey().export({
+      format: "der",
+      type: "spki",
+    });
+    this.signingKeyId = crypto
+      .createHash("sha256")
+      .update(spki)
+      .digest("base64url")
+      .slice(0, 24);
     return this.signingKeyId;
   }
 
   private getSigningKeyInput(): crypto.KeyLike | crypto.SignKeyObjectInput {
-    if (this.signingAlgorithm === 'PS256') {
+    if (this.signingAlgorithm === "PS256") {
       return {
         key: this.getSigningPrivateKey(),
         padding: crypto.constants.RSA_PKCS1_PSS_PADDING,
@@ -908,8 +1138,10 @@ export class OIDCBridge {
     return this.getSigningPrivateKey();
   }
 
-  private getVerificationKeyInput(): crypto.KeyLike | crypto.VerifyKeyObjectInput {
-    if (this.signingAlgorithm === 'PS256') {
+  private getVerificationKeyInput():
+    | crypto.KeyLike
+    | crypto.VerifyKeyObjectInput {
+    if (this.signingAlgorithm === "PS256") {
       return {
         key: this.getSigningPublicKey(),
         padding: crypto.constants.RSA_PKCS1_PSS_PADDING,
@@ -922,32 +1154,32 @@ export class OIDCBridge {
 
   private parsePrivateKey(rawKey: string): crypto.KeyObject {
     const trimmed = rawKey.trim();
-    if (trimmed.includes('BEGIN PRIVATE KEY')) {
+    if (trimmed.includes("BEGIN PRIVATE KEY")) {
       return crypto.createPrivateKey(trimmed);
     }
 
     return crypto.createPrivateKey({
-      key: Buffer.from(this.normalizeBase64(trimmed), 'base64'),
-      format: 'der',
-      type: 'pkcs8',
+      key: Buffer.from(this.normalizeBase64(trimmed), "base64"),
+      format: "der",
+      type: "pkcs8",
     });
   }
 
   private parsePublicKey(rawKey: string): crypto.KeyObject {
     const trimmed = rawKey.trim();
-    if (trimmed.includes('BEGIN PUBLIC KEY')) {
+    if (trimmed.includes("BEGIN PUBLIC KEY")) {
       return crypto.createPublicKey(trimmed);
     }
 
     return crypto.createPublicKey({
-      key: Buffer.from(this.normalizeBase64(trimmed), 'base64'),
-      format: 'der',
-      type: 'spki',
+      key: Buffer.from(this.normalizeBase64(trimmed), "base64"),
+      format: "der",
+      type: "spki",
     });
   }
 
   private normalizeBase64(value: string): string {
-    return value.replace(/-/g, '+').replace(/_/g, '/');
+    return value.replace(/-/g, "+").replace(/_/g, "/");
   }
 
   // -------------------------------------------------------------------------
@@ -962,7 +1194,7 @@ export class OIDCBridge {
     if (client) {
       client.active = false;
       await this.clients.set(clientId, client);
-      logger.info('oidc_client_revoked', { clientId });
+      logger.info("oidc_client_revoked", { clientId });
     }
   }
 }
@@ -977,7 +1209,7 @@ export class OIDCError extends Error {
     public readonly statusCode: number = 400,
   ) {
     super(message);
-    this.name = 'OIDCError';
+    this.name = "OIDCError";
   }
 
   toJSON(): Record<string, unknown> {

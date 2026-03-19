@@ -1,14 +1,14 @@
-import { z } from 'zod';
-import { createLogger, format, transports } from 'winston';
-import crypto from 'crypto';
+import { z } from "zod";
+import { createLogger, format, transports } from "winston";
+import crypto from "crypto";
 
 // ---------------------------------------------------------------------------
 // Logger
 // ---------------------------------------------------------------------------
 const logger = createLogger({
-  level: process.env.LOG_LEVEL ?? 'info',
+  level: process.env.LOG_LEVEL ?? "info",
   format: format.combine(format.timestamp(), format.json()),
-  defaultMeta: { service: 'sla-monitor' },
+  defaultMeta: { service: "sla-monitor" },
   transports: [new transports.Console()],
 });
 
@@ -16,37 +16,41 @@ const logger = createLogger({
 // Zod Schemas
 // ---------------------------------------------------------------------------
 export const ServiceComponentSchema = z.enum([
-  'api_gateway',
-  'credential_service',
-  'verification_service',
-  'proof_generation',
-  'tee_nodes',
-  'identity_service',
-  'compliance_engine',
-  'webhook_delivery',
-  'oidc_bridge',
-  'sanctions_screening',
+  "api_gateway",
+  "credential_service",
+  "verification_service",
+  "proof_generation",
+  "tee_nodes",
+  "identity_service",
+  "compliance_engine",
+  "webhook_delivery",
+  "oidc_bridge",
+  "sanctions_screening",
 ]);
 
 export type ServiceComponent = z.infer<typeof ServiceComponentSchema>;
 
 export const SLADefinitionSchema = z.object({
   clientId: z.string(),
-  tier: z.enum(['standard', 'professional', 'enterprise']),
-  components: z.array(z.object({
-    component: ServiceComponentSchema,
-    uptimeTarget: z.number().min(90).max(100).default(99.9),
-    latencyP50Ms: z.number().int().positive(),
-    latencyP95Ms: z.number().int().positive(),
-    latencyP99Ms: z.number().int().positive(),
-    errorRateTarget: z.number().min(0).max(10).default(0.1),
-    proofGenerationTimeMs: z.number().int().positive().optional(),
-  })),
-  creditPercentages: z.object({
-    tier1: z.number().default(10),
-    tier2: z.number().default(25),
-    tier3: z.number().default(50),
-  }).default({}),
+  tier: z.enum(["standard", "professional", "enterprise"]),
+  components: z.array(
+    z.object({
+      component: ServiceComponentSchema,
+      uptimeTarget: z.number().min(90).max(100).default(99.9),
+      latencyP50Ms: z.number().int().positive(),
+      latencyP95Ms: z.number().int().positive(),
+      latencyP99Ms: z.number().int().positive(),
+      errorRateTarget: z.number().min(0).max(10).default(0.1),
+      proofGenerationTimeMs: z.number().int().positive().optional(),
+    }),
+  ),
+  creditPercentages: z
+    .object({
+      tier1: z.number().default(10),
+      tier2: z.number().default(25),
+      tier3: z.number().default(50),
+    })
+    .default({}),
   reportingIntervalDays: z.number().int().positive().default(30),
 });
 
@@ -73,7 +77,13 @@ interface SLAViolation {
   id: string;
   clientId: string;
   component: ServiceComponent;
-  violationType: 'uptime' | 'latency_p50' | 'latency_p95' | 'latency_p99' | 'error_rate' | 'proof_generation';
+  violationType:
+    | "uptime"
+    | "latency_p50"
+    | "latency_p95"
+    | "latency_p99"
+    | "error_rate"
+    | "proof_generation";
   target: number;
   actual: number;
   detectedAt: string;
@@ -119,13 +129,19 @@ export class SLAMonitor {
   private latencyBuckets: LatencyBucket[] = [];
   private uptimeRecords: UptimeRecord[] = [];
   private violations: SLAViolation[] = [];
-  private alerts: Array<{ id: string; clientId: string; message: string; severity: string; timestamp: string }> = [];
+  private alerts: Array<{
+    id: string;
+    clientId: string;
+    message: string;
+    severity: string;
+    timestamp: string;
+  }> = [];
 
   private readonly maxBuckets = 1_000_000;
   private readonly maxUptimeRecords = 100_000;
 
   constructor() {
-    logger.info('SLAMonitor initialized');
+    logger.info("SLAMonitor initialized");
   }
 
   // -------------------------------------------------------------------------
@@ -134,7 +150,11 @@ export class SLAMonitor {
   registerSLA(definition: SLADefinition): void {
     const parsed = SLADefinitionSchema.parse(definition);
     this.slaDefinitions.set(parsed.clientId, parsed);
-    logger.info('sla_registered', { clientId: parsed.clientId, tier: parsed.tier, components: parsed.components.length });
+    logger.info("sla_registered", {
+      clientId: parsed.clientId,
+      tier: parsed.tier,
+      components: parsed.components.length,
+    });
   }
 
   getSLA(clientId: string): SLADefinition | null {
@@ -144,7 +164,11 @@ export class SLAMonitor {
   // -------------------------------------------------------------------------
   // Record metrics
   // -------------------------------------------------------------------------
-  recordLatency(component: ServiceComponent, latencyMs: number, success: boolean): void {
+  recordLatency(
+    component: ServiceComponent,
+    latencyMs: number,
+    success: boolean,
+  ): void {
     this.latencyBuckets.push({
       timestamp: Date.now(),
       component,
@@ -153,11 +177,17 @@ export class SLAMonitor {
     });
 
     if (this.latencyBuckets.length > this.maxBuckets) {
-      this.latencyBuckets = this.latencyBuckets.slice(-Math.floor(this.maxBuckets / 2));
+      this.latencyBuckets = this.latencyBuckets.slice(
+        -Math.floor(this.maxBuckets / 2),
+      );
     }
   }
 
-  recordUptime(component: ServiceComponent, available: boolean, responseTimeMs: number): void {
+  recordUptime(
+    component: ServiceComponent,
+    available: boolean,
+    responseTimeMs: number,
+  ): void {
     this.uptimeRecords.push({
       component,
       checkTimestamp: Date.now(),
@@ -166,7 +196,9 @@ export class SLAMonitor {
     });
 
     if (this.uptimeRecords.length > this.maxUptimeRecords) {
-      this.uptimeRecords = this.uptimeRecords.slice(-Math.floor(this.maxUptimeRecords / 2));
+      this.uptimeRecords = this.uptimeRecords.slice(
+        -Math.floor(this.maxUptimeRecords / 2),
+      );
     }
 
     // Check all SLAs for this component
@@ -174,7 +206,7 @@ export class SLAMonitor {
       for (const [clientId, sla] of this.slaDefinitions) {
         const compDef = sla.components.find((c) => c.component === component);
         if (compDef) {
-          this.emitAlert(clientId, `${component} is unavailable`, 'critical');
+          this.emitAlert(clientId, `${component} is unavailable`, "critical");
         }
       }
     }
@@ -183,7 +215,10 @@ export class SLAMonitor {
   // -------------------------------------------------------------------------
   // Calculate percentiles
   // -------------------------------------------------------------------------
-  getLatencyPercentiles(component: ServiceComponent, windowMs: number): {
+  getLatencyPercentiles(
+    component: ServiceComponent,
+    windowMs: number,
+  ): {
     p50: number;
     p95: number;
     p99: number;
@@ -220,7 +255,10 @@ export class SLAMonitor {
   // -------------------------------------------------------------------------
   // Calculate uptime
   // -------------------------------------------------------------------------
-  getUptime(component: ServiceComponent, windowMs: number): { uptimePercentage: number; totalChecks: number; downChecks: number } {
+  getUptime(
+    component: ServiceComponent,
+    windowMs: number,
+  ): { uptimePercentage: number; totalChecks: number; downChecks: number } {
     const cutoff = Date.now() - windowMs;
     const records = this.uptimeRecords.filter(
       (r) => r.component === component && r.checkTimestamp >= cutoff,
@@ -231,7 +269,9 @@ export class SLAMonitor {
     }
 
     const downChecks = records.filter((r) => !r.available).length;
-    const uptimePercentage = Math.round(((records.length - downChecks) / records.length) * 10000) / 100;
+    const uptimePercentage =
+      Math.round(((records.length - downChecks) / records.length) * 10000) /
+      100;
 
     return { uptimePercentage, totalChecks: records.length, downChecks };
   }
@@ -254,29 +294,88 @@ export class SLAMonitor {
 
       // Uptime violation
       if (uptime.uptimePercentage < compDef.uptimeTarget) {
-        newViolations.push(this.createViolation(clientId, compDef.component, 'uptime', compDef.uptimeTarget, uptime.uptimePercentage, periodStart, now, sla));
+        newViolations.push(
+          this.createViolation(
+            clientId,
+            compDef.component,
+            "uptime",
+            compDef.uptimeTarget,
+            uptime.uptimePercentage,
+            periodStart,
+            now,
+            sla,
+          ),
+        );
       }
 
       // Latency violations
       if (latency.p50 > compDef.latencyP50Ms && latency.count > 0) {
-        newViolations.push(this.createViolation(clientId, compDef.component, 'latency_p50', compDef.latencyP50Ms, latency.p50, periodStart, now, sla));
+        newViolations.push(
+          this.createViolation(
+            clientId,
+            compDef.component,
+            "latency_p50",
+            compDef.latencyP50Ms,
+            latency.p50,
+            periodStart,
+            now,
+            sla,
+          ),
+        );
       }
       if (latency.p95 > compDef.latencyP95Ms && latency.count > 0) {
-        newViolations.push(this.createViolation(clientId, compDef.component, 'latency_p95', compDef.latencyP95Ms, latency.p95, periodStart, now, sla));
+        newViolations.push(
+          this.createViolation(
+            clientId,
+            compDef.component,
+            "latency_p95",
+            compDef.latencyP95Ms,
+            latency.p95,
+            periodStart,
+            now,
+            sla,
+          ),
+        );
       }
       if (latency.p99 > compDef.latencyP99Ms && latency.count > 0) {
-        newViolations.push(this.createViolation(clientId, compDef.component, 'latency_p99', compDef.latencyP99Ms, latency.p99, periodStart, now, sla));
+        newViolations.push(
+          this.createViolation(
+            clientId,
+            compDef.component,
+            "latency_p99",
+            compDef.latencyP99Ms,
+            latency.p99,
+            periodStart,
+            now,
+            sla,
+          ),
+        );
       }
 
       // Error rate violation
       if (latency.errorRate > compDef.errorRateTarget && latency.count > 0) {
-        newViolations.push(this.createViolation(clientId, compDef.component, 'error_rate', compDef.errorRateTarget, latency.errorRate, periodStart, now, sla));
+        newViolations.push(
+          this.createViolation(
+            clientId,
+            compDef.component,
+            "error_rate",
+            compDef.errorRateTarget,
+            latency.errorRate,
+            periodStart,
+            now,
+            sla,
+          ),
+        );
       }
     }
 
     this.violations.push(...newViolations);
     for (const v of newViolations) {
-      this.emitAlert(clientId, `SLA violation: ${v.component} ${v.violationType} (target: ${v.target}, actual: ${v.actual})`, 'high');
+      this.emitAlert(
+        clientId,
+        `SLA violation: ${v.component} ${v.violationType} (target: ${v.target}, actual: ${v.actual})`,
+        "high",
+      );
     }
 
     return newViolations;
@@ -285,7 +384,7 @@ export class SLAMonitor {
   private createViolation(
     clientId: string,
     component: ServiceComponent,
-    violationType: SLAViolation['violationType'],
+    violationType: SLAViolation["violationType"],
     target: number,
     actual: number,
     periodStart: Date,
@@ -345,7 +444,7 @@ export class SLAMonitor {
         errorRateActual: latency.errorRate,
         errorRateTarget: compDef.errorRateTarget,
         totalRequests: latency.count,
-        totalErrors: Math.round(latency.count * latency.errorRate / 100),
+        totalErrors: Math.round((latency.count * latency.errorRate) / 100),
       };
     });
 
@@ -353,7 +452,10 @@ export class SLAMonitor {
       (v) => v.clientId === clientId && new Date(v.detectedAt) >= periodStart,
     );
 
-    const totalCredit = periodViolations.reduce((sum, v) => sum + v.creditPercentage, 0);
+    const totalCredit = periodViolations.reduce(
+      (sum, v) => sum + v.creditPercentage,
+      0,
+    );
     const overallCompliance = periodViolations.length === 0;
 
     const report: SLAReport = {
@@ -369,7 +471,7 @@ export class SLAMonitor {
       overallCompliance,
     };
 
-    logger.info('sla_report_generated', {
+    logger.info("sla_report_generated", {
       reportId: report.reportId,
       clientId,
       compliance: overallCompliance,
@@ -387,7 +489,9 @@ export class SLAMonitor {
     let violations = this.violations.filter((v) => v.clientId === clientId);
     if (since) {
       const sinceDate = new Date(since);
-      violations = violations.filter((v) => new Date(v.detectedAt) >= sinceDate);
+      violations = violations.filter(
+        (v) => new Date(v.detectedAt) >= sinceDate,
+      );
     }
     return violations;
   }
@@ -412,13 +516,16 @@ export class SLAMonitor {
     };
     this.alerts.push(alert);
     if (this.alerts.length > 10000) this.alerts = this.alerts.slice(-5000);
-    logger.warn('sla_alert', alert);
+    logger.warn("sla_alert", alert);
   }
 
   getAlerts(clientId: string, limit = 50): typeof this.alerts {
     return this.alerts
       .filter((a) => a.clientId === clientId)
-      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+      .sort(
+        (a, b) =>
+          new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
+      )
       .slice(0, limit);
   }
 }

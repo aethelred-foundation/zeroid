@@ -6,13 +6,13 @@
  * Uses a combination of on-chain reads (wagmi) and API calls.
  */
 
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useAccount, useReadContract, useWriteContract } from 'wagmi';
-import { type Address as ViemAddress, type Hash } from 'viem';
-import { toast } from 'sonner';
-import { apiClient } from '@/lib/api/client';
-import { CONTRACT_ADDRESSES } from '@/config/constants';
-import type { Address, Bytes32, ISODateString, UnixTimestamp } from '@/types';
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useAccount, useReadContract, useWriteContract } from "wagmi";
+import { type Address as ViemAddress, type Hash } from "viem";
+import { toast } from "sonner";
+import { apiClient } from "@/lib/api/client";
+import { CONTRACT_ADDRESSES } from "@/config/constants";
+import type { Address, Bytes32, ISODateString, UnixTimestamp } from "@/types";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -22,7 +22,7 @@ export interface SupportedChain {
   chainId: number;
   name: string;
   shortName: string;
-  network: 'mainnet' | 'testnet';
+  network: "mainnet" | "testnet";
   bridgeContractAddress: Address;
   explorerUrl: string;
   avgBlockTimeMs: number;
@@ -40,7 +40,7 @@ export interface BridgeRequest {
   preservePrivacy: boolean;
 }
 
-export type BridgePriority = 'standard' | 'fast' | 'instant';
+export type BridgePriority = "standard" | "fast" | "instant";
 
 export interface BridgeTransaction {
   id: string;
@@ -67,13 +67,13 @@ export interface BridgeTransaction {
 }
 
 export type BridgeStatus =
-  | 'pending'
-  | 'source_confirmed'
-  | 'relaying'
-  | 'destination_pending'
-  | 'completed'
-  | 'failed'
-  | 'refunded';
+  | "pending"
+  | "source_confirmed"
+  | "relaying"
+  | "destination_pending"
+  | "completed"
+  | "failed"
+  | "refunded";
 
 export interface BridgeFee {
   baseFee: string;
@@ -108,7 +108,7 @@ export interface BridgedCredential {
   schemaName: string;
   bridgedAt: ISODateString;
   expiresAt: ISODateString;
-  status: 'active' | 'expired' | 'revoked' | 'pending_sync';
+  status: "active" | "expired" | "revoked" | "pending_sync";
   bridgeTxId: string;
   lastSyncedAt: ISODateString;
 }
@@ -132,12 +132,12 @@ export interface CrossChainVerification {
 // ---------------------------------------------------------------------------
 
 const crossChainKeys = {
-  all: ['cross-chain'] as const,
-  chains: () => [...crossChainKeys.all, 'chains'] as const,
-  bridge: (id: string) => [...crossChainKeys.all, 'bridge', id] as const,
-  bridged: () => [...crossChainKeys.all, 'bridged'] as const,
+  all: ["cross-chain"] as const,
+  chains: () => [...crossChainKeys.all, "chains"] as const,
+  bridge: (id: string) => [...crossChainKeys.all, "bridge", id] as const,
+  bridged: () => [...crossChainKeys.all, "bridged"] as const,
   fee: (credId: string, chainId: number) =>
-    [...crossChainKeys.all, 'fee', credId, chainId] as const,
+    [...crossChainKeys.all, "fee", credId, chainId] as const,
 };
 
 // ---------------------------------------------------------------------------
@@ -148,7 +148,9 @@ export function useSupportedChains() {
   return useQuery({
     queryKey: crossChainKeys.chains(),
     queryFn: () =>
-      apiClient.get<SupportedChain[]>('/api/v1/bridge/chains') as unknown as SupportedChain[],
+      apiClient.get<SupportedChain[]>(
+        "/api/v1/bridge/chains",
+      ) as unknown as SupportedChain[],
     staleTime: 600_000,
   });
 }
@@ -168,7 +170,7 @@ export function useBridgeCredential() {
       const txHash = await writeContractAsync({
         address: CONTRACT_ADDRESSES.credentialRegistry as ViemAddress,
         abi: BRIDGE_ABI,
-        functionName: 'inititateBridge',
+        functionName: "inititateBridge",
         args: [
           request.credentialId,
           BigInt(request.destinationChainId),
@@ -179,7 +181,7 @@ export function useBridgeCredential() {
 
       // 2. Register bridge with API for relay tracking
       const bridgeTx = await apiClient.post<BridgeTransaction>(
-        '/api/v1/bridge/initiate',
+        "/api/v1/bridge/initiate",
         {
           credentialId: request.credentialId,
           destinationChainId: request.destinationChainId,
@@ -194,13 +196,13 @@ export function useBridgeCredential() {
       return bridgeTx as unknown as BridgeTransaction;
     },
     onSuccess: (data) => {
-      toast.success('Bridge initiated', {
+      toast.success("Bridge initiated", {
         description: `Bridging to ${data.destinationChainName} — est. completion: ${new Date(data.estimatedCompletionAt).toLocaleTimeString()}`,
       });
       queryClient.invalidateQueries({ queryKey: crossChainKeys.bridged() });
     },
     onError: (err: Error) => {
-      toast.error('Bridge initiation failed', { description: err.message });
+      toast.error("Bridge initiation failed", { description: err.message });
     },
   });
 }
@@ -211,7 +213,7 @@ export function useBridgeCredential() {
 
 export function useBridgeStatus(bridgeId: string | undefined) {
   return useQuery({
-    queryKey: crossChainKeys.bridge(bridgeId ?? ''),
+    queryKey: crossChainKeys.bridge(bridgeId ?? ""),
     queryFn: () =>
       apiClient.get<BridgeTransaction>(
         `/api/v1/bridge/status/${bridgeId}`,
@@ -221,7 +223,11 @@ export function useBridgeStatus(bridgeId: string | undefined) {
     refetchInterval: (query) => {
       const data = query.state.data as BridgeTransaction | undefined;
       if (!data) return 10_000;
-      if (data.status === 'completed' || data.status === 'failed' || data.status === 'refunded') {
+      if (
+        data.status === "completed" ||
+        data.status === "failed" ||
+        data.status === "refunded"
+      ) {
         return false;
       }
       return 10_000;
@@ -239,7 +245,7 @@ export function useBridgedCredentials() {
   return useQuery({
     queryKey: crossChainKeys.bridged(),
     queryFn: () =>
-      apiClient.get<BridgedCredential[]>('/api/v1/bridge/credentials', {
+      apiClient.get<BridgedCredential[]>("/api/v1/bridge/credentials", {
         owner: address as string,
       }) as unknown as BridgedCredential[],
     enabled: !!address,
@@ -256,15 +262,12 @@ export function useBridgeFeeEstimate(
   destinationChainId: number | undefined,
 ) {
   return useQuery({
-    queryKey: crossChainKeys.fee(credentialId ?? '', destinationChainId ?? 0),
+    queryKey: crossChainKeys.fee(credentialId ?? "", destinationChainId ?? 0),
     queryFn: () =>
-      apiClient.get<BridgeFeeEstimate>(
-        `/api/v1/bridge/estimate`,
-        {
-          credentialId: credentialId!,
-          destinationChainId: destinationChainId!,
-        },
-      ) as unknown as BridgeFeeEstimate,
+      apiClient.get<BridgeFeeEstimate>(`/api/v1/bridge/estimate`, {
+        credentialId: credentialId!,
+        destinationChainId: destinationChainId!,
+      }) as unknown as BridgeFeeEstimate,
     enabled: !!credentialId && !!destinationChainId,
     staleTime: 30_000,
   });
@@ -281,23 +284,25 @@ export function useVerifyBridgedCredential() {
       chainId: number;
     }): Promise<CrossChainVerification> => {
       return apiClient.post<CrossChainVerification>(
-        '/api/v1/bridge/verify',
+        "/api/v1/bridge/verify",
         params,
       ) as unknown as CrossChainVerification;
     },
     onSuccess: (data) => {
       if (data.verified) {
-        toast.success('Credential verified on destination chain', {
+        toast.success("Credential verified on destination chain", {
           description: `Verified on ${data.chainName} — integrity: valid, issuer: valid`,
         });
       } else {
-        toast.error('Credential verification failed', {
+        toast.error("Credential verification failed", {
           description: `Chain: ${data.chainName} — check integrity and issuer status`,
         });
       }
     },
     onError: (err: Error) => {
-      toast.error('Cross-chain verification failed', { description: err.message });
+      toast.error("Cross-chain verification failed", {
+        description: err.message,
+      });
     },
   });
 }
@@ -308,26 +313,26 @@ export function useVerifyBridgedCredential() {
 
 const BRIDGE_ABI = [
   {
-    name: 'inititateBridge',
-    type: 'function',
-    stateMutability: 'payable',
+    name: "inititateBridge",
+    type: "function",
+    stateMutability: "payable",
     inputs: [
-      { name: 'credentialId', type: 'bytes32' },
-      { name: 'destinationChainId', type: 'uint256' },
-      { name: 'recipient', type: 'address' },
-      { name: 'preservePrivacy', type: 'bool' },
+      { name: "credentialId", type: "bytes32" },
+      { name: "destinationChainId", type: "uint256" },
+      { name: "recipient", type: "address" },
+      { name: "preservePrivacy", type: "bool" },
     ],
-    outputs: [{ name: 'bridgeNonce', type: 'uint256' }],
+    outputs: [{ name: "bridgeNonce", type: "uint256" }],
   },
   {
-    name: 'getBridgeStatus',
-    type: 'function',
-    stateMutability: 'view',
-    inputs: [{ name: 'bridgeNonce', type: 'uint256' }],
+    name: "getBridgeStatus",
+    type: "function",
+    stateMutability: "view",
+    inputs: [{ name: "bridgeNonce", type: "uint256" }],
     outputs: [
-      { name: 'status', type: 'uint8' },
-      { name: 'destinationChainId', type: 'uint256' },
-      { name: 'timestamp', type: 'uint256' },
+      { name: "status", type: "uint8" },
+      { name: "destinationChainId", type: "uint256" },
+      { name: "timestamp", type: "uint256" },
     ],
   },
 ] as const;

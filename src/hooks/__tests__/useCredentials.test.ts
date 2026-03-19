@@ -3,24 +3,25 @@
  * credential requesting, and on-chain revocation.
  */
 
-import { renderHook, act, waitFor } from '@testing-library/react';
-import React from 'react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { toast } from 'sonner';
-import { apiClient } from '@/lib/api/client';
+import { renderHook, act, waitFor } from "@testing-library/react";
+import React from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { toast } from "sonner";
+import { apiClient } from "@/lib/api/client";
 
 // ---------------------------------------------------------------------------
 // Mocks
 // ---------------------------------------------------------------------------
 
-const mockAddress = '0xholder0000000000000000000000000000000001';
-const mockTxHash = '0xtxhash000000000000000000000000000000000000000000000000000000001';
+const mockAddress = "0xholder0000000000000000000000000000000001";
+const mockTxHash =
+  "0xtxhash000000000000000000000000000000000000000000000000000000001";
 
 const mockUseAccount = jest.fn();
 const mockUseReadContract = jest.fn();
 const mockWriteContractAsync = jest.fn();
 
-jest.mock('wagmi', () => ({
+jest.mock("wagmi", () => ({
   useAccount: () => mockUseAccount(),
   useReadContract: (args: unknown) => mockUseReadContract(args),
   useWriteContract: () => ({
@@ -28,23 +29,23 @@ jest.mock('wagmi', () => ({
   }),
 }));
 
-jest.mock('sonner', () => ({
+jest.mock("sonner", () => ({
   toast: {
     success: jest.fn(),
     error: jest.fn(),
   },
 }));
 
-jest.mock('@/lib/api/client', () => ({
+jest.mock("@/lib/api/client", () => ({
   apiClient: {
     get: jest.fn(),
     post: jest.fn(),
   },
 }));
 
-jest.mock('@/config/constants', () => ({
-  CREDENTIAL_REGISTRY_ADDRESS: '0xCredRegistryAddress',
-  CREDENTIAL_REGISTRY_ABI: [{ type: 'function', name: 'credentialHash' }],
+jest.mock("@/config/constants", () => ({
+  CREDENTIAL_REGISTRY_ADDRESS: "0xCredRegistryAddress",
+  CREDENTIAL_REGISTRY_ABI: [{ type: "function", name: "credentialHash" }],
 }));
 
 // ---------------------------------------------------------------------------
@@ -83,23 +84,23 @@ beforeEach(() => {
 // Tests
 // ---------------------------------------------------------------------------
 
-describe('useCredentials hooks', () => {
+describe("useCredentials hooks", () => {
   // =========================================================================
   // useCredentials
   // =========================================================================
 
-  describe('useCredentials', () => {
-    it('fetches credentials for the connected address', async () => {
+  describe("useCredentials", () => {
+    it("fetches credentials for the connected address", async () => {
       const credsResponse = {
         credentials: [
-          { hash: '0xcred1', status: 'active' },
-          { hash: '0xcred2', status: 'active' },
+          { hash: "0xcred1", status: "active" },
+          { hash: "0xcred2", status: "active" },
         ],
         total: 2,
       };
       (apiClient.get as jest.Mock).mockResolvedValue(credsResponse);
 
-      const { useCredentials } = await import('@/hooks/useCredentials');
+      const { useCredentials } = await import("@/hooks/useCredentials");
       const { result } = renderHook(() => useCredentials(), {
         wrapper: createQueryWrapper(),
       });
@@ -113,14 +114,14 @@ describe('useCredentials hooks', () => {
       );
     });
 
-    it('passes status filter to the query', async () => {
+    it("passes status filter to the query", async () => {
       (apiClient.get as jest.Mock).mockResolvedValue({
         credentials: [],
         total: 0,
       });
 
-      const { useCredentials } = await import('@/hooks/useCredentials');
-      renderHook(() => useCredentials('active' as any), {
+      const { useCredentials } = await import("@/hooks/useCredentials");
+      renderHook(() => useCredentials("active" as any), {
         wrapper: createQueryWrapper(),
       });
 
@@ -129,13 +130,13 @@ describe('useCredentials hooks', () => {
       });
 
       const url = (apiClient.get as jest.Mock).mock.calls[0][0] as string;
-      expect(url).toContain('status=active');
+      expect(url).toContain("status=active");
     });
 
-    it('does not fetch when address is undefined', async () => {
+    it("does not fetch when address is undefined", async () => {
       mockUseAccount.mockReturnValue({ address: undefined });
 
-      const { useCredentials } = await import('@/hooks/useCredentials');
+      const { useCredentials } = await import("@/hooks/useCredentials");
       const { result } = renderHook(() => useCredentials(), {
         wrapper: createQueryWrapper(),
       });
@@ -144,18 +145,18 @@ describe('useCredentials hooks', () => {
       expect(apiClient.get).not.toHaveBeenCalled();
     });
 
-    it('includes correct query key with status', async () => {
+    it("includes correct query key with status", async () => {
       (apiClient.get as jest.Mock).mockResolvedValue({
         credentials: [],
         total: 0,
       });
 
-      const { useCredentials } = await import('@/hooks/useCredentials');
+      const { useCredentials } = await import("@/hooks/useCredentials");
       const { result: result1 } = renderHook(() => useCredentials(), {
         wrapper: createQueryWrapper(),
       });
       const { result: result2 } = renderHook(
-        () => useCredentials('revoked' as any),
+        () => useCredentials("revoked" as any),
         { wrapper: createQueryWrapper() },
       );
 
@@ -170,22 +171,22 @@ describe('useCredentials hooks', () => {
   // useCredentialDetails
   // =========================================================================
 
-  describe('useCredentialDetails', () => {
-    it('fetches credential detail from API and on-chain hash', async () => {
+  describe("useCredentialDetails", () => {
+    it("fetches credential detail from API and on-chain hash", async () => {
       const credDetail = {
-        hash: '0xcred1',
-        schemaName: 'Government ID',
-        contentHash: '0xonchain_hash_match',
+        hash: "0xcred1",
+        schemaName: "Government ID",
+        contentHash: "0xonchain_hash_match",
       };
 
       (apiClient.get as jest.Mock).mockResolvedValue(credDetail);
       mockUseReadContract.mockReturnValue({
-        data: '0xonchain_hash_match',
+        data: "0xonchain_hash_match",
         isLoading: false,
       });
 
-      const { useCredentialDetails } = await import('@/hooks/useCredentials');
-      const { result } = renderHook(() => useCredentialDetails('cred-123'), {
+      const { useCredentialDetails } = await import("@/hooks/useCredentials");
+      const { result } = renderHook(() => useCredentialDetails("cred-123"), {
         wrapper: createQueryWrapper(),
       });
 
@@ -193,24 +194,24 @@ describe('useCredentials hooks', () => {
         expect(result.current.data).toEqual(credDetail);
       });
 
-      expect(result.current.onChainHash).toBe('0xonchain_hash_match');
+      expect(result.current.onChainHash).toBe("0xonchain_hash_match");
       expect(result.current.isIntegrityValid).toBe(true);
     });
 
-    it('returns isIntegrityValid false when hashes do not match', async () => {
+    it("returns isIntegrityValid false when hashes do not match", async () => {
       const credDetail = {
-        hash: '0xcred1',
-        contentHash: '0xoffchain_hash',
+        hash: "0xcred1",
+        contentHash: "0xoffchain_hash",
       };
 
       (apiClient.get as jest.Mock).mockResolvedValue(credDetail);
       mockUseReadContract.mockReturnValue({
-        data: '0xonchain_hash_different',
+        data: "0xonchain_hash_different",
         isLoading: false,
       });
 
-      const { useCredentialDetails } = await import('@/hooks/useCredentials');
-      const { result } = renderHook(() => useCredentialDetails('cred-123'), {
+      const { useCredentialDetails } = await import("@/hooks/useCredentials");
+      const { result } = renderHook(() => useCredentialDetails("cred-123"), {
         wrapper: createQueryWrapper(),
       });
 
@@ -221,23 +222,23 @@ describe('useCredentials hooks', () => {
       expect(result.current.isIntegrityValid).toBe(false);
     });
 
-    it('returns isIntegrityValid undefined when data is not yet loaded', async () => {
+    it("returns isIntegrityValid undefined when data is not yet loaded", async () => {
       (apiClient.get as jest.Mock).mockReturnValue(new Promise(() => {}));
       mockUseReadContract.mockReturnValue({
         data: undefined,
         isLoading: true,
       });
 
-      const { useCredentialDetails } = await import('@/hooks/useCredentials');
-      const { result } = renderHook(() => useCredentialDetails('cred-123'), {
+      const { useCredentialDetails } = await import("@/hooks/useCredentials");
+      const { result } = renderHook(() => useCredentialDetails("cred-123"), {
         wrapper: createQueryWrapper(),
       });
 
       expect(result.current.isIntegrityValid).toBeUndefined();
     });
 
-    it('does not fetch when credentialId is undefined', async () => {
-      const { useCredentialDetails } = await import('@/hooks/useCredentials');
+    it("does not fetch when credentialId is undefined", async () => {
+      const { useCredentialDetails } = await import("@/hooks/useCredentials");
       const { result } = renderHook(() => useCredentialDetails(undefined), {
         wrapper: createQueryWrapper(),
       });
@@ -246,14 +247,14 @@ describe('useCredentials hooks', () => {
       expect(apiClient.get).not.toHaveBeenCalled();
     });
 
-    it('exposes isHashLoading from on-chain read', async () => {
+    it("exposes isHashLoading from on-chain read", async () => {
       mockUseReadContract.mockReturnValue({
         data: undefined,
         isLoading: true,
       });
 
-      const { useCredentialDetails } = await import('@/hooks/useCredentials');
-      const { result } = renderHook(() => useCredentialDetails('cred-123'), {
+      const { useCredentialDetails } = await import("@/hooks/useCredentials");
+      const { result } = renderHook(() => useCredentialDetails("cred-123"), {
         wrapper: createQueryWrapper(),
       });
 
@@ -265,45 +266,45 @@ describe('useCredentials hooks', () => {
   // useRequestCredential
   // =========================================================================
 
-  describe('useRequestCredential', () => {
-    it('submits a credential request and shows success toast', async () => {
-      const response = { credentialId: 'cred-new-0123456789ab' };
+  describe("useRequestCredential", () => {
+    it("submits a credential request and shows success toast", async () => {
+      const response = { credentialId: "cred-new-0123456789ab" };
       (apiClient.post as jest.Mock).mockResolvedValue(response);
 
-      const { useRequestCredential } = await import('@/hooks/useCredentials');
+      const { useRequestCredential } = await import("@/hooks/useCredentials");
       const { result } = renderHook(() => useRequestCredential(), {
         wrapper: createQueryWrapper(),
       });
 
       await act(async () => {
         await result.current.mutateAsync({
-          issuerDid: 'did:aethelred:testnet:0xissuer',
-          schemaId: 'schema-1',
-          claims: { fullName: 'Alice' },
-          proofOfEligibility: 'proof-data',
+          issuerDid: "did:aethelred:testnet:0xissuer",
+          schemaId: "schema-1",
+          claims: { fullName: "Alice" },
+          proofOfEligibility: "proof-data",
         } as any);
       });
 
       expect(apiClient.post).toHaveBeenCalledWith(
-        '/v1/credentials/request',
+        "/v1/credentials/request",
         expect.objectContaining({
           holderAddress: mockAddress,
-          issuerDid: 'did:aethelred:testnet:0xissuer',
-          schemaId: 'schema-1',
+          issuerDid: "did:aethelred:testnet:0xissuer",
+          schemaId: "schema-1",
         }),
       );
 
-      expect(toast.success).toHaveBeenCalledWith('Credential requested', {
-        description: expect.stringContaining('cred-new-012'),
+      expect(toast.success).toHaveBeenCalledWith("Credential requested", {
+        description: expect.stringContaining("cred-new-012"),
       });
     });
 
-    it('shows error toast on request failure', async () => {
+    it("shows error toast on request failure", async () => {
       (apiClient.post as jest.Mock).mockRejectedValue(
-        new Error('Issuer unavailable'),
+        new Error("Issuer unavailable"),
       );
 
-      const { useRequestCredential } = await import('@/hooks/useCredentials');
+      const { useRequestCredential } = await import("@/hooks/useCredentials");
       const { result } = renderHook(() => useRequestCredential(), {
         wrapper: createQueryWrapper(),
       });
@@ -311,8 +312,8 @@ describe('useCredentials hooks', () => {
       await act(async () => {
         try {
           await result.current.mutateAsync({
-            issuerDid: 'did:aethelred:testnet:0xissuer',
-            schemaId: 'schema-1',
+            issuerDid: "did:aethelred:testnet:0xissuer",
+            schemaId: "schema-1",
             claims: {},
           } as any);
         } catch {
@@ -320,8 +321,8 @@ describe('useCredentials hooks', () => {
         }
       });
 
-      expect(toast.error).toHaveBeenCalledWith('Credential request failed', {
-        description: 'Issuer unavailable',
+      expect(toast.error).toHaveBeenCalledWith("Credential request failed", {
+        description: "Issuer unavailable",
       });
     });
   });
@@ -330,76 +331,76 @@ describe('useCredentials hooks', () => {
   // useRevokeCredential
   // =========================================================================
 
-  describe('useRevokeCredential', () => {
-    it('revokes a credential on-chain and notifies API', async () => {
+  describe("useRevokeCredential", () => {
+    it("revokes a credential on-chain and notifies API", async () => {
       (apiClient.post as jest.Mock).mockResolvedValue({ success: true });
 
-      const { useRevokeCredential } = await import('@/hooks/useCredentials');
+      const { useRevokeCredential } = await import("@/hooks/useCredentials");
       const { result } = renderHook(() => useRevokeCredential(), {
         wrapper: createQueryWrapper(),
       });
 
       let hash: string | undefined;
       await act(async () => {
-        hash = await result.current.mutateAsync('cred-to-revoke');
+        hash = await result.current.mutateAsync("cred-to-revoke");
       });
 
       expect(hash).toBe(mockTxHash);
 
       expect(mockWriteContractAsync).toHaveBeenCalledWith(
         expect.objectContaining({
-          functionName: 'revokeCredential',
-          args: ['cred-to-revoke'],
+          functionName: "revokeCredential",
+          args: ["cred-to-revoke"],
         }),
       );
 
       expect(apiClient.post).toHaveBeenCalledWith(
-        '/v1/credentials/cred-to-revoke/revoke',
+        "/v1/credentials/cred-to-revoke/revoke",
         expect.objectContaining({
           txHash: mockTxHash,
           revokerAddress: mockAddress,
         }),
       );
 
-      expect(toast.success).toHaveBeenCalledWith('Credential revoked');
+      expect(toast.success).toHaveBeenCalledWith("Credential revoked");
     });
 
-    it('shows error toast on revocation failure', async () => {
+    it("shows error toast on revocation failure", async () => {
       mockWriteContractAsync.mockRejectedValue(
-        new Error('Not authorized to revoke'),
+        new Error("Not authorized to revoke"),
       );
 
-      const { useRevokeCredential } = await import('@/hooks/useCredentials');
+      const { useRevokeCredential } = await import("@/hooks/useCredentials");
       const { result } = renderHook(() => useRevokeCredential(), {
         wrapper: createQueryWrapper(),
       });
 
       await act(async () => {
         try {
-          await result.current.mutateAsync('cred-to-revoke');
+          await result.current.mutateAsync("cred-to-revoke");
         } catch {
           // Expected
         }
       });
 
-      expect(toast.error).toHaveBeenCalledWith('Revocation failed', {
-        description: 'Not authorized to revoke',
+      expect(toast.error).toHaveBeenCalledWith("Revocation failed", {
+        description: "Not authorized to revoke",
       });
     });
 
-    it('handles API notification failure after on-chain revocation', async () => {
+    it("handles API notification failure after on-chain revocation", async () => {
       (apiClient.post as jest.Mock).mockRejectedValue(
-        new Error('API notification failed'),
+        new Error("API notification failed"),
       );
 
-      const { useRevokeCredential } = await import('@/hooks/useCredentials');
+      const { useRevokeCredential } = await import("@/hooks/useCredentials");
       const { result } = renderHook(() => useRevokeCredential(), {
         wrapper: createQueryWrapper(),
       });
 
       await act(async () => {
         try {
-          await result.current.mutateAsync('cred-to-revoke');
+          await result.current.mutateAsync("cred-to-revoke");
         } catch {
           // Expected — the mutation includes the API call
         }
@@ -408,8 +409,8 @@ describe('useCredentials hooks', () => {
       // On-chain call should have succeeded
       expect(mockWriteContractAsync).toHaveBeenCalled();
       // Error toast shown
-      expect(toast.error).toHaveBeenCalledWith('Revocation failed', {
-        description: 'API notification failed',
+      expect(toast.error).toHaveBeenCalledWith("Revocation failed", {
+        description: "API notification failed",
       });
     });
   });

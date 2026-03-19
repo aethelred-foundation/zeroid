@@ -10,12 +10,12 @@
  *   Attestation Key (ephemeral P-256) signs the Quote Body (header + ISV report).
  *   QE Report reportData[0:32] = SHA-256(attestation_key_raw || qe_auth_data).
  */
-import * as crypto from 'crypto';
+import * as crypto from "crypto";
 
 // ─── Binary layout constants ─────────────────────────────────────────────────
 const QUOTE_HEADER_SIZE = 48;
 const REPORT_BODY_SIZE = 384;
-const INTEL_QE_VENDOR = '939a7233f79c4ca9940a0db3957f0607';
+const INTEL_QE_VENDOR = "939a7233f79c4ca9940a0db3957f0607";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 export interface KeyHierarchy {
@@ -77,14 +77,17 @@ export interface QuoteBuildOptions {
 
 // ─── Generate an EC P-256 key pair synchronously ─────────────────────────────
 export function generateP256KeyPair(): crypto.KeyPairKeyObjectResult {
-  return crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' });
+  return crypto.generateKeyPairSync("ec", { namedCurve: "P-256" });
 }
 
 // ─── Extract raw public key coordinates (x, y) from a P-256 KeyObject ───────
-export function extractRawPublicKey(pub: crypto.KeyObject): { x: Buffer; y: Buffer } {
-  const spki = pub.export({ format: 'der', type: 'spki' }) as Buffer;
+export function extractRawPublicKey(pub: crypto.KeyObject): {
+  x: Buffer;
+  y: Buffer;
+} {
+  const spki = pub.export({ format: "der", type: "spki" }) as Buffer;
   const point = spki.subarray(-65);
-  if (point[0] !== 0x04) throw new Error('Expected uncompressed point');
+  if (point[0] !== 0x04) throw new Error("Expected uncompressed point");
   return {
     x: Buffer.from(point.subarray(1, 33)),
     y: Buffer.from(point.subarray(33, 65)),
@@ -93,14 +96,14 @@ export function extractRawPublicKey(pub: crypto.KeyObject): { x: Buffer; y: Buff
 
 // ─── Sign data with an EC P-256 private key, return raw r||s (64 bytes) ─────
 export function signRaw(data: Buffer, privateKey: crypto.KeyObject): Buffer {
-  const sig = crypto.sign('SHA256', data, privateKey);
+  const sig = crypto.sign("SHA256", data, privateKey);
   return derSignatureToRaw(sig);
 }
 
 // ─── Convert DER-encoded ECDSA signature to raw r||s (64 bytes) ─────────────
 function derSignatureToRaw(derSig: Buffer): Buffer {
   let offset = 0;
-  if (derSig[offset++] !== 0x30) throw new Error('Expected SEQUENCE');
+  if (derSig[offset++] !== 0x30) throw new Error("Expected SEQUENCE");
   // skip outer length
   if (derSig[offset] & 0x80) {
     offset += 1 + (derSig[offset] & 0x7f);
@@ -108,13 +111,13 @@ function derSignatureToRaw(derSig: Buffer): Buffer {
     offset += 1;
   }
 
-  if (derSig[offset++] !== 0x02) throw new Error('Expected INTEGER for r');
+  if (derSig[offset++] !== 0x02) throw new Error("Expected INTEGER for r");
   const rLen = derSig[offset++];
   let r = derSig.subarray(offset, offset + rLen);
   offset += rLen;
   if (r.length === 33 && r[0] === 0x00) r = r.subarray(1);
 
-  if (derSig[offset++] !== 0x02) throw new Error('Expected INTEGER for s');
+  if (derSig[offset++] !== 0x02) throw new Error("Expected INTEGER for s");
   const sLen = derSig[offset++];
   let s = derSig.subarray(offset, offset + sLen);
   if (s.length === 33 && s[0] === 0x00) s = s.subarray(1);
@@ -144,7 +147,7 @@ function derOctStr(content: Buffer): Buffer {
 
 function derInt(value: Buffer): Buffer {
   let v = value;
-  if (v.length > 0 && (v[0] & 0x80)) {
+  if (v.length > 0 && v[0] & 0x80) {
     v = Buffer.concat([Buffer.from([0x00]), v]);
   }
   return Buffer.concat([Buffer.from([0x02]), derLen(v.length), v]);
@@ -152,7 +155,11 @@ function derInt(value: Buffer): Buffer {
 
 function derExplicit(tag: number, content: Buffer): Buffer {
   const tagByte = 0xa0 | tag;
-  return Buffer.concat([Buffer.from([tagByte]), derLen(content.length), content]);
+  return Buffer.concat([
+    Buffer.from([tagByte]),
+    derLen(content.length),
+    content,
+  ]);
 }
 
 function derBitStr(content: Buffer): Buffer {
@@ -168,15 +175,15 @@ function derBool(val: boolean): Buffer {
 function encodeUTCTime(date: Date): Buffer {
   const y = date.getUTCFullYear() % 100;
   const str = [
-    y.toString().padStart(2, '0'),
-    (date.getUTCMonth() + 1).toString().padStart(2, '0'),
-    date.getUTCDate().toString().padStart(2, '0'),
-    date.getUTCHours().toString().padStart(2, '0'),
-    date.getUTCMinutes().toString().padStart(2, '0'),
-    date.getUTCSeconds().toString().padStart(2, '0'),
-    'Z',
-  ].join('');
-  const buf = Buffer.from(str, 'ascii');
+    y.toString().padStart(2, "0"),
+    (date.getUTCMonth() + 1).toString().padStart(2, "0"),
+    date.getUTCDate().toString().padStart(2, "0"),
+    date.getUTCHours().toString().padStart(2, "0"),
+    date.getUTCMinutes().toString().padStart(2, "0"),
+    date.getUTCSeconds().toString().padStart(2, "0"),
+    "Z",
+  ].join("");
+  const buf = Buffer.from(str, "ascii");
   return Buffer.concat([Buffer.from([0x17, buf.length]), buf]);
 }
 
@@ -185,11 +192,11 @@ function buildRdnSequence(dn: string): Buffer {
   if (!match) throw new Error(`Cannot parse DN: ${dn}`);
   const cn = match[1];
   // OID 2.5.4.3 = commonName
-  const cnOid = Buffer.from('0603550403', 'hex');
+  const cnOid = Buffer.from("0603550403", "hex");
   const cnValue = Buffer.concat([
     Buffer.from([0x0c]), // UTF8String
     derLen(cn.length),
-    Buffer.from(cn, 'utf8'),
+    Buffer.from(cn, "utf8"),
   ]);
   const atv = derSeq(Buffer.concat([cnOid, cnValue]));
   // SET wrapping
@@ -214,31 +221,38 @@ function generateX509Cert(params: CertParams): string {
   const version = derExplicit(0, derInt(Buffer.from([0x02])));
 
   // Serial number
-  const serialBytes = Buffer.from(params.serialNumber, 'hex');
+  const serialBytes = Buffer.from(params.serialNumber, "hex");
   const serialNumber = derInt(serialBytes);
 
   // Signature Algorithm: ecdsa-with-SHA256 (1.2.840.10045.4.3.2)
-  const sigAlgOid = Buffer.from('06082a8648ce3d040302', 'hex');
+  const sigAlgOid = Buffer.from("06082a8648ce3d040302", "hex");
   const signatureAlgorithm = derSeq(sigAlgOid);
 
   const issuer = buildRdnSequence(params.issuer);
-  const validity = derSeq(Buffer.concat([
-    encodeUTCTime(params.notBefore),
-    encodeUTCTime(params.notAfter),
-  ]));
+  const validity = derSeq(
+    Buffer.concat([
+      encodeUTCTime(params.notBefore),
+      encodeUTCTime(params.notAfter),
+    ]),
+  );
   const subject = buildRdnSequence(params.subject);
 
   // SubjectPublicKeyInfo
-  const spki = params.publicKey.export({ format: 'der', type: 'spki' }) as Buffer;
+  const spki = params.publicKey.export({
+    format: "der",
+    type: "spki",
+  }) as Buffer;
 
   // Extensions (v3)
   const extensions: Buffer[] = [];
   if (params.isCA) {
     // Extension: Basic Constraints (2.5.29.19), critical, CA:TRUE
     // SEQUENCE { OID, BOOLEAN TRUE (critical), OCTET STRING { SEQUENCE { BOOLEAN TRUE } } }
-    const bcOid = Buffer.from('0603551d13', 'hex');
+    const bcOid = Buffer.from("0603551d13", "hex");
     const bcExtValue = derSeq(derBool(true)); // SEQUENCE { BOOLEAN TRUE }
-    const ext = derSeq(Buffer.concat([bcOid, derBool(true), derOctStr(bcExtValue)]));
+    const ext = derSeq(
+      Buffer.concat([bcOid, derBool(true), derOctStr(bcExtValue)]),
+    );
     extensions.push(ext);
   }
 
@@ -249,34 +263,34 @@ function generateX509Cert(params: CertParams): string {
   }
 
   // tbsCertificate
-  const tbsCertificate = derSeq(Buffer.concat([
-    version,
-    serialNumber,
-    signatureAlgorithm,
-    issuer,
-    validity,
-    subject,
-    spki,
-    extensionsDer,
-  ]));
+  const tbsCertificate = derSeq(
+    Buffer.concat([
+      version,
+      serialNumber,
+      signatureAlgorithm,
+      issuer,
+      validity,
+      subject,
+      spki,
+      extensionsDer,
+    ]),
+  );
 
   // Sign
-  const signature = crypto.sign('SHA256', tbsCertificate, params.signingKey);
+  const signature = crypto.sign("SHA256", tbsCertificate, params.signingKey);
 
   // Full certificate
-  const cert = derSeq(Buffer.concat([
-    tbsCertificate,
-    signatureAlgorithm,
-    derBitStr(signature),
-  ]));
+  const cert = derSeq(
+    Buffer.concat([tbsCertificate, signatureAlgorithm, derBitStr(signature)]),
+  );
 
   // PEM encode
-  const b64 = cert.toString('base64');
+  const b64 = cert.toString("base64");
   const lines: string[] = [];
   for (let i = 0; i < b64.length; i += 64) {
     lines.push(b64.substring(i, i + 64));
   }
-  return `-----BEGIN CERTIFICATE-----\n${lines.join('\n')}\n-----END CERTIFICATE-----`;
+  return `-----BEGIN CERTIFICATE-----\n${lines.join("\n")}\n-----END CERTIFICATE-----`;
 }
 
 // ─── Generate a complete key hierarchy ──────────────────────────────────────
@@ -284,11 +298,11 @@ export function generateKeyHierarchy(_fmspc?: string): KeyHierarchy {
   const rootKey = generateP256KeyPair();
   const now = new Date();
   const rootCertPem = generateX509Cert({
-    subject: 'CN=Test SGX Root CA',
-    issuer: 'CN=Test SGX Root CA',
+    subject: "CN=Test SGX Root CA",
+    issuer: "CN=Test SGX Root CA",
     publicKey: rootKey.publicKey,
     signingKey: rootKey.privateKey,
-    serialNumber: crypto.randomBytes(16).toString('hex'),
+    serialNumber: crypto.randomBytes(16).toString("hex"),
     notBefore: now,
     notAfter: new Date(now.getTime() + 3650 * 86400000),
     isCA: true,
@@ -297,11 +311,11 @@ export function generateKeyHierarchy(_fmspc?: string): KeyHierarchy {
 
   const intermediateKey = generateP256KeyPair();
   const intermediateCertPem = generateX509Cert({
-    subject: 'CN=Test SGX Intermediate CA',
-    issuer: 'CN=Test SGX Root CA',
+    subject: "CN=Test SGX Intermediate CA",
+    issuer: "CN=Test SGX Root CA",
     publicKey: intermediateKey.publicKey,
     signingKey: rootKey.privateKey,
-    serialNumber: crypto.randomBytes(16).toString('hex'),
+    serialNumber: crypto.randomBytes(16).toString("hex"),
     notBefore: now,
     notAfter: new Date(now.getTime() + 1825 * 86400000),
     isCA: true,
@@ -310,11 +324,11 @@ export function generateKeyHierarchy(_fmspc?: string): KeyHierarchy {
 
   const pckLeafKey = generateP256KeyPair();
   const pckLeafCertPem = generateX509Cert({
-    subject: 'CN=Test SGX PCK Certificate',
-    issuer: 'CN=Test SGX Intermediate CA',
+    subject: "CN=Test SGX PCK Certificate",
+    issuer: "CN=Test SGX Intermediate CA",
     publicKey: pckLeafKey.publicKey,
     signingKey: intermediateKey.privateKey,
-    serialNumber: crypto.randomBytes(16).toString('hex'),
+    serialNumber: crypto.randomBytes(16).toString("hex"),
     notBefore: now,
     notAfter: new Date(now.getTime() + 365 * 86400000),
     isCA: false,
@@ -322,9 +336,15 @@ export function generateKeyHierarchy(_fmspc?: string): KeyHierarchy {
   const pckLeafCert = new crypto.X509Certificate(pckLeafCertPem);
 
   return {
-    rootKey, rootCert, rootCertPem,
-    intermediateKey, intermediateCert, intermediateCertPem,
-    pckLeafKey, pckLeafCert, pckLeafCertPem,
+    rootKey,
+    rootCert,
+    rootCertPem,
+    intermediateKey,
+    intermediateCert,
+    intermediateCertPem,
+    pckLeafKey,
+    pckLeafCert,
+    pckLeafCertPem,
   };
 }
 
@@ -332,27 +352,33 @@ export function generateKeyHierarchy(_fmspc?: string): KeyHierarchy {
 export function buildQuote(opts: QuoteBuildOptions = {}): QuoteComponents {
   const hierarchy = opts.hierarchy ?? generateKeyHierarchy();
 
-  const mrenclave = opts.mrenclave ?? crypto.randomBytes(32).toString('hex');
-  const mrsigner = opts.mrsigner ?? crypto.randomBytes(32).toString('hex');
-  const cpuSvn = opts.cpuSvn ?? '0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a';
+  const mrenclave = opts.mrenclave ?? crypto.randomBytes(32).toString("hex");
+  const mrsigner = opts.mrsigner ?? crypto.randomBytes(32).toString("hex");
+  const cpuSvn = opts.cpuSvn ?? "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a";
   const isvProdId = opts.isvProdId ?? 1;
   const isvSvn = opts.isvSvn ?? 2;
   const pceSvn = opts.pceSvn ?? 10;
 
   // Generate a random public key to bind into reportData
   const boundKeyPair = generateP256KeyPair();
-  const boundPubDer = boundKeyPair.publicKey.export({ format: 'der', type: 'spki' }) as Buffer;
-  const boundPublicKey = boundPubDer.toString('base64');
-  const boundKeyHash = crypto.createHash('sha256').update(boundPubDer).digest('hex');
+  const boundPubDer = boundKeyPair.publicKey.export({
+    format: "der",
+    type: "spki",
+  }) as Buffer;
+  const boundPublicKey = boundPubDer.toString("base64");
+  const boundKeyHash = crypto
+    .createHash("sha256")
+    .update(boundPubDer)
+    .digest("hex");
 
   // Build ISV Report Body (384 bytes)
   const isvReportBody = Buffer.alloc(REPORT_BODY_SIZE);
-  Buffer.from(cpuSvn, 'hex').copy(isvReportBody, 0);
-  Buffer.from(mrenclave, 'hex').copy(isvReportBody, 64);
-  Buffer.from(mrsigner, 'hex').copy(isvReportBody, 128);
+  Buffer.from(cpuSvn, "hex").copy(isvReportBody, 0);
+  Buffer.from(mrenclave, "hex").copy(isvReportBody, 64);
+  Buffer.from(mrsigner, "hex").copy(isvReportBody, 128);
   isvReportBody.writeUInt16LE(isvProdId, 256);
   isvReportBody.writeUInt16LE(isvSvn, 258);
-  Buffer.from(boundKeyHash, 'hex').copy(isvReportBody, 320);
+  Buffer.from(boundKeyHash, "hex").copy(isvReportBody, 320);
 
   // Build Quote Header (48 bytes)
   const header = Buffer.alloc(QUOTE_HEADER_SIZE);
@@ -361,7 +387,7 @@ export function buildQuote(opts: QuoteBuildOptions = {}): QuoteComponents {
   header.writeUInt32LE(opts.teeType ?? 0, 4);
   header.writeUInt16LE(opts.qeSvn ?? 6, 8);
   header.writeUInt16LE(pceSvn, 10);
-  Buffer.from(opts.qeVendorId ?? INTEL_QE_VENDOR, 'hex').copy(header, 12);
+  Buffer.from(opts.qeVendorId ?? INTEL_QE_VENDOR, "hex").copy(header, 12);
 
   const quoteBody = Buffer.concat([header, isvReportBody]);
 
@@ -380,21 +406,23 @@ export function buildQuote(opts: QuoteBuildOptions = {}): QuoteComponents {
   const qeAuthData = opts.qeAuthData ?? crypto.randomBytes(32);
 
   // QE Report Body
-  const qeMrenclave = opts.qeMrenclave ?? crypto.randomBytes(32).toString('hex');
-  const qeMrsigner = opts.qeMrsigner ?? crypto.randomBytes(32).toString('hex');
+  const qeMrenclave =
+    opts.qeMrenclave ?? crypto.randomBytes(32).toString("hex");
+  const qeMrsigner = opts.qeMrsigner ?? crypto.randomBytes(32).toString("hex");
   const qeIsvProdId = opts.qeIsvProdId ?? 1;
   const qeIsvSvn = opts.qeIsvSvn ?? 6;
 
   const qeReportBody = Buffer.alloc(REPORT_BODY_SIZE);
-  Buffer.from(qeMrenclave, 'hex').copy(qeReportBody, 64);
-  Buffer.from(qeMrsigner, 'hex').copy(qeReportBody, 128);
+  Buffer.from(qeMrenclave, "hex").copy(qeReportBody, 64);
+  Buffer.from(qeMrsigner, "hex").copy(qeReportBody, 128);
   qeReportBody.writeUInt16LE(qeIsvProdId, 256);
   qeReportBody.writeUInt16LE(qeIsvSvn, 258);
 
   if (opts.corruptAttestKeyBinding) {
     crypto.randomBytes(32).copy(qeReportBody, 320);
   } else {
-    const bindingHash = crypto.createHash('sha256')
+    const bindingHash = crypto
+      .createHash("sha256")
       .update(attestKeyRaw)
       .update(qeAuthData)
       .digest();
@@ -408,9 +436,10 @@ export function buildQuote(opts: QuoteBuildOptions = {}): QuoteComponents {
   }
 
   // Cert chain PEM
-  const certChainPem = opts.certChainPemOverride ??
+  const certChainPem =
+    opts.certChainPemOverride ??
     `${hierarchy.pckLeafCertPem}\n${hierarchy.intermediateCertPem}\n`;
-  const certChainBuf = Buffer.from(certChainPem, 'utf8');
+  const certChainBuf = Buffer.from(certChainPem, "utf8");
 
   // Assemble the full quote
   const qeAuthLenBuf = Buffer.alloc(2);
@@ -434,7 +463,7 @@ export function buildQuote(opts: QuoteBuildOptions = {}): QuoteComponents {
 
   return {
     quoteBuffer,
-    quoteBase64: quoteBuffer.toString('base64'),
+    quoteBase64: quoteBuffer.toString("base64"),
     attestKey,
     attestKeyRaw,
     hierarchy,
@@ -488,12 +517,13 @@ export interface BuiltCollateral {
 
 export function buildCollateral(opts: CollateralBuildOptions): BuiltCollateral {
   const { hierarchy } = opts;
-  const fmspc = opts.fmspc ?? '00906ea10000';
+  const fmspc = opts.fmspc ?? "00906ea10000";
   const now = new Date();
 
   // ── Build TCB Info ────────────────────────────────────────────────────
   const tcbIssueDate = opts.tcbIssueDate ?? now.toISOString();
-  const tcbNextUpdate = opts.tcbNextUpdate ?? new Date(now.getTime() + 30 * 86400000).toISOString();
+  const tcbNextUpdate =
+    opts.tcbNextUpdate ?? new Date(now.getTime() + 30 * 86400000).toISOString();
 
   const defaultTcbLevels = [
     {
@@ -501,14 +531,14 @@ export function buildCollateral(opts: CollateralBuildOptions): BuiltCollateral {
         sgxtcbcomponents: Array.from({ length: 16 }, () => ({ svn: 5 })),
         pcesvn: 10,
       },
-      tcbStatus: 'UpToDate',
+      tcbStatus: "UpToDate",
     },
     {
       tcb: {
         sgxtcbcomponents: Array.from({ length: 16 }, () => ({ svn: 2 })),
         pcesvn: 7,
       },
-      tcbStatus: 'OutOfDate',
+      tcbStatus: "OutOfDate",
     },
   ];
 
@@ -525,32 +555,36 @@ export function buildCollateral(opts: CollateralBuildOptions): BuiltCollateral {
   // Sign TCB info with a dedicated signing key
   const tcbSigningKey = generateP256KeyPair();
   const tcbSigningCertPem = generateX509Cert({
-    subject: 'CN=Test TCB Signing Cert',
-    issuer: 'CN=Test SGX Intermediate CA',
+    subject: "CN=Test TCB Signing Cert",
+    issuer: "CN=Test SGX Intermediate CA",
     publicKey: tcbSigningKey.publicKey,
     signingKey: hierarchy.intermediateKey.privateKey,
-    serialNumber: crypto.randomBytes(16).toString('hex'),
+    serialNumber: crypto.randomBytes(16).toString("hex"),
     notBefore: now,
     notAfter: new Date(now.getTime() + 365 * 86400000),
     isCA: false,
   });
   const tcbSigningCertChain = `${tcbSigningCertPem}\n${hierarchy.intermediateCertPem}\n`;
 
-  const tcbInfoSigDer = crypto.sign('SHA256', Buffer.from(tcbInfoJson, 'utf8'), tcbSigningKey.privateKey);
+  const tcbInfoSigDer = crypto.sign(
+    "SHA256",
+    Buffer.from(tcbInfoJson, "utf8"),
+    tcbSigningKey.privateKey,
+  );
   const tcbInfoSigRaw = derSignatureToRaw(tcbInfoSigDer);
-  const tcbInfoSignature = tcbInfoSigRaw.toString('hex');
+  const tcbInfoSignature = tcbInfoSigRaw.toString("hex");
 
   // ── Build QE Identity ─────────────────────────────────────────────────
-  const qeMrsigner = opts.qeMrsigner ?? crypto.randomBytes(32).toString('hex');
+  const qeMrsigner = opts.qeMrsigner ?? crypto.randomBytes(32).toString("hex");
   const qeIsvProdId = opts.qeIsvProdId ?? 1;
   const qeTcbLevels = opts.qeTcbLevels ?? [
-    { tcb: { isvsvn: 6 }, tcbStatus: 'UpToDate' },
-    { tcb: { isvsvn: 2 }, tcbStatus: 'OutOfDate' },
+    { tcb: { isvsvn: 6 }, tcbStatus: "UpToDate" },
+    { tcb: { isvsvn: 2 }, tcbStatus: "OutOfDate" },
   ];
 
   const qeIdentityBody = JSON.stringify({
     enclaveIdentity: {
-      id: 'QE',
+      id: "QE",
       mrsigner: qeMrsigner,
       isvprodid: qeIsvProdId,
       tcbLevels: qeTcbLevels,
@@ -560,13 +594,14 @@ export function buildCollateral(opts: CollateralBuildOptions): BuiltCollateral {
   let qeIdentityFinal = qeIdentityBody;
 
   // Sign QE identity
-  const qeIdSigningKey = opts.wrongQeIdentitySigningKey ?? generateP256KeyPair();
+  const qeIdSigningKey =
+    opts.wrongQeIdentitySigningKey ?? generateP256KeyPair();
   const qeIdSigningCertPem = generateX509Cert({
-    subject: 'CN=Test QE Identity Signing Cert',
-    issuer: 'CN=Test SGX Intermediate CA',
+    subject: "CN=Test QE Identity Signing Cert",
+    issuer: "CN=Test SGX Intermediate CA",
     publicKey: qeIdSigningKey.publicKey,
     signingKey: hierarchy.intermediateKey.privateKey,
-    serialNumber: crypto.randomBytes(16).toString('hex'),
+    serialNumber: crypto.randomBytes(16).toString("hex"),
     notBefore: now,
     notAfter: new Date(now.getTime() + 365 * 86400000),
     isCA: false,
@@ -574,7 +609,11 @@ export function buildCollateral(opts: CollateralBuildOptions): BuiltCollateral {
   const qeIdSigningCertChain = `${qeIdSigningCertPem}\n${hierarchy.intermediateCertPem}\n`;
 
   const signedQeData = qeIdentityBody; // always sign the original
-  const qeIdSigDer = crypto.sign('SHA256', Buffer.from(signedQeData, 'utf8'), qeIdSigningKey.privateKey);
+  const qeIdSigDer = crypto.sign(
+    "SHA256",
+    Buffer.from(signedQeData, "utf8"),
+    qeIdSigningKey.privateKey,
+  );
   let qeIdSigRaw = derSignatureToRaw(qeIdSigDer);
 
   if (opts.corruptQeIdentitySignature) {
@@ -584,19 +623,20 @@ export function buildCollateral(opts: CollateralBuildOptions): BuiltCollateral {
 
   if (opts.tamperQeIdentity) {
     const parsed = JSON.parse(qeIdentityBody);
-    parsed.enclaveIdentity.id = 'TAMPERED';
+    parsed.enclaveIdentity.id = "TAMPERED";
     qeIdentityFinal = JSON.stringify(parsed);
   }
 
-  const qeIdentitySignature = qeIdSigRaw.toString('hex');
+  const qeIdentitySignature = qeIdSigRaw.toString("hex");
 
   // ── Build CRLs ────────────────────────────────────────────────────────
   const crlThisUpdate = opts.crlThisUpdate ?? new Date(now.getTime() - 3600000);
-  const crlNextUpdate = opts.crlNextUpdate ?? new Date(now.getTime() + 30 * 86400000);
+  const crlNextUpdate =
+    opts.crlNextUpdate ?? new Date(now.getTime() + 30 * 86400000);
 
   const rootCaCrl = buildCRL(
     hierarchy.rootKey.privateKey,
-    'Test SGX Root CA',
+    "Test SGX Root CA",
     [],
     crlThisUpdate,
     crlNextUpdate,
@@ -604,7 +644,7 @@ export function buildCollateral(opts: CollateralBuildOptions): BuiltCollateral {
 
   const pckCrl = buildCRL(
     hierarchy.intermediateKey.privateKey,
-    'Test SGX Intermediate CA',
+    "Test SGX Intermediate CA",
     opts.revokedSerials ?? [],
     crlThisUpdate,
     crlNextUpdate,
@@ -613,9 +653,9 @@ export function buildCollateral(opts: CollateralBuildOptions): BuiltCollateral {
   const pckCrlIssuerChain = `${hierarchy.intermediateCertPem}\n${hierarchy.rootCertPem}\n`;
 
   return {
-    pckCrl: pckCrl.toString('hex'),
+    pckCrl: pckCrl.toString("hex"),
     pckCrlIssuerChain,
-    rootCaCrl: rootCaCrl.toString('hex'),
+    rootCaCrl: rootCaCrl.toString("hex"),
     tcbInfo: tcbInfoJson,
     tcbInfoSignature,
     tcbSigningCertChain,
@@ -636,7 +676,7 @@ function buildCRL(
   const issuer = buildRdnSequence(`CN=${issuerCN}`);
 
   // Signature algorithm: ecdsa-with-SHA256
-  const sigAlgOid = Buffer.from('06082a8648ce3d040302', 'hex');
+  const sigAlgOid = Buffer.from("06082a8648ce3d040302", "hex");
   const signatureAlgorithm = derSeq(sigAlgOid);
 
   const thisUpdateDer = encodeUTCTime(thisUpdate);
@@ -647,7 +687,7 @@ function buildCRL(
   if (revokedSerials.length > 0) {
     const entries: Buffer[] = [];
     for (const serial of revokedSerials) {
-      const serialInt = derInt(Buffer.from(serial, 'hex'));
+      const serialInt = derInt(Buffer.from(serial, "hex"));
       const revocationDate = encodeUTCTime(new Date());
       entries.push(derSeq(Buffer.concat([serialInt, revocationDate])));
     }
@@ -655,20 +695,20 @@ function buildCRL(
   }
 
   // tbsCertList
-  const tbsCertList = derSeq(Buffer.concat([
-    signatureAlgorithm,
-    issuer,
-    thisUpdateDer,
-    nextUpdateDer,
-    revokedCertsDer,
-  ]));
+  const tbsCertList = derSeq(
+    Buffer.concat([
+      signatureAlgorithm,
+      issuer,
+      thisUpdateDer,
+      nextUpdateDer,
+      revokedCertsDer,
+    ]),
+  );
 
   // Sign
-  const signature = crypto.sign('SHA256', tbsCertList, signingKey);
+  const signature = crypto.sign("SHA256", tbsCertList, signingKey);
 
-  return derSeq(Buffer.concat([
-    tbsCertList,
-    signatureAlgorithm,
-    derBitStr(signature),
-  ]));
+  return derSeq(
+    Buffer.concat([tbsCertList, signatureAlgorithm, derBitStr(signature)]),
+  );
 }

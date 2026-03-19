@@ -5,23 +5,23 @@
  * and recovery via on-chain registry + API layer.
  */
 
-import { useCallback } from 'react';
-import { useAccount, useReadContract, useWriteContract } from 'wagmi';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { type Address, type Hash } from 'viem';
-import { toast } from 'sonner';
-import { apiClient } from '@/lib/api/client';
+import { useCallback } from "react";
+import { useAccount, useReadContract, useWriteContract } from "wagmi";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { type Address, type Hash } from "viem";
+import { toast } from "sonner";
+import { apiClient } from "@/lib/api/client";
 import {
   IDENTITY_REGISTRY_ADDRESS,
   IDENTITY_REGISTRY_ABI,
-} from '@/config/constants';
+} from "@/config/constants";
 import type {
   IdentityProfile,
   DIDDocument,
   DelegateRecord,
   CreateIdentityParams,
   UpdateProfileParams,
-} from '@/types';
+} from "@/types";
 
 // ---------------------------------------------------------------------------
 // On-chain DID resolution
@@ -33,7 +33,7 @@ export function useOnChainIdentity() {
   const { data: didHash, isLoading: isDIDLoading } = useReadContract({
     address: IDENTITY_REGISTRY_ADDRESS as Address,
     abi: IDENTITY_REGISTRY_ABI,
-    functionName: 'identityOf',
+    functionName: "identityOf",
     args: address ? [address] : undefined,
     query: { enabled: !!address },
   });
@@ -41,7 +41,7 @@ export function useOnChainIdentity() {
   const { data: delegates, isLoading: isDelegatesLoading } = useReadContract({
     address: IDENTITY_REGISTRY_ADDRESS as Address,
     abi: IDENTITY_REGISTRY_ABI,
-    functionName: 'getDelegates',
+    functionName: "getDelegates",
     args: address ? [address] : undefined,
     query: { enabled: !!address },
   });
@@ -50,7 +50,7 @@ export function useOnChainIdentity() {
     didHash: didHash as string | undefined,
     delegates: (delegates as DelegateRecord[]) ?? [],
     isLoading: isDIDLoading || isDelegatesLoading,
-    hasIdentity: !!didHash && didHash !== '0x',
+    hasIdentity: !!didHash && didHash !== "0x",
   };
 }
 
@@ -62,8 +62,9 @@ export function useIdentityProfile() {
   const { address } = useAccount();
 
   return useQuery({
-    queryKey: ['identity', 'profile', address],
-    queryFn: () => apiClient.get<IdentityProfile>(`/v1/identity/${address}/profile`),
+    queryKey: ["identity", "profile", address],
+    queryFn: () =>
+      apiClient.get<IdentityProfile>(`/v1/identity/${address}/profile`),
     enabled: !!address,
     staleTime: 30_000,
   });
@@ -84,12 +85,12 @@ export function useCreateIdentity() {
       const hash = await writeContractAsync({
         address: IDENTITY_REGISTRY_ADDRESS as Address,
         abi: IDENTITY_REGISTRY_ABI,
-        functionName: 'registerIdentity',
+        functionName: "registerIdentity",
         args: [params.didDocumentHash, params.recoveryAddress],
       });
 
       // Persist full DID document via API
-      await apiClient.post('/v1/identity/register', {
+      await apiClient.post("/v1/identity/register", {
         ownerAddress: address,
         txHash: hash,
         didDocument: params.didDocument,
@@ -99,11 +100,11 @@ export function useCreateIdentity() {
       return hash;
     },
     onSuccess: () => {
-      toast.success('Identity created successfully');
-      queryClient.invalidateQueries({ queryKey: ['identity'] });
+      toast.success("Identity created successfully");
+      queryClient.invalidateQueries({ queryKey: ["identity"] });
     },
     onError: (err: Error) => {
-      toast.error('Failed to create identity', { description: err.message });
+      toast.error("Failed to create identity", { description: err.message });
     },
   });
 }
@@ -116,11 +117,13 @@ export function useUpdateProfile() {
     mutationFn: (params: UpdateProfileParams) =>
       apiClient.put(`/v1/identity/${address}/profile`, params),
     onSuccess: () => {
-      toast.success('Profile updated');
-      queryClient.invalidateQueries({ queryKey: ['identity', 'profile', address] });
+      toast.success("Profile updated");
+      queryClient.invalidateQueries({
+        queryKey: ["identity", "profile", address],
+      });
     },
     onError: (err: Error) => {
-      toast.error('Profile update failed', { description: err.message });
+      toast.error("Profile update failed", { description: err.message });
     },
   });
 }
@@ -160,11 +163,11 @@ export function useDelegateControl() {
       const hash = await writeContractAsync({
         address: IDENTITY_REGISTRY_ADDRESS as Address,
         abi: IDENTITY_REGISTRY_ABI,
-        functionName: 'addDelegate',
+        functionName: "addDelegate",
         args: [delegateAddress, expirySeconds],
       });
-      toast.success('Delegate added');
-      queryClient.invalidateQueries({ queryKey: ['identity'] });
+      toast.success("Delegate added");
+      queryClient.invalidateQueries({ queryKey: ["identity"] });
       return hash;
     },
     [writeContractAsync, queryClient],
@@ -175,11 +178,11 @@ export function useDelegateControl() {
       const hash = await writeContractAsync({
         address: IDENTITY_REGISTRY_ADDRESS as Address,
         abi: IDENTITY_REGISTRY_ABI,
-        functionName: 'revokeDelegate',
+        functionName: "revokeDelegate",
         args: [delegateAddress],
       });
-      toast.success('Delegate revoked');
-      queryClient.invalidateQueries({ queryKey: ['identity'] });
+      toast.success("Delegate revoked");
+      queryClient.invalidateQueries({ queryKey: ["identity"] });
       return hash;
     },
     [writeContractAsync, queryClient],

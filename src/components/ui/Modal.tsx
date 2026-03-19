@@ -1,14 +1,14 @@
-'use client';
+"use client";
 
-import React, { Fragment } from 'react';
-import { Dialog, Transition } from '@headlessui/react';
-import { X, AlertTriangle } from 'lucide-react';
+import React, { Fragment } from "react";
+import { Dialog, Transition } from "@headlessui/react";
+import { X, AlertTriangle } from "lucide-react";
 
 // ============================================================
 // Modal Component
 // ============================================================
 
-type ModalSize = 'sm' | 'md' | 'lg' | 'xl' | 'full';
+type ModalSize = "sm" | "md" | "lg" | "xl" | "full";
 
 interface ModalProps {
   open: boolean;
@@ -22,11 +22,11 @@ interface ModalProps {
 }
 
 const MODAL_SIZES: Record<ModalSize, string> = {
-  sm: 'max-w-md',
-  md: 'max-w-lg',
-  lg: 'max-w-2xl',
-  xl: 'max-w-4xl',
-  full: 'max-w-[90vw]',
+  sm: "max-w-md",
+  md: "max-w-lg",
+  lg: "max-w-2xl",
+  xl: "max-w-4xl",
+  full: "max-w-[90vw]",
 };
 
 export function Modal({
@@ -35,9 +35,9 @@ export function Modal({
   title,
   description,
   children,
-  size = 'md',
+  size = "md",
   showClose = true,
-  className = '',
+  className = "",
 }: ModalProps) {
   return (
     <Transition appear show={open} as={Fragment}>
@@ -117,7 +117,7 @@ interface ModalFooterProps {
   className?: string;
 }
 
-export function ModalFooter({ children, className = '' }: ModalFooterProps) {
+export function ModalFooter({ children, className = "" }: ModalFooterProps) {
   return (
     <div
       className={`flex items-center justify-end gap-3 pt-4 border-t border-zero-800 ${className}`}
@@ -139,7 +139,7 @@ interface ConfirmDialogProps {
   description?: string;
   confirmLabel?: string;
   cancelLabel?: string;
-  variant?: 'default' | 'danger';
+  variant?: "default" | "danger";
   loading?: boolean;
 }
 
@@ -149,9 +149,9 @@ export function ConfirmDialog({
   onConfirm,
   title,
   description,
-  confirmLabel = 'Confirm',
-  cancelLabel = 'Cancel',
-  variant = 'default',
+  confirmLabel = "Confirm",
+  cancelLabel = "Cancel",
+  variant = "default",
   loading = false,
 }: ConfirmDialogProps) {
   const handleConfirm = () => {
@@ -166,14 +166,14 @@ export function ConfirmDialog({
         <div className="flex justify-center mb-4">
           <div
             className={`w-12 h-12 rounded-full flex items-center justify-center ${
-              variant === 'danger'
-                ? 'bg-red-500/10 border border-red-500/20'
-                : 'bg-cyan-500/10 border border-cyan-500/20'
+              variant === "danger"
+                ? "bg-red-500/10 border border-red-500/20"
+                : "bg-cyan-500/10 border border-cyan-500/20"
             }`}
           >
             <AlertTriangle
               className={`w-6 h-6 ${
-                variant === 'danger' ? 'text-red-400' : 'text-cyan-400'
+                variant === "danger" ? "text-red-400" : "text-cyan-400"
               }`}
             />
           </div>
@@ -198,12 +198,12 @@ export function ConfirmDialog({
             onClick={handleConfirm}
             disabled={loading}
             className={`px-4 py-2 text-sm font-medium text-white rounded-xl transition-colors disabled:opacity-50 ${
-              variant === 'danger'
-                ? 'bg-red-500 hover:bg-red-600'
-                : 'bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500'
+              variant === "danger"
+                ? "bg-red-500 hover:bg-red-600"
+                : "bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500"
             }`}
           >
-            {loading ? 'Processing...' : confirmLabel}
+            {loading ? "Processing..." : confirmLabel}
           </button>
         </div>
       </div>

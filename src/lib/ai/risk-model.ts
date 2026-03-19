@@ -41,19 +41,19 @@ export interface RiskPrediction {
   modelInfo: ModelMetadata;
 }
 
-export type RiskLevel = 'low' | 'medium' | 'high' | 'critical';
+export type RiskLevel = "low" | "medium" | "high" | "critical";
 
 export interface RiskFactorDecomposition {
   name: string;
   contribution: number;
   rawValue: number;
   normalizedValue: number;
-  direction: 'increases_risk' | 'decreases_risk' | 'neutral';
+  direction: "increases_risk" | "decreases_risk" | "neutral";
   description: string;
 }
 
 export interface RiskDecision {
-  action: 'allow' | 'review' | 'enhanced_due_diligence' | 'block';
+  action: "allow" | "review" | "enhanced_due_diligence" | "block";
   reason: string;
   thresholdApplied: number;
   requiresHumanReview: boolean;
@@ -61,7 +61,7 @@ export interface RiskDecision {
 }
 
 export interface RiskTrend {
-  direction: 'improving' | 'stable' | 'deteriorating';
+  direction: "improving" | "stable" | "deteriorating";
   velocity: number;
   projectedScore30d: number;
   historicalScores: { timestamp: number; score: number }[];
@@ -82,21 +82,21 @@ export interface ModelMetadata {
 // ============================================================================
 
 const MODEL_META: ModelMetadata = {
-  version: '2.1.0',
-  lastUpdated: '2026-03-01',
+  version: "2.1.0",
+  lastUpdated: "2026-03-01",
   accuracy: 0.943,
   falsePositiveRate: 0.032,
   falseNegativeRate: 0.025,
   featureCount: 16,
-  architecture: '16-32-16-1 (ReLU, Sigmoid output)',
+  architecture: "16-32-16-1 (ReLU, Sigmoid output)",
 };
 
 /** Decision thresholds */
 const THRESHOLDS = {
   low: 0.25,
-  medium: 0.50,
+  medium: 0.5,
   high: 0.75,
-  critical: 0.90,
+  critical: 0.9,
 } as const;
 
 // ============================================================================
@@ -137,20 +137,22 @@ export function extractFeatures(data: IdentityData): Float32Array {
   features[1] = normalize(data.credentialCount, 0, 50);
 
   // F2: Active credential ratio
-  features[2] = data.credentialCount > 0
-    ? data.activeCredentialCount / data.credentialCount
-    : 0;
+  features[2] =
+    data.credentialCount > 0
+      ? data.activeCredentialCount / data.credentialCount
+      : 0;
 
   // F3: Revoked credential ratio (higher = riskier)
-  features[3] = data.credentialCount > 0
-    ? data.revokedCredentialCount / data.credentialCount
-    : 0;
+  features[3] =
+    data.credentialCount > 0
+      ? data.revokedCredentialCount / data.credentialCount
+      : 0;
 
   // F4: Verification success rate
-  const totalVerifications = data.verificationCount + data.failedVerificationCount;
-  features[4] = totalVerifications > 0
-    ? data.verificationCount / totalVerifications
-    : 0.5;
+  const totalVerifications =
+    data.verificationCount + data.failedVerificationCount;
+  features[4] =
+    totalVerifications > 0 ? data.verificationCount / totalVerifications : 0.5;
 
   // F5: Jurisdiction exposure
   features[5] = normalize(data.jurisdictionCount, 0, 20);
@@ -184,9 +186,10 @@ export function extractFeatures(data: IdentityData): Float32Array {
   features[13] = data.zkProofUsageRatio;
 
   // F14: Credential concentration (Herfindahl-like — closer to 1 means all one type)
-  features[14] = data.activeCredentialCount > 0
-    ? 1 / Math.max(data.activeCredentialCount, 1)
-    : 1;
+  features[14] =
+    data.activeCredentialCount > 0
+      ? 1 / Math.max(data.activeCredentialCount, 1)
+      : 1;
 
   // F15: Account maturity score (composite)
   features[15] = computeMaturityScore(data);
@@ -216,7 +219,11 @@ function computeMaturityScore(data: IdentityData): number {
  * Here we use representative weights that produce sensible risk scores.
  */
 
-function initializeWeights(rows: number, cols: number, seed: number): Float32Array {
+function initializeWeights(
+  rows: number,
+  cols: number,
+  seed: number,
+): Float32Array {
   const weights = new Float32Array(rows * cols);
   // Glorot uniform initialization with deterministic seed
   const limit = Math.sqrt(6 / (rows + cols));
@@ -296,12 +303,22 @@ export function forwardPass(features: Float32Array): number {
 // ============================================================================
 
 const FEATURE_NAMES = [
-  'Account Age', 'Credential Count', 'Active Credential Ratio',
-  'Revoked Credential Ratio', 'Verification Success Rate',
-  'Jurisdiction Exposure', 'Cross-Border Activity', 'Credential Freshness',
-  'Biometric Enrollment', 'Delegation Exposure', 'Account Inactivity',
-  'Transaction Velocity', 'Verifier Diversity', 'ZK Proof Adoption',
-  'Credential Concentration', 'Account Maturity',
+  "Account Age",
+  "Credential Count",
+  "Active Credential Ratio",
+  "Revoked Credential Ratio",
+  "Verification Success Rate",
+  "Jurisdiction Exposure",
+  "Cross-Border Activity",
+  "Credential Freshness",
+  "Biometric Enrollment",
+  "Delegation Exposure",
+  "Account Inactivity",
+  "Transaction Velocity",
+  "Verifier Diversity",
+  "ZK Proof Adoption",
+  "Credential Concentration",
+  "Account Maturity",
 ];
 
 const RISK_INCREASING_FEATURES = new Set([3, 5, 6, 9, 10, 11, 14]);
@@ -325,13 +342,13 @@ export function decomposeRiskFactors(
     const perturbedScore = forwardPass(perturbed);
     const contribution = baseScore - perturbedScore;
 
-    let direction: RiskFactorDecomposition['direction'] = 'neutral';
+    let direction: RiskFactorDecomposition["direction"] = "neutral";
     if (RISK_INCREASING_FEATURES.has(i) && features[i] > 0.5) {
-      direction = 'increases_risk';
+      direction = "increases_risk";
     } else if (RISK_DECREASING_FEATURES.has(i) && features[i] > 0.5) {
-      direction = 'decreases_risk';
+      direction = "decreases_risk";
     } else if (Math.abs(contribution) > 0.01) {
-      direction = contribution > 0 ? 'increases_risk' : 'decreases_risk';
+      direction = contribution > 0 ? "increases_risk" : "decreases_risk";
     }
 
     factors.push({
@@ -344,7 +361,9 @@ export function decomposeRiskFactors(
     });
   }
 
-  return factors.sort((a, b) => Math.abs(b.contribution) - Math.abs(a.contribution));
+  return factors.sort(
+    (a, b) => Math.abs(b.contribution) - Math.abs(a.contribution),
+  );
 }
 
 function getFactorDescription(featureIndex: number, value: number): string {
@@ -357,7 +376,7 @@ function getFactorDescription(featureIndex: number, value: number): string {
     5: (v) => `Active in ${Math.round(v * 20)} jurisdiction(s)`,
     6: (v) => `${Math.round(v * 100)} cross-border transfers`,
     7: (v) => `Credential freshness: ${Math.round(v * 100)}%`,
-    8: (v) => v > 0.5 ? 'Biometric enrolled' : 'No biometric enrollment',
+    8: (v) => (v > 0.5 ? "Biometric enrolled" : "No biometric enrollment"),
     9: (v) => `${Math.round(v * 20)} active delegation(s)`,
     10: (v) => `${Math.round(v * 365)} days since last activity`,
     11: (v) => `Transaction velocity: ${Math.round(v * 1000)}/day`,
@@ -376,62 +395,65 @@ function getFactorDescription(featureIndex: number, value: number): string {
 /**
  * Apply threshold-based rules to produce an actionable decision.
  */
-export function makeDecision(score: number, factors: RiskFactorDecomposition[]): RiskDecision {
+export function makeDecision(
+  score: number,
+  factors: RiskFactorDecomposition[],
+): RiskDecision {
   if (score >= THRESHOLDS.critical) {
     return {
-      action: 'block',
-      reason: 'Risk score exceeds critical threshold',
+      action: "block",
+      reason: "Risk score exceeds critical threshold",
       thresholdApplied: THRESHOLDS.critical,
       requiresHumanReview: true,
       suggestedActions: [
-        'Suspend all active sessions',
-        'Require re-verification of all credentials',
-        'Escalate to compliance team immediately',
+        "Suspend all active sessions",
+        "Require re-verification of all credentials",
+        "Escalate to compliance team immediately",
       ],
     };
   }
 
   if (score >= THRESHOLDS.high) {
     const topRiskFactors = factors
-      .filter((f) => f.direction === 'increases_risk')
+      .filter((f) => f.direction === "increases_risk")
       .slice(0, 3)
       .map((f) => f.name);
 
     return {
-      action: 'enhanced_due_diligence',
-      reason: `High risk driven by: ${topRiskFactors.join(', ')}`,
+      action: "enhanced_due_diligence",
+      reason: `High risk driven by: ${topRiskFactors.join(", ")}`,
       thresholdApplied: THRESHOLDS.high,
       requiresHumanReview: true,
       suggestedActions: [
-        'Request additional credentials',
-        'Enable enhanced monitoring',
-        'Limit transaction amounts until review complete',
+        "Request additional credentials",
+        "Enable enhanced monitoring",
+        "Limit transaction amounts until review complete",
       ],
     };
   }
 
   if (score >= THRESHOLDS.medium) {
     return {
-      action: 'review',
-      reason: 'Risk score in review range',
+      action: "review",
+      reason: "Risk score in review range",
       thresholdApplied: THRESHOLDS.medium,
       requiresHumanReview: false,
       suggestedActions: [
-        'Schedule periodic review',
-        'Monitor transaction patterns',
-        'Suggest credential renewal for expiring items',
+        "Schedule periodic review",
+        "Monitor transaction patterns",
+        "Suggest credential renewal for expiring items",
       ],
     };
   }
 
   return {
-    action: 'allow',
-    reason: 'Risk score within acceptable range',
+    action: "allow",
+    reason: "Risk score within acceptable range",
     thresholdApplied: THRESHOLDS.low,
     requiresHumanReview: false,
     suggestedActions: [
-      'Continue standard monitoring',
-      'Suggest privacy improvements if ZK adoption is low',
+      "Continue standard monitoring",
+      "Suggest privacy improvements if ZK adoption is low",
     ],
   };
 }
@@ -449,7 +471,7 @@ export function computeRiskTrend(
 ): RiskTrend {
   if (historicalScores.length < 2) {
     return {
-      direction: 'stable',
+      direction: "stable",
       velocity: 0,
       projectedScore30d: currentScore,
       historicalScores,
@@ -457,11 +479,16 @@ export function computeRiskTrend(
   }
 
   // Sort by timestamp ascending
-  const sorted = [...historicalScores].sort((a, b) => a.timestamp - b.timestamp);
+  const sorted = [...historicalScores].sort(
+    (a, b) => a.timestamp - b.timestamp,
+  );
 
   // Linear regression for trend
   const n = sorted.length;
-  let sumX = 0, sumY = 0, sumXY = 0, sumXX = 0;
+  let sumX = 0,
+    sumY = 0,
+    sumXY = 0,
+    sumXX = 0;
   const baseTimestamp = sorted[0].timestamp;
 
   for (const point of sorted) {
@@ -475,20 +502,22 @@ export function computeRiskTrend(
 
   const denominator = n * sumXX - sumX * sumX;
   const slope = denominator !== 0 ? (n * sumXY - sumX * sumY) / denominator : 0;
-  const intercept = denominator !== 0 ? (sumY - slope * sumX) / n : currentScore;
+  const intercept =
+    denominator !== 0 ? (sumY - slope * sumX) / n : currentScore;
 
   // Daily velocity (score change per day)
   const velocity = Math.round(slope * 10000) / 10000;
 
   // Project 30 days forward
   const lastDay = (sorted[sorted.length - 1].timestamp - baseTimestamp) / 86400;
-  const projectedScore30d = Math.max(0, Math.min(1,
-    intercept + slope * (lastDay + 30),
-  ));
+  const projectedScore30d = Math.max(
+    0,
+    Math.min(1, intercept + slope * (lastDay + 30)),
+  );
 
-  let direction: RiskTrend['direction'] = 'stable';
-  if (velocity > 0.001) direction = 'deteriorating';
-  else if (velocity < -0.001) direction = 'improving';
+  let direction: RiskTrend["direction"] = "stable";
+  if (velocity > 0.001) direction = "deteriorating";
+  else if (velocity < -0.001) direction = "improving";
 
   return {
     direction,
@@ -523,10 +552,10 @@ export function predictRisk(
 
   // 5. Determine level from decision action
   const ACTION_TO_LEVEL: Record<string, RiskLevel> = {
-    block: 'critical',
-    enhanced_due_diligence: 'high',
-    review: 'medium',
-    allow: 'low',
+    block: "critical",
+    enhanced_due_diligence: "high",
+    review: "medium",
+    allow: "low",
   };
   const level: RiskLevel = ACTION_TO_LEVEL[decision.action];
 
@@ -535,7 +564,10 @@ export function predictRisk(
 
   // 7. Confidence estimate (based on data completeness)
   const nonZeroFeatures = Array.from(features).filter((f) => f > 0).length;
-  const confidence = Math.min(0.99, 0.5 + (nonZeroFeatures / features.length) * 0.5);
+  const confidence = Math.min(
+    0.99,
+    0.5 + (nonZeroFeatures / features.length) * 0.5,
+  );
 
   return {
     score: Math.round(score * 1000) / 1000,

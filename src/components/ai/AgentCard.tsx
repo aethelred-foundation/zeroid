@@ -1,7 +1,7 @@
-'use client';
+"use client";
 
-import { useState, useMemo } from 'react';
-import { motion } from 'framer-motion';
+import { useState, useMemo } from "react";
+import { motion } from "framer-motion";
 import {
   Bot,
   Brain,
@@ -20,14 +20,14 @@ import {
   Link2,
   Activity,
   Loader2,
-} from 'lucide-react';
+} from "lucide-react";
 
 // ============================================================================
 // Types
 // ============================================================================
 
-type AgentType = 'llm' | 'autonomous' | 'bot';
-type AgentStatus = 'active' | 'suspended' | 'inactive' | 'pending_review';
+type AgentType = "llm" | "autonomous" | "bot";
+type AgentStatus = "active" | "suspended" | "inactive" | "pending_review";
 
 interface AgentCapability {
   id: string;
@@ -76,26 +76,51 @@ const AGENT_TYPE_CONFIG: Record<
   AgentType,
   { label: string; icon: typeof Bot; color: string; bg: string }
 > = {
-  llm: { label: 'LLM Agent', icon: Brain, color: 'text-violet-400', bg: 'bg-violet-500/10' },
-  autonomous: { label: 'Autonomous', icon: Cpu, color: 'text-cyan-400', bg: 'bg-cyan-500/10' },
-  bot: { label: 'Bot', icon: Bot, color: 'text-amber-400', bg: 'bg-amber-500/10' },
+  llm: {
+    label: "LLM Agent",
+    icon: Brain,
+    color: "text-violet-400",
+    bg: "bg-violet-500/10",
+  },
+  autonomous: {
+    label: "Autonomous",
+    icon: Cpu,
+    color: "text-cyan-400",
+    bg: "bg-cyan-500/10",
+  },
+  bot: {
+    label: "Bot",
+    icon: Bot,
+    color: "text-amber-400",
+    bg: "bg-amber-500/10",
+  },
 };
 
 const STATUS_CONFIG: Record<
   AgentStatus,
   { label: string; color: string; dot: string }
 > = {
-  active: { label: 'Active', color: 'text-emerald-400', dot: 'bg-emerald-400' },
-  suspended: { label: 'Suspended', color: 'text-red-400', dot: 'bg-red-400' },
-  inactive: { label: 'Inactive', color: 'text-zero-400', dot: 'bg-zero-400' },
-  pending_review: { label: 'Pending Review', color: 'text-amber-400', dot: 'bg-amber-400' },
+  active: { label: "Active", color: "text-emerald-400", dot: "bg-emerald-400" },
+  suspended: { label: "Suspended", color: "text-red-400", dot: "bg-red-400" },
+  inactive: { label: "Inactive", color: "text-zero-400", dot: "bg-zero-400" },
+  pending_review: {
+    label: "Pending Review",
+    color: "text-amber-400",
+    dot: "bg-amber-400",
+  },
 };
 
 // ============================================================================
 // Sub-components
 // ============================================================================
 
-function ActivitySparkline({ data, className }: { data: number[]; className?: string }) {
+function ActivitySparkline({
+  data,
+  className,
+}: {
+  data: number[];
+  className?: string;
+}) {
   const max = Math.max(...data, 1);
   const points = data.map((v, i) => {
     const x = (i / (data.length - 1)) * 100;
@@ -104,9 +129,13 @@ function ActivitySparkline({ data, className }: { data: number[]; className?: st
   });
 
   return (
-    <svg viewBox="0 0 100 100" preserveAspectRatio="none" className={`${className}`}>
+    <svg
+      viewBox="0 0 100 100"
+      preserveAspectRatio="none"
+      className={`${className}`}
+    >
       <polyline
-        points={points.join(' ')}
+        points={points.join(" ")}
         fill="none"
         stroke="currentColor"
         strokeWidth="3"
@@ -119,25 +148,23 @@ function ActivitySparkline({ data, className }: { data: number[]; className?: st
         <stop offset="100%" stopColor="currentColor" stopOpacity="0" />
       </linearGradient>
       <polygon
-        points={`0,100 ${points.join(' ')} 100,100`}
+        points={`0,100 ${points.join(" ")} 100,100`}
         fill="url(#sparkFill)"
       />
     </svg>
   );
 }
 
-function ReputationRing({
-  score,
-  size,
-}: {
-  score: number;
-  size: number;
-}) {
+function ReputationRing({ score, size }: { score: number; size: number }) {
   const radius = (size - 8) / 2;
   const circumference = 2 * Math.PI * radius;
   const progress = (score / 100) * circumference;
   const color =
-    score >= 80 ? 'text-emerald-400' : score >= 60 ? 'text-amber-400' : 'text-red-400';
+    score >= 80
+      ? "text-emerald-400"
+      : score >= 60
+        ? "text-amber-400"
+        : "text-red-400";
 
   return (
     <div className="relative" style={{ width: size, height: size }}>
@@ -163,7 +190,7 @@ function ReputationRing({
           strokeDasharray={circumference}
           initial={{ strokeDashoffset: circumference }}
           animate={{ strokeDashoffset: circumference - progress }}
-          transition={{ duration: 1, ease: 'easeOut' }}
+          transition={{ duration: 1, ease: "easeOut" }}
         />
       </svg>
       <div className="absolute inset-0 flex items-center justify-center">
@@ -187,7 +214,7 @@ export default function AgentCard({
   onAudit,
   loading = false,
   compact = false,
-  className = '',
+  className = "",
 }: AgentCardProps) {
   const [copied, setCopied] = useState(false);
 
@@ -233,15 +260,21 @@ export default function AgentCard({
         animate={{ opacity: 1, y: 0 }}
       >
         <div className="flex items-center gap-3">
-          <div className={`w-10 h-10 rounded-xl ${typeConfig.bg} flex items-center justify-center`}>
+          <div
+            className={`w-10 h-10 rounded-xl ${typeConfig.bg} flex items-center justify-center`}
+          >
             <TypeIcon className={`w-5 h-5 ${typeConfig.color}`} />
           </div>
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
-              <p className="text-sm font-medium text-[var(--text-primary)] truncate">{agent.name}</p>
+              <p className="text-sm font-medium text-[var(--text-primary)] truncate">
+                {agent.name}
+              </p>
               <span className={`w-2 h-2 rounded-full ${statusConfig.dot}`} />
             </div>
-            <p className="text-[10px] font-mono text-[var(--text-tertiary)]">{truncatedDid}</p>
+            <p className="text-[10px] font-mono text-[var(--text-tertiary)]">
+              {truncatedDid}
+            </p>
           </div>
           <ReputationRing score={agent.reputationScore} size={40} />
         </div>
@@ -261,12 +294,14 @@ export default function AgentCard({
         <div className="flex items-start justify-between">
           <div className="flex items-center gap-3">
             {/* Avatar */}
-            <div className={`relative w-14 h-14 rounded-2xl ${typeConfig.bg} flex items-center justify-center border border-${typeConfig.color}/20`}>
+            <div
+              className={`relative w-14 h-14 rounded-2xl ${typeConfig.bg} flex items-center justify-center border border-${typeConfig.color}/20`}
+            >
               <TypeIcon className={`w-7 h-7 ${typeConfig.color}`} />
               <motion.span
                 className={`absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full ${statusConfig.dot} border-2 border-[var(--surface-primary)]`}
                 animate={
-                  agent.status === 'active'
+                  agent.status === "active"
                     ? { scale: [1, 1.2, 1], opacity: [1, 0.7, 1] }
                     : {}
                 }
@@ -274,8 +309,12 @@ export default function AgentCard({
               />
             </div>
             <div>
-              <h3 className="text-sm font-semibold text-[var(--text-primary)]">{agent.name}</h3>
-              <span className={`inline-flex items-center gap-1 text-[10px] ${typeConfig.color}`}>
+              <h3 className="text-sm font-semibold text-[var(--text-primary)]">
+                {agent.name}
+              </h3>
+              <span
+                className={`inline-flex items-center gap-1 text-[10px] ${typeConfig.color}`}
+              >
                 <TypeIcon className="w-3 h-3" />
                 {typeConfig.label}
               </span>
@@ -304,7 +343,9 @@ export default function AgentCard({
 
         {/* Status row */}
         <div className="flex items-center gap-3 mt-3">
-          <span className={`flex items-center gap-1.5 text-xs ${statusConfig.color}`}>
+          <span
+            className={`flex items-center gap-1.5 text-xs ${statusConfig.color}`}
+          >
             <span className={`w-2 h-2 rounded-full ${statusConfig.dot}`} />
             {statusConfig.label}
           </span>
@@ -353,7 +394,10 @@ export default function AgentCard({
             </div>
             {agent.delegation.expiresAt && (
               <span className="text-[10px] text-[var(--text-tertiary)] flex-shrink-0">
-                Exp: {new Date(agent.delegation.expiresAt * 1000).toLocaleDateString()}
+                Exp:{" "}
+                {new Date(
+                  agent.delegation.expiresAt * 1000,
+                ).toLocaleDateString()}
               </span>
             )}
           </div>
@@ -383,7 +427,7 @@ export default function AgentCard({
 
       {/* Quick actions */}
       <div className="flex items-center gap-2 p-5 mt-2 border-t border-[var(--border-primary)]">
-        {onVerify && agent.status !== 'active' && (
+        {onVerify && agent.status !== "active" && (
           <button
             onClick={() => onVerify(agent.id)}
             className="btn-primary btn-sm flex-1"
@@ -392,7 +436,7 @@ export default function AgentCard({
             Verify
           </button>
         )}
-        {onSuspend && agent.status === 'active' && (
+        {onSuspend && agent.status === "active" && (
           <button
             onClick={() => onSuspend(agent.id)}
             className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium bg-amber-500/10 text-amber-400 hover:bg-amber-500/20 transition-colors"

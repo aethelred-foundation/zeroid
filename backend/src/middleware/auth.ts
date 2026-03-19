@@ -1,6 +1,6 @@
-import { Request, Response, NextFunction } from 'express';
-import * as jose from 'jose';
-import { prisma, logger, redis } from '../index';
+import { Request, Response, NextFunction } from "express";
+import * as jose from "jose";
+import { prisma, logger, redis } from "../index";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -16,11 +16,11 @@ export interface AuthenticatedRequest extends Request {
 }
 
 interface JWTPayload {
-  sub: string;        // identity ID
-  did: string;        // DID identifier
+  sub: string; // identity ID
+  did: string; // DID identifier
   iat: number;
   exp: number;
-  jti: string;        // session ID
+  jti: string; // session ID
 }
 
 // ---------------------------------------------------------------------------
@@ -30,32 +30,35 @@ function loadJWTSecret(): Uint8Array {
   const secret = process.env.JWT_SECRET;
   if (!secret) {
     throw new Error(
-      'FATAL: JWT_SECRET environment variable is not set. ' +
-      'Refusing to start without a cryptographic signing secret.',
+      "FATAL: JWT_SECRET environment variable is not set. " +
+        "Refusing to start without a cryptographic signing secret.",
     );
   }
   if (secret.length < 32) {
     throw new Error(
-      'FATAL: JWT_SECRET must be at least 32 characters. ' +
-      'Refusing to start with a weak signing secret.',
+      "FATAL: JWT_SECRET must be at least 32 characters. " +
+        "Refusing to start with a weak signing secret.",
     );
   }
   return new TextEncoder().encode(secret);
 }
 
 const JWT_SECRET = loadJWTSecret();
-const JWT_ISSUER = 'zeroid-api';
-const JWT_AUDIENCE = 'zeroid-client';
-const TOKEN_EXPIRY = '24h';
+const JWT_ISSUER = "zeroid-api";
+const JWT_AUDIENCE = "zeroid-client";
+const TOKEN_EXPIRY = "24h";
 
 // ---------------------------------------------------------------------------
 // Token generation
 // ---------------------------------------------------------------------------
-export async function generateToken(identityId: string, did: string): Promise<{ token: string; sessionId: string }> {
+export async function generateToken(
+  identityId: string,
+  did: string,
+): Promise<{ token: string; sessionId: string }> {
   const sessionId = crypto.randomUUID();
 
   const token = await new jose.SignJWT({ did } as unknown as jose.JWTPayload)
-    .setProtectedHeader({ alg: 'HS256', typ: 'JWT' })
+    .setProtectedHeader({ alg: "HS256", typ: "JWT" })
     .setSubject(identityId)
     .setIssuedAt()
     .setExpirationTime(TOKEN_EXPIRY)
@@ -80,12 +83,17 @@ export async function generateToken(identityId: string, did: string): Promise<{ 
   // Cache session for fast lookup (TTL = 24h)
   await redis.set(
     `session:${sessionId}`,
-    JSON.stringify({ identityId, did, tokenHash, expiresAt: expiresAt.toISOString() }),
-    'EX',
+    JSON.stringify({
+      identityId,
+      did,
+      tokenHash,
+      expiresAt: expiresAt.toISOString(),
+    }),
+    "EX",
     86400,
   );
 
-  logger.info('token_generated', { identityId, did, sessionId });
+  logger.info("token_generated", { identityId, did, sessionId });
   return { token, sessionId };
 }
 
@@ -96,8 +104,8 @@ export async function revokeToken(sessionId: string): Promise<void> {
   await prisma.session.delete({ where: { id: sessionId } }).catch(() => {});
   await redis.del(`session:${sessionId}`);
   // Add to revocation set for remainder of original TTL
-  await redis.set(`revoked:${sessionId}`, '1', 'EX', 86400);
-  logger.info('token_revoked', { sessionId });
+  await redis.set(`revoked:${sessionId}`, "1", "EX", 86400);
+  logger.info("token_revoked", { sessionId });
 }
 
 // ---------------------------------------------------------------------------
@@ -107,24 +115,24 @@ async function verifyDID(did: string, publicKey: string): Promise<boolean> {
   // Verify DID format: did:aethelred:<identifier>
   const didPattern = /^did:aethelred:[a-zA-Z0-9._-]+$/;
   if (!didPattern.test(did)) {
-    logger.warn('invalid_did_format', { did });
+    logger.warn("invalid_did_format", { did });
     return false;
   }
 
   // Look up the DID in our registry and verify the public key matches
   const identity = await prisma.identity.findUnique({ where: { did } });
   if (!identity) {
-    logger.warn('did_not_found', { did });
+    logger.warn("did_not_found", { did });
     return false;
   }
 
   if (identity.publicKey !== publicKey) {
-    logger.warn('did_public_key_mismatch', { did });
+    logger.warn("did_public_key_mismatch", { did });
     return false;
   }
 
-  if (identity.status !== 'ACTIVE') {
-    logger.warn('did_not_active', { did, status: identity.status });
+  if (identity.status !== "ACTIVE") {
+    logger.warn("did_not_active", { did, status: identity.status });
     return false;
   }
 
@@ -137,10 +145,10 @@ async function verifyDID(did: string, publicKey: string): Promise<boolean> {
 async function hashToken(token: string): Promise<string> {
   const encoder = new TextEncoder();
   const data = encoder.encode(token);
-  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
   return Array.from(new Uint8Array(hashBuffer))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
 }
 
 // ---------------------------------------------------------------------------
@@ -152,10 +160,10 @@ export async function authMiddleware(
   next: NextFunction,
 ): Promise<void> {
   const authHeader = req.headers.authorization;
-  if (!authHeader?.startsWith('Bearer ')) {
+  if (!authHeader?.startsWith("Bearer ")) {
     res.status(401).json({
-      error: 'Missing or invalid authorization header',
-      code: 'AUTH_MISSING_TOKEN',
+      error: "Missing or invalid authorization header",
+      code: "AUTH_MISSING_TOKEN",
     });
     return;
   }
@@ -176,15 +184,20 @@ export async function authMiddleware(
 
     // jti (session ID) is mandatory
     if (!sessionId) {
-      res.status(401).json({ error: 'Token missing session identifier', code: 'AUTH_SESSION_MISSING' });
+      res.status(401).json({
+        error: "Token missing session identifier",
+        code: "AUTH_SESSION_MISSING",
+      });
       return;
     }
 
     // Check revocation
     const isRevoked = await redis.get(`revoked:${sessionId}`);
     if (isRevoked) {
-      logger.warn('revoked_token_used', { sessionId, did: jwtPayload.did });
-      res.status(401).json({ error: 'Token has been revoked', code: 'AUTH_TOKEN_REVOKED' });
+      logger.warn("revoked_token_used", { sessionId, did: jwtPayload.did });
+      res
+        .status(401)
+        .json({ error: "Token has been revoked", code: "AUTH_TOKEN_REVOKED" });
       return;
     }
 
@@ -226,13 +239,21 @@ export async function authMiddleware(
           tokenHash: session.tokenHash,
           expiresAt: session.expiresAt.toISOString(),
         };
-        await redis.set(`session:${sessionId}`, JSON.stringify(identityData), 'EX', 86400);
+        await redis.set(
+          `session:${sessionId}`,
+          JSON.stringify(identityData),
+          "EX",
+          86400,
+        );
       }
     }
 
     if (!sessionValid) {
-      logger.warn('session_not_found', { sessionId, sub: jwtPayload.sub });
-      res.status(401).json({ error: 'Session not found or expired', code: 'AUTH_SESSION_INVALID' });
+      logger.warn("session_not_found", { sessionId, sub: jwtPayload.sub });
+      res.status(401).json({
+        error: "Session not found or expired",
+        code: "AUTH_SESSION_INVALID",
+      });
       return;
     }
 
@@ -242,8 +263,11 @@ export async function authMiddleware(
       select: { id: true, did: true, publicKey: true, status: true },
     });
 
-    if (!identity || identity.status !== 'ACTIVE') {
-      res.status(401).json({ error: 'Identity not found or inactive', code: 'AUTH_IDENTITY_INVALID' });
+    if (!identity || identity.status !== "ACTIVE") {
+      res.status(401).json({
+        error: "Identity not found or inactive",
+        code: "AUTH_IDENTITY_INVALID",
+      });
       return;
     }
 
@@ -252,16 +276,22 @@ export async function authMiddleware(
     next();
   } catch (err) {
     if (err instanceof jose.errors.JWTExpired) {
-      res.status(401).json({ error: 'Token has expired', code: 'AUTH_TOKEN_EXPIRED' });
+      res
+        .status(401)
+        .json({ error: "Token has expired", code: "AUTH_TOKEN_EXPIRED" });
       return;
     }
     if (err instanceof jose.errors.JWTClaimValidationFailed) {
-      res.status(401).json({ error: 'Invalid token claims', code: 'AUTH_CLAIMS_INVALID' });
+      res
+        .status(401)
+        .json({ error: "Invalid token claims", code: "AUTH_CLAIMS_INVALID" });
       return;
     }
 
-    logger.error('auth_error', { error: (err as Error).message });
-    res.status(401).json({ error: 'Authentication failed', code: 'AUTH_FAILED' });
+    logger.error("auth_error", { error: (err as Error).message });
+    res
+      .status(401)
+      .json({ error: "Authentication failed", code: "AUTH_FAILED" });
   }
 }
 
@@ -274,7 +304,7 @@ export async function optionalAuthMiddleware(
   next: NextFunction,
 ): Promise<void> {
   const authHeader = req.headers.authorization;
-  if (!authHeader?.startsWith('Bearer ')) {
+  if (!authHeader?.startsWith("Bearer ")) {
     next();
     return;
   }
@@ -339,7 +369,12 @@ export async function optionalAuthMiddleware(
           tokenHash: session.tokenHash,
           expiresAt: session.expiresAt.toISOString(),
         };
-        await redis.set(`session:${sessionId}`, JSON.stringify(identityData), 'EX', 86400);
+        await redis.set(
+          `session:${sessionId}`,
+          JSON.stringify(identityData),
+          "EX",
+          86400,
+        );
       }
     }
 
@@ -353,7 +388,7 @@ export async function optionalAuthMiddleware(
       select: { id: true, did: true, publicKey: true, status: true },
     });
 
-    if (identity?.status === 'ACTIVE') {
+    if (identity?.status === "ACTIVE") {
       req.identity = identity;
       req.sessionId = sessionId;
     }

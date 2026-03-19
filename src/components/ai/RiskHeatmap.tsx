@@ -1,7 +1,7 @@
-'use client';
+"use client";
 
-import { useState, useMemo, useCallback } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { useState, useMemo, useCallback } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import {
   AlertTriangle,
   Filter,
@@ -9,13 +9,13 @@ import {
   Info,
   X,
   Loader2,
-} from 'lucide-react';
+} from "lucide-react";
 
 // ============================================================================
 // Types
 // ============================================================================
 
-type SeverityLevel = 'low' | 'medium' | 'high' | 'critical';
+type SeverityLevel = "low" | "medium" | "high" | "critical";
 
 interface RiskFactor {
   name: string;
@@ -47,45 +47,57 @@ interface RiskHeatmapProps {
 // ============================================================================
 
 const DEFAULT_CATEGORIES = [
-  'KYC/AML',
-  'Sanctions',
-  'Data Privacy',
-  'Cross-border',
-  'Credential Fraud',
-  'Identity Theft',
+  "KYC/AML",
+  "Sanctions",
+  "Data Privacy",
+  "Cross-border",
+  "Credential Fraud",
+  "Identity Theft",
 ];
 
 const DEFAULT_JURISDICTIONS = [
-  'US', 'EU', 'UK', 'SG', 'JP', 'AU', 'CA', 'CH', 'AE', 'HK',
+  "US",
+  "EU",
+  "UK",
+  "SG",
+  "JP",
+  "AU",
+  "CA",
+  "CH",
+  "AE",
+  "HK",
 ];
 
-const SEVERITY_CONFIG: Record<SeverityLevel, { label: string; color: string; bg: string }> = {
-  low: { label: 'Low', color: 'text-emerald-400', bg: 'bg-emerald-500' },
-  medium: { label: 'Medium', color: 'text-amber-400', bg: 'bg-amber-500' },
-  high: { label: 'High', color: 'text-orange-400', bg: 'bg-orange-500' },
-  critical: { label: 'Critical', color: 'text-red-400', bg: 'bg-red-500' },
+const SEVERITY_CONFIG: Record<
+  SeverityLevel,
+  { label: string; color: string; bg: string }
+> = {
+  low: { label: "Low", color: "text-emerald-400", bg: "bg-emerald-500" },
+  medium: { label: "Medium", color: "text-amber-400", bg: "bg-amber-500" },
+  high: { label: "High", color: "text-orange-400", bg: "bg-orange-500" },
+  critical: { label: "Critical", color: "text-red-400", bg: "bg-red-500" },
 };
 
 function getSeverity(score: number): SeverityLevel {
-  if (score <= 25) return 'low';
-  if (score <= 50) return 'medium';
-  if (score <= 75) return 'high';
-  return 'critical';
+  if (score <= 25) return "low";
+  if (score <= 50) return "medium";
+  if (score <= 75) return "high";
+  return "critical";
 }
 
 function getCellColor(score: number): string {
-  if (score <= 15) return 'bg-emerald-500/20 hover:bg-emerald-500/30';
-  if (score <= 30) return 'bg-emerald-500/40 hover:bg-emerald-500/50';
-  if (score <= 45) return 'bg-amber-500/30 hover:bg-amber-500/40';
-  if (score <= 60) return 'bg-amber-500/50 hover:bg-amber-500/60';
-  if (score <= 75) return 'bg-orange-500/40 hover:bg-orange-500/50';
-  if (score <= 90) return 'bg-red-500/40 hover:bg-red-500/50';
-  return 'bg-red-500/60 hover:bg-red-500/70';
+  if (score <= 15) return "bg-emerald-500/20 hover:bg-emerald-500/30";
+  if (score <= 30) return "bg-emerald-500/40 hover:bg-emerald-500/50";
+  if (score <= 45) return "bg-amber-500/30 hover:bg-amber-500/40";
+  if (score <= 60) return "bg-amber-500/50 hover:bg-amber-500/60";
+  if (score <= 75) return "bg-orange-500/40 hover:bg-orange-500/50";
+  if (score <= 90) return "bg-red-500/40 hover:bg-red-500/50";
+  return "bg-red-500/60 hover:bg-red-500/70";
 }
 
 function generateMockData(
   categories: string[],
-  jurisdictions: string[]
+  jurisdictions: string[],
 ): RiskCell[] {
   const cells: RiskCell[] = [];
   for (const category of categories) {
@@ -97,11 +109,25 @@ function generateMockData(
         score,
         severity: getSeverity(score),
         factors: [
-          { name: 'Regulatory Gap', score: Math.floor(Math.random() * 100), description: 'Missing or outdated regulatory framework' },
-          { name: 'Enforcement Risk', score: Math.floor(Math.random() * 100), description: 'Likelihood of enforcement action' },
-          { name: 'Data Risk', score: Math.floor(Math.random() * 100), description: 'Risk of data exposure or breach' },
+          {
+            name: "Regulatory Gap",
+            score: Math.floor(Math.random() * 100),
+            description: "Missing or outdated regulatory framework",
+          },
+          {
+            name: "Enforcement Risk",
+            score: Math.floor(Math.random() * 100),
+            description: "Likelihood of enforcement action",
+          },
+          {
+            name: "Data Risk",
+            score: Math.floor(Math.random() * 100),
+            description: "Risk of data exposure or breach",
+          },
         ],
-        lastUpdated: new Date(Date.now() - Math.random() * 7 * 86400000).toISOString(),
+        lastUpdated: new Date(
+          Date.now() - Math.random() * 7 * 86400000,
+        ).toISOString(),
       });
     }
   }
@@ -142,14 +168,16 @@ function Tooltip({
         {cell.factors.map((factor) => (
           <div key={factor.name}>
             <div className="flex items-center justify-between mb-1">
-              <span className="text-[10px] text-[var(--text-secondary)]">{factor.name}</span>
+              <span className="text-[10px] text-[var(--text-secondary)]">
+                {factor.name}
+              </span>
               <span className="text-[10px] font-mono text-[var(--text-tertiary)]">
                 {factor.score}
               </span>
             </div>
             <div className="w-full h-1.5 rounded-full bg-[var(--surface-tertiary)]">
               <motion.div
-                className={`h-full rounded-full ${getCellColor(factor.score).split(' ')[0]}`}
+                className={`h-full rounded-full ${getCellColor(factor.score).split(" ")[0]}`}
                 initial={{ width: 0 }}
                 animate={{ width: `${factor.score}%` }}
                 transition={{ duration: 0.4 }}
@@ -178,7 +206,7 @@ function DrillDownPanel({
     <motion.div
       className="rounded-2xl border border-[var(--border-primary)] bg-[var(--surface-elevated)] p-5 mt-4"
       initial={{ opacity: 0, height: 0 }}
-      animate={{ opacity: 1, height: 'auto' }}
+      animate={{ opacity: 1, height: "auto" }}
       exit={{ opacity: 0, height: 0 }}
       transition={{ duration: 0.3 }}
     >
@@ -188,11 +216,18 @@ function DrillDownPanel({
             {cell.jurisdiction} - {cell.category}
           </h4>
           <div className="flex items-center gap-2 mt-1">
-            <span className={`text-xs font-medium ${severity.color}`}>{severity.label}</span>
-            <span className="text-xs text-[var(--text-tertiary)]">Score: {cell.score}/100</span>
+            <span className={`text-xs font-medium ${severity.color}`}>
+              {severity.label}
+            </span>
+            <span className="text-xs text-[var(--text-tertiary)]">
+              Score: {cell.score}/100
+            </span>
           </div>
         </div>
-        <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-[var(--surface-secondary)] transition-colors">
+        <button
+          onClick={onClose}
+          className="p-1.5 rounded-lg hover:bg-[var(--surface-secondary)] transition-colors"
+        >
           <X className="w-4 h-4 text-[var(--text-tertiary)]" />
         </button>
       </div>
@@ -221,7 +256,7 @@ function DrillDownPanel({
                   className={`h-full rounded-full ${factorSeverity.bg}`}
                   initial={{ width: 0 }}
                   animate={{ width: `${factor.score}%` }}
-                  transition={{ duration: 0.6, ease: 'easeOut' }}
+                  transition={{ duration: 0.6, ease: "easeOut" }}
                 />
               </div>
             </div>
@@ -243,7 +278,7 @@ export default function RiskHeatmap({
   loading = false,
   error = null,
   onCellClick,
-  className = '',
+  className = "",
 }: RiskHeatmapProps) {
   const [hoveredCell, setHoveredCell] = useState<RiskCell | null>(null);
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
@@ -262,10 +297,10 @@ export default function RiskHeatmap({
   const getCellData = useCallback(
     (category: string, jurisdiction: string): RiskCell | undefined => {
       return cellData.find(
-        (c) => c.category === category && c.jurisdiction === jurisdiction
+        (c) => c.category === category && c.jurisdiction === jurisdiction,
       );
     },
-    [cellData]
+    [cellData],
   );
 
   const handleMouseEnter = useCallback(
@@ -273,22 +308,31 @@ export default function RiskHeatmap({
       setHoveredCell(cell);
       setTooltipPos({ x: e.clientX, y: e.clientY });
     },
-    []
+    [],
   );
 
   const handleCellClick = useCallback(
     (cell: RiskCell) => {
-      setSelectedCell(selectedCell?.category === cell.category && selectedCell?.jurisdiction === cell.jurisdiction ? null : cell);
+      setSelectedCell(
+        selectedCell?.category === cell.category &&
+          selectedCell?.jurisdiction === cell.jurisdiction
+          ? null
+          : cell,
+      );
       onCellClick?.(cell);
     },
-    [selectedCell, onCellClick]
+    [selectedCell, onCellClick],
   );
 
   if (loading) {
     return (
-      <div className={`card p-8 flex items-center justify-center gap-2 ${className}`}>
+      <div
+        className={`card p-8 flex items-center justify-center gap-2 ${className}`}
+      >
         <Loader2 className="w-5 h-5 animate-spin text-brand-500" />
-        <span className="text-sm text-[var(--text-secondary)]">Loading risk data...</span>
+        <span className="text-sm text-[var(--text-secondary)]">
+          Loading risk data...
+        </span>
       </div>
     );
   }
@@ -318,8 +362,10 @@ export default function RiskHeatmap({
             className="btn-ghost btn-sm"
           >
             <Filter className="w-3.5 h-3.5" />
-            {filterCategory ?? 'All Categories'}
-            <ChevronDown className={`w-3.5 h-3.5 transition-transform ${showFilter ? 'rotate-180' : ''}`} />
+            {filterCategory ?? "All Categories"}
+            <ChevronDown
+              className={`w-3.5 h-3.5 transition-transform ${showFilter ? "rotate-180" : ""}`}
+            />
           </button>
           <AnimatePresence>
             {showFilter && (
@@ -330,9 +376,14 @@ export default function RiskHeatmap({
                 exit={{ opacity: 0, y: -5 }}
               >
                 <button
-                  onClick={() => { setFilterCategory(null); setShowFilter(false); }}
+                  onClick={() => {
+                    setFilterCategory(null);
+                    setShowFilter(false);
+                  }}
                   className={`w-full text-left px-4 py-2 text-sm hover:bg-[var(--surface-secondary)] ${
-                    !filterCategory ? 'text-brand-500 font-medium' : 'text-[var(--text-secondary)]'
+                    !filterCategory
+                      ? "text-brand-500 font-medium"
+                      : "text-[var(--text-secondary)]"
                   }`}
                 >
                   All Categories
@@ -340,9 +391,14 @@ export default function RiskHeatmap({
                 {categories.map((cat) => (
                   <button
                     key={cat}
-                    onClick={() => { setFilterCategory(cat); setShowFilter(false); }}
+                    onClick={() => {
+                      setFilterCategory(cat);
+                      setShowFilter(false);
+                    }}
                     className={`w-full text-left px-4 py-2 text-sm hover:bg-[var(--surface-secondary)] ${
-                      filterCategory === cat ? 'text-brand-500 font-medium' : 'text-[var(--text-secondary)]'
+                      filterCategory === cat
+                        ? "text-brand-500 font-medium"
+                        : "text-[var(--text-secondary)]"
                     }`}
                   >
                     {cat}
@@ -380,7 +436,8 @@ export default function RiskHeatmap({
               </div>
               {jurisdictions.map((jurisdiction) => {
                 const cell = getCellData(category, jurisdiction);
-                if (!cell) return <div key={jurisdiction} className="flex-1 p-1" />;
+                if (!cell)
+                  return <div key={jurisdiction} className="flex-1 p-1" />;
 
                 return (
                   <div key={jurisdiction} className="flex-1 p-1">
@@ -388,8 +445,8 @@ export default function RiskHeatmap({
                       className={`w-full aspect-square rounded-lg ${getCellColor(cell.score)} transition-colors flex items-center justify-center cursor-pointer border border-transparent ${
                         selectedCell?.category === cell.category &&
                         selectedCell?.jurisdiction === cell.jurisdiction
-                          ? 'border-white/40 ring-2 ring-brand-500/30'
-                          : ''
+                          ? "border-white/40 ring-2 ring-brand-500/30"
+                          : ""
                       }`}
                       onMouseEnter={(e) => handleMouseEnter(cell, e)}
                       onMouseLeave={() => setHoveredCell(null)}
@@ -415,7 +472,9 @@ export default function RiskHeatmap({
         {Object.entries(SEVERITY_CONFIG).map(([key, config]) => (
           <div key={key} className="flex items-center gap-1.5">
             <div className={`w-3 h-3 rounded ${config.bg}/60`} />
-            <span className="text-[10px] text-[var(--text-tertiary)]">{config.label}</span>
+            <span className="text-[10px] text-[var(--text-tertiary)]">
+              {config.label}
+            </span>
           </div>
         ))}
       </div>

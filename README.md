@@ -71,6 +71,7 @@ The platform combines 12 on-chain smart contracts, 9 ZK circuits (Circom), a TEE
 <td width="50%">
 
 **Self-Sovereign Identity**
+
 - DID creation and resolution (W3C-compliant)
 - Verifiable credential issuance and management
 - Selective disclosure with BBS+ signatures
@@ -80,6 +81,7 @@ The platform combines 12 on-chain smart contracts, 9 ZK circuits (Circom), a TEE
 <td width="50%">
 
 **Zero-Knowledge Proofs**
+
 - Age verification without revealing date of birth
 - Residency and nationality proof circuits
 - Credit tier scoring with privacy preservation
@@ -91,6 +93,7 @@ The platform combines 12 on-chain smart contracts, 9 ZK circuits (Circom), a TEE
 <td width="50%">
 
 **AI-Powered Compliance**
+
 - AI agent identity registry and verification
 - Behavioral biometrics for fraud detection
 - Real-time risk scoring engine
@@ -100,6 +103,7 @@ The platform combines 12 on-chain smart contracts, 9 ZK circuits (Circom), a TEE
 <td width="50%">
 
 **Enterprise & Government**
+
 - Multi-jurisdiction regulatory compliance
 - OFAC and global sanctions screening
 - Jurisdiction-aware policy engine
@@ -151,15 +155,15 @@ graph TB
 
 ## Tech Stack
 
-| Layer | Technology |
-|-------|------------|
-| Frontend | Next.js 14, React 18, Tailwind CSS, RainbowKit, wagmi/viem |
-| Backend | Express, TypeScript 5.3, Prisma ORM |
-| Smart Contracts | Solidity 0.8.20, Foundry + Hardhat dual build |
-| ZK Circuits | Circom 2.1, snarkjs, Groth16 |
-| Native | Rust (TEE attestation crate) |
-| SDKs | Go, Python |
-| AI/ML | Agent identity, fraud detection, risk scoring |
+| Layer           | Technology                                                 |
+| --------------- | ---------------------------------------------------------- |
+| Frontend        | Next.js 14, React 18, Tailwind CSS, RainbowKit, wagmi/viem |
+| Backend         | Express, TypeScript 5.3, Prisma ORM                        |
+| Smart Contracts | Solidity 0.8.20, Foundry + Hardhat dual build              |
+| ZK Circuits     | Circom 2.1, snarkjs, Groth16                               |
+| Native          | Rust (TEE attestation crate)                               |
+| SDKs            | Go, Python                                                 |
+| AI/ML           | Agent identity, fraud detection, risk scoring              |
 
 ---
 
@@ -167,14 +171,14 @@ graph TB
 
 ### Prerequisites
 
-| Tool | Version |
-|------|---------|
-| Node.js | >= 20.0.0 |
-| Rust | >= 1.75.0 |
-| Circom | >= 2.1.0 |
-| Docker + Compose | latest |
-| PostgreSQL | >= 16 |
-| Foundry | latest |
+| Tool             | Version   |
+| ---------------- | --------- |
+| Node.js          | >= 20.0.0 |
+| Rust             | >= 1.75.0 |
+| Circom           | >= 2.1.0  |
+| Docker + Compose | latest    |
+| PostgreSQL       | >= 16     |
+| Foundry          | latest    |
 
 ### Installation
 
@@ -372,15 +376,15 @@ Behavioral biometrics anomaly detection, real-time fraud scoring, sanctions scre
 
 ## Performance
 
-| Metric | Target | Current |
-|--------|--------|---------|
-| First Contentful Paint | < 1.5 s | 1.1 s |
-| Largest Contentful Paint | < 2.5 s | 1.9 s |
-| Time to Interactive | < 3.5 s | 2.4 s |
-| API Response Time (p95) | < 200 ms | 130 ms |
-| ZK Proof Generation (age) | < 3 s | 1.8 s |
+| Metric                           | Target      | Current   |
+| -------------------------------- | ----------- | --------- |
+| First Contentful Paint           | < 1.5 s     | 1.1 s     |
+| Largest Contentful Paint         | < 2.5 s     | 1.9 s     |
+| Time to Interactive              | < 3.5 s     | 2.4 s     |
+| API Response Time (p95)          | < 200 ms    | 130 ms    |
+| ZK Proof Generation (age)        | < 3 s       | 1.8 s     |
 | ZK Proof Verification (on-chain) | < 250 k gas | 210 k gas |
-| DID Resolution | < 100 ms | 45 ms |
+| DID Resolution                   | < 100 ms    | 45 ms     |
 
 Optimisations: code splitting, Next.js image optimisation, snarkjs WASM prover, proof caching, CDN edge delivery, Gzip/Brotli compression, database indexing.
 
@@ -434,10 +438,16 @@ GET  /v1/compliance/jurisdiction/:code # Get jurisdiction rules
 ### WebSocket
 
 ```javascript
-const ws = new WebSocket('wss://api.aethelred.io/zeroid/ws');
+const ws = new WebSocket("wss://api.aethelred.io/zeroid/ws");
 
-ws.send(JSON.stringify({ method: 'subscribe', channel: 'credentials', filter: { issuer: 'did:aethelred:...' } }));
-ws.send(JSON.stringify({ method: 'subscribe', channel: 'revocations' }));
+ws.send(
+  JSON.stringify({
+    method: "subscribe",
+    channel: "credentials",
+    filter: { issuer: "did:aethelred:..." },
+  }),
+);
+ws.send(JSON.stringify({ method: "subscribe", channel: "revocations" }));
 ```
 
 Full reference: [api.aethelred.io/zeroid/docs](https://api.aethelred.io/zeroid/docs)
@@ -448,13 +458,13 @@ Full reference: [api.aethelred.io/zeroid/docs](https://api.aethelred.io/zeroid/d
 
 We welcome contributions. Please see the [Contributing Guide](CONTRIBUTING.md) before opening a PR.
 
-| Standard | Requirement |
-|----------|-------------|
-| Commits | [Conventional Commits](https://www.conventionalcommits.org/) |
-| Solidity | Foundry `forge fmt` + NatSpec documentation |
-| Circom | Circuit constraint documentation + test vectors |
-| TypeScript | ESLint + Prettier + strict mode |
-| Tests | All new features must include unit + integration tests |
+| Standard   | Requirement                                                  |
+| ---------- | ------------------------------------------------------------ |
+| Commits    | [Conventional Commits](https://www.conventionalcommits.org/) |
+| Solidity   | Foundry `forge fmt` + NatSpec documentation                  |
+| Circom     | Circuit constraint documentation + test vectors              |
+| TypeScript | ESLint + Prettier + strict mode                              |
+| Tests      | All new features must include unit + integration tests       |
 
 1. Fork the repository
 2. Create a feature branch — `git checkout -b feature/my-feature`

@@ -13,12 +13,12 @@ import {
   updateWitnessWithDelta,
   AccumulatorTracker,
   batchUpdateWitnesses,
-} from '@/lib/crypto/accumulator';
+} from "@/lib/crypto/accumulator";
 import type {
   NonMembershipWitness,
   AccumulatorState,
   AccumulatorDelta,
-} from '@/lib/crypto/accumulator';
+} from "@/lib/crypto/accumulator";
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -35,7 +35,7 @@ const mockDigest = jest.fn(async (_algo: string, data: ArrayBuffer) => {
   return output.buffer;
 });
 
-Object.defineProperty(globalThis, 'crypto', {
+Object.defineProperty(globalThis, "crypto", {
   value: {
     subtle: { digest: mockDigest },
     getRandomValues: (arr: Uint8Array) => {
@@ -50,13 +50,15 @@ Object.defineProperty(globalThis, 'crypto', {
 // Fixtures
 // ---------------------------------------------------------------------------
 
-const VALID_ELEMENT = '0x' + 'ab'.repeat(32); // 66 chars total
-const ZERO_ELEMENT = '0x' + '00'.repeat(32);
+const VALID_ELEMENT = "0x" + "ab".repeat(32); // 66 chars total
+const ZERO_ELEMENT = "0x" + "00".repeat(32);
 
-function makeWitness(overrides: Partial<NonMembershipWitness> = {}): NonMembershipWitness {
+function makeWitness(
+  overrides: Partial<NonMembershipWitness> = {},
+): NonMembershipWitness {
   return {
-    c: '0xaaa111',
-    d: '0xbbb222',
+    c: "0xaaa111",
+    d: "0xbbb222",
     element: VALID_ELEMENT,
     accumulatorVersion: 5,
     createdAt: Math.floor(Date.now() / 1000) - 3600, // 1 hour ago
@@ -64,30 +66,34 @@ function makeWitness(overrides: Partial<NonMembershipWitness> = {}): NonMembersh
   };
 }
 
-function makeAccumulatorState(overrides: Partial<AccumulatorState> = {}): AccumulatorState {
+function makeAccumulatorState(
+  overrides: Partial<AccumulatorState> = {},
+): AccumulatorState {
   return {
-    value: '0xaccvalue',
+    value: "0xaccvalue",
     version: 5,
     size: 100,
-    stateHash: '0xstatehash',
+    stateHash: "0xstatehash",
     lastUpdatedAt: Math.floor(Date.now() / 1000),
     publicParams: {
-      g1: '0xg1point',
-      g2: '0xg2point',
-      z: '0xzpoint',
+      g1: "0xg1point",
+      g2: "0xg2point",
+      z: "0xzpoint",
       maxSize: 10000,
     },
     ...overrides,
   };
 }
 
-function makeDelta(overrides: Partial<AccumulatorDelta> = {}): AccumulatorDelta {
+function makeDelta(
+  overrides: Partial<AccumulatorDelta> = {},
+): AccumulatorDelta {
   return {
     fromVersion: 5,
     toVersion: 6,
     additions: [],
     removals: [],
-    newAccumulatorValue: '0xnewval',
+    newAccumulatorValue: "0xnewval",
     timestamp: Math.floor(Date.now() / 1000),
     ...overrides,
   };
@@ -97,12 +103,12 @@ function makeDelta(overrides: Partial<AccumulatorDelta> = {}): AccumulatorDelta 
 // verifyNonMembershipWitness
 // ---------------------------------------------------------------------------
 
-describe('verifyNonMembershipWitness', () => {
+describe("verifyNonMembershipWitness", () => {
   beforeEach(() => {
     mockDigest.mockClear();
   });
 
-  it('returns valid=true when all checks pass', async () => {
+  it("returns valid=true when all checks pass", async () => {
     const witness = makeWitness();
     const state = makeAccumulatorState();
 
@@ -117,132 +123,138 @@ describe('verifyNonMembershipWitness', () => {
     expect(result.checks.every((c) => c.passed)).toBe(true);
   });
 
-  it('fails witness_structure check when c is empty', async () => {
-    const witness = makeWitness({ c: '' });
+  it("fails witness_structure check when c is empty", async () => {
+    const witness = makeWitness({ c: "" });
     const state = makeAccumulatorState();
 
     const result = await verifyNonMembershipWitness(witness, state);
 
-    const structCheck = result.checks.find((c) => c.name === 'witness_structure');
+    const structCheck = result.checks.find(
+      (c) => c.name === "witness_structure",
+    );
     expect(structCheck?.passed).toBe(false);
-    expect(structCheck?.detail).toBe('Missing witness fields');
+    expect(structCheck?.detail).toBe("Missing witness fields");
     expect(result.valid).toBe(false);
   });
 
-  it('fails witness_structure check when d is empty', async () => {
-    const witness = makeWitness({ d: '' });
+  it("fails witness_structure check when d is empty", async () => {
+    const witness = makeWitness({ d: "" });
     const state = makeAccumulatorState();
 
     const result = await verifyNonMembershipWitness(witness, state);
 
-    const structCheck = result.checks.find((c) => c.name === 'witness_structure');
+    const structCheck = result.checks.find(
+      (c) => c.name === "witness_structure",
+    );
     expect(structCheck?.passed).toBe(false);
   });
 
-  it('fails witness_structure check when element is empty', async () => {
-    const witness = makeWitness({ element: '' });
+  it("fails witness_structure check when element is empty", async () => {
+    const witness = makeWitness({ element: "" });
     const state = makeAccumulatorState();
 
     const result = await verifyNonMembershipWitness(witness, state);
 
-    const structCheck = result.checks.find((c) => c.name === 'witness_structure');
+    const structCheck = result.checks.find(
+      (c) => c.name === "witness_structure",
+    );
     expect(structCheck?.passed).toBe(false);
   });
 
-  it('reports needsUpdate=true when witness version is behind', async () => {
+  it("reports needsUpdate=true when witness version is behind", async () => {
     const witness = makeWitness({ accumulatorVersion: 3 });
     const state = makeAccumulatorState({ version: 5 });
 
     const result = await verifyNonMembershipWitness(witness, state);
 
     expect(result.needsUpdate).toBe(true);
-    const vCheck = result.checks.find((c) => c.name === 'version_check');
+    const vCheck = result.checks.find((c) => c.name === "version_check");
     expect(vCheck?.passed).toBe(false);
-    expect(vCheck?.detail).toContain('2 version(s) behind');
-    expect(vCheck?.detail).toContain('v3');
-    expect(vCheck?.detail).toContain('v5');
+    expect(vCheck?.detail).toContain("2 version(s) behind");
+    expect(vCheck?.detail).toContain("v3");
+    expect(vCheck?.detail).toContain("v5");
   });
 
-  it('version_check passes when versions match', async () => {
+  it("version_check passes when versions match", async () => {
     const witness = makeWitness({ accumulatorVersion: 7 });
     const state = makeAccumulatorState({ version: 7 });
 
     const result = await verifyNonMembershipWitness(witness, state);
 
-    const vCheck = result.checks.find((c) => c.name === 'version_check');
+    const vCheck = result.checks.find((c) => c.name === "version_check");
     expect(vCheck?.passed).toBe(true);
-    expect(vCheck?.detail).toContain('v7');
+    expect(vCheck?.detail).toContain("v7");
   });
 
-  it('pairing_check always passes with structural mock', async () => {
+  it("pairing_check always passes with structural mock", async () => {
     const witness = makeWitness();
     const state = makeAccumulatorState();
 
     const result = await verifyNonMembershipWitness(witness, state);
 
-    const pCheck = result.checks.find((c) => c.name === 'pairing_check');
+    const pCheck = result.checks.find((c) => c.name === "pairing_check");
     expect(pCheck?.passed).toBe(true);
-    expect(pCheck?.detail).toBe('Pairing equation satisfied');
+    expect(pCheck?.detail).toBe("Pairing equation satisfied");
   });
 
-  it('fails element_validity when element is the zero element', async () => {
+  it("fails element_validity when element is the zero element", async () => {
     const witness = makeWitness({ element: ZERO_ELEMENT });
     const state = makeAccumulatorState();
 
     const result = await verifyNonMembershipWitness(witness, state);
 
-    const eCheck = result.checks.find((c) => c.name === 'element_validity');
+    const eCheck = result.checks.find((c) => c.name === "element_validity");
     expect(eCheck?.passed).toBe(false);
-    expect(eCheck?.detail).toBe('Invalid element encoding');
+    expect(eCheck?.detail).toBe("Invalid element encoding");
   });
 
-  it('fails element_validity when element has wrong length', async () => {
-    const witness = makeWitness({ element: '0xshort' });
+  it("fails element_validity when element has wrong length", async () => {
+    const witness = makeWitness({ element: "0xshort" });
     const state = makeAccumulatorState();
 
     const result = await verifyNonMembershipWitness(witness, state);
 
-    const eCheck = result.checks.find((c) => c.name === 'element_validity');
+    const eCheck = result.checks.find((c) => c.name === "element_validity");
     expect(eCheck?.passed).toBe(false);
   });
 
-  it('passes element_validity for correct 66-char non-zero element', async () => {
+  it("passes element_validity for correct 66-char non-zero element", async () => {
     const witness = makeWitness({ element: VALID_ELEMENT });
     const state = makeAccumulatorState();
 
     const result = await verifyNonMembershipWitness(witness, state);
 
-    const eCheck = result.checks.find((c) => c.name === 'element_validity');
+    const eCheck = result.checks.find((c) => c.name === "element_validity");
     expect(eCheck?.passed).toBe(true);
-    expect(eCheck?.detail).toBe('Element is a valid field element');
+    expect(eCheck?.detail).toBe("Element is a valid field element");
   });
 
-  it('fails freshness check when witness is older than 7 days', async () => {
+  it("fails freshness check when witness is older than 7 days", async () => {
     const eightDaysAgo = Math.floor(Date.now() / 1000) - 8 * 24 * 60 * 60;
     const witness = makeWitness({ createdAt: eightDaysAgo });
     const state = makeAccumulatorState();
 
     const result = await verifyNonMembershipWitness(witness, state);
 
-    const fCheck = result.checks.find((c) => c.name === 'freshness');
+    const fCheck = result.checks.find((c) => c.name === "freshness");
     expect(fCheck?.passed).toBe(false);
   });
 
-  it('passes freshness check when witness is less than 7 days old', async () => {
+  it("passes freshness check when witness is less than 7 days old", async () => {
     const oneHourAgo = Math.floor(Date.now() / 1000) - 3600;
     const witness = makeWitness({ createdAt: oneHourAgo });
     const state = makeAccumulatorState();
 
     const result = await verifyNonMembershipWitness(witness, state);
 
-    const fCheck = result.checks.find((c) => c.name === 'freshness');
+    const fCheck = result.checks.find((c) => c.name === "freshness");
     expect(fCheck?.passed).toBe(true);
-    expect(fCheck?.detail).toContain('hours');
+    expect(fCheck?.detail).toContain("hours");
   });
 
-  it('valid is false when any single check fails', async () => {
+  it("valid is false when any single check fails", async () => {
     // Element validity fails but everything else passes
-    const witness = makeWitness({ element: '0xshort' });
+    const witness = makeWitness({ element: "0xshort" });
     const state = makeAccumulatorState();
 
     const result = await verifyNonMembershipWitness(witness, state);
@@ -250,7 +262,7 @@ describe('verifyNonMembershipWitness', () => {
     expect(result.valid).toBe(false);
   });
 
-  it('calls crypto.subtle.digest for pairing check', async () => {
+  it("calls crypto.subtle.digest for pairing check", async () => {
     const witness = makeWitness();
     const state = makeAccumulatorState();
 
@@ -258,39 +270,40 @@ describe('verifyNonMembershipWitness', () => {
 
     // hashToField is called multiple times (for pairing LHS/RHS and element hashing)
     expect(mockDigest).toHaveBeenCalled();
-    expect(mockDigest.mock.calls.every((call) => call[0] === 'SHA-256')).toBe(true);
+    expect(mockDigest.mock.calls.every((call) => call[0] === "SHA-256")).toBe(
+      true,
+    );
   });
-
 });
 
 // ---------------------------------------------------------------------------
 // updateWitnessWithDelta
 // ---------------------------------------------------------------------------
 
-describe('updateWitnessWithDelta', () => {
+describe("updateWitnessWithDelta", () => {
   beforeEach(() => {
     mockDigest.mockClear();
   });
 
-  it('throws on version mismatch', async () => {
+  it("throws on version mismatch", async () => {
     const witness = makeWitness({ accumulatorVersion: 3 });
     const delta = makeDelta({ fromVersion: 5 });
 
     await expect(updateWitnessWithDelta(witness, delta)).rejects.toThrow(
-      'Version mismatch: witness is at v3, delta starts at v5',
+      "Version mismatch: witness is at v3, delta starts at v5",
     );
   });
 
-  it('throws when the element was added to the accumulator', async () => {
+  it("throws when the element was added to the accumulator", async () => {
     const witness = makeWitness({ accumulatorVersion: 5 });
     const delta = makeDelta({ fromVersion: 5, additions: [VALID_ELEMENT] });
 
     await expect(updateWitnessWithDelta(witness, delta)).rejects.toThrow(
-      'Element was added to accumulator',
+      "Element was added to accumulator",
     );
   });
 
-  it('updates witness version to delta toVersion with no additions or removals', async () => {
+  it("updates witness version to delta toVersion with no additions or removals", async () => {
     const witness = makeWitness({ accumulatorVersion: 5 });
     const delta = makeDelta({ fromVersion: 5, toVersion: 6 });
 
@@ -300,24 +313,32 @@ describe('updateWitnessWithDelta', () => {
     expect(result.element).toBe(witness.element);
   });
 
-  it('updates c and d when there are additions', async () => {
-    const witness = makeWitness({ accumulatorVersion: 5, c: '0xorigC', d: '0xorigD' });
+  it("updates c and d when there are additions", async () => {
+    const witness = makeWitness({
+      accumulatorVersion: 5,
+      c: "0xorigC",
+      d: "0xorigD",
+    });
     const delta = makeDelta({
       fromVersion: 5,
       toVersion: 6,
-      additions: ['0x' + 'cc'.repeat(32)],
+      additions: ["0x" + "cc".repeat(32)],
     });
 
     const result = await updateWitnessWithDelta(witness, delta);
 
-    expect(result.c).not.toBe('0xorigC');
-    expect(result.d).not.toBe('0xorigD');
+    expect(result.c).not.toBe("0xorigC");
+    expect(result.d).not.toBe("0xorigD");
     expect(result.accumulatorVersion).toBe(6);
   });
 
-  it('updates c and d when there are removals (non-self)', async () => {
-    const otherElement = '0x' + 'dd'.repeat(32);
-    const witness = makeWitness({ accumulatorVersion: 5, c: '0xorigC', d: '0xorigD' });
+  it("updates c and d when there are removals (non-self)", async () => {
+    const otherElement = "0x" + "dd".repeat(32);
+    const witness = makeWitness({
+      accumulatorVersion: 5,
+      c: "0xorigC",
+      d: "0xorigD",
+    });
     const delta = makeDelta({
       fromVersion: 5,
       toVersion: 6,
@@ -326,12 +347,16 @@ describe('updateWitnessWithDelta', () => {
 
     const result = await updateWitnessWithDelta(witness, delta);
 
-    expect(result.c).not.toBe('0xorigC');
-    expect(result.d).not.toBe('0xorigD');
+    expect(result.c).not.toBe("0xorigC");
+    expect(result.d).not.toBe("0xorigD");
   });
 
-  it('skips self-removal without altering witness values', async () => {
-    const witness = makeWitness({ accumulatorVersion: 5, c: '0xorigC', d: '0xorigD' });
+  it("skips self-removal without altering witness values", async () => {
+    const witness = makeWitness({
+      accumulatorVersion: 5,
+      c: "0xorigC",
+      d: "0xorigD",
+    });
     const delta = makeDelta({
       fromVersion: 5,
       toVersion: 6,
@@ -341,12 +366,12 @@ describe('updateWitnessWithDelta', () => {
     const result = await updateWitnessWithDelta(witness, delta);
 
     // c and d should remain the same since the only removal is self
-    expect(result.c).toBe('0xorigC');
-    expect(result.d).toBe('0xorigD');
+    expect(result.c).toBe("0xorigC");
+    expect(result.d).toBe("0xorigD");
     expect(result.accumulatorVersion).toBe(6);
   });
 
-  it('sets createdAt to current timestamp', async () => {
+  it("sets createdAt to current timestamp", async () => {
     const now = Math.floor(Date.now() / 1000);
     const witness = makeWitness({ accumulatorVersion: 5, createdAt: 1000 });
     const delta = makeDelta({ fromVersion: 5, toVersion: 6 });
@@ -357,9 +382,9 @@ describe('updateWitnessWithDelta', () => {
     expect(result.createdAt).toBeLessThanOrEqual(now + 1);
   });
 
-  it('processes both additions and removals in one delta', async () => {
-    const otherElement = '0x' + 'ee'.repeat(32);
-    const addedElement = '0x' + 'ff'.repeat(32);
+  it("processes both additions and removals in one delta", async () => {
+    const otherElement = "0x" + "ee".repeat(32);
+    const addedElement = "0x" + "ff".repeat(32);
     const witness = makeWitness({ accumulatorVersion: 5 });
     const delta = makeDelta({
       fromVersion: 5,
@@ -379,7 +404,7 @@ describe('updateWitnessWithDelta', () => {
 // AccumulatorTracker
 // ---------------------------------------------------------------------------
 
-describe('AccumulatorTracker', () => {
+describe("AccumulatorTracker", () => {
   let tracker: AccumulatorTracker;
   let initialState: AccumulatorState;
 
@@ -388,8 +413,8 @@ describe('AccumulatorTracker', () => {
     tracker = new AccumulatorTracker(initialState);
   });
 
-  describe('getState', () => {
-    it('returns a copy of the initial state', () => {
+  describe("getState", () => {
+    it("returns a copy of the initial state", () => {
       const state = tracker.getState();
       expect(state.version).toBe(1);
       expect(state.size).toBe(10);
@@ -398,20 +423,20 @@ describe('AccumulatorTracker', () => {
     });
   });
 
-  describe('getVersion', () => {
-    it('returns the current version', () => {
+  describe("getVersion", () => {
+    it("returns the current version", () => {
       expect(tracker.getVersion()).toBe(1);
     });
   });
 
-  describe('applyDelta', () => {
-    it('updates state correctly after applying a delta', () => {
+  describe("applyDelta", () => {
+    it("updates state correctly after applying a delta", () => {
       const delta = makeDelta({
         fromVersion: 1,
         toVersion: 2,
-        additions: ['0xelem1', '0xelem2'],
-        removals: ['0xelem3'],
-        newAccumulatorValue: '0xnewval2',
+        additions: ["0xelem1", "0xelem2"],
+        removals: ["0xelem3"],
+        newAccumulatorValue: "0xnewval2",
         timestamp: 999999,
       });
 
@@ -419,21 +444,21 @@ describe('AccumulatorTracker', () => {
 
       const state = tracker.getState();
       expect(state.version).toBe(2);
-      expect(state.value).toBe('0xnewval2');
+      expect(state.value).toBe("0xnewval2");
       expect(state.size).toBe(11); // 10 + 2 additions - 1 removal
       expect(state.lastUpdatedAt).toBe(999999);
-      expect(state.stateHash).toBe(''); // reset
+      expect(state.stateHash).toBe(""); // reset
     });
 
-    it('throws on version mismatch', () => {
+    it("throws on version mismatch", () => {
       const delta = makeDelta({ fromVersion: 5, toVersion: 6 });
 
       expect(() => tracker.applyDelta(delta)).toThrow(
-        'Cannot apply delta: expected fromVersion 1, got 5',
+        "Cannot apply delta: expected fromVersion 1, got 5",
       );
     });
 
-    it('trims delta history when exceeding maxHistorySize', () => {
+    it("trims delta history when exceeding maxHistorySize", () => {
       const smallTracker = new AccumulatorTracker(
         makeAccumulatorState({ version: 0, size: 0 }),
         3,
@@ -455,115 +480,151 @@ describe('AccumulatorTracker', () => {
       expect(deltas[0].fromVersion).toBe(2);
     });
 
-    it('allows sequential deltas', () => {
-      tracker.applyDelta(makeDelta({ fromVersion: 1, toVersion: 2, newAccumulatorValue: '0xv2' }));
-      tracker.applyDelta(makeDelta({ fromVersion: 2, toVersion: 3, newAccumulatorValue: '0xv3' }));
-
-      expect(tracker.getVersion()).toBe(3);
-    });
-  });
-
-  describe('getDeltasSince', () => {
-    beforeEach(() => {
-      tracker.applyDelta(makeDelta({ fromVersion: 1, toVersion: 2, newAccumulatorValue: '0xv2' }));
-      tracker.applyDelta(makeDelta({ fromVersion: 2, toVersion: 3, newAccumulatorValue: '0xv3' }));
-      tracker.applyDelta(makeDelta({ fromVersion: 3, toVersion: 4, newAccumulatorValue: '0xv4' }));
-    });
-
-    it('returns all deltas since a given version', () => {
-      const deltas = tracker.getDeltasSince(2);
-      expect(deltas.length).toBe(2);
-      expect(deltas[0].fromVersion).toBe(2);
-      expect(deltas[1].fromVersion).toBe(3);
-    });
-
-    it('returns empty array when version is current', () => {
-      const deltas = tracker.getDeltasSince(4);
-      expect(deltas).toHaveLength(0);
-    });
-
-    it('returns all deltas when version is 0', () => {
-      const deltas = tracker.getDeltasSince(0);
-      expect(deltas.length).toBe(3);
-    });
-  });
-
-  describe('witnessNeedsUpdate', () => {
-    it('returns true when witness version is behind', () => {
-      const witness = makeWitness({ accumulatorVersion: 0 });
-      expect(tracker.witnessNeedsUpdate(witness)).toBe(true);
-    });
-
-    it('returns false when witness version matches', () => {
-      const witness = makeWitness({ accumulatorVersion: 1 });
-      expect(tracker.witnessNeedsUpdate(witness)).toBe(false);
-    });
-  });
-
-  describe('getVersionGap', () => {
-    it('returns the gap between witness and current version', () => {
-      tracker.applyDelta(makeDelta({ fromVersion: 1, toVersion: 5, newAccumulatorValue: '0xv5' }));
-
-      const witness = makeWitness({ accumulatorVersion: 2 });
-      expect(tracker.getVersionGap(witness)).toBe(3);
-    });
-
-    it('returns 0 when witness is at or ahead of current version', () => {
-      const witness = makeWitness({ accumulatorVersion: 10 });
-      expect(tracker.getVersionGap(witness)).toBe(0);
-    });
-  });
-
-  describe('isRevoked', () => {
-    it('returns true when element was added and not subsequently removed', () => {
+    it("allows sequential deltas", () => {
       tracker.applyDelta(
         makeDelta({
           fromVersion: 1,
           toVersion: 2,
-          additions: ['0xrevoked_elem'],
-          newAccumulatorValue: '0xv2',
-        }),
-      );
-
-      expect(tracker.isRevoked('0xrevoked_elem')).toBe(true);
-    });
-
-    it('returns false when element was added then later removed', () => {
-      tracker.applyDelta(
-        makeDelta({
-          fromVersion: 1,
-          toVersion: 2,
-          additions: ['0xtemp_elem'],
-          newAccumulatorValue: '0xv2',
+          newAccumulatorValue: "0xv2",
         }),
       );
       tracker.applyDelta(
         makeDelta({
           fromVersion: 2,
           toVersion: 3,
-          removals: ['0xtemp_elem'],
-          newAccumulatorValue: '0xv3',
+          newAccumulatorValue: "0xv3",
         }),
       );
 
-      expect(tracker.isRevoked('0xtemp_elem')).toBe(false);
+      expect(tracker.getVersion()).toBe(3);
     });
+  });
 
-    it('returns false when element was never added', () => {
+  describe("getDeltasSince", () => {
+    beforeEach(() => {
       tracker.applyDelta(
         makeDelta({
           fromVersion: 1,
           toVersion: 2,
-          additions: ['0xother_elem'],
-          newAccumulatorValue: '0xv2',
+          newAccumulatorValue: "0xv2",
+        }),
+      );
+      tracker.applyDelta(
+        makeDelta({
+          fromVersion: 2,
+          toVersion: 3,
+          newAccumulatorValue: "0xv3",
+        }),
+      );
+      tracker.applyDelta(
+        makeDelta({
+          fromVersion: 3,
+          toVersion: 4,
+          newAccumulatorValue: "0xv4",
+        }),
+      );
+    });
+
+    it("returns all deltas since a given version", () => {
+      const deltas = tracker.getDeltasSince(2);
+      expect(deltas.length).toBe(2);
+      expect(deltas[0].fromVersion).toBe(2);
+      expect(deltas[1].fromVersion).toBe(3);
+    });
+
+    it("returns empty array when version is current", () => {
+      const deltas = tracker.getDeltasSince(4);
+      expect(deltas).toHaveLength(0);
+    });
+
+    it("returns all deltas when version is 0", () => {
+      const deltas = tracker.getDeltasSince(0);
+      expect(deltas.length).toBe(3);
+    });
+  });
+
+  describe("witnessNeedsUpdate", () => {
+    it("returns true when witness version is behind", () => {
+      const witness = makeWitness({ accumulatorVersion: 0 });
+      expect(tracker.witnessNeedsUpdate(witness)).toBe(true);
+    });
+
+    it("returns false when witness version matches", () => {
+      const witness = makeWitness({ accumulatorVersion: 1 });
+      expect(tracker.witnessNeedsUpdate(witness)).toBe(false);
+    });
+  });
+
+  describe("getVersionGap", () => {
+    it("returns the gap between witness and current version", () => {
+      tracker.applyDelta(
+        makeDelta({
+          fromVersion: 1,
+          toVersion: 5,
+          newAccumulatorValue: "0xv5",
         }),
       );
 
-      expect(tracker.isRevoked('0xnever_added')).toBe(false);
+      const witness = makeWitness({ accumulatorVersion: 2 });
+      expect(tracker.getVersionGap(witness)).toBe(3);
     });
 
-    it('returns false when delta history is empty', () => {
-      expect(tracker.isRevoked('0xanything')).toBe(false);
+    it("returns 0 when witness is at or ahead of current version", () => {
+      const witness = makeWitness({ accumulatorVersion: 10 });
+      expect(tracker.getVersionGap(witness)).toBe(0);
+    });
+  });
+
+  describe("isRevoked", () => {
+    it("returns true when element was added and not subsequently removed", () => {
+      tracker.applyDelta(
+        makeDelta({
+          fromVersion: 1,
+          toVersion: 2,
+          additions: ["0xrevoked_elem"],
+          newAccumulatorValue: "0xv2",
+        }),
+      );
+
+      expect(tracker.isRevoked("0xrevoked_elem")).toBe(true);
+    });
+
+    it("returns false when element was added then later removed", () => {
+      tracker.applyDelta(
+        makeDelta({
+          fromVersion: 1,
+          toVersion: 2,
+          additions: ["0xtemp_elem"],
+          newAccumulatorValue: "0xv2",
+        }),
+      );
+      tracker.applyDelta(
+        makeDelta({
+          fromVersion: 2,
+          toVersion: 3,
+          removals: ["0xtemp_elem"],
+          newAccumulatorValue: "0xv3",
+        }),
+      );
+
+      expect(tracker.isRevoked("0xtemp_elem")).toBe(false);
+    });
+
+    it("returns false when element was never added", () => {
+      tracker.applyDelta(
+        makeDelta({
+          fromVersion: 1,
+          toVersion: 2,
+          additions: ["0xother_elem"],
+          newAccumulatorValue: "0xv2",
+        }),
+      );
+
+      expect(tracker.isRevoked("0xnever_added")).toBe(false);
+    });
+
+    it("returns false when delta history is empty", () => {
+      expect(tracker.isRevoked("0xanything")).toBe(false);
     });
   });
 });
@@ -572,15 +633,15 @@ describe('AccumulatorTracker', () => {
 // batchUpdateWitnesses
 // ---------------------------------------------------------------------------
 
-describe('batchUpdateWitnesses', () => {
+describe("batchUpdateWitnesses", () => {
   beforeEach(() => {
     mockDigest.mockClear();
   });
 
-  it('returns all witnesses unchanged when no deltas apply', async () => {
+  it("returns all witnesses unchanged when no deltas apply", async () => {
     const witnesses = [
-      makeWitness({ accumulatorVersion: 10, element: '0x' + 'aa'.repeat(32) }),
-      makeWitness({ accumulatorVersion: 10, element: '0x' + 'bb'.repeat(32) }),
+      makeWitness({ accumulatorVersion: 10, element: "0x" + "aa".repeat(32) }),
+      makeWitness({ accumulatorVersion: 10, element: "0x" + "bb".repeat(32) }),
     ];
     const deltas = [makeDelta({ fromVersion: 5, toVersion: 6 })];
 
@@ -590,12 +651,12 @@ describe('batchUpdateWitnesses', () => {
     expect(result.failedElements).toHaveLength(0);
   });
 
-  it('updates witnesses through multiple sequential deltas', async () => {
-    const elem = '0x' + 'aa'.repeat(32);
+  it("updates witnesses through multiple sequential deltas", async () => {
+    const elem = "0x" + "aa".repeat(32);
     const witnesses = [makeWitness({ accumulatorVersion: 1, element: elem })];
     const deltas = [
-      makeDelta({ fromVersion: 1, toVersion: 2, newAccumulatorValue: '0xv2' }),
-      makeDelta({ fromVersion: 2, toVersion: 3, newAccumulatorValue: '0xv3' }),
+      makeDelta({ fromVersion: 1, toVersion: 2, newAccumulatorValue: "0xv2" }),
+      makeDelta({ fromVersion: 2, toVersion: 3, newAccumulatorValue: "0xv3" }),
     ];
 
     const result = await batchUpdateWitnesses(witnesses, deltas);
@@ -605,10 +666,12 @@ describe('batchUpdateWitnesses', () => {
     expect(result.failedElements).toHaveLength(0);
   });
 
-  it('records failed elements when element was added to accumulator', async () => {
-    const elem = '0x' + 'aa'.repeat(32);
+  it("records failed elements when element was added to accumulator", async () => {
+    const elem = "0x" + "aa".repeat(32);
     const witnesses = [makeWitness({ accumulatorVersion: 1, element: elem })];
-    const deltas = [makeDelta({ fromVersion: 1, toVersion: 2, additions: [elem] })];
+    const deltas = [
+      makeDelta({ fromVersion: 1, toVersion: 2, additions: [elem] }),
+    ];
 
     const result = await batchUpdateWitnesses(witnesses, deltas);
 
@@ -616,13 +679,13 @@ describe('batchUpdateWitnesses', () => {
     expect(result.failedElements).toEqual([elem]);
   });
 
-  it('sorts deltas by version before processing', async () => {
-    const elem = '0x' + 'aa'.repeat(32);
+  it("sorts deltas by version before processing", async () => {
+    const elem = "0x" + "aa".repeat(32);
     const witnesses = [makeWitness({ accumulatorVersion: 1, element: elem })];
     // Provide deltas out of order
     const deltas = [
-      makeDelta({ fromVersion: 2, toVersion: 3, newAccumulatorValue: '0xv3' }),
-      makeDelta({ fromVersion: 1, toVersion: 2, newAccumulatorValue: '0xv2' }),
+      makeDelta({ fromVersion: 2, toVersion: 3, newAccumulatorValue: "0xv3" }),
+      makeDelta({ fromVersion: 1, toVersion: 2, newAccumulatorValue: "0xv2" }),
     ];
 
     const result = await batchUpdateWitnesses(witnesses, deltas);
@@ -630,7 +693,7 @@ describe('batchUpdateWitnesses', () => {
     expect(result.updatedWitnesses[0].accumulatorVersion).toBe(3);
   });
 
-  it('handles empty witnesses array', async () => {
+  it("handles empty witnesses array", async () => {
     const deltas = [makeDelta({ fromVersion: 1, toVersion: 2 })];
 
     const result = await batchUpdateWitnesses([], deltas);
@@ -640,7 +703,7 @@ describe('batchUpdateWitnesses', () => {
     expect(result.fromVersion).toBe(0);
   });
 
-  it('handles empty deltas array', async () => {
+  it("handles empty deltas array", async () => {
     const witnesses = [makeWitness({ accumulatorVersion: 5 })];
 
     const result = await batchUpdateWitnesses(witnesses, []);
@@ -649,10 +712,10 @@ describe('batchUpdateWitnesses', () => {
     expect(result.toVersion).toBe(0);
   });
 
-  it('uses diff cache for repeated computations', async () => {
-    const elem1 = '0x' + 'aa'.repeat(32);
-    const elem2 = '0x' + 'bb'.repeat(32);
-    const addedElem = '0x' + 'cc'.repeat(32);
+  it("uses diff cache for repeated computations", async () => {
+    const elem1 = "0x" + "aa".repeat(32);
+    const elem2 = "0x" + "bb".repeat(32);
+    const addedElem = "0x" + "cc".repeat(32);
 
     const witnesses = [
       makeWitness({ accumulatorVersion: 1, element: elem1 }),
@@ -670,15 +733,25 @@ describe('batchUpdateWitnesses', () => {
     expect(callCountAfter - callCountBefore).toBeGreaterThan(0);
   });
 
-  it('hits diff cache when same diff key is computed twice', async () => {
+  it("hits diff cache when same diff key is computed twice", async () => {
     // Use two witnesses with the same element so getCachedDiff
     // hits the cache on the second witness's processing
-    const elem = '0x' + 'aa'.repeat(32);
-    const addedElem = '0x' + 'cc'.repeat(32);
+    const elem = "0x" + "aa".repeat(32);
+    const addedElem = "0x" + "cc".repeat(32);
 
     const witnesses = [
-      makeWitness({ accumulatorVersion: 1, element: elem, c: '0xc1', d: '0xd1' }),
-      makeWitness({ accumulatorVersion: 1, element: elem, c: '0xc2', d: '0xd2' }),
+      makeWitness({
+        accumulatorVersion: 1,
+        element: elem,
+        c: "0xc1",
+        d: "0xd1",
+      }),
+      makeWitness({
+        accumulatorVersion: 1,
+        element: elem,
+        c: "0xc2",
+        d: "0xd2",
+      }),
     ];
     const deltas = [
       makeDelta({ fromVersion: 1, toVersion: 2, additions: [addedElem] }),
@@ -689,10 +762,10 @@ describe('batchUpdateWitnesses', () => {
     expect(result.failedElements).toHaveLength(0);
   });
 
-  it('reports correct fromVersion and toVersion', async () => {
+  it("reports correct fromVersion and toVersion", async () => {
     const witnesses = [
-      makeWitness({ accumulatorVersion: 2, element: '0x' + 'aa'.repeat(32) }),
-      makeWitness({ accumulatorVersion: 4, element: '0x' + 'bb'.repeat(32) }),
+      makeWitness({ accumulatorVersion: 2, element: "0x" + "aa".repeat(32) }),
+      makeWitness({ accumulatorVersion: 4, element: "0x" + "bb".repeat(32) }),
     ];
     const deltas = [
       makeDelta({ fromVersion: 2, toVersion: 3 }),
@@ -706,15 +779,15 @@ describe('batchUpdateWitnesses', () => {
     expect(result.toVersion).toBe(5);
   });
 
-  it('returns processingTimeMs as a number', async () => {
+  it("returns processingTimeMs as a number", async () => {
     const result = await batchUpdateWitnesses([], []);
 
-    expect(typeof result.processingTimeMs).toBe('number');
+    expect(typeof result.processingTimeMs).toBe("number");
     expect(result.processingTimeMs).toBeGreaterThanOrEqual(0);
   });
 
-  it('skips deltas that are below the current witness version', async () => {
-    const elem = '0x' + 'aa'.repeat(32);
+  it("skips deltas that are below the current witness version", async () => {
+    const elem = "0x" + "aa".repeat(32);
     const witnesses = [makeWitness({ accumulatorVersion: 3, element: elem })];
     const deltas = [
       makeDelta({ fromVersion: 1, toVersion: 2 }),
@@ -728,9 +801,9 @@ describe('batchUpdateWitnesses', () => {
     expect(result.updatedWitnesses[0].accumulatorVersion).toBe(4);
   });
 
-  it('processes removals in batch update (non-self elements)', async () => {
-    const elem = '0x' + 'aa'.repeat(32);
-    const removedElem = '0x' + 'dd'.repeat(32);
+  it("processes removals in batch update (non-self elements)", async () => {
+    const elem = "0x" + "aa".repeat(32);
+    const removedElem = "0x" + "dd".repeat(32);
     const witnesses = [makeWitness({ accumulatorVersion: 1, element: elem })];
     const deltas = [
       makeDelta({ fromVersion: 1, toVersion: 2, removals: [removedElem] }),
@@ -743,8 +816,8 @@ describe('batchUpdateWitnesses', () => {
     expect(result.failedElements).toHaveLength(0);
   });
 
-  it('skips self-removal in batch update without altering witness', async () => {
-    const elem = '0x' + 'aa'.repeat(32);
+  it("skips self-removal in batch update without altering witness", async () => {
+    const elem = "0x" + "aa".repeat(32);
     const witnesses = [makeWitness({ accumulatorVersion: 1, element: elem })];
     const deltas = [
       makeDelta({ fromVersion: 1, toVersion: 2, removals: [elem] }),
@@ -756,10 +829,10 @@ describe('batchUpdateWitnesses', () => {
     expect(result.updatedWitnesses[0].accumulatorVersion).toBe(2);
   });
 
-  it('processes both additions and removals in a single batch delta', async () => {
-    const elem = '0x' + 'aa'.repeat(32);
-    const addedElem = '0x' + 'ff'.repeat(32);
-    const removedElem = '0x' + 'dd'.repeat(32);
+  it("processes both additions and removals in a single batch delta", async () => {
+    const elem = "0x" + "aa".repeat(32);
+    const addedElem = "0x" + "ff".repeat(32);
+    const removedElem = "0x" + "dd".repeat(32);
     const witnesses = [makeWitness({ accumulatorVersion: 1, element: elem })];
     const deltas = [
       makeDelta({
@@ -777,13 +850,21 @@ describe('batchUpdateWitnesses', () => {
     expect(result.failedElements).toHaveLength(0);
   });
 
-  it('skips deltas whose fromVersion is below the witness current version', async () => {
-    const elem = '0x' + 'aa'.repeat(32);
+  it("skips deltas whose fromVersion is below the witness current version", async () => {
+    const elem = "0x" + "aa".repeat(32);
     const witnesses = [makeWitness({ accumulatorVersion: 1, element: elem })];
     // Delta v1->v3 will advance the witness to v3, then delta v2->v3 should be skipped
     const deltas = [
-      makeDelta({ fromVersion: 1, toVersion: 3, additions: ['0x' + 'ee'.repeat(32)] }),
-      makeDelta({ fromVersion: 2, toVersion: 3, additions: ['0x' + 'ff'.repeat(32)] }),
+      makeDelta({
+        fromVersion: 1,
+        toVersion: 3,
+        additions: ["0x" + "ee".repeat(32)],
+      }),
+      makeDelta({
+        fromVersion: 2,
+        toVersion: 3,
+        additions: ["0x" + "ff".repeat(32)],
+      }),
     ];
 
     const result = await batchUpdateWitnesses(witnesses, deltas);
@@ -793,9 +874,9 @@ describe('batchUpdateWitnesses', () => {
     expect(result.failedElements).toHaveLength(0);
   });
 
-  it('handles mix of successful and failed witnesses', async () => {
-    const okElem = '0x' + 'aa'.repeat(32);
-    const failElem = '0x' + 'bb'.repeat(32);
+  it("handles mix of successful and failed witnesses", async () => {
+    const okElem = "0x" + "aa".repeat(32);
+    const failElem = "0x" + "bb".repeat(32);
 
     const witnesses = [
       makeWitness({ accumulatorVersion: 1, element: okElem }),

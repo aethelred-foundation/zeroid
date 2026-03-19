@@ -1,7 +1,7 @@
-'use client';
+"use client";
 
-import { useState } from 'react';
-import { motion } from 'framer-motion';
+import { useState } from "react";
+import { motion } from "framer-motion";
 import {
   ShieldCheck,
   Plus,
@@ -15,25 +15,25 @@ import {
   XCircle,
   CheckCircle2,
   AlertTriangle,
-} from 'lucide-react';
-import AppLayout from '@/components/layout/AppLayout';
-import CredentialCard from '@/components/credentials/CredentialCard';
-import CredentialRequest from '@/components/credentials/CredentialRequest';
-import CredentialList from '@/components/credentials/CredentialList';
-import { Modal } from '@/components/ui/Modal';
-import { useCredentials } from '@/hooks/useCredentials';
+} from "lucide-react";
+import AppLayout from "@/components/layout/AppLayout";
+import CredentialCard from "@/components/credentials/CredentialCard";
+import CredentialRequest from "@/components/credentials/CredentialRequest";
+import CredentialList from "@/components/credentials/CredentialList";
+import { Modal } from "@/components/ui/Modal";
+import { useCredentials } from "@/hooks/useCredentials";
 
-type FilterStatus = 'all' | 'active' | 'pending' | 'expired' | 'revoked';
+type FilterStatus = "all" | "active" | "pending" | "expired" | "revoked";
 
 const schemaTypes = [
-  { id: 'age', label: 'Age Verification', icon: '🎂' },
-  { id: 'residency', label: 'Residency Proof', icon: '🏠' },
-  { id: 'nationality', label: 'Nationality', icon: '🌍' },
-  { id: 'credit', label: 'Credit Tier', icon: '💳' },
-  { id: 'employment', label: 'Employment Status', icon: '💼' },
-  { id: 'education', label: 'Education', icon: '🎓' },
-  { id: 'accredited', label: 'Accredited Investor', icon: '📊' },
-  { id: 'kyc', label: 'KYC Verification', icon: '✅' },
+  { id: "age", label: "Age Verification", icon: "🎂" },
+  { id: "residency", label: "Residency Proof", icon: "🏠" },
+  { id: "nationality", label: "Nationality", icon: "🌍" },
+  { id: "credit", label: "Credit Tier", icon: "💳" },
+  { id: "employment", label: "Employment Status", icon: "💼" },
+  { id: "education", label: "Education", icon: "🎓" },
+  { id: "accredited", label: "Accredited Investor", icon: "📊" },
+  { id: "kyc", label: "KYC Verification", icon: "✅" },
 ];
 
 export default function CredentialsPage() {
@@ -41,21 +41,24 @@ export default function CredentialsPage() {
   const credentials = credentialsQuery.data?.credentials ?? [];
   const isLoading = credentialsQuery.isLoading;
   const [showRequestModal, setShowRequestModal] = useState(false);
-  const [filterStatus, setFilterStatus] = useState<FilterStatus>('all');
-  const [searchQuery, setSearchQuery] = useState('');
-  const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
+  const [filterStatus, setFilterStatus] = useState<FilterStatus>("all");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
 
   const statusCounts = {
     all: credentials.length,
-    active: credentials.filter((c: any) => c.status === 'active').length,
-    pending: credentials.filter((c: any) => c.status === 'pending').length,
-    expired: credentials.filter((c: any) => c.status === 'expired').length,
-    revoked: credentials.filter((c: any) => c.status === 'revoked').length,
+    active: credentials.filter((c: any) => c.status === "active").length,
+    pending: credentials.filter((c: any) => c.status === "pending").length,
+    expired: credentials.filter((c: any) => c.status === "expired").length,
+    revoked: credentials.filter((c: any) => c.status === "revoked").length,
   };
 
   const filteredCredentials = credentials.filter((cred: any) => {
-    if (filterStatus !== 'all' && cred.status !== filterStatus) return false;
-    if (searchQuery && !cred.schemaType.toLowerCase().includes(searchQuery.toLowerCase()))
+    if (filterStatus !== "all" && cred.status !== filterStatus) return false;
+    if (
+      searchQuery &&
+      !cred.schemaType.toLowerCase().includes(searchQuery.toLowerCase())
+    )
       return false;
     return true;
   });
@@ -84,11 +87,36 @@ export default function CredentialsPage() {
         <div className="flex items-center gap-2 overflow-x-auto pb-2">
           {(
             [
-              { id: 'all' as const, label: 'All', icon: ShieldCheck, color: 'text-brand-500' },
-              { id: 'active' as const, label: 'Active', icon: CheckCircle2, color: 'text-status-verified' },
-              { id: 'pending' as const, label: 'Pending', icon: Clock, color: 'text-status-pending' },
-              { id: 'expired' as const, label: 'Expired', icon: AlertTriangle, color: 'text-status-expired' },
-              { id: 'revoked' as const, label: 'Revoked', icon: XCircle, color: 'text-status-revoked' },
+              {
+                id: "all" as const,
+                label: "All",
+                icon: ShieldCheck,
+                color: "text-brand-500",
+              },
+              {
+                id: "active" as const,
+                label: "Active",
+                icon: CheckCircle2,
+                color: "text-status-verified",
+              },
+              {
+                id: "pending" as const,
+                label: "Pending",
+                icon: Clock,
+                color: "text-status-pending",
+              },
+              {
+                id: "expired" as const,
+                label: "Expired",
+                icon: AlertTriangle,
+                color: "text-status-expired",
+              },
+              {
+                id: "revoked" as const,
+                label: "Revoked",
+                icon: XCircle,
+                color: "text-status-revoked",
+              },
             ] as const
           ).map((status) => (
             <button
@@ -96,17 +124,19 @@ export default function CredentialsPage() {
               onClick={() => setFilterStatus(status.id)}
               className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all whitespace-nowrap ${
                 filterStatus === status.id
-                  ? 'bg-brand-600 text-white shadow-sm'
-                  : 'bg-[var(--surface-secondary)] text-[var(--text-secondary)] hover:bg-[var(--surface-tertiary)]'
+                  ? "bg-brand-600 text-white shadow-sm"
+                  : "bg-[var(--surface-secondary)] text-[var(--text-secondary)] hover:bg-[var(--surface-tertiary)]"
               }`}
             >
-              <status.icon className={`w-4 h-4 ${filterStatus === status.id ? 'text-white' : status.color}`} />
+              <status.icon
+                className={`w-4 h-4 ${filterStatus === status.id ? "text-white" : status.color}`}
+              />
               {status.label}
               <span
                 className={`text-xs px-1.5 py-0.5 rounded-full ${
                   filterStatus === status.id
-                    ? 'bg-white/20 text-white'
-                    : 'bg-[var(--surface-tertiary)] text-[var(--text-tertiary)]'
+                    ? "bg-white/20 text-white"
+                    : "bg-[var(--surface-tertiary)] text-[var(--text-tertiary)]"
                 }`}
               >
                 {statusCounts[status.id]}
@@ -129,21 +159,21 @@ export default function CredentialsPage() {
           </div>
           <div className="flex items-center border border-[var(--border-primary)] rounded-xl overflow-hidden">
             <button
-              onClick={() => setViewMode('grid')}
+              onClick={() => setViewMode("grid")}
               className={`p-2.5 transition-colors ${
-                viewMode === 'grid'
-                  ? 'bg-brand-600 text-white'
-                  : 'text-[var(--text-secondary)] hover:bg-[var(--surface-secondary)]'
+                viewMode === "grid"
+                  ? "bg-brand-600 text-white"
+                  : "text-[var(--text-secondary)] hover:bg-[var(--surface-secondary)]"
               }`}
             >
               <Grid3X3 className="w-4 h-4" />
             </button>
             <button
-              onClick={() => setViewMode('list')}
+              onClick={() => setViewMode("list")}
               className={`p-2.5 transition-colors ${
-                viewMode === 'list'
-                  ? 'bg-brand-600 text-white'
-                  : 'text-[var(--text-secondary)] hover:bg-[var(--surface-secondary)]'
+                viewMode === "list"
+                  ? "bg-brand-600 text-white"
+                  : "text-[var(--text-secondary)] hover:bg-[var(--surface-secondary)]"
               }`}
             >
               <List className="w-4 h-4" />
@@ -153,7 +183,7 @@ export default function CredentialsPage() {
 
         {/* Credentials Grid/List */}
         {filteredCredentials.length > 0 ? (
-          viewMode === 'grid' ? (
+          viewMode === "grid" ? (
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
               {filteredCredentials.map((credential: any, i: number) => (
                 <motion.div
@@ -178,11 +208,11 @@ export default function CredentialsPage() {
             <ShieldCheck className="w-16 h-16 mx-auto mb-4 text-[var(--text-tertiary)]" />
             <h3 className="text-lg font-semibold mb-2">No credentials found</h3>
             <p className="text-[var(--text-secondary)] mb-6">
-              {filterStatus === 'all'
-                ? 'Request your first credential to get started'
+              {filterStatus === "all"
+                ? "Request your first credential to get started"
                 : `No ${filterStatus} credentials`}
             </p>
-            {filterStatus === 'all' && (
+            {filterStatus === "all" && (
               <button
                 onClick={() => setShowRequestModal(true)}
                 className="btn-primary"
@@ -196,7 +226,9 @@ export default function CredentialsPage() {
 
         {/* Available Credential Schemas */}
         <div className="card p-6">
-          <h2 className="text-lg font-semibold mb-4">Available Credential Schemas</h2>
+          <h2 className="text-lg font-semibold mb-4">
+            Available Credential Schemas
+          </h2>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             {schemaTypes.map((schema) => (
               <button

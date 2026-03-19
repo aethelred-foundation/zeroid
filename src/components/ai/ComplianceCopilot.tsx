@@ -1,7 +1,7 @@
-'use client';
+"use client";
 
-import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import {
   Bot,
   User,
@@ -24,15 +24,19 @@ import {
   MessageSquare,
   X,
   RefreshCw,
-} from 'lucide-react';
+} from "lucide-react";
 
 // ============================================================================
 // Types
 // ============================================================================
 
-type MessageType = 'text' | 'compliance_alert' | 'action_suggestion' | 'report_summary';
+type MessageType =
+  | "text"
+  | "compliance_alert"
+  | "action_suggestion"
+  | "report_summary";
 
-type MessageRole = 'user' | 'assistant';
+type MessageRole = "user" | "assistant";
 
 interface Citation {
   title: string;
@@ -42,7 +46,7 @@ interface Citation {
 
 interface ActionButton {
   label: string;
-  icon: 'screening' | 'report' | 'details';
+  icon: "screening" | "report" | "details";
   action: string;
 }
 
@@ -54,7 +58,7 @@ interface ChatMessage {
   timestamp: number;
   citations?: Citation[];
   actions?: ActionButton[];
-  alertSeverity?: 'info' | 'warning' | 'critical';
+  alertSeverity?: "info" | "warning" | "critical";
   reportMetrics?: { label: string; value: string }[];
 }
 
@@ -68,12 +72,30 @@ interface ComplianceCopilotProps {
 // ============================================================================
 
 const CONVERSATION_STARTERS = [
-  { label: 'Run KYC screening', prompt: 'Run a KYC screening on the latest onboarded identity' },
-  { label: 'Compliance status', prompt: 'What is our current compliance status across all jurisdictions?' },
-  { label: 'Regulatory updates', prompt: 'Show me recent regulatory updates that affect our operations' },
-  { label: 'Generate report', prompt: 'Generate a compliance report for Q1 2026' },
-  { label: 'Risk assessment', prompt: 'Perform a risk assessment on pending credential requests' },
-  { label: 'Sanctions check', prompt: 'Run sanctions screening against the latest OFAC list' },
+  {
+    label: "Run KYC screening",
+    prompt: "Run a KYC screening on the latest onboarded identity",
+  },
+  {
+    label: "Compliance status",
+    prompt: "What is our current compliance status across all jurisdictions?",
+  },
+  {
+    label: "Regulatory updates",
+    prompt: "Show me recent regulatory updates that affect our operations",
+  },
+  {
+    label: "Generate report",
+    prompt: "Generate a compliance report for Q1 2026",
+  },
+  {
+    label: "Risk assessment",
+    prompt: "Perform a risk assessment on pending credential requests",
+  },
+  {
+    label: "Sanctions check",
+    prompt: "Run sanctions screening against the latest OFAC list",
+  },
 ];
 
 const ACTION_ICONS: Record<string, typeof Shield> = {
@@ -82,10 +104,25 @@ const ACTION_ICONS: Record<string, typeof Shield> = {
   details: Eye,
 };
 
-const ALERT_STYLES: Record<string, { border: string; bg: string; icon: string }> = {
-  info: { border: 'border-blue-500/30', bg: 'bg-blue-500/5', icon: 'text-blue-400' },
-  warning: { border: 'border-amber-500/30', bg: 'bg-amber-500/5', icon: 'text-amber-400' },
-  critical: { border: 'border-red-500/30', bg: 'bg-red-500/5', icon: 'text-red-400' },
+const ALERT_STYLES: Record<
+  string,
+  { border: string; bg: string; icon: string }
+> = {
+  info: {
+    border: "border-blue-500/30",
+    bg: "bg-blue-500/5",
+    icon: "text-blue-400",
+  },
+  warning: {
+    border: "border-amber-500/30",
+    bg: "bg-amber-500/5",
+    icon: "text-amber-400",
+  },
+  critical: {
+    border: "border-red-500/30",
+    bg: "bg-red-500/5",
+    icon: "text-red-400",
+  },
 };
 
 // ============================================================================
@@ -97,7 +134,10 @@ function generateId(): string {
 }
 
 function formatTime(ts: number): string {
-  return new Date(ts).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+  return new Date(ts).toLocaleTimeString("en-US", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 // ============================================================================
@@ -148,7 +188,7 @@ function MessageBubble({
   onCopy: (content: string) => void;
 }) {
   const [copied, setCopied] = useState(false);
-  const isUser = message.role === 'user';
+  const isUser = message.role === "user";
 
   const handleCopy = () => {
     onCopy(message.content);
@@ -156,11 +196,13 @@ function MessageBubble({
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const alertStyle = message.alertSeverity ? ALERT_STYLES[message.alertSeverity] : null;
+  const alertStyle = message.alertSeverity
+    ? ALERT_STYLES[message.alertSeverity]
+    : null;
 
   return (
     <motion.div
-      className={`flex gap-3 px-4 py-2 ${isUser ? 'flex-row-reverse' : ''}`}
+      className={`flex gap-3 px-4 py-2 ${isUser ? "flex-row-reverse" : ""}`}
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.25 }}
@@ -168,9 +210,7 @@ function MessageBubble({
       {/* Avatar */}
       <div
         className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${
-          isUser
-            ? 'bg-[var(--surface-tertiary)]'
-            : 'bg-brand-500/10'
+          isUser ? "bg-[var(--surface-tertiary)]" : "bg-brand-500/10"
         }`}
       >
         {isUser ? (
@@ -181,19 +221,23 @@ function MessageBubble({
       </div>
 
       {/* Content */}
-      <div className={`flex-1 max-w-[85%] space-y-2 ${isUser ? 'items-end' : ''}`}>
+      <div
+        className={`flex-1 max-w-[85%] space-y-2 ${isUser ? "items-end" : ""}`}
+      >
         <div
           className={`rounded-2xl px-4 py-3 text-sm leading-relaxed ${
             isUser
-              ? 'bg-brand-500 text-white ml-auto rounded-tr-sm'
+              ? "bg-brand-500 text-white ml-auto rounded-tr-sm"
               : alertStyle
                 ? `${alertStyle.bg} border ${alertStyle.border} rounded-tl-sm`
-                : 'bg-[var(--surface-secondary)] text-[var(--text-primary)] rounded-tl-sm'
+                : "bg-[var(--surface-secondary)] text-[var(--text-primary)] rounded-tl-sm"
           }`}
         >
           {/* Alert header */}
-          {message.type === 'compliance_alert' && message.alertSeverity && (
-            <div className={`flex items-center gap-2 mb-2 font-medium ${alertStyle!.icon}`}>
+          {message.type === "compliance_alert" && message.alertSeverity && (
+            <div
+              className={`flex items-center gap-2 mb-2 font-medium ${alertStyle!.icon}`}
+            >
               <AlertTriangle className="w-4 h-4" />
               <span className="text-xs uppercase tracking-wider">
                 {message.alertSeverity} Alert
@@ -202,14 +246,16 @@ function MessageBubble({
           )}
 
           {/* Report summary header */}
-          {message.type === 'report_summary' && (
+          {message.type === "report_summary" && (
             <div className="flex items-center gap-2 mb-2 text-brand-500 font-medium">
               <FileText className="w-4 h-4" />
-              <span className="text-xs uppercase tracking-wider">Report Summary</span>
+              <span className="text-xs uppercase tracking-wider">
+                Report Summary
+              </span>
             </div>
           )}
 
-          <p className={isUser ? 'text-white' : 'text-[var(--text-primary)]'}>
+          <p className={isUser ? "text-white" : "text-[var(--text-primary)]"}>
             {message.content}
           </p>
 
@@ -224,7 +270,9 @@ function MessageBubble({
                   <p className="text-[10px] text-[var(--text-tertiary)] uppercase tracking-wider">
                     {metric.label}
                   </p>
-                  <p className="text-sm font-semibold text-[var(--text-primary)]">{metric.value}</p>
+                  <p className="text-sm font-semibold text-[var(--text-primary)]">
+                    {metric.value}
+                  </p>
                 </div>
               ))}
             </div>
@@ -287,18 +335,21 @@ function MessageBubble({
 // Main Component
 // ============================================================================
 
-export default function ComplianceCopilot({ onAction, className = '' }: ComplianceCopilotProps) {
+export default function ComplianceCopilot({
+  onAction,
+  className = "",
+}: ComplianceCopilotProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [input, setInput] = useState('');
+  const [input, setInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
+  const [searchQuery, setSearchQuery] = useState("");
   const [showSearch, setShowSearch] = useState(false);
   const [showHistory, setShowHistory] = useState(true);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const scrollToBottom = useCallback(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, []);
 
   useEffect(() => {
@@ -311,87 +362,112 @@ export default function ComplianceCopilot({ onAction, className = '' }: Complian
     return messages.filter((m) => m.content.toLowerCase().includes(q));
   }, [messages, searchQuery]);
 
-  const simulateResponse = useCallback(
-    (userMessage: string) => {
-      setIsTyping(true);
+  const simulateResponse = useCallback((userMessage: string) => {
+    setIsTyping(true);
 
-      const timeout = setTimeout(() => {
+    const timeout = setTimeout(
+      () => {
         const responseTypes: ChatMessage[] = [
           {
             id: generateId(),
-            role: 'assistant',
-            type: 'compliance_alert',
+            role: "assistant",
+            type: "compliance_alert",
             content:
-              'I detected a potential compliance gap in the EU jurisdiction. The eIDAS 2.0 regulation requires updated credential schemas for cross-border identity verification effective March 2026.',
+              "I detected a potential compliance gap in the EU jurisdiction. The eIDAS 2.0 regulation requires updated credential schemas for cross-border identity verification effective March 2026.",
             timestamp: Date.now(),
-            alertSeverity: 'warning',
+            alertSeverity: "warning",
             citations: [
               {
-                title: 'eIDAS 2.0 Regulation',
-                source: 'EU Official Journal',
-                url: 'https://eur-lex.europa.eu/eli/reg/2024/1183/oj',
+                title: "eIDAS 2.0 Regulation",
+                source: "EU Official Journal",
+                url: "https://eur-lex.europa.eu/eli/reg/2024/1183/oj",
               },
             ],
             actions: [
-              { label: 'Run Screening', icon: 'screening', action: 'run_screening' },
-              { label: 'View Details', icon: 'details', action: 'view_details' },
+              {
+                label: "Run Screening",
+                icon: "screening",
+                action: "run_screening",
+              },
+              {
+                label: "View Details",
+                icon: "details",
+                action: "view_details",
+              },
             ],
           },
           {
             id: generateId(),
-            role: 'assistant',
-            type: 'report_summary',
+            role: "assistant",
+            type: "report_summary",
             content:
-              'Here is the compliance report summary. All critical metrics are within acceptable thresholds, with minor gaps identified in APAC jurisdictions.',
+              "Here is the compliance report summary. All critical metrics are within acceptable thresholds, with minor gaps identified in APAC jurisdictions.",
             timestamp: Date.now(),
             reportMetrics: [
-              { label: 'Overall Score', value: '94.2%' },
-              { label: 'Jurisdictions', value: '23 / 28' },
-              { label: 'Open Issues', value: '7' },
-              { label: 'Critical Gaps', value: '0' },
+              { label: "Overall Score", value: "94.2%" },
+              { label: "Jurisdictions", value: "23 / 28" },
+              { label: "Open Issues", value: "7" },
+              { label: "Critical Gaps", value: "0" },
             ],
             actions: [
-              { label: 'Generate Full Report', icon: 'report', action: 'generate_report' },
-            ],
-          },
-          {
-            id: generateId(),
-            role: 'assistant',
-            type: 'action_suggestion',
-            content:
-              'Based on your query, I recommend running a comprehensive sanctions screening against the latest OFAC, EU, and UN consolidated lists. The last screening was completed 48 hours ago.',
-            timestamp: Date.now(),
-            actions: [
-              { label: 'Run Screening', icon: 'screening', action: 'run_sanctions_screening' },
-              { label: 'View Last Report', icon: 'report', action: 'view_last_report' },
-              { label: 'View Details', icon: 'details', action: 'view_screening_details' },
-            ],
-            citations: [
               {
-                title: 'OFAC SDN List',
-                source: 'US Treasury',
-                url: 'https://sanctionssearch.ofac.treas.gov/',
+                label: "Generate Full Report",
+                icon: "report",
+                action: "generate_report",
               },
             ],
           },
           {
             id: generateId(),
-            role: 'assistant',
-            type: 'text',
-            content: userMessage.includes('status')
-              ? 'Your compliance posture is strong. 23 out of 28 target jurisdictions are fully compliant. 4 jurisdictions require updated KYC credential schemas, and 1 jurisdiction (Singapore) has a pending MAS regulatory review.'
-              : 'I have analyzed the request. All identity credentials are within their validity window and the ZK proof circuits are up to date. No immediate action is required.',
+            role: "assistant",
+            type: "action_suggestion",
+            content:
+              "Based on your query, I recommend running a comprehensive sanctions screening against the latest OFAC, EU, and UN consolidated lists. The last screening was completed 48 hours ago.",
+            timestamp: Date.now(),
+            actions: [
+              {
+                label: "Run Screening",
+                icon: "screening",
+                action: "run_sanctions_screening",
+              },
+              {
+                label: "View Last Report",
+                icon: "report",
+                action: "view_last_report",
+              },
+              {
+                label: "View Details",
+                icon: "details",
+                action: "view_screening_details",
+              },
+            ],
+            citations: [
+              {
+                title: "OFAC SDN List",
+                source: "US Treasury",
+                url: "https://sanctionssearch.ofac.treas.gov/",
+              },
+            ],
+          },
+          {
+            id: generateId(),
+            role: "assistant",
+            type: "text",
+            content: userMessage.includes("status")
+              ? "Your compliance posture is strong. 23 out of 28 target jurisdictions are fully compliant. 4 jurisdictions require updated KYC credential schemas, and 1 jurisdiction (Singapore) has a pending MAS regulatory review."
+              : "I have analyzed the request. All identity credentials are within their validity window and the ZK proof circuits are up to date. No immediate action is required.",
             timestamp: Date.now(),
           },
         ];
 
-        const response = responseTypes[Math.floor(Math.random() * responseTypes.length)];
+        const response =
+          responseTypes[Math.floor(Math.random() * responseTypes.length)];
         setMessages((prev) => [...prev, response]);
         setIsTyping(false);
-      }, 1500 + Math.random() * 1000);
-    },
-    []
-  );
+      },
+      1500 + Math.random() * 1000,
+    );
+  }, []);
 
   const handleSend = useCallback(() => {
     const trimmed = input.trim();
@@ -399,14 +475,14 @@ export default function ComplianceCopilot({ onAction, className = '' }: Complian
 
     const userMsg: ChatMessage = {
       id: generateId(),
-      role: 'user',
-      type: 'text',
+      role: "user",
+      type: "text",
       content: trimmed,
       timestamp: Date.now(),
     };
 
     setMessages((prev) => [...prev, userMsg]);
-    setInput('');
+    setInput("");
     simulateResponse(trimmed);
   }, [input, isTyping, simulateResponse]);
 
@@ -414,15 +490,15 @@ export default function ComplianceCopilot({ onAction, className = '' }: Complian
     (prompt: string) => {
       const userMsg: ChatMessage = {
         id: generateId(),
-        role: 'user',
-        type: 'text',
+        role: "user",
+        type: "text",
         content: prompt,
         timestamp: Date.now(),
       };
       setMessages((prev) => [...prev, userMsg]);
       simulateResponse(prompt);
     },
-    [simulateResponse]
+    [simulateResponse],
   );
 
   const handleCopy = useCallback(async (content: string) => {
@@ -436,10 +512,10 @@ export default function ComplianceCopilot({ onAction, className = '' }: Complian
   const handleExport = useCallback(() => {
     const text = messages
       .map((m) => `[${formatTime(m.timestamp)}] ${m.role}: ${m.content}`)
-      .join('\n\n');
-    const blob = new Blob([text], { type: 'text/plain' });
+      .join("\n\n");
+    const blob = new Blob([text], { type: "text/plain" });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
+    const a = document.createElement("a");
     a.href = url;
     a.download = `compliance-copilot-${Date.now()}.txt`;
     a.click();
@@ -450,7 +526,7 @@ export default function ComplianceCopilot({ onAction, className = '' }: Complian
     (action: string) => {
       onAction?.(action);
     },
-    [onAction]
+    [onAction],
   );
 
   return (
@@ -505,7 +581,7 @@ export default function ComplianceCopilot({ onAction, className = '' }: Complian
           <motion.div
             className="px-4 py-2 border-b border-[var(--border-primary)] bg-[var(--surface-secondary)]"
             initial={{ height: 0, opacity: 0 }}
-            animate={{ height: 'auto', opacity: 1 }}
+            animate={{ height: "auto", opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
           >
             <div className="relative">
@@ -519,7 +595,7 @@ export default function ComplianceCopilot({ onAction, className = '' }: Complian
               />
               {searchQuery && (
                 <button
-                  onClick={() => setSearchQuery('')}
+                  onClick={() => setSearchQuery("")}
                   className="absolute right-3 top-1/2 -translate-y-1/2"
                 >
                   <X className="w-3.5 h-3.5 text-[var(--text-tertiary)]" />
@@ -541,8 +617,8 @@ export default function ComplianceCopilot({ onAction, className = '' }: Complian
               Compliance Copilot
             </h4>
             <p className="text-xs text-[var(--text-secondary)] mb-6 max-w-xs">
-              Ask me about compliance status, regulatory updates, risk assessments, or run
-              automated screening workflows.
+              Ask me about compliance status, regulatory updates, risk
+              assessments, or run automated screening workflows.
             </p>
             <div className="grid grid-cols-2 gap-2 w-full max-w-sm">
               {CONVERSATION_STARTERS.map((starter) => (
@@ -597,7 +673,7 @@ export default function ComplianceCopilot({ onAction, className = '' }: Complian
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleSend()}
+            onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && handleSend()}
             placeholder="Ask about compliance, regulations, or risk..."
             className="flex-1 px-4 py-2.5 rounded-xl bg-[var(--surface-secondary)] border border-[var(--border-primary)] text-sm text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:outline-none focus:border-brand-500 transition-colors"
             disabled={isTyping}

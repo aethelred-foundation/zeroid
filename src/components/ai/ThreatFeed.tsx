@@ -1,7 +1,7 @@
-'use client';
+"use client";
 
-import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import {
   Shield,
   ShieldAlert,
@@ -20,21 +20,21 @@ import {
   Lock,
   Globe,
   RefreshCw,
-} from 'lucide-react';
+} from "lucide-react";
 
 // ============================================================================
 // Types
 // ============================================================================
 
-type ThreatSeverity = 'info' | 'warning' | 'error' | 'critical';
+type ThreatSeverity = "info" | "warning" | "error" | "critical";
 
 type ThreatType =
-  | 'identity_compromise'
-  | 'credential_fraud'
-  | 'unauthorized_access'
-  | 'sanctions_match'
-  | 'anomalous_behavior'
-  | 'network_attack';
+  | "identity_compromise"
+  | "credential_fraud"
+  | "unauthorized_access"
+  | "sanctions_match"
+  | "anomalous_behavior"
+  | "network_attack";
 
 interface ThreatEvent {
   id: string;
@@ -67,50 +67,58 @@ interface ThreatFeedProps {
 
 const SEVERITY_CONFIG: Record<
   ThreatSeverity,
-  { label: string; icon: typeof Info; color: string; bg: string; border: string; dot: string }
+  {
+    label: string;
+    icon: typeof Info;
+    color: string;
+    bg: string;
+    border: string;
+    dot: string;
+  }
 > = {
   info: {
-    label: 'Info',
+    label: "Info",
     icon: Info,
-    color: 'text-blue-400',
-    bg: 'bg-blue-500/10',
-    border: 'border-blue-500/20',
-    dot: 'bg-blue-400',
+    color: "text-blue-400",
+    bg: "bg-blue-500/10",
+    border: "border-blue-500/20",
+    dot: "bg-blue-400",
   },
   warning: {
-    label: 'Warning',
+    label: "Warning",
     icon: AlertTriangle,
-    color: 'text-amber-400',
-    bg: 'bg-amber-500/10',
-    border: 'border-amber-500/20',
-    dot: 'bg-amber-400',
+    color: "text-amber-400",
+    bg: "bg-amber-500/10",
+    border: "border-amber-500/20",
+    dot: "bg-amber-400",
   },
   error: {
-    label: 'Error',
+    label: "Error",
     icon: ShieldAlert,
-    color: 'text-orange-400',
-    bg: 'bg-orange-500/10',
-    border: 'border-orange-500/20',
-    dot: 'bg-orange-400',
+    color: "text-orange-400",
+    bg: "bg-orange-500/10",
+    border: "border-orange-500/20",
+    dot: "bg-orange-400",
   },
   critical: {
-    label: 'Critical',
+    label: "Critical",
     icon: AlertOctagon,
-    color: 'text-red-400',
-    bg: 'bg-red-500/10',
-    border: 'border-red-500/20',
-    dot: 'bg-red-400',
+    color: "text-red-400",
+    bg: "bg-red-500/10",
+    border: "border-red-500/20",
+    dot: "bg-red-400",
   },
 };
 
-const TYPE_CONFIG: Record<ThreatType, { label: string; icon: typeof Shield }> = {
-  identity_compromise: { label: 'Identity Compromise', icon: Fingerprint },
-  credential_fraud: { label: 'Credential Fraud', icon: ShieldAlert },
-  unauthorized_access: { label: 'Unauthorized Access', icon: Lock },
-  sanctions_match: { label: 'Sanctions Match', icon: AlertOctagon },
-  anomalous_behavior: { label: 'Anomalous Behavior', icon: Bug },
-  network_attack: { label: 'Network Attack', icon: Globe },
-};
+const TYPE_CONFIG: Record<ThreatType, { label: string; icon: typeof Shield }> =
+  {
+    identity_compromise: { label: "Identity Compromise", icon: Fingerprint },
+    credential_fraud: { label: "Credential Fraud", icon: ShieldAlert },
+    unauthorized_access: { label: "Unauthorized Access", icon: Lock },
+    sanctions_match: { label: "Sanctions Match", icon: AlertOctagon },
+    anomalous_behavior: { label: "Anomalous Behavior", icon: Bug },
+    network_attack: { label: "Network Attack", icon: Globe },
+  };
 
 // ============================================================================
 // Helpers
@@ -129,17 +137,23 @@ function formatRelativeTime(ts: number): string {
 
 function generateMockEvent(): ThreatEvent {
   const types = Object.keys(TYPE_CONFIG) as ThreatType[];
-  const severities: ThreatSeverity[] = ['info', 'warning', 'error', 'critical'];
+  const severities: ThreatSeverity[] = ["info", "warning", "error", "critical"];
   const type = types[Math.floor(Math.random() * types.length)];
   const severity = severities[Math.floor(Math.random() * severities.length)];
 
   const descriptions: Record<ThreatType, string> = {
-    identity_compromise: 'Potential identity takeover attempt detected on DID endpoint',
-    credential_fraud: 'Fraudulent credential presentation intercepted during verification',
-    unauthorized_access: 'Unauthorized API access attempt from unregistered IP range',
-    sanctions_match: 'New sanctions list entry matches existing identity in the system',
-    anomalous_behavior: 'Unusual credential request pattern detected from verified issuer',
-    network_attack: 'DDoS mitigation triggered on TEE attestation service endpoint',
+    identity_compromise:
+      "Potential identity takeover attempt detected on DID endpoint",
+    credential_fraud:
+      "Fraudulent credential presentation intercepted during verification",
+    unauthorized_access:
+      "Unauthorized API access attempt from unregistered IP range",
+    sanctions_match:
+      "New sanctions list entry matches existing identity in the system",
+    anomalous_behavior:
+      "Unusual credential request pattern detected from verified issuer",
+    network_attack:
+      "DDoS mitigation triggered on TEE attestation service endpoint",
   };
 
   return {
@@ -149,12 +163,19 @@ function generateMockEvent(): ThreatEvent {
     title: TYPE_CONFIG[type].label,
     description: descriptions[type],
     details: `Full analysis available. Event originated from monitoring subsystem. Automated correlation with ${Math.floor(Math.random() * 5) + 1} related events in the last 24 hours.`,
-    source: ['TEE Monitor', 'ZK Verifier', 'API Gateway', 'Chain Indexer', 'Sanctions Oracle'][
-      Math.floor(Math.random() * 5)
-    ],
+    source: [
+      "TEE Monitor",
+      "ZK Verifier",
+      "API Gateway",
+      "Chain Indexer",
+      "Sanctions Oracle",
+    ][Math.floor(Math.random() * 5)],
     timestamp: Date.now() - Math.floor(Math.random() * 3600000),
     reviewed: Math.random() > 0.6,
-    affectedDid: Math.random() > 0.5 ? `did:aethelred:mainnet:0x${Math.random().toString(16).slice(2, 10)}...` : undefined,
+    affectedDid:
+      Math.random() > 0.5
+        ? `did:aethelred:mainnet:0x${Math.random().toString(16).slice(2, 10)}...`
+        : undefined,
   };
 }
 
@@ -182,9 +203,11 @@ function ThreatEventCard({
   return (
     <motion.div
       className={`rounded-xl border ${config.border} ${
-        isNew ? config.bg : 'bg-[var(--surface-secondary)]'
-      } overflow-hidden transition-colors ${event.reviewed ? 'opacity-60' : ''}`}
-      initial={isNew ? { opacity: 0, x: -20, scale: 0.95 } : { opacity: 0, y: 5 }}
+        isNew ? config.bg : "bg-[var(--surface-secondary)]"
+      } overflow-hidden transition-colors ${event.reviewed ? "opacity-60" : ""}`}
+      initial={
+        isNew ? { opacity: 0, x: -20, scale: 0.95 } : { opacity: 0, y: 5 }
+      }
       animate={{ opacity: event.reviewed ? 0.6 : 1, x: 0, y: 0, scale: 1 }}
       transition={{ duration: 0.3 }}
       layout
@@ -198,7 +221,9 @@ function ThreatEventCard({
       >
         <div className="flex items-start gap-3">
           {/* Icon */}
-          <div className={`w-9 h-9 rounded-lg ${config.bg} flex items-center justify-center flex-shrink-0`}>
+          <div
+            className={`w-9 h-9 rounded-lg ${config.bg} flex items-center justify-center flex-shrink-0`}
+          >
             <SeverityIcon className={`w-4 h-4 ${config.color}`} />
           </div>
 
@@ -208,7 +233,9 @@ function ThreatEventCard({
               <h4 className="text-sm font-medium text-[var(--text-primary)] truncate">
                 {event.title}
               </h4>
-              <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium ${config.bg} ${config.color}`}>
+              <span
+                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium ${config.bg} ${config.color}`}
+              >
                 <span className={`w-1.5 h-1.5 rounded-full ${config.dot}`} />
                 {config.label}
               </span>
@@ -242,7 +269,11 @@ function ThreatEventCard({
 
           {/* Expand */}
           <div className="flex-shrink-0 text-[var(--text-tertiary)]">
-            {expanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+            {expanded ? (
+              <ChevronUp className="w-4 h-4" />
+            ) : (
+              <ChevronDown className="w-4 h-4" />
+            )}
           </div>
         </div>
       </button>
@@ -251,27 +282,40 @@ function ThreatEventCard({
         {expanded && (
           <motion.div
             initial={{ height: 0, opacity: 0 }}
-            animate={{ height: 'auto', opacity: 1 }}
+            animate={{ height: "auto", opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
             transition={{ duration: 0.2 }}
             className="overflow-hidden"
           >
             <div className="px-4 pb-4 border-t border-[var(--border-primary)] pt-3 space-y-3">
               {event.details && (
-                <p className="text-xs text-[var(--text-secondary)]">{event.details}</p>
+                <p className="text-xs text-[var(--text-secondary)]">
+                  {event.details}
+                </p>
               )}
               {event.affectedDid && (
                 <div className="p-2 rounded-lg bg-[var(--surface-primary)]">
-                  <span className="text-[10px] text-[var(--text-tertiary)]">Affected DID:</span>
-                  <p className="text-xs font-mono text-[var(--text-primary)]">{event.affectedDid}</p>
+                  <span className="text-[10px] text-[var(--text-tertiary)]">
+                    Affected DID:
+                  </span>
+                  <p className="text-xs font-mono text-[var(--text-primary)]">
+                    {event.affectedDid}
+                  </p>
                 </div>
               )}
               {event.metadata && (
                 <div className="grid grid-cols-2 gap-2">
                   {Object.entries(event.metadata).map(([key, value]) => (
-                    <div key={key} className="p-2 rounded-lg bg-[var(--surface-primary)]">
-                      <span className="text-[10px] text-[var(--text-tertiary)]">{key}</span>
-                      <p className="text-xs text-[var(--text-primary)]">{value}</p>
+                    <div
+                      key={key}
+                      className="p-2 rounded-lg bg-[var(--surface-primary)]"
+                    >
+                      <span className="text-[10px] text-[var(--text-tertiary)]">
+                        {key}
+                      </span>
+                      <p className="text-xs text-[var(--text-primary)]">
+                        {value}
+                      </p>
                     </div>
                   ))}
                 </div>
@@ -316,14 +360,20 @@ export default function ThreatFeed({
   error = null,
   onReview,
   onEventClick,
-  className = '',
+  className = "",
 }: ThreatFeedProps) {
-  const [internalEvents, setInternalEvents] = useState<ThreatEvent[]>(() =>
-    externalEvents ?? Array.from({ length: 8 }, () => generateMockEvent()).sort((a, b) => b.timestamp - a.timestamp)
+  const [internalEvents, setInternalEvents] = useState<ThreatEvent[]>(
+    () =>
+      externalEvents ??
+      Array.from({ length: 8 }, () => generateMockEvent()).sort(
+        (a, b) => b.timestamp - a.timestamp,
+      ),
   );
   const [newEventIds, setNewEventIds] = useState<Set<string>>(new Set());
-  const [severityFilter, setSeverityFilter] = useState<ThreatSeverity | 'all'>('all');
-  const [typeFilter, setTypeFilter] = useState<ThreatType | 'all'>('all');
+  const [severityFilter, setSeverityFilter] = useState<ThreatSeverity | "all">(
+    "all",
+  );
+  const [typeFilter, setTypeFilter] = useState<ThreatType | "all">("all");
   const [showFilters, setShowFilters] = useState(false);
   const [autoScroll, setAutoScroll] = useState(true);
   const listRef = useRef<HTMLDivElement>(null);
@@ -360,14 +410,15 @@ export default function ThreatFeed({
   // Auto-scroll
   useEffect(() => {
     if (autoScroll && listRef.current) {
-      listRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+      listRef.current.scrollTo({ top: 0, behavior: "smooth" });
     }
   }, [events.length, autoScroll]);
 
   const filteredEvents = useMemo(() => {
     return events.filter((e) => {
-      if (severityFilter !== 'all' && e.severity !== severityFilter) return false;
-      if (typeFilter !== 'all' && e.type !== typeFilter) return false;
+      if (severityFilter !== "all" && e.severity !== severityFilter)
+        return false;
+      if (typeFilter !== "all" && e.type !== typeFilter) return false;
       return true;
     });
   }, [events, severityFilter, typeFilter]);
@@ -378,23 +429,27 @@ export default function ThreatFeed({
         onReview(eventId);
       } else {
         setInternalEvents((prev) =>
-          prev.map((e) => (e.id === eventId ? { ...e, reviewed: true } : e))
+          prev.map((e) => (e.id === eventId ? { ...e, reviewed: true } : e)),
         );
       }
     },
-    [onReview]
+    [onReview],
   );
 
   const unreviewedCount = useMemo(
     () => events.filter((e) => !e.reviewed).length,
-    [events]
+    [events],
   );
 
   if (loading) {
     return (
-      <div className={`card p-8 flex items-center justify-center gap-2 ${className}`}>
+      <div
+        className={`card p-8 flex items-center justify-center gap-2 ${className}`}
+      >
         <Loader2 className="w-5 h-5 animate-spin text-brand-500" />
-        <span className="text-sm text-[var(--text-secondary)]">Loading threat feed...</span>
+        <span className="text-sm text-[var(--text-secondary)]">
+          Loading threat feed...
+        </span>
       </div>
     );
   }
@@ -411,7 +466,9 @@ export default function ThreatFeed({
   }
 
   return (
-    <div className={`rounded-2xl border border-[var(--border-primary)] bg-[var(--surface-primary)] overflow-hidden ${className}`}>
+    <div
+      className={`rounded-2xl border border-[var(--border-primary)] bg-[var(--surface-primary)] overflow-hidden ${className}`}
+    >
       {/* Header */}
       <div className="flex items-center justify-between px-5 py-4 border-b border-[var(--border-primary)]">
         <div className="flex items-center gap-3">
@@ -423,14 +480,16 @@ export default function ThreatFeed({
                 animate={{ scale: [1, 1.2, 1] }}
                 transition={{ duration: 2, repeat: Infinity }}
               >
-                {unreviewedCount > 9 ? '9+' : unreviewedCount}
+                {unreviewedCount > 9 ? "9+" : unreviewedCount}
               </motion.span>
             )}
           </div>
           <div>
-            <h3 className="text-sm font-semibold text-[var(--text-primary)]">Threat Intelligence Feed</h3>
+            <h3 className="text-sm font-semibold text-[var(--text-primary)]">
+              Threat Intelligence Feed
+            </h3>
             <p className="text-[10px] text-[var(--text-tertiary)]">
-              {filteredEvents.length} events {autoRefresh && '- Live'}
+              {filteredEvents.length} events {autoRefresh && "- Live"}
             </p>
           </div>
         </div>
@@ -438,7 +497,7 @@ export default function ThreatFeed({
           {autoRefresh && (
             <motion.div
               animate={{ rotate: 360 }}
-              transition={{ duration: 3, repeat: Infinity, ease: 'linear' }}
+              transition={{ duration: 3, repeat: Infinity, ease: "linear" }}
             >
               <RefreshCw className="w-3.5 h-3.5 text-emerald-400" />
             </motion.div>
@@ -458,33 +517,39 @@ export default function ThreatFeed({
           <motion.div
             className="px-5 py-3 border-b border-[var(--border-primary)] bg-[var(--surface-secondary)]"
             initial={{ height: 0, opacity: 0 }}
-            animate={{ height: 'auto', opacity: 1 }}
+            animate={{ height: "auto", opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
           >
             <div className="flex flex-wrap gap-2">
-              <span className="text-[10px] text-[var(--text-tertiary)] self-center mr-1">Severity:</span>
-              {(['all', 'info', 'warning', 'error', 'critical'] as const).map((s) => (
-                <button
-                  key={s}
-                  onClick={() => setSeverityFilter(s)}
-                  className={`px-2.5 py-1 rounded-full text-[10px] font-medium transition-colors ${
-                    severityFilter === s
-                      ? 'bg-brand-500/20 text-brand-500'
-                      : 'bg-[var(--surface-primary)] text-[var(--text-secondary)] hover:bg-[var(--surface-tertiary)]'
-                  }`}
-                >
-                  {s === 'all' ? 'All' : SEVERITY_CONFIG[s].label}
-                </button>
-              ))}
+              <span className="text-[10px] text-[var(--text-tertiary)] self-center mr-1">
+                Severity:
+              </span>
+              {(["all", "info", "warning", "error", "critical"] as const).map(
+                (s) => (
+                  <button
+                    key={s}
+                    onClick={() => setSeverityFilter(s)}
+                    className={`px-2.5 py-1 rounded-full text-[10px] font-medium transition-colors ${
+                      severityFilter === s
+                        ? "bg-brand-500/20 text-brand-500"
+                        : "bg-[var(--surface-primary)] text-[var(--text-secondary)] hover:bg-[var(--surface-tertiary)]"
+                    }`}
+                  >
+                    {s === "all" ? "All" : SEVERITY_CONFIG[s].label}
+                  </button>
+                ),
+              )}
             </div>
             <div className="flex flex-wrap gap-2 mt-2">
-              <span className="text-[10px] text-[var(--text-tertiary)] self-center mr-1">Type:</span>
+              <span className="text-[10px] text-[var(--text-tertiary)] self-center mr-1">
+                Type:
+              </span>
               <button
-                onClick={() => setTypeFilter('all')}
+                onClick={() => setTypeFilter("all")}
                 className={`px-2.5 py-1 rounded-full text-[10px] font-medium transition-colors ${
-                  typeFilter === 'all'
-                    ? 'bg-brand-500/20 text-brand-500'
-                    : 'bg-[var(--surface-primary)] text-[var(--text-secondary)] hover:bg-[var(--surface-tertiary)]'
+                  typeFilter === "all"
+                    ? "bg-brand-500/20 text-brand-500"
+                    : "bg-[var(--surface-primary)] text-[var(--text-secondary)] hover:bg-[var(--surface-tertiary)]"
                 }`}
               >
                 All
@@ -495,8 +560,8 @@ export default function ThreatFeed({
                   onClick={() => setTypeFilter(t)}
                   className={`px-2.5 py-1 rounded-full text-[10px] font-medium transition-colors ${
                     typeFilter === t
-                      ? 'bg-brand-500/20 text-brand-500'
-                      : 'bg-[var(--surface-primary)] text-[var(--text-secondary)] hover:bg-[var(--surface-tertiary)]'
+                      ? "bg-brand-500/20 text-brand-500"
+                      : "bg-[var(--surface-primary)] text-[var(--text-secondary)] hover:bg-[var(--surface-tertiary)]"
                   }`}
                 >
                   {TYPE_CONFIG[t].label}
@@ -508,11 +573,16 @@ export default function ThreatFeed({
       </AnimatePresence>
 
       {/* Event list */}
-      <div ref={listRef} className="max-h-[500px] overflow-y-auto p-4 space-y-3">
+      <div
+        ref={listRef}
+        className="max-h-[500px] overflow-y-auto p-4 space-y-3"
+      >
         {filteredEvents.length === 0 ? (
           <div className="py-8 text-center">
             <Shield className="w-8 h-8 text-[var(--text-tertiary)] mx-auto mb-2" />
-            <p className="text-sm text-[var(--text-secondary)]">No threat events match your filters</p>
+            <p className="text-sm text-[var(--text-secondary)]">
+              No threat events match your filters
+            </p>
           </div>
         ) : (
           <AnimatePresence initial={false}>

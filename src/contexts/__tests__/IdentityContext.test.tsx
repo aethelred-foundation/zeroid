@@ -7,35 +7,35 @@
  * and the useIdentity guard for missing provider.
  */
 
-import React from 'react';
-import { renderHook, act, waitFor } from '@testing-library/react';
-import { IdentityProvider, useIdentity } from '@/contexts/IdentityContext';
-import { apiClient } from '@/lib/api/client';
-import { createDID } from '@/lib/utils';
+import React from "react";
+import { renderHook, act, waitFor } from "@testing-library/react";
+import { IdentityProvider, useIdentity } from "@/contexts/IdentityContext";
+import { apiClient } from "@/lib/api/client";
+import { createDID } from "@/lib/utils";
 import type {
   IdentityProfile,
   Credential,
   CredentialStatus,
   DID,
   Bytes32,
-} from '@/types';
+} from "@/types";
 
 // ---------------------------------------------------------------------------
 // Mocks
 // ---------------------------------------------------------------------------
 
-const mockAddress = '0x1234567890abcdef1234567890abcdef12345678' as const;
+const mockAddress = "0x1234567890abcdef1234567890abcdef12345678" as const;
 
 const mockUseAccount = jest.fn<
   { address: string | undefined; isConnected: boolean },
   []
 >();
 
-jest.mock('wagmi', () => ({
+jest.mock("wagmi", () => ({
   useAccount: () => mockUseAccount(),
 }));
 
-jest.mock('@/lib/api/client', () => ({
+jest.mock("@/lib/api/client", () => ({
   apiClient: {
     getIdentityByAddress: jest.fn(),
     listCredentials: jest.fn(),
@@ -43,13 +43,13 @@ jest.mock('@/lib/api/client', () => ({
   },
 }));
 
-jest.mock('@/lib/utils', () => ({
+jest.mock("@/lib/utils", () => ({
   createDID: jest.fn(),
 }));
 
-jest.mock('@/config/constants', () => ({
+jest.mock("@/config/constants", () => ({
   CREDENTIAL_POLL_INTERVAL_MS: 15_000,
-  DID_METHOD_PREFIX: 'did:aethelred',
+  DID_METHOD_PREFIX: "did:aethelred",
 }));
 
 // ---------------------------------------------------------------------------
@@ -59,15 +59,16 @@ jest.mock('@/config/constants', () => ({
 const makeDID = (addr: string): DID => ({
   uri: `did:aethelred:testnet:${addr}`,
   identifier: addr,
-  hash: '0xdeadbeef00000000000000000000000000000000000000000000000000000001' as Bytes32,
-  network: 'testnet',
+  hash: "0xdeadbeef00000000000000000000000000000000000000000000000000000001" as Bytes32,
+  network: "testnet",
 });
 
 const makeProfile = (addr: string): IdentityProfile => ({
   did: makeDID(addr),
   controller: addr as `0x${string}`,
   status: 1,
-  recoveryHash: '0x0000000000000000000000000000000000000000000000000000000000000000' as Bytes32,
+  recoveryHash:
+    "0x0000000000000000000000000000000000000000000000000000000000000000" as Bytes32,
   credentialCount: 2,
   nonce: 1,
   createdAt: 1700000000,
@@ -79,13 +80,15 @@ const makeCredential = (
   status: CredentialStatus = 1,
 ): Credential => ({
   hash: hash as Bytes32,
-  schemaHash: '0xschema0000000000000000000000000000000000000000000000000000000001' as Bytes32,
-  issuerDid: makeDID('0xissuer'),
+  schemaHash:
+    "0xschema0000000000000000000000000000000000000000000000000000000001" as Bytes32,
+  issuerDid: makeDID("0xissuer"),
   subjectDid: makeDID(mockAddress),
   issuedAt: 1700000000,
   expiresAt: 1800000000,
   status,
-  merkleRoot: '0xmerkle0000000000000000000000000000000000000000000000000000000001' as Bytes32,
+  merkleRoot:
+    "0xmerkle0000000000000000000000000000000000000000000000000000000001" as Bytes32,
 });
 
 // ---------------------------------------------------------------------------
@@ -118,19 +121,19 @@ afterEach(() => {
 // Tests
 // ---------------------------------------------------------------------------
 
-describe('IdentityContext', () => {
+describe("IdentityContext", () => {
   // =========================================================================
   // useIdentity guard
   // =========================================================================
 
-  describe('useIdentity() outside provider', () => {
-    it('throws when used without IdentityProvider', () => {
+  describe("useIdentity() outside provider", () => {
+    it("throws when used without IdentityProvider", () => {
       // Suppress console.error for expected error
-      const spy = jest.spyOn(console, 'error').mockImplementation(() => {});
+      const spy = jest.spyOn(console, "error").mockImplementation(() => {});
 
       expect(() => {
         renderHook(() => useIdentity());
-      }).toThrow('useIdentity must be used within an <IdentityProvider>');
+      }).toThrow("useIdentity must be used within an <IdentityProvider>");
 
       spy.mockRestore();
     });
@@ -140,8 +143,8 @@ describe('IdentityContext', () => {
   // Default state
   // =========================================================================
 
-  describe('default state', () => {
-    it('provides default identity state when wallet is disconnected', () => {
+  describe("default state", () => {
+    it("provides default identity state when wallet is disconnected", () => {
       const { result } = renderHook(() => useIdentity(), { wrapper });
 
       expect(result.current.identity).toEqual({
@@ -159,8 +162,8 @@ describe('IdentityContext', () => {
   // DID derivation
   // =========================================================================
 
-  describe('DID derivation', () => {
-    it('derives DID from connected address', () => {
+  describe("DID derivation", () => {
+    it("derives DID from connected address", () => {
       mockUseAccount.mockReturnValue({
         address: mockAddress,
         isConnected: true,
@@ -177,7 +180,7 @@ describe('IdentityContext', () => {
       expect(result.current.did).toEqual(makeDID(mockAddress.toLowerCase()));
     });
 
-    it('returns null DID when disconnected', () => {
+    it("returns null DID when disconnected", () => {
       mockUseAccount.mockReturnValue({
         address: undefined,
         isConnected: false,
@@ -193,10 +196,10 @@ describe('IdentityContext', () => {
   // Profile loading on connect
   // =========================================================================
 
-  describe('loading identity on connect', () => {
-    it('fetches profile and credentials when wallet connects', async () => {
+  describe("loading identity on connect", () => {
+    it("fetches profile and credentials when wallet connects", async () => {
       const profile = makeProfile(mockAddress);
-      const creds = [makeCredential('0xcred01'), makeCredential('0xcred02')];
+      const creds = [makeCredential("0xcred01"), makeCredential("0xcred02")];
 
       (apiClient.getIdentityByAddress as jest.Mock).mockResolvedValue(profile);
       (apiClient.listCredentials as jest.Mock).mockResolvedValue({
@@ -225,7 +228,7 @@ describe('IdentityContext', () => {
       expect(result.current.identity.error).toBeNull();
     });
 
-    it('sets isRegistered to false when profile is not found (404)', async () => {
+    it("sets isRegistered to false when profile is not found (404)", async () => {
       (apiClient.getIdentityByAddress as jest.Mock).mockResolvedValue(null);
 
       mockUseAccount.mockReturnValue({
@@ -244,9 +247,9 @@ describe('IdentityContext', () => {
       expect(result.current.identity.isRegistered).toBe(false);
     });
 
-    it('handles fetch error and sets error state', async () => {
+    it("handles fetch error and sets error state", async () => {
       (apiClient.getIdentityByAddress as jest.Mock).mockRejectedValue(
-        new Error('Network failure'),
+        new Error("Network failure"),
       );
 
       mockUseAccount.mockReturnValue({
@@ -260,12 +263,12 @@ describe('IdentityContext', () => {
         expect(result.current.identity.isLoading).toBe(false);
       });
 
-      expect(result.current.identity.error).toBe('Network failure');
+      expect(result.current.identity.error).toBe("Network failure");
     });
 
-    it('handles non-Error thrown objects gracefully', async () => {
+    it("handles non-Error thrown objects gracefully", async () => {
       (apiClient.getIdentityByAddress as jest.Mock).mockRejectedValue(
-        'string error',
+        "string error",
       );
 
       mockUseAccount.mockReturnValue({
@@ -279,11 +282,11 @@ describe('IdentityContext', () => {
         expect(result.current.identity.isLoading).toBe(false);
       });
 
-      expect(result.current.identity.error).toBe('Failed to load identity');
+      expect(result.current.identity.error).toBe("Failed to load identity");
     });
 
-    it('returns null profile for 404 statusCode errors', async () => {
-      const err404 = new Error('Not found') as Error & { statusCode: number };
+    it("returns null profile for 404 statusCode errors", async () => {
+      const err404 = new Error("Not found") as Error & { statusCode: number };
       err404.statusCode = 404;
       (apiClient.getIdentityByAddress as jest.Mock).mockRejectedValue(err404);
 
@@ -307,8 +310,8 @@ describe('IdentityContext', () => {
   // State cleanup on disconnect
   // =========================================================================
 
-  describe('disconnect cleanup', () => {
-    it('clears state when wallet disconnects', async () => {
+  describe("disconnect cleanup", () => {
+    it("clears state when wallet disconnects", async () => {
       const profile = makeProfile(mockAddress);
 
       (apiClient.getIdentityByAddress as jest.Mock).mockResolvedValue(profile);
@@ -353,13 +356,13 @@ describe('IdentityContext', () => {
   // Credential polling
   // =========================================================================
 
-  describe('credential polling', () => {
-    it('polls credentials every CREDENTIAL_POLL_INTERVAL_MS when registered', async () => {
+  describe("credential polling", () => {
+    it("polls credentials every CREDENTIAL_POLL_INTERVAL_MS when registered", async () => {
       const profile = makeProfile(mockAddress);
-      const credsFirst = [makeCredential('0xcred01')];
+      const credsFirst = [makeCredential("0xcred01")];
       const credsSecond = [
-        makeCredential('0xcred01'),
-        makeCredential('0xcred02'),
+        makeCredential("0xcred01"),
+        makeCredential("0xcred02"),
       ];
 
       (apiClient.getIdentityByAddress as jest.Mock).mockResolvedValue(profile);
@@ -402,7 +405,7 @@ describe('IdentityContext', () => {
       });
     });
 
-    it('stops polling when identity is not registered', async () => {
+    it("stops polling when identity is not registered", async () => {
       (apiClient.getIdentityByAddress as jest.Mock).mockResolvedValue(null);
 
       mockUseAccount.mockReturnValue({
@@ -428,7 +431,7 @@ describe('IdentityContext', () => {
       expect(apiClient.listCredentials).not.toHaveBeenCalled();
     });
 
-    it('silently ignores polling errors', async () => {
+    it("silently ignores polling errors", async () => {
       const profile = makeProfile(mockAddress);
 
       (apiClient.getIdentityByAddress as jest.Mock).mockResolvedValue(profile);
@@ -440,7 +443,7 @@ describe('IdentityContext', () => {
           pageSize: 100,
           hasMore: false,
         })
-        .mockRejectedValue(new Error('Poll error'));
+        .mockRejectedValue(new Error("Poll error"));
 
       mockUseAccount.mockReturnValue({
         address: mockAddress,
@@ -467,18 +470,18 @@ describe('IdentityContext', () => {
   // registerIdentity
   // =========================================================================
 
-  describe('registerIdentity', () => {
-    it('registers identity and re-fetches profile on success', async () => {
+  describe("registerIdentity", () => {
+    it("registers identity and re-fetches profile on success", async () => {
       const profile = makeProfile(mockAddress);
       const recoveryHash =
-        '0xrecovery000000000000000000000000000000000000000000000000000000' as Bytes32;
+        "0xrecovery000000000000000000000000000000000000000000000000000000" as Bytes32;
 
       (apiClient.getIdentityByAddress as jest.Mock)
         .mockResolvedValueOnce(null) // initial fetch
         .mockResolvedValueOnce(profile); // post-registration fetch
       (apiClient.registerIdentity as jest.Mock).mockResolvedValue({
         didHash: profile.did.hash,
-        txHash: '0xtx',
+        txHash: "0xtx",
       });
 
       mockUseAccount.mockReturnValue({
@@ -504,7 +507,7 @@ describe('IdentityContext', () => {
       expect(result.current.identity.isLoading).toBe(false);
     });
 
-    it('throws when wallet is not connected (no DID)', async () => {
+    it("throws when wallet is not connected (no DID)", async () => {
       mockUseAccount.mockReturnValue({
         address: undefined,
         isConnected: false,
@@ -513,17 +516,17 @@ describe('IdentityContext', () => {
       const { result } = renderHook(() => useIdentity(), { wrapper });
 
       const recoveryHash =
-        '0xrecovery000000000000000000000000000000000000000000000000000000' as Bytes32;
+        "0xrecovery000000000000000000000000000000000000000000000000000000" as Bytes32;
 
       await expect(
         act(() => result.current.registerIdentity(recoveryHash)),
-      ).rejects.toThrow('Wallet must be connected to register');
+      ).rejects.toThrow("Wallet must be connected to register");
     });
 
-    it('sets error state and re-throws when registration API fails', async () => {
+    it("sets error state and re-throws when registration API fails", async () => {
       (apiClient.getIdentityByAddress as jest.Mock).mockResolvedValue(null);
       (apiClient.registerIdentity as jest.Mock).mockRejectedValue(
-        new Error('Registration server error'),
+        new Error("Registration server error"),
       );
 
       mockUseAccount.mockReturnValue({
@@ -538,7 +541,7 @@ describe('IdentityContext', () => {
       });
 
       const recoveryHash =
-        '0xrecovery000000000000000000000000000000000000000000000000000000' as Bytes32;
+        "0xrecovery000000000000000000000000000000000000000000000000000000" as Bytes32;
 
       let caught: Error | undefined;
       await act(async () => {
@@ -550,15 +553,15 @@ describe('IdentityContext', () => {
       });
 
       expect(caught).toBeDefined();
-      expect(caught!.message).toBe('Registration server error');
-      expect(result.current.identity.error).toBe('Registration server error');
+      expect(caught!.message).toBe("Registration server error");
+      expect(result.current.identity.error).toBe("Registration server error");
       expect(result.current.identity.isLoading).toBe(false);
     });
 
-    it('handles non-Error thrown in registration catch', async () => {
+    it("handles non-Error thrown in registration catch", async () => {
       (apiClient.getIdentityByAddress as jest.Mock).mockResolvedValue(null);
       (apiClient.registerIdentity as jest.Mock).mockRejectedValue(
-        'string registration error',
+        "string registration error",
       );
 
       mockUseAccount.mockReturnValue({
@@ -573,7 +576,7 @@ describe('IdentityContext', () => {
       });
 
       const recoveryHash =
-        '0xrecovery000000000000000000000000000000000000000000000000000000' as Bytes32;
+        "0xrecovery000000000000000000000000000000000000000000000000000000" as Bytes32;
 
       let caught: unknown;
       await act(async () => {
@@ -584,8 +587,8 @@ describe('IdentityContext', () => {
         }
       });
 
-      expect(caught).toBe('string registration error');
-      expect(result.current.identity.error).toBe('Registration failed');
+      expect(caught).toBe("string registration error");
+      expect(result.current.identity.error).toBe("Registration failed");
     });
   });
 
@@ -593,10 +596,10 @@ describe('IdentityContext', () => {
   // refreshProfile
   // =========================================================================
 
-  describe('refreshProfile', () => {
-    it('updates profile when address is available', async () => {
+  describe("refreshProfile", () => {
+    it("updates profile when address is available", async () => {
       const profileV1 = makeProfile(mockAddress);
-      const profileV2 = { ...profileV1, displayName: 'Updated' };
+      const profileV2 = { ...profileV1, displayName: "Updated" };
 
       (apiClient.getIdentityByAddress as jest.Mock)
         .mockResolvedValueOnce(profileV1)
@@ -625,7 +628,7 @@ describe('IdentityContext', () => {
       expect(result.current.identity.profile).toEqual(profileV2);
     });
 
-    it('does nothing when address is not available', async () => {
+    it("does nothing when address is not available", async () => {
       mockUseAccount.mockReturnValue({
         address: undefined,
         isConnected: false,
@@ -638,10 +641,10 @@ describe('IdentityContext', () => {
       expect(apiClient.getIdentityByAddress).not.toHaveBeenCalled();
     });
 
-    it('sets error state on failure', async () => {
+    it("sets error state on failure", async () => {
       (apiClient.getIdentityByAddress as jest.Mock)
         .mockResolvedValueOnce(makeProfile(mockAddress))
-        .mockRejectedValueOnce(new Error('Refresh failed'));
+        .mockRejectedValueOnce(new Error("Refresh failed"));
       (apiClient.listCredentials as jest.Mock).mockResolvedValue({
         items: [],
         total: 0,
@@ -663,13 +666,13 @@ describe('IdentityContext', () => {
 
       await act(() => result.current.refreshProfile());
 
-      expect(result.current.identity.error).toBe('Refresh failed');
+      expect(result.current.identity.error).toBe("Refresh failed");
     });
 
-    it('handles non-Error thrown in refreshProfile', async () => {
+    it("handles non-Error thrown in refreshProfile", async () => {
       (apiClient.getIdentityByAddress as jest.Mock)
         .mockResolvedValueOnce(makeProfile(mockAddress))
-        .mockRejectedValueOnce('string error');
+        .mockRejectedValueOnce("string error");
       (apiClient.listCredentials as jest.Mock).mockResolvedValue({
         items: [],
         total: 0,
@@ -691,7 +694,7 @@ describe('IdentityContext', () => {
 
       await act(() => result.current.refreshProfile());
 
-      expect(result.current.identity.error).toBe('Failed to refresh profile');
+      expect(result.current.identity.error).toBe("Failed to refresh profile");
     });
   });
 
@@ -699,13 +702,13 @@ describe('IdentityContext', () => {
   // refreshCredentials
   // =========================================================================
 
-  describe('refreshCredentials', () => {
-    it('updates credentials when profile is available', async () => {
+  describe("refreshCredentials", () => {
+    it("updates credentials when profile is available", async () => {
       const profile = makeProfile(mockAddress);
       const credsNew = [
-        makeCredential('0xcred01'),
-        makeCredential('0xcred02'),
-        makeCredential('0xcred03'),
+        makeCredential("0xcred01"),
+        makeCredential("0xcred02"),
+        makeCredential("0xcred03"),
       ];
 
       (apiClient.getIdentityByAddress as jest.Mock).mockResolvedValue(profile);
@@ -741,7 +744,7 @@ describe('IdentityContext', () => {
       expect(result.current.identity.credentials).toEqual(credsNew);
     });
 
-    it('does nothing when profile is null', async () => {
+    it("does nothing when profile is null", async () => {
       (apiClient.getIdentityByAddress as jest.Mock).mockResolvedValue(null);
 
       mockUseAccount.mockReturnValue({
@@ -762,7 +765,7 @@ describe('IdentityContext', () => {
       expect(apiClient.listCredentials).not.toHaveBeenCalled();
     });
 
-    it('swallows fetch error via fetchCredentials and sets credentials to empty', async () => {
+    it("swallows fetch error via fetchCredentials and sets credentials to empty", async () => {
       const profile = makeProfile(mockAddress);
 
       (apiClient.getIdentityByAddress as jest.Mock).mockResolvedValue(profile);
@@ -774,7 +777,7 @@ describe('IdentityContext', () => {
           pageSize: 100,
           hasMore: false,
         })
-        .mockRejectedValueOnce(new Error('Cred refresh failed'));
+        .mockRejectedValueOnce(new Error("Cred refresh failed"));
 
       mockUseAccount.mockReturnValue({
         address: mockAddress,
@@ -800,9 +803,9 @@ describe('IdentityContext', () => {
   // getCredential
   // =========================================================================
 
-  describe('getCredential', () => {
-    it('returns the credential matching the hash', async () => {
-      const cred = makeCredential('0xcred01');
+  describe("getCredential", () => {
+    it("returns the credential matching the hash", async () => {
+      const cred = makeCredential("0xcred01");
 
       (apiClient.getIdentityByAddress as jest.Mock).mockResolvedValue(
         makeProfile(mockAddress),
@@ -826,10 +829,10 @@ describe('IdentityContext', () => {
         expect(result.current.identity.credentials.length).toBe(1);
       });
 
-      expect(result.current.getCredential('0xcred01' as Bytes32)).toEqual(cred);
+      expect(result.current.getCredential("0xcred01" as Bytes32)).toEqual(cred);
     });
 
-    it('returns undefined for non-existent credential', async () => {
+    it("returns undefined for non-existent credential", async () => {
       (apiClient.getIdentityByAddress as jest.Mock).mockResolvedValue(
         makeProfile(mockAddress),
       );
@@ -853,7 +856,7 @@ describe('IdentityContext', () => {
       });
 
       expect(
-        result.current.getCredential('0xnonexistent' as Bytes32),
+        result.current.getCredential("0xnonexistent" as Bytes32),
       ).toBeUndefined();
     });
   });
@@ -862,11 +865,11 @@ describe('IdentityContext', () => {
   // getCredentialsByStatus
   // =========================================================================
 
-  describe('getCredentialsByStatus', () => {
-    it('filters credentials by status', async () => {
-      const activeCred = makeCredential('0xcred01', 1);
-      const revokedCred = makeCredential('0xcred02', 3);
-      const expiredCred = makeCredential('0xcred03', 4);
+  describe("getCredentialsByStatus", () => {
+    it("filters credentials by status", async () => {
+      const activeCred = makeCredential("0xcred01", 1);
+      const revokedCred = makeCredential("0xcred02", 3);
+      const expiredCred = makeCredential("0xcred03", 4);
 
       (apiClient.getIdentityByAddress as jest.Mock).mockResolvedValue(
         makeProfile(mockAddress),
@@ -906,13 +909,13 @@ describe('IdentityContext', () => {
   // clearIdentity
   // =========================================================================
 
-  describe('clearIdentity', () => {
-    it('resets identity state to defaults', async () => {
+  describe("clearIdentity", () => {
+    it("resets identity state to defaults", async () => {
       (apiClient.getIdentityByAddress as jest.Mock).mockResolvedValue(
         makeProfile(mockAddress),
       );
       (apiClient.listCredentials as jest.Mock).mockResolvedValue({
-        items: [makeCredential('0xcred01')],
+        items: [makeCredential("0xcred01")],
         total: 1,
         page: 1,
         pageSize: 100,
@@ -948,8 +951,8 @@ describe('IdentityContext', () => {
   // Cleanup on unmount
   // =========================================================================
 
-  describe('cleanup on unmount', () => {
-    it('cancels in-flight fetches when the component unmounts before profile resolves', async () => {
+  describe("cleanup on unmount", () => {
+    it("cancels in-flight fetches when the component unmounts before profile resolves", async () => {
       let resolveProfile: (val: IdentityProfile | null) => void;
       (apiClient.getIdentityByAddress as jest.Mock).mockReturnValue(
         new Promise<IdentityProfile | null>((resolve) => {
@@ -975,7 +978,7 @@ describe('IdentityContext', () => {
       // If we get here without errors, cleanup works correctly
     });
 
-    it('cancels in-flight fetches when unmounting after profile but before credentials', async () => {
+    it("cancels in-flight fetches when unmounting after profile but before credentials", async () => {
       const profile = makeProfile(mockAddress);
       let resolveCredentials: (val: any) => void;
 
@@ -1018,7 +1021,7 @@ describe('IdentityContext', () => {
       });
     });
 
-    it('cancels in-flight fetches when unmounting during error handling', async () => {
+    it("cancels in-flight fetches when unmounting during error handling", async () => {
       let rejectProfile: (err: Error) => void;
       (apiClient.getIdentityByAddress as jest.Mock).mockReturnValue(
         new Promise<IdentityProfile | null>((_, reject) => {
@@ -1038,7 +1041,7 @@ describe('IdentityContext', () => {
 
       // Reject after unmount — should not cause state update errors
       await act(async () => {
-        rejectProfile!(new Error('Network error'));
+        rejectProfile!(new Error("Network error"));
       });
     });
   });
@@ -1047,8 +1050,8 @@ describe('IdentityContext', () => {
   // Duplicate address skip
   // =========================================================================
 
-  describe('duplicate address skip', () => {
-    it('does not re-fetch if address has not changed on rerender', async () => {
+  describe("duplicate address skip", () => {
+    it("does not re-fetch if address has not changed on rerender", async () => {
       (apiClient.getIdentityByAddress as jest.Mock).mockResolvedValue(
         makeProfile(mockAddress),
       );
@@ -1083,7 +1086,7 @@ describe('IdentityContext', () => {
       expect(apiClient.getIdentityByAddress).toHaveBeenCalledTimes(1);
     });
 
-    it('skips re-fetch when reconnecting with the same address', async () => {
+    it("skips re-fetch when reconnecting with the same address", async () => {
       (apiClient.getIdentityByAddress as jest.Mock).mockResolvedValue(
         makeProfile(mockAddress),
       );

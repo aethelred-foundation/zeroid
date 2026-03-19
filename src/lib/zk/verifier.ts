@@ -14,9 +14,9 @@ import type {
   Groth16Proof,
   ZKProof,
   ProofVerification,
-} from '@/types';
-import { CIRCUITS } from '@/config/constants';
-import { withTimeout } from '@/lib/utils';
+} from "@/types";
+import { CIRCUITS } from "@/config/constants";
+import { withTimeout } from "@/lib/utils";
 
 // ============================================================================
 // Types
@@ -48,7 +48,9 @@ const vkeyCache = new Map<string, VerificationKey>();
  * @returns The parsed verification key
  * @throws If the circuit is unknown or the key fails to load
  */
-async function fetchVerificationKey(circuitId: Bytes32): Promise<VerificationKey> {
+async function fetchVerificationKey(
+  circuitId: Bytes32,
+): Promise<VerificationKey> {
   const cached = vkeyCache.get(circuitId);
   if (cached) return cached;
 
@@ -114,7 +116,7 @@ export async function verifyProofLocally(
         proofHash: zkProof.proofHash,
         circuitId: zkProof.circuitId,
         verifiedAt: now,
-        error: 'Proof has expired',
+        error: "Proof has expired",
       };
     }
 
@@ -132,9 +134,13 @@ export async function verifyProofLocally(
 
     // Run verification with a timeout
     const isValid = await withTimeout(
-      snarkjs.groth16.verify(vkey, publicSignals, snarkjsProof) as Promise<boolean>,
+      snarkjs.groth16.verify(
+        vkey,
+        publicSignals,
+        snarkjsProof,
+      ) as Promise<boolean>,
       10_000,
-      'Local proof verification timed out',
+      "Local proof verification timed out",
     );
 
     return {
@@ -142,7 +148,7 @@ export async function verifyProofLocally(
       proofHash: zkProof.proofHash,
       circuitId: zkProof.circuitId,
       verifiedAt: now,
-      error: isValid ? undefined : 'Proof verification failed',
+      error: isValid ? undefined : "Proof verification failed",
     };
   } catch (error) {
     return {
@@ -150,7 +156,8 @@ export async function verifyProofLocally(
       proofHash: zkProof.proofHash,
       circuitId: zkProof.circuitId,
       verifiedAt: now,
-      error: error instanceof Error ? error.message : 'Unknown verification error',
+      error:
+        error instanceof Error ? error.message : "Unknown verification error",
     };
   }
 }
@@ -174,7 +181,11 @@ export async function verifyRawProof(
   const vkey = await fetchVerificationKey(circuitId);
   const snarkjsProof = toSnarkjsProof(proof);
 
-  return snarkjs.groth16.verify(vkey, publicSignals, snarkjsProof) as Promise<boolean>;
+  return snarkjs.groth16.verify(
+    vkey,
+    publicSignals,
+    snarkjsProof,
+  ) as Promise<boolean>;
 }
 
 /**
@@ -200,7 +211,7 @@ export async function verifyProofBatch(
  */
 export function areOutputsTruthy(zkProof: ZKProof): boolean {
   return zkProof.publicOutputs.every(
-    (output) => output !== '0' && output !== '',
+    (output) => output !== "0" && output !== "",
   );
 }
 
@@ -219,21 +230,21 @@ function toSnarkjsProof(proof: Groth16Proof): {
   curve: string;
 } {
   return {
-    pi_a: [proof.a[0], proof.a[1], '1'],
+    pi_a: [proof.a[0], proof.a[1], "1"],
     pi_b: [
       [proof.b[0][0], proof.b[0][1]],
       [proof.b[1][0], proof.b[1][1]],
-      ['1', '0'],
+      ["1", "0"],
     ],
-    pi_c: [proof.c[0], proof.c[1], '1'],
-    protocol: 'groth16',
-    curve: 'bn128',
+    pi_c: [proof.c[0], proof.c[1], "1"],
+    protocol: "groth16",
+    curve: "bn128",
   };
 }
 
 /**
  * Dynamically import snarkjs to avoid bundling it in the initial chunk.
  */
-async function loadSnarkjs(): Promise<typeof import('snarkjs')> {
-  return import('snarkjs');
+async function loadSnarkjs(): Promise<typeof import("snarkjs")> {
+  return import("snarkjs");
 }

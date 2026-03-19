@@ -5,25 +5,25 @@
  * Uses on-chain reads for vote tallies and off-chain API for metadata.
  */
 
-import { useCallback } from 'react';
-import { useAccount, useReadContract, useWriteContract } from 'wagmi';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { type Address, type Hash, parseEther } from 'viem';
-import { toast } from 'sonner';
-import { apiClient } from '@/lib/api/client';
+import { useCallback } from "react";
+import { useAccount, useReadContract, useWriteContract } from "wagmi";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { type Address, type Hash, parseEther } from "viem";
+import { toast } from "sonner";
+import { apiClient } from "@/lib/api/client";
 import {
   GOVERNANCE_ADDRESS,
   GOVERNANCE_ABI,
   GOVERNANCE_TOKEN_ADDRESS,
   GOVERNANCE_TOKEN_ABI,
-} from '@/config/constants';
+} from "@/config/constants";
 import type {
   Proposal,
   ProposalStatus,
   VoteType,
   CreateProposalParams,
   VotingPower,
-} from '@/types';
+} from "@/types";
 
 // ---------------------------------------------------------------------------
 // Convenience wrapper — used by pages that need { proposals, votingPower }
@@ -40,7 +40,11 @@ export function useGovernance() {
     delegatedTo: power.delegatee,
     isLoading: proposalsQuery.isLoading || power.isLoading,
     vote: async (proposalId: string, support: string) => {
-      const supportMap: Record<string, number> = { for: 1, against: 0, abstain: 2 };
+      const supportMap: Record<string, number> = {
+        for: 1,
+        against: 0,
+        abstain: 2,
+      };
       await voteMutation.mutateAsync({
         proposalId: BigInt(proposalId),
         support: (supportMap[support] ?? 2) as any,
@@ -62,7 +66,7 @@ export function useVotingPower() {
   const { data: balance, isLoading: isBalanceLoading } = useReadContract({
     address: GOVERNANCE_TOKEN_ADDRESS as Address,
     abi: GOVERNANCE_TOKEN_ABI,
-    functionName: 'getVotes',
+    functionName: "getVotes",
     args: address ? [address] : undefined,
     query: { enabled: !!address, refetchInterval: 30_000 },
   });
@@ -70,7 +74,7 @@ export function useVotingPower() {
   const { data: delegatee } = useReadContract({
     address: GOVERNANCE_TOKEN_ADDRESS as Address,
     abi: GOVERNANCE_TOKEN_ABI,
-    functionName: 'delegates',
+    functionName: "delegates",
     args: address ? [address] : undefined,
     query: { enabled: !!address },
   });
@@ -89,12 +93,12 @@ export function useVotingPower() {
 
 export function useProposals(status?: ProposalStatus, page = 1) {
   const params = new URLSearchParams();
-  if (status) params.set('status', status);
-  params.set('page', String(page));
-  params.set('pageSize', '20');
+  if (status) params.set("status", status);
+  params.set("page", String(page));
+  params.set("pageSize", "20");
 
   return useQuery({
-    queryKey: ['proposals', status, page],
+    queryKey: ["proposals", status, page],
     queryFn: () =>
       apiClient.get<{ proposals: Proposal[]; total: number }>(
         `/v1/governance/proposals?${params.toString()}`,
@@ -112,20 +116,24 @@ export function useProposalDetail(proposalId: bigint | undefined) {
   const { data: votes, isLoading: isVotesLoading } = useReadContract({
     address: GOVERNANCE_ADDRESS as Address,
     abi: GOVERNANCE_ABI,
-    functionName: 'proposalVotes',
+    functionName: "proposalVotes",
     args: proposalId !== undefined ? [proposalId] : undefined,
     query: { enabled: proposalId !== undefined, refetchInterval: 15_000 },
   });
 
   const apiQuery = useQuery({
-    queryKey: ['proposal', proposalId?.toString()],
+    queryKey: ["proposal", proposalId?.toString()],
     queryFn: () =>
       apiClient.get<Proposal>(`/v1/governance/proposals/${proposalId}`),
     enabled: proposalId !== undefined,
     staleTime: 10_000,
   });
 
-  const [againstVotes, forVotes, abstainVotes] = (votes as [bigint, bigint, bigint]) ?? [0n, 0n, 0n];
+  const [againstVotes, forVotes, abstainVotes] = (votes as [
+    bigint,
+    bigint,
+    bigint,
+  ]) ?? [0n, 0n, 0n];
 
   return {
     ...apiQuery,
@@ -148,12 +156,17 @@ export function useCreateProposal() {
       const hash = await writeContractAsync({
         address: GOVERNANCE_ADDRESS as Address,
         abi: GOVERNANCE_ABI,
-        functionName: 'propose',
-        args: [params.targets, params.values, params.calldatas, params.description],
+        functionName: "propose",
+        args: [
+          params.targets,
+          params.values,
+          params.calldatas,
+          params.description,
+        ],
       });
 
       // Store extended metadata via API
-      await apiClient.post('/v1/governance/proposals/metadata', {
+      await apiClient.post("/v1/governance/proposals/metadata", {
         txHash: hash,
         title: params.title,
         summary: params.summary,
@@ -163,11 +176,11 @@ export function useCreateProposal() {
       return hash;
     },
     onSuccess: () => {
-      toast.success('Proposal created');
-      queryClient.invalidateQueries({ queryKey: ['proposals'] });
+      toast.success("Proposal created");
+      queryClient.invalidateQueries({ queryKey: ["proposals"] });
     },
     onError: (err: Error) => {
-      toast.error('Proposal creation failed', { description: err.message });
+      toast.error("Proposal creation failed", { description: err.message });
     },
   });
 }
@@ -181,8 +194,12 @@ export function useVote() {
   const { writeContractAsync } = useWriteContract();
 
   return useMutation({
-    mutationFn: async (params: { proposalId: bigint; support: VoteType; reason?: string }): Promise<Hash> => {
-      const fnName = params.reason ? 'castVoteWithReason' : 'castVote';
+    mutationFn: async (params: {
+      proposalId: bigint;
+      support: VoteType;
+      reason?: string;
+    }): Promise<Hash> => {
+      const fnName = params.reason ? "castVoteWithReason" : "castVote";
       const args = params.reason
         ? [params.proposalId, params.support, params.reason]
         : [params.proposalId, params.support];
@@ -195,12 +212,12 @@ export function useVote() {
       });
     },
     onSuccess: () => {
-      toast.success('Vote cast successfully');
-      queryClient.invalidateQueries({ queryKey: ['proposal'] });
-      queryClient.invalidateQueries({ queryKey: ['proposals'] });
+      toast.success("Vote cast successfully");
+      queryClient.invalidateQueries({ queryKey: ["proposal"] });
+      queryClient.invalidateQueries({ queryKey: ["proposals"] });
     },
     onError: (err: Error) => {
-      toast.error('Vote failed', { description: err.message });
+      toast.error("Vote failed", { description: err.message });
     },
   });
 }
@@ -223,16 +240,21 @@ export function useExecuteProposal() {
       return writeContractAsync({
         address: GOVERNANCE_ADDRESS as Address,
         abi: GOVERNANCE_ABI,
-        functionName: 'execute',
-        args: [params.targets, params.values, params.calldatas, params.descriptionHash],
+        functionName: "execute",
+        args: [
+          params.targets,
+          params.values,
+          params.calldatas,
+          params.descriptionHash,
+        ],
       });
     },
     onSuccess: () => {
-      toast.success('Proposal executed');
-      queryClient.invalidateQueries({ queryKey: ['proposals'] });
+      toast.success("Proposal executed");
+      queryClient.invalidateQueries({ queryKey: ["proposals"] });
     },
     onError: (err: Error) => {
-      toast.error('Execution failed', { description: err.message });
+      toast.error("Execution failed", { description: err.message });
     },
   });
 }

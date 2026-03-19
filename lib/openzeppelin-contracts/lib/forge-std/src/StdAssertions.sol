@@ -225,11 +225,12 @@ abstract contract StdAssertions {
         vm.assertNotEqDecimal(left, right, decimals);
     }
 
-    function assertNotEqDecimal(uint256 left, uint256 right, uint256 decimals, string memory err)
-        internal
-        pure
-        virtual
-    {
+    function assertNotEqDecimal(
+        uint256 left,
+        uint256 right,
+        uint256 decimals,
+        string memory err
+    ) internal pure virtual {
         vm.assertNotEqDecimal(left, right, decimals, err);
     }
 
@@ -477,19 +478,16 @@ abstract contract StdAssertions {
         vm.assertApproxEqAbs(left, right, maxDelta);
     }
 
-    function assertApproxEqAbs(uint256 left, uint256 right, uint256 maxDelta, string memory err)
-        internal
-        pure
-        virtual
-    {
+    function assertApproxEqAbs(uint256 left, uint256 right, uint256 maxDelta, string memory err) internal pure virtual {
         vm.assertApproxEqAbs(left, right, maxDelta, err);
     }
 
-    function assertApproxEqAbsDecimal(uint256 left, uint256 right, uint256 maxDelta, uint256 decimals)
-        internal
-        pure
-        virtual
-    {
+    function assertApproxEqAbsDecimal(
+        uint256 left,
+        uint256 right,
+        uint256 maxDelta,
+        uint256 decimals
+    ) internal pure virtual {
         vm.assertApproxEqAbsDecimal(left, right, maxDelta, decimals);
     }
 
@@ -511,19 +509,22 @@ abstract contract StdAssertions {
         vm.assertApproxEqAbs(left, right, maxDelta, err);
     }
 
-    function assertApproxEqAbsDecimal(int256 left, int256 right, uint256 maxDelta, uint256 decimals)
-        internal
-        pure
-        virtual
-    {
+    function assertApproxEqAbsDecimal(
+        int256 left,
+        int256 right,
+        uint256 maxDelta,
+        uint256 decimals
+    ) internal pure virtual {
         vm.assertApproxEqAbsDecimal(left, right, maxDelta, decimals);
     }
 
-    function assertApproxEqAbsDecimal(int256 left, int256 right, uint256 maxDelta, uint256 decimals, string memory err)
-        internal
-        pure
-        virtual
-    {
+    function assertApproxEqAbsDecimal(
+        int256 left,
+        int256 right,
+        uint256 maxDelta,
+        uint256 decimals,
+        string memory err
+    ) internal pure virtual {
         vm.assertApproxEqAbsDecimal(left, right, maxDelta, decimals, err);
     }
 
@@ -620,17 +621,21 @@ abstract contract StdAssertions {
         assertEqCall(target, callDataA, target, callDataB, true);
     }
 
-    function assertEqCall(address targetA, bytes memory callDataA, address targetB, bytes memory callDataB)
-        internal
-        virtual
-    {
+    function assertEqCall(
+        address targetA,
+        bytes memory callDataA,
+        address targetB,
+        bytes memory callDataB
+    ) internal virtual {
         assertEqCall(targetA, callDataA, targetB, callDataB, true);
     }
 
-    function assertEqCall(address target, bytes memory callDataA, bytes memory callDataB, bool strictRevertData)
-        internal
-        virtual
-    {
+    function assertEqCall(
+        address target,
+        bytes memory callDataA,
+        bytes memory callDataB,
+        bool strictRevertData
+    ) internal virtual {
         assertEqCall(target, callDataA, target, callDataB, strictRevertData);
     }
 

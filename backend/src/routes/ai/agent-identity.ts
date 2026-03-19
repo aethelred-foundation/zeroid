@@ -1,12 +1,12 @@
-import { Router, Response } from 'express';
-import { z } from 'zod';
-import { logger } from '../../index';
-import { AuthenticatedRequest, authMiddleware } from '../../middleware/auth';
-import { validate } from '../../middleware/validation';
+import { Router, Response } from "express";
+import { z } from "zod";
+import { logger } from "../../index";
+import { AuthenticatedRequest, authMiddleware } from "../../middleware/auth";
+import { validate } from "../../middleware/validation";
 import {
   agentIdentityService,
   AgentIdentityError,
-} from '../../services/ai/agent-identity';
+} from "../../services/ai/agent-identity";
 
 // ---------------------------------------------------------------------------
 // Validation schemas
@@ -17,20 +17,25 @@ const AgentCapabilitySchema = z.object({
   description: z.string().min(5).max(500),
   resourceTypes: z.array(z.string().min(1).max(50)).min(1).max(20),
   actions: z.array(z.string().min(1).max(50)).min(1).max(20),
-  riskLevel: z.enum(['low', 'medium', 'high', 'critical']),
+  riskLevel: z.enum(["low", "medium", "high", "critical"]),
   requiresApproval: z.boolean(),
-  rateLimit: z.object({
-    maxPerHour: z.number().int().min(1).max(10000),
-    maxPerDay: z.number().int().min(1).max(100000),
-  }).optional(),
+  rateLimit: z
+    .object({
+      maxPerHour: z.number().int().min(1).max(10000),
+      maxPerDay: z.number().int().min(1).max(100000),
+    })
+    .optional(),
 });
 
 const RegisterAgentSchema = z.object({
   agentName: z.string().min(3).max(100),
   agentDescription: z.string().min(10).max(1000),
   agentProtocol: z.enum([
-    'openai_functions', 'anthropic_tool_use', 'google_genai',
-    'aethelred_native', 'custom',
+    "openai_functions",
+    "anthropic_tool_use",
+    "google_genai",
+    "aethelred_native",
+    "custom",
   ]),
   capabilities: z.array(AgentCapabilitySchema).min(1).max(50),
   publicKey: z.string().min(32).max(512),
@@ -49,8 +54,11 @@ const UpdateCapabilitiesSchema = z.object({
 
 const DelegationConstraintSchema = z.object({
   type: z.enum([
-    'time_bounded', 'action_scoped', 'resource_scoped',
-    'rate_limited', 'approval_required',
+    "time_bounded",
+    "action_scoped",
+    "resource_scoped",
+    "rate_limited",
+    "approval_required",
   ]),
   parameters: z.record(z.unknown()),
 });
@@ -68,10 +76,15 @@ const VerifyAgentSchema = z.object({
   requestedCapabilities: z.array(z.string().min(1).max(100)).min(1).max(20),
   context: z.object({
     callerAgentId: z.string().optional(),
-    callerProtocol: z.enum([
-      'openai_functions', 'anthropic_tool_use', 'google_genai',
-      'aethelred_native', 'custom',
-    ]).optional(),
+    callerProtocol: z
+      .enum([
+        "openai_functions",
+        "anthropic_tool_use",
+        "google_genai",
+        "aethelred_native",
+        "custom",
+      ])
+      .optional(),
     purpose: z.string().min(3).max(500),
     resourceId: z.string().optional(),
   }),
@@ -104,12 +117,14 @@ router.use(authMiddleware);
 // POST /ai/agents — Register a new AI agent identity
 // ---------------------------------------------------------------------------
 router.post(
-  '/',
+  "/",
   validate({ body: RegisterAgentSchema }),
   async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
       if (!req.identity) {
-        res.status(401).json({ error: 'AUTH_REQUIRED', message: 'Authentication required' });
+        res
+          .status(401)
+          .json({ error: "AUTH_REQUIRED", message: "Authentication required" });
         return;
       }
 
@@ -145,11 +160,13 @@ router.post(
 // GET /ai/agents/:agentId — Get agent profile
 // ---------------------------------------------------------------------------
 router.get(
-  '/:agentId',
+  "/:agentId",
   validate({ params: AgentIdParamsSchema }),
   async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
-      const agent = await agentIdentityService.getAgent(req.params.agentId as string);
+      const agent = await agentIdentityService.getAgent(
+        req.params.agentId as string,
+      );
 
       res.json({
         success: true,
@@ -171,7 +188,7 @@ router.get(
           lastActiveAt: agent.lastActiveAt,
           stats: agent.stats,
           metadata: agent.metadata,
-          ...(agent.status === 'suspended' && {
+          ...(agent.status === "suspended" && {
             suspension: {
               suspendedAt: agent.suspendedAt,
               suspendedBy: agent.suspendedBy,
@@ -190,7 +207,7 @@ router.get(
 // POST /ai/agents/:agentId/capabilities — Update agent capabilities
 // ---------------------------------------------------------------------------
 router.post(
-  '/:agentId/capabilities',
+  "/:agentId/capabilities",
   validate({
     params: AgentIdParamsSchema,
     body: UpdateCapabilitiesSchema,
@@ -198,7 +215,9 @@ router.post(
   async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
       if (!req.identity) {
-        res.status(401).json({ error: 'AUTH_REQUIRED', message: 'Authentication required' });
+        res
+          .status(401)
+          .json({ error: "AUTH_REQUIRED", message: "Authentication required" });
         return;
       }
 
@@ -231,7 +250,7 @@ router.post(
 // POST /ai/agents/:agentId/delegate — Create delegation chain
 // ---------------------------------------------------------------------------
 router.post(
-  '/:agentId/delegate',
+  "/:agentId/delegate",
   validate({
     params: AgentIdParamsSchema,
     body: CreateDelegationSchema,
@@ -239,7 +258,9 @@ router.post(
   async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
       if (!req.identity) {
-        res.status(401).json({ error: 'AUTH_REQUIRED', message: 'Authentication required' });
+        res
+          .status(401)
+          .json({ error: "AUTH_REQUIRED", message: "Authentication required" });
         return;
       }
 
@@ -278,7 +299,7 @@ router.post(
 // POST /ai/agents/:agentId/verify — Verify agent identity for M2M
 // ---------------------------------------------------------------------------
 router.post(
-  '/:agentId/verify',
+  "/:agentId/verify",
   validate({
     params: AgentIdParamsSchema,
     body: VerifyAgentSchema,
@@ -304,7 +325,7 @@ router.post(
 // GET /ai/agents/:agentId/audit — Get agent activity audit
 // ---------------------------------------------------------------------------
 router.get(
-  '/:agentId/audit',
+  "/:agentId/audit",
   validate({
     params: AgentIdParamsSchema,
     query: AuditQuerySchema,
@@ -318,7 +339,9 @@ router.get(
       );
 
       // Also fetch the agent to include summary stats
-      const agent = await agentIdentityService.getAgent(req.params.agentId as string);
+      const agent = await agentIdentityService.getAgent(
+        req.params.agentId as string,
+      );
 
       res.json({
         success: true,
@@ -339,7 +362,7 @@ router.get(
 // POST /ai/agents/:agentId/suspend — Suspend agent (human-in-the-loop)
 // ---------------------------------------------------------------------------
 router.post(
-  '/:agentId/suspend',
+  "/:agentId/suspend",
   validate({
     params: AgentIdParamsSchema,
     body: SuspendAgentSchema,
@@ -347,7 +370,9 @@ router.post(
   async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
       if (!req.identity) {
-        res.status(401).json({ error: 'AUTH_REQUIRED', message: 'Authentication required' });
+        res
+          .status(401)
+          .json({ error: "AUTH_REQUIRED", message: "Authentication required" });
         return;
       }
 
@@ -366,7 +391,8 @@ router.post(
           suspendedBy: agent.suspendedBy,
           reason: agent.suspensionReason,
         },
-        message: 'Agent has been suspended. All active delegations have been revoked.',
+        message:
+          "Agent has been suspended. All active delegations have been revoked.",
       });
     } catch (error) {
       handleError(error, res);
@@ -378,12 +404,14 @@ router.post(
 // POST /ai/agents/approvals/respond — Respond to human-in-the-loop approval
 // ---------------------------------------------------------------------------
 router.post(
-  '/approvals/respond',
+  "/approvals/respond",
   validate({ body: ApprovalResponseSchema }),
   async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
       if (!req.identity) {
-        res.status(401).json({ error: 'AUTH_REQUIRED', message: 'Authentication required' });
+        res
+          .status(401)
+          .json({ error: "AUTH_REQUIRED", message: "Authentication required" });
         return;
       }
 
@@ -406,7 +434,7 @@ router.post(
           respondedAt: result.respondedAt,
           respondedBy: result.respondedBy,
         },
-        message: `Approval request ${approved ? 'approved' : 'rejected'}`,
+        message: `Approval request ${approved ? "approved" : "rejected"}`,
       });
     } catch (error) {
       handleError(error, res);
@@ -426,14 +454,14 @@ function handleError(error: unknown, res: Response): void {
     return;
   }
 
-  logger.error('ai_agent_route_error', {
+  logger.error("ai_agent_route_error", {
     error: (error as Error).message,
     stack: (error as Error).stack,
   });
 
   res.status(500).json({
-    error: 'INTERNAL_ERROR',
-    message: 'An internal error occurred',
+    error: "INTERNAL_ERROR",
+    message: "An internal error occurred",
   });
 }
 

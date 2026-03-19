@@ -1,14 +1,14 @@
-import { z } from 'zod';
-import { createLogger, format, transports } from 'winston';
-import crypto from 'crypto';
+import { z } from "zod";
+import { createLogger, format, transports } from "winston";
+import crypto from "crypto";
 
 // ---------------------------------------------------------------------------
 // Logger
 // ---------------------------------------------------------------------------
 const logger = createLogger({
-  level: process.env.LOG_LEVEL ?? 'info',
+  level: process.env.LOG_LEVEL ?? "info",
   format: format.combine(format.timestamp(), format.json()),
-  defaultMeta: { service: 'webhook-system' },
+  defaultMeta: { service: "webhook-system" },
   transports: [new transports.Console()],
 });
 
@@ -16,21 +16,21 @@ const logger = createLogger({
 // Zod Schemas
 // ---------------------------------------------------------------------------
 export const WebhookEventTypeSchema = z.enum([
-  'credential.issued',
-  'credential.revoked',
-  'credential.expired',
-  'credential.updated',
-  'verification.completed',
-  'verification.failed',
-  'identity.registered',
-  'identity.updated',
-  'identity.deactivated',
-  'compliance.status_changed',
-  'compliance.screening_complete',
-  'compliance.report_generated',
-  'enterprise.api_key_created',
-  'enterprise.api_key_revoked',
-  'enterprise.sla_violation',
+  "credential.issued",
+  "credential.revoked",
+  "credential.expired",
+  "credential.updated",
+  "verification.completed",
+  "verification.failed",
+  "identity.registered",
+  "identity.updated",
+  "identity.deactivated",
+  "compliance.status_changed",
+  "compliance.screening_complete",
+  "compliance.report_generated",
+  "enterprise.api_key_created",
+  "enterprise.api_key_revoked",
+  "enterprise.sla_violation",
 ]);
 
 export type WebhookEventType = z.infer<typeof WebhookEventTypeSchema>;
@@ -97,7 +97,7 @@ interface WebhookDelivery {
   webhookId: string;
   eventType: WebhookEventType;
   payload: Record<string, unknown>;
-  status: 'pending' | 'delivered' | 'failed' | 'dead_letter';
+  status: "pending" | "delivered" | "failed" | "dead_letter";
   attempts: number;
   maxAttempts: number;
   nextRetryAt: string | null;
@@ -128,7 +128,8 @@ interface DeadLetterEntry {
 // Rate limiter per subscriber
 // ---------------------------------------------------------------------------
 class SubscriberRateLimiter {
-  private windows: Map<string, { count: number; windowStart: number }> = new Map();
+  private windows: Map<string, { count: number; windowStart: number }> =
+    new Map();
   private readonly maxPerWindow: number;
   private readonly windowMs: number;
 
@@ -169,16 +170,19 @@ export class WebhookSystem {
 
   constructor() {
     this.rateLimiter = new SubscriberRateLimiter(100, 60000);
-    logger.info('WebhookSystem initialized');
+    logger.info("WebhookSystem initialized");
   }
 
   // -------------------------------------------------------------------------
   // Webhook registration
   // -------------------------------------------------------------------------
-  register(clientId: string, registration: WebhookRegistration): RegisteredWebhook {
+  register(
+    clientId: string,
+    registration: WebhookRegistration,
+  ): RegisteredWebhook {
     const parsed = WebhookRegistrationSchema.parse(registration);
     const id = crypto.randomUUID();
-    const secret = parsed.secret ?? crypto.randomBytes(32).toString('hex');
+    const secret = parsed.secret ?? crypto.randomBytes(32).toString("hex");
 
     const webhook: RegisteredWebhook = {
       id,
@@ -186,7 +190,7 @@ export class WebhookSystem {
       url: parsed.url,
       events: parsed.events,
       secret,
-      description: parsed.description ?? '',
+      description: parsed.description ?? "",
       active: parsed.active,
       metadata: parsed.metadata,
       batchDelivery: parsed.batchDelivery,
@@ -208,24 +212,34 @@ export class WebhookSystem {
     };
 
     this.webhooks.set(id, webhook);
-    logger.info('webhook_registered', { webhookId: id, clientId, url: parsed.url, events: parsed.events });
+    logger.info("webhook_registered", {
+      webhookId: id,
+      clientId,
+      url: parsed.url,
+      events: parsed.events,
+    });
     return webhook;
   }
 
   // -------------------------------------------------------------------------
   // Webhook update
   // -------------------------------------------------------------------------
-  update(webhookId: string, clientId: string, updates: WebhookUpdate): RegisteredWebhook {
+  update(
+    webhookId: string,
+    clientId: string,
+    updates: WebhookUpdate,
+  ): RegisteredWebhook {
     const webhook = this.webhooks.get(webhookId);
     if (!webhook || webhook.clientId !== clientId) {
-      throw new WebhookError('Webhook not found', 'WEBHOOK_NOT_FOUND', 404);
+      throw new WebhookError("Webhook not found", "WEBHOOK_NOT_FOUND", 404);
     }
 
     const parsed = WebhookUpdateSchema.parse(updates);
     if (parsed.url !== undefined) webhook.url = parsed.url;
     if (parsed.events !== undefined) webhook.events = parsed.events;
     if (parsed.active !== undefined) webhook.active = parsed.active;
-    if (parsed.description !== undefined) webhook.description = parsed.description;
+    if (parsed.description !== undefined)
+      webhook.description = parsed.description;
     if (parsed.metadata !== undefined) webhook.metadata = parsed.metadata;
     if (parsed.headers !== undefined) webhook.headers = parsed.headers;
     webhook.updatedAt = new Date().toISOString();
@@ -238,7 +252,7 @@ export class WebhookSystem {
     }
 
     this.webhooks.set(webhookId, webhook);
-    logger.info('webhook_updated', { webhookId, updates: Object.keys(parsed) });
+    logger.info("webhook_updated", { webhookId, updates: Object.keys(parsed) });
     return webhook;
   }
 
@@ -248,11 +262,11 @@ export class WebhookSystem {
   remove(webhookId: string, clientId: string): void {
     const webhook = this.webhooks.get(webhookId);
     if (!webhook || webhook.clientId !== clientId) {
-      throw new WebhookError('Webhook not found', 'WEBHOOK_NOT_FOUND', 404);
+      throw new WebhookError("Webhook not found", "WEBHOOK_NOT_FOUND", 404);
     }
     this.webhooks.delete(webhookId);
     this.batchBuffers.delete(webhookId);
-    logger.info('webhook_removed', { webhookId, clientId });
+    logger.info("webhook_removed", { webhookId, clientId });
   }
 
   // -------------------------------------------------------------------------
@@ -269,7 +283,11 @@ export class WebhookSystem {
   // -------------------------------------------------------------------------
   // Emit event — dispatches to all matching webhooks
   // -------------------------------------------------------------------------
-  async emit(eventType: WebhookEventType, data: Record<string, unknown>, source = 'zeroid'): Promise<string[]> {
+  async emit(
+    eventType: WebhookEventType,
+    data: Record<string, unknown>,
+    source = "zeroid",
+  ): Promise<string[]> {
     const event: WebhookEvent = {
       eventId: crypto.randomUUID(),
       eventType,
@@ -298,7 +316,7 @@ export class WebhookSystem {
       }
 
       if (!this.rateLimiter.allow(webhook.id)) {
-        logger.warn('webhook_rate_limited', { webhookId: webhook.id });
+        logger.warn("webhook_rate_limited", { webhookId: webhook.id });
         continue;
       }
 
@@ -306,14 +324,21 @@ export class WebhookSystem {
       deliveryIds.push(deliveryId);
     }
 
-    logger.info('event_emitted', { eventId: event.eventId, eventType, matchedWebhooks: matchingWebhooks.length });
+    logger.info("event_emitted", {
+      eventId: event.eventId,
+      eventType,
+      matchedWebhooks: matchingWebhooks.length,
+    });
     return deliveryIds;
   }
 
   // -------------------------------------------------------------------------
   // Deliver payload
   // -------------------------------------------------------------------------
-  private async deliver(webhook: RegisteredWebhook, event: WebhookEvent): Promise<string> {
+  private async deliver(
+    webhook: RegisteredWebhook,
+    event: WebhookEvent,
+  ): Promise<string> {
     const deliveryId = crypto.randomUUID();
     const payload = {
       id: event.eventId,
@@ -327,12 +352,12 @@ export class WebhookSystem {
     const signature = this.signPayload(body, webhook.secret);
 
     const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      'X-ZeroID-Signature': signature,
-      'X-ZeroID-Event': event.eventType,
-      'X-ZeroID-Delivery': deliveryId,
-      'X-ZeroID-Timestamp': event.timestamp,
-      'User-Agent': 'ZeroID-Webhook/1.0',
+      "Content-Type": "application/json",
+      "X-ZeroID-Signature": signature,
+      "X-ZeroID-Event": event.eventType,
+      "X-ZeroID-Delivery": deliveryId,
+      "X-ZeroID-Timestamp": event.timestamp,
+      "User-Agent": "ZeroID-Webhook/1.0",
       ...webhook.headers,
     };
 
@@ -341,7 +366,7 @@ export class WebhookSystem {
       webhookId: webhook.id,
       eventType: event.eventType,
       payload,
-      status: 'pending',
+      status: "pending",
       attempts: 0,
       maxAttempts: this.maxRetries,
       nextRetryAt: null,
@@ -356,20 +381,23 @@ export class WebhookSystem {
     return deliveryId;
   }
 
-  private async attemptDelivery(delivery: WebhookDelivery, webhook: RegisteredWebhook): Promise<void> {
+  private async attemptDelivery(
+    delivery: WebhookDelivery,
+    webhook: RegisteredWebhook,
+  ): Promise<void> {
     delivery.attempts++;
     const startTime = Date.now();
 
     try {
       const response = await fetch(delivery.request.url, {
-        method: 'POST',
+        method: "POST",
         headers: delivery.request.headers,
         body: delivery.request.body,
         signal: AbortSignal.timeout(30000),
       });
 
       const latencyMs = Date.now() - startTime;
-      const responseBody = await response.text().catch(() => '');
+      const responseBody = await response.text().catch(() => "");
 
       delivery.response = {
         statusCode: response.status,
@@ -378,16 +406,23 @@ export class WebhookSystem {
       };
 
       if (response.ok) {
-        delivery.status = 'delivered';
+        delivery.status = "delivered";
         delivery.completedAt = new Date().toISOString();
         this.updateHealth(webhook, true, response.status, latencyMs);
-        logger.info('webhook_delivered', { deliveryId: delivery.deliveryId, webhookId: webhook.id, latencyMs });
+        logger.info("webhook_delivered", {
+          deliveryId: delivery.deliveryId,
+          webhookId: webhook.id,
+          latencyMs,
+        });
       } else {
-        throw new Error(`HTTP ${response.status}: ${responseBody.substring(0, 200)}`);
+        throw new Error(
+          `HTTP ${response.status}: ${responseBody.substring(0, 200)}`,
+        );
       }
     } catch (error) {
       const latencyMs = Date.now() - startTime;
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      const errorMessage =
+        error instanceof Error ? error.message : "Unknown error";
 
       delivery.response = delivery.response ?? {
         statusCode: 0,
@@ -395,15 +430,20 @@ export class WebhookSystem {
         latencyMs,
       };
 
-      this.updateHealth(webhook, false, delivery.response.statusCode, latencyMs);
+      this.updateHealth(
+        webhook,
+        false,
+        delivery.response.statusCode,
+        latencyMs,
+      );
 
       if (delivery.attempts < delivery.maxAttempts) {
         // Exponential backoff: 1s, 2s, 4s, 8s, 16s
         const delayMs = Math.pow(2, delivery.attempts - 1) * 1000;
-        delivery.status = 'pending';
+        delivery.status = "pending";
         delivery.nextRetryAt = new Date(Date.now() + delayMs).toISOString();
 
-        logger.warn('webhook_delivery_failed_retrying', {
+        logger.warn("webhook_delivery_failed_retrying", {
           deliveryId: delivery.deliveryId,
           webhookId: webhook.id,
           attempt: delivery.attempts,
@@ -414,7 +454,7 @@ export class WebhookSystem {
         // Schedule retry
         setTimeout(() => this.attemptDelivery(delivery, webhook), delayMs);
       } else {
-        delivery.status = 'dead_letter';
+        delivery.status = "dead_letter";
         delivery.completedAt = new Date().toISOString();
         this.deadLetterQueue.push({
           deliveryId: delivery.deliveryId,
@@ -425,7 +465,7 @@ export class WebhookSystem {
           attempts: delivery.attempts,
         });
 
-        logger.error('webhook_delivery_exhausted', {
+        logger.error("webhook_delivery_exhausted", {
           deliveryId: delivery.deliveryId,
           webhookId: webhook.id,
           attempts: delivery.attempts,
@@ -448,10 +488,10 @@ export class WebhookSystem {
 
     const batchEvent: WebhookEvent = {
       eventId: crypto.randomUUID(),
-      eventType: 'credential.issued', // batch type
+      eventType: "credential.issued", // batch type
       timestamp: new Date().toISOString(),
       data: { batch: true, events: buffer, count: buffer.length },
-      source: 'zeroid-batch',
+      source: "zeroid-batch",
     };
 
     this.batchBuffers.set(webhookId, []);
@@ -461,10 +501,14 @@ export class WebhookSystem {
   // -------------------------------------------------------------------------
   // Event replay for recovery
   // -------------------------------------------------------------------------
-  async replayEvents(webhookId: string, since: string, until?: string): Promise<{ replayed: number; deliveryIds: string[] }> {
+  async replayEvents(
+    webhookId: string,
+    since: string,
+    until?: string,
+  ): Promise<{ replayed: number; deliveryIds: string[] }> {
     const webhook = this.webhooks.get(webhookId);
     if (!webhook) {
-      throw new WebhookError('Webhook not found', 'WEBHOOK_NOT_FOUND', 404);
+      throw new WebhookError("Webhook not found", "WEBHOOK_NOT_FOUND", 404);
     }
 
     const sinceTime = new Date(since).getTime();
@@ -472,7 +516,11 @@ export class WebhookSystem {
 
     const eventsToReplay = this.eventLog.filter((e) => {
       const eventTime = new Date(e.timestamp).getTime();
-      return eventTime >= sinceTime && eventTime <= untilTime && webhook.events.includes(e.eventType);
+      return (
+        eventTime >= sinceTime &&
+        eventTime <= untilTime &&
+        webhook.events.includes(e.eventType)
+      );
     });
 
     const deliveryIds: string[] = [];
@@ -481,7 +529,12 @@ export class WebhookSystem {
       deliveryIds.push(deliveryId);
     }
 
-    logger.info('events_replayed', { webhookId, replayed: eventsToReplay.length, since, until });
+    logger.info("events_replayed", {
+      webhookId,
+      replayed: eventsToReplay.length,
+      since,
+      until,
+    });
     return { replayed: eventsToReplay.length, deliveryIds };
   }
 
@@ -496,7 +549,9 @@ export class WebhookSystem {
   }
 
   async retryDeadLetter(deliveryId: string): Promise<boolean> {
-    const dlEntry = this.deadLetterQueue.find((e) => e.deliveryId === deliveryId);
+    const dlEntry = this.deadLetterQueue.find(
+      (e) => e.deliveryId === deliveryId,
+    );
     if (!dlEntry) return false;
 
     const delivery = this.deliveries.get(deliveryId);
@@ -504,9 +559,11 @@ export class WebhookSystem {
     if (!delivery || !webhook) return false;
 
     delivery.attempts = 0;
-    delivery.status = 'pending';
+    delivery.status = "pending";
     delivery.maxAttempts = this.maxRetries;
-    this.deadLetterQueue = this.deadLetterQueue.filter((e) => e.deliveryId !== deliveryId);
+    this.deadLetterQueue = this.deadLetterQueue.filter(
+      (e) => e.deliveryId !== deliveryId,
+    );
 
     await this.attemptDelivery(delivery, webhook);
     return true;
@@ -518,7 +575,10 @@ export class WebhookSystem {
   getDeliveries(webhookId: string, limit = 50): WebhookDelivery[] {
     return [...this.deliveries.values()]
       .filter((d) => d.webhookId === webhookId)
-      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      .sort(
+        (a, b) =>
+          new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+      )
       .slice(0, limit);
   }
 
@@ -529,7 +589,12 @@ export class WebhookSystem {
   // -------------------------------------------------------------------------
   // Health monitoring
   // -------------------------------------------------------------------------
-  private updateHealth(webhook: RegisteredWebhook, success: boolean, statusCode: number, latencyMs: number): void {
+  private updateHealth(
+    webhook: RegisteredWebhook,
+    success: boolean,
+    statusCode: number,
+    latencyMs: number,
+  ): void {
     const health = webhook.health;
     health.lastStatusCode = statusCode;
 
@@ -538,7 +603,8 @@ export class WebhookSystem {
       health.lastSuccessAt = new Date().toISOString();
       health.totalDelivered++;
       health.averageLatencyMs = Math.round(
-        (health.averageLatencyMs * (health.totalDelivered - 1) + latencyMs) / health.totalDelivered,
+        (health.averageLatencyMs * (health.totalDelivered - 1) + latencyMs) /
+          health.totalDelivered,
       );
     } else {
       health.consecutiveFailures++;
@@ -550,7 +616,10 @@ export class WebhookSystem {
         health.disabled = true;
         health.disabledReason = `Auto-disabled after ${health.consecutiveFailures} consecutive failures`;
         webhook.active = false;
-        logger.warn('webhook_auto_disabled', { webhookId: webhook.id, consecutiveFailures: health.consecutiveFailures });
+        logger.warn("webhook_auto_disabled", {
+          webhookId: webhook.id,
+          consecutiveFailures: health.consecutiveFailures,
+        });
       }
     }
   }
@@ -561,17 +630,25 @@ export class WebhookSystem {
   private signPayload(payload: string, secret: string): string {
     const timestamp = Math.floor(Date.now() / 1000).toString();
     const signaturePayload = `${timestamp}.${payload}`;
-    const hmac = crypto.createHmac('sha256', secret).update(signaturePayload).digest('hex');
+    const hmac = crypto
+      .createHmac("sha256", secret)
+      .update(signaturePayload)
+      .digest("hex");
     return `t=${timestamp},v1=${hmac}`;
   }
 
   // -------------------------------------------------------------------------
   // Verify signature (for clients)
   // -------------------------------------------------------------------------
-  static verifySignature(payload: string, signature: string, secret: string, toleranceSeconds = 300): boolean {
-    const parts = signature.split(',');
-    const timestampPart = parts.find((p) => p.startsWith('t='));
-    const sigPart = parts.find((p) => p.startsWith('v1='));
+  static verifySignature(
+    payload: string,
+    signature: string,
+    secret: string,
+    toleranceSeconds = 300,
+  ): boolean {
+    const parts = signature.split(",");
+    const timestampPart = parts.find((p) => p.startsWith("t="));
+    const sigPart = parts.find((p) => p.startsWith("v1="));
 
     if (!timestampPart || !sigPart) return false;
 
@@ -580,9 +657,13 @@ export class WebhookSystem {
 
     // Check tolerance
     const now = Math.floor(Date.now() / 1000);
-    if (Math.abs(now - parseInt(timestamp, 10)) > toleranceSeconds) return false;
+    if (Math.abs(now - parseInt(timestamp, 10)) > toleranceSeconds)
+      return false;
 
-    const expectedSig = crypto.createHmac('sha256', secret).update(`${timestamp}.${payload}`).digest('hex');
+    const expectedSig = crypto
+      .createHmac("sha256", secret)
+      .update(`${timestamp}.${payload}`)
+      .digest("hex");
     return crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expectedSig));
   }
 }
@@ -597,7 +678,7 @@ export class WebhookError extends Error {
     public readonly statusCode: number = 400,
   ) {
     super(message);
-    this.name = 'WebhookError';
+    this.name = "WebhookError";
   }
 }
 

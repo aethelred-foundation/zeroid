@@ -133,7 +133,7 @@ contract StdMathTest is Test {
         vm.assume(b != 0);
         uint256 manualDelta = a > b ? a - b : b - a;
 
-        uint256 manualPercentDelta = manualDelta * 1e18 / b;
+        uint256 manualPercentDelta = (manualDelta * 1e18) / b;
         uint256 percentDelta = stdMath.percentDelta(a, b);
 
         assertEq(percentDelta, manualPercentDelta);
@@ -182,7 +182,7 @@ contract StdMathTest is Test {
             manualDelta = absA + absB;
         }
 
-        uint256 manualPercentDelta = manualDelta * 1e18 / absB;
+        uint256 manualPercentDelta = (manualDelta * 1e18) / absB;
         uint256 percentDelta = stdMath.percentDelta(a, b);
 
         assertEq(percentDelta, manualPercentDelta);

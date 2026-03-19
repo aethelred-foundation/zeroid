@@ -1,6 +1,6 @@
-'use client';
+"use client";
 
-import React from 'react';
+import React from "react";
 
 // ============================================================
 // Base Skeleton
@@ -12,7 +12,7 @@ import React from 'react';
 
 export function SkeletonText({
   lines = 3,
-  className = '',
+  className = "",
 }: {
   lines?: number;
   className?: string;
@@ -23,7 +23,7 @@ export function SkeletonText({
         <div
           key={i}
           className="animate-pulse bg-zero-800 rounded h-3"
-          style={{ width: i === lines - 1 ? '60%' : i === 0 ? '90%' : '100%' }}
+          style={{ width: i === lines - 1 ? "60%" : i === 0 ? "90%" : "100%" }}
         />
       ))}
     </div>
@@ -36,7 +36,7 @@ export function SkeletonText({
 
 export function SkeletonAvatar({
   size = 40,
-  className = '',
+  className = "",
 }: {
   size?: number;
   className?: string;
@@ -55,8 +55,8 @@ export function SkeletonAvatar({
 // ============================================================
 
 export function SkeletonCard({
-  height = '12rem',
-  className = '',
+  height = "12rem",
+  className = "",
 }: {
   height?: string;
   className?: string;
@@ -89,7 +89,7 @@ export function SkeletonCard({
 export function SkeletonTable({
   rows = 5,
   columns = 4,
-  className = '',
+  className = "",
 }: {
   rows?: number;
   columns?: number;
@@ -133,7 +133,7 @@ export function SkeletonTable({
 // SkeletonMetric — Metric card placeholder
 // ============================================================
 
-export function SkeletonMetric({ className = '' }: { className?: string }) {
+export function SkeletonMetric({ className = "" }: { className?: string }) {
   return (
     <div
       className={`bg-zero-900 border border-zero-800 rounded-2xl p-5 ${className}`}
@@ -156,7 +156,7 @@ export function SkeletonMetric({ className = '' }: { className?: string }) {
 
 export function SkeletonBadge({
   width = 64,
-  className = '',
+  className = "",
 }: {
   width?: number;
   className?: string;
@@ -176,7 +176,7 @@ export function SkeletonBadge({
 
 export function SkeletonStats({
   count = 4,
-  className = '',
+  className = "",
 }: {
   count?: number;
   className?: string;
@@ -198,9 +198,9 @@ export function SkeletonStats({
 // ============================================================
 
 export function SkeletonLine({
-  width = '100%',
-  height = '1rem',
-  className = '',
+  width = "100%",
+  height = "1rem",
+  className = "",
 }: {
   width?: string;
   height?: string;

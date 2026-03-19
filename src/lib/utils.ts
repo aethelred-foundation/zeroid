@@ -6,12 +6,12 @@
  * hex utilities, and DID helpers.
  */
 
-import { clsx, type ClassValue } from 'clsx';
-import { twMerge } from 'tailwind-merge';
-import { format, formatDistanceToNow, fromUnixTime } from 'date-fns';
-import { keccak256, toHex, toBytes } from 'viem';
-import type { Address, Bytes32, DID, UnixTimestamp } from '@/types';
-import { DID_METHOD_PREFIX } from '@/config/constants';
+import { clsx, type ClassValue } from "clsx";
+import { twMerge } from "tailwind-merge";
+import { format, formatDistanceToNow, fromUnixTime } from "date-fns";
+import { keccak256, toHex, toBytes } from "viem";
+import type { Address, Bytes32, DID, UnixTimestamp } from "@/types";
+import { DID_METHOD_PREFIX } from "@/config/constants";
 
 // ============================================================================
 // Class Name Utility
@@ -46,7 +46,7 @@ export function formatAddress(
   prefixLen = 6,
   suffixLen = 4,
 ): string {
-  if (!address) return '';
+  if (!address) return "";
   if (address.length <= prefixLen + suffixLen + 3) return address;
   return `${address.slice(0, prefixLen)}...${address.slice(-suffixLen)}`;
 }
@@ -88,13 +88,13 @@ export function isValidBytes32(value: string): value is Bytes32 {
  */
 export function formatDate(
   timestamp: UnixTimestamp,
-  pattern = 'MMM d, yyyy',
+  pattern = "MMM d, yyyy",
 ): string {
-  if (!timestamp || timestamp <= 0) return 'N/A';
+  if (!timestamp || timestamp <= 0) return "N/A";
   try {
     return format(fromUnixTime(timestamp), pattern);
   } catch {
-    return 'Invalid date';
+    return "Invalid date";
   }
 }
 
@@ -115,11 +115,11 @@ export function formatDateTime(timestamp: UnixTimestamp): string {
  * @returns E.g. `3 hours ago`, `in 2 days`
  */
 export function formatRelativeTime(timestamp: UnixTimestamp): string {
-  if (!timestamp || timestamp <= 0) return 'N/A';
+  if (!timestamp || timestamp <= 0) return "N/A";
   try {
     return formatDistanceToNow(fromUnixTime(timestamp), { addSuffix: true });
   } catch {
-    return 'Unknown';
+    return "Unknown";
   }
 }
 
@@ -146,7 +146,7 @@ export function isExpired(expiresAt: UnixTimestamp): boolean {
  */
 export function createDID(
   identifier: string,
-  network: DID['network'] = 'mainnet',
+  network: DID["network"] = "mainnet",
 ): DID {
   const uri = `${DID_METHOD_PREFIX}:${network}:${identifier}`;
   const hash = keccak256(toBytes(uri)) as Bytes32;
@@ -160,12 +160,12 @@ export function createDID(
  * @returns Parsed DID or `null` if the URI is invalid
  */
 export function parseDID(uri: string): DID | null {
-  const parts = uri.split(':');
-  if (parts.length !== 4 || parts[0] !== 'did' || parts[1] !== 'aethelred') {
+  const parts = uri.split(":");
+  if (parts.length !== 4 || parts[0] !== "did" || parts[1] !== "aethelred") {
     return null;
   }
-  const network = parts[2] as DID['network'];
-  if (!['mainnet', 'testnet', 'devnet'].includes(network)) {
+  const network = parts[2] as DID["network"];
+  if (!["mainnet", "testnet", "devnet"].includes(network)) {
     return null;
   }
   const identifier = parts[3];
@@ -193,9 +193,10 @@ export function hashDID(uri: string): Bytes32 {
  */
 export function formatNumber(n: number, decimals = 0): string {
   if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(2)}B`;
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(decimals > 0 ? decimals : 1)}M`;
+  if (n >= 1_000_000)
+    return `${(n / 1_000_000).toFixed(decimals > 0 ? decimals : 1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(decimals > 0 ? decimals : 1)}K`;
-  return n.toFixed(decimals).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  return n.toFixed(decimals).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 }
 
 /**
@@ -307,7 +308,7 @@ export async function withRetry<T>(
 export function withTimeout<T>(
   promise: Promise<T>,
   timeoutMs: number,
-  message = 'Operation timed out',
+  message = "Operation timed out",
 ): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(message)), timeoutMs);

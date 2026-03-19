@@ -5,10 +5,10 @@
  * selecting attributes for selective disclosure, and viewing history.
  */
 
-import { useAccount } from 'wagmi';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { toast } from 'sonner';
-import { apiClient } from '@/lib/api/client';
+import { useAccount } from "wagmi";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
+import { apiClient } from "@/lib/api/client";
 import type {
   VerificationRequest,
   VerificationResponse,
@@ -16,7 +16,7 @@ import type {
   AttributeSelection,
   VerificationStatus,
   CreateVerificationParams,
-} from '@/types';
+} from "@/types";
 
 // ---------------------------------------------------------------------------
 // Create a verification request (as a verifier)
@@ -29,7 +29,7 @@ export function useCreateVerificationRequest() {
   return useMutation({
     mutationFn: async (params: CreateVerificationParams) => {
       const response = await apiClient.post<{ requestId: string }>(
-        '/v1/verification/request',
+        "/v1/verification/request",
         {
           verifierAddress: address,
           subjectDid: params.subjectDid,
@@ -43,13 +43,13 @@ export function useCreateVerificationRequest() {
       return response;
     },
     onSuccess: (data) => {
-      toast.success('Verification request created', {
+      toast.success("Verification request created", {
         description: `Request ID: ${data.requestId.slice(0, 12)}...`,
       });
-      queryClient.invalidateQueries({ queryKey: ['verificationHistory'] });
+      queryClient.invalidateQueries({ queryKey: ["verificationHistory"] });
     },
     onError: (err: Error) => {
-      toast.error('Failed to create verification request', {
+      toast.error("Failed to create verification request", {
         description: err.message,
       });
     },
@@ -81,12 +81,12 @@ export function useRespondToVerification() {
       return response;
     },
     onSuccess: () => {
-      toast.success('Verification response submitted');
-      queryClient.invalidateQueries({ queryKey: ['verificationHistory'] });
-      queryClient.invalidateQueries({ queryKey: ['pendingVerifications'] });
+      toast.success("Verification response submitted");
+      queryClient.invalidateQueries({ queryKey: ["verificationHistory"] });
+      queryClient.invalidateQueries({ queryKey: ["pendingVerifications"] });
     },
     onError: (err: Error) => {
-      toast.error('Verification response failed', { description: err.message });
+      toast.error("Verification response failed", { description: err.message });
     },
   });
 }
@@ -99,7 +99,7 @@ export function useSelectAttributes(requestId: string | undefined) {
   const { address } = useAccount();
 
   return useQuery({
-    queryKey: ['attributeSelection', requestId, address],
+    queryKey: ["attributeSelection", requestId, address],
     queryFn: async () => {
       const request = await apiClient.get<VerificationRequest>(
         `/v1/verification/${requestId}`,
@@ -107,7 +107,7 @@ export function useSelectAttributes(requestId: string | undefined) {
 
       const userCredentials = await apiClient.get<AttributeSelection[]>(
         `/v1/credentials/${address}/attributes`,
-        { params: { schemaIds: request.requiredCredentials.join(',') } },
+        { params: { schemaIds: request.requiredCredentials.join(",") } },
       );
 
       return {
@@ -129,7 +129,7 @@ export function usePendingVerifications() {
   const { address } = useAccount();
 
   return useQuery({
-    queryKey: ['pendingVerifications', address],
+    queryKey: ["pendingVerifications", address],
     queryFn: () =>
       apiClient.get<VerificationRequest[]>(
         `/v1/verification/pending/${address}`,
@@ -166,12 +166,12 @@ export function useVerificationHistory(
 ) {
   const { address } = useAccount();
   const params = new URLSearchParams();
-  if (status) params.set('status', status);
-  params.set('page', String(page));
-  params.set('pageSize', String(pageSize));
+  if (status) params.set("status", status);
+  params.set("page", String(page));
+  params.set("pageSize", String(pageSize));
 
   return useQuery({
-    queryKey: ['verificationHistory', address, status, page],
+    queryKey: ["verificationHistory", address, status, page],
     queryFn: () =>
       apiClient.get<{ items: VerificationHistory[]; total: number }>(
         `/v1/verification/history/${address}?${params.toString()}`,

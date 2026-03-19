@@ -6,7 +6,7 @@
  * modules and the ZeroID API client.
  */
 
-'use client';
+"use client";
 
 import React, {
   createContext,
@@ -16,7 +16,7 @@ import React, {
   useMemo,
   useRef,
   useState,
-} from 'react';
+} from "react";
 
 import type {
   ProofState,
@@ -25,14 +25,11 @@ import type {
   ProofVerification,
   VerificationResult,
   Bytes32,
-} from '@/types';
-import {
-  generateProof,
-  type ProofProgressCallback,
-} from '@/lib/zk/prover';
-import { verifyProofLocally } from '@/lib/zk/verifier';
-import { apiClient } from '@/lib/api/client';
-import { useIdentity } from '@/contexts/IdentityContext';
+} from "@/types";
+import { generateProof, type ProofProgressCallback } from "@/lib/zk/prover";
+import { verifyProofLocally } from "@/lib/zk/verifier";
+import { apiClient } from "@/lib/api/client";
+import { useIdentity } from "@/contexts/IdentityContext";
 
 // ============================================================================
 // Context Value Type
@@ -116,7 +113,7 @@ export function ProofProvider({ children }: { children: React.ReactNode }) {
     if (!did || !identity.isRegistered) return;
 
     try {
-      const requests = await apiClient.listProofRequests(did.hash, '');
+      const requests = await apiClient.listProofRequests(did.hash, "");
       setState((prev) => ({ ...prev, pendingRequests: requests }));
     } catch {
       // Silently ignore — requests will be retried on next poll
@@ -152,7 +149,7 @@ export function ProofProvider({ children }: { children: React.ReactNode }) {
       publicInputs: Record<string, string>,
     ): Promise<ZKProof> => {
       if (generatingRef.current) {
-        throw new Error('A proof is already being generated. Please wait.');
+        throw new Error("A proof is already being generated. Please wait.");
       }
 
       generatingRef.current = true;
@@ -185,7 +182,7 @@ export function ProofProvider({ children }: { children: React.ReactNode }) {
         return proof;
       } catch (error) {
         const message =
-          error instanceof Error ? error.message : 'Proof generation failed';
+          error instanceof Error ? error.message : "Proof generation failed";
         setState((prev) => ({
           ...prev,
           isGenerating: false,
@@ -227,7 +224,7 @@ export function ProofProvider({ children }: { children: React.ReactNode }) {
         return result;
       } catch (error) {
         const message =
-          error instanceof Error ? error.message : 'Local verification failed';
+          error instanceof Error ? error.message : "Local verification failed";
         setState((prev) => ({ ...prev, error: message }));
         throw error;
       }
@@ -242,7 +239,7 @@ export function ProofProvider({ children }: { children: React.ReactNode }) {
   const submitProof = useCallback(
     async (proof: ZKProof): Promise<ProofVerification> => {
       try {
-        const result = await apiClient.submitProof(proof, '');
+        const result = await apiClient.submitProof(proof, "");
 
         setState((prev) => ({
           ...prev,
@@ -263,7 +260,7 @@ export function ProofProvider({ children }: { children: React.ReactNode }) {
         return result;
       } catch (error) {
         const message =
-          error instanceof Error ? error.message : 'Proof submission failed';
+          error instanceof Error ? error.message : "Proof submission failed";
         setState((prev) => ({ ...prev, error: message }));
         throw error;
       }
@@ -297,7 +294,7 @@ export function ProofProvider({ children }: { children: React.ReactNode }) {
       const localResult = await verifyProofLocally(proof);
       if (!localResult.valid) {
         throw new Error(
-          `Generated proof failed local verification: ${localResult.error || 'unknown reason'}`,
+          `Generated proof failed local verification: ${localResult.error || "unknown reason"}`,
         );
       }
 
@@ -305,7 +302,7 @@ export function ProofProvider({ children }: { children: React.ReactNode }) {
       const result = await apiClient.respondToVerification(
         requestId,
         { consent: true, proof },
-        '',
+        "",
       );
 
       // Remove the fulfilled request from pending
@@ -390,7 +387,7 @@ export function ProofProvider({ children }: { children: React.ReactNode }) {
 export function useProofs(): ProofContextValue {
   const ctx = useContext(ProofContext);
   if (!ctx) {
-    throw new Error('useProofs must be used within a <ProofProvider>');
+    throw new Error("useProofs must be used within a <ProofProvider>");
   }
   return ctx;
 }

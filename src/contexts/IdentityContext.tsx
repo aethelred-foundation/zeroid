@@ -7,7 +7,7 @@
  * for backend communication.
  */
 
-'use client';
+"use client";
 
 import React, {
   createContext,
@@ -17,9 +17,9 @@ import React, {
   useMemo,
   useRef,
   useState,
-} from 'react';
+} from "react";
 
-import { useAccount } from 'wagmi';
+import { useAccount } from "wagmi";
 
 import type {
   IdentityState,
@@ -29,10 +29,10 @@ import type {
   DID,
   Bytes32,
   Address,
-} from '@/types';
-import { apiClient } from '@/lib/api/client';
-import { createDID } from '@/lib/utils';
-import { CREDENTIAL_POLL_INTERVAL_MS } from '@/config/constants';
+} from "@/types";
+import { apiClient } from "@/lib/api/client";
+import { createDID } from "@/lib/utils";
+import { CREDENTIAL_POLL_INTERVAL_MS } from "@/config/constants";
 
 // ============================================================================
 // Context Value Type
@@ -80,7 +80,9 @@ const DEFAULT_IDENTITY_STATE: IdentityState = {
 // Context
 // ============================================================================
 
-const IdentityContext = createContext<IdentityContextValue | undefined>(undefined);
+const IdentityContext = createContext<IdentityContextValue | undefined>(
+  undefined,
+);
 
 // ============================================================================
 // Provider
@@ -100,7 +102,8 @@ export function IdentityProvider({ children }: { children: React.ReactNode }) {
 
   const did = useMemo<DID | null>(() => {
     if (!address) return null;
-    const network = (process.env.NEXT_PUBLIC_CHAIN_ENV || 'testnet') as DID['network'];
+    const network = (process.env.NEXT_PUBLIC_CHAIN_ENV ||
+      "testnet") as DID["network"];
     return createDID(address.toLowerCase(), network);
   }, [address]);
 
@@ -116,7 +119,7 @@ export function IdentityProvider({ children }: { children: React.ReactNode }) {
       // 404 means the user is not registered yet — not an error
       if (
         error instanceof Error &&
-        'statusCode' in error &&
+        "statusCode" in error &&
         (error as { statusCode: number }).statusCode === 404
       ) {
         return null;
@@ -132,11 +135,7 @@ export function IdentityProvider({ children }: { children: React.ReactNode }) {
   const fetchCredentials = useCallback(
     async (didHash: Bytes32): Promise<Credential[]> => {
       try {
-        const result = await apiClient.listCredentials(
-          didHash,
-          1,
-          100,
-        );
+        const result = await apiClient.listCredentials(didHash, 1, 100);
         return result.items;
       } catch {
         return [];
@@ -197,7 +196,8 @@ export function IdentityProvider({ children }: { children: React.ReactNode }) {
         setState((prev) => ({
           ...prev,
           isLoading: false,
-          error: error instanceof Error ? error.message : 'Failed to load identity',
+          error:
+            error instanceof Error ? error.message : "Failed to load identity",
         }));
       }
     }
@@ -236,15 +236,13 @@ export function IdentityProvider({ children }: { children: React.ReactNode }) {
   const registerIdentity = useCallback(
     async (recoveryHash: Bytes32) => {
       if (!did) {
-        throw new Error('Wallet must be connected to register');
+        throw new Error("Wallet must be connected to register");
       }
 
       setState((prev) => ({ ...prev, isLoading: true, error: null }));
 
       try {
-        await apiClient.registerIdentity(
-          { didUri: did.uri, recoveryHash },
-        );
+        await apiClient.registerIdentity({ didUri: did.uri, recoveryHash });
 
         // Re-fetch the profile after registration
         const profile = await fetchProfile(address as Address);
@@ -260,7 +258,7 @@ export function IdentityProvider({ children }: { children: React.ReactNode }) {
         setState((prev) => ({
           ...prev,
           isLoading: false,
-          error: error instanceof Error ? error.message : 'Registration failed',
+          error: error instanceof Error ? error.message : "Registration failed",
         }));
         throw error;
       }
@@ -281,7 +279,8 @@ export function IdentityProvider({ children }: { children: React.ReactNode }) {
     } catch (error) {
       setState((prev) => ({
         ...prev,
-        error: error instanceof Error ? error.message : 'Failed to refresh profile',
+        error:
+          error instanceof Error ? error.message : "Failed to refresh profile",
       }));
     }
   }, [address, fetchProfile]);
@@ -340,7 +339,9 @@ export function IdentityProvider({ children }: { children: React.ReactNode }) {
   );
 
   return (
-    <IdentityContext.Provider value={value}>{children}</IdentityContext.Provider>
+    <IdentityContext.Provider value={value}>
+      {children}
+    </IdentityContext.Provider>
   );
 }
 
@@ -356,7 +357,7 @@ export function IdentityProvider({ children }: { children: React.ReactNode }) {
 export function useIdentity(): IdentityContextValue {
   const ctx = useContext(IdentityContext);
   if (!ctx) {
-    throw new Error('useIdentity must be used within an <IdentityProvider>');
+    throw new Error("useIdentity must be used within an <IdentityProvider>");
   }
   return ctx;
 }

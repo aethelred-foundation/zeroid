@@ -88,7 +88,7 @@ contract StdChainsTest is Test {
         // We deploy a mock to properly test the revert.
         StdChainsMock stdChainsMock = new StdChainsMock();
 
-        vm.expectRevert("StdChains getChain(string): Chain with alias \"does_not_exist\" not found.");
+        vm.expectRevert('StdChains getChain(string): Chain with alias "does_not_exist" not found.');
         stdChainsMock.exposed_getChain("does_not_exist");
     }
 
@@ -96,7 +96,7 @@ contract StdChainsTest is Test {
         // We deploy a mock to properly test the revert.
         StdChainsMock stdChainsMock = new StdChainsMock();
 
-        vm.expectRevert("StdChains setChain(string,ChainData): Chain ID 31337 already used by \"anvil\".");
+        vm.expectRevert('StdChains setChain(string,ChainData): Chain ID 31337 already used by "anvil".');
         stdChainsMock.exposed_setChain("anvil2", ChainData("Anvil", 31337, "URL"));
     }
 
@@ -183,7 +183,7 @@ contract StdChainsTest is Test {
         // We deploy a mock to properly test the revert.
         StdChainsMock stdChainsMock = new StdChainsMock();
 
-        vm.expectRevert("StdChains getChain(string): Chain with alias \"no_such_alias\" not found.");
+        vm.expectRevert('StdChains getChain(string): Chain with alias "no_such_alias" not found.');
         stdChainsMock.exposed_getChain("no_such_alias");
     }
 

@@ -6,12 +6,12 @@
  * cleanup when identity is cleared, and the useProofs guard for missing provider.
  */
 
-import React from 'react';
-import { renderHook, act, waitFor } from '@testing-library/react';
-import { ProofProvider, useProofs } from '@/contexts/ProofContext';
-import { apiClient } from '@/lib/api/client';
-import { generateProof } from '@/lib/zk/prover';
-import { verifyProofLocally } from '@/lib/zk/verifier';
+import React from "react";
+import { renderHook, act, waitFor } from "@testing-library/react";
+import { ProofProvider, useProofs } from "@/contexts/ProofContext";
+import { apiClient } from "@/lib/api/client";
+import { generateProof } from "@/lib/zk/prover";
+import { verifyProofLocally } from "@/lib/zk/verifier";
 import type {
   ZKProof,
   ProofRequest,
@@ -19,7 +19,7 @@ import type {
   VerificationResult,
   Bytes32,
   DID,
-} from '@/types';
+} from "@/types";
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -43,11 +43,11 @@ const mockIdentity = {
   clearIdentity: jest.fn(),
 };
 
-jest.mock('@/contexts/IdentityContext', () => ({
+jest.mock("@/contexts/IdentityContext", () => ({
   useIdentity: () => mockIdentity,
 }));
 
-jest.mock('@/lib/api/client', () => ({
+jest.mock("@/lib/api/client", () => ({
   apiClient: {
     listProofRequests: jest.fn(),
     submitProof: jest.fn(),
@@ -55,11 +55,11 @@ jest.mock('@/lib/api/client', () => ({
   },
 }));
 
-jest.mock('@/lib/zk/prover', () => ({
+jest.mock("@/lib/zk/prover", () => ({
   generateProof: jest.fn(),
 }));
 
-jest.mock('@/lib/zk/verifier', () => ({
+jest.mock("@/lib/zk/verifier", () => ({
   verifyProofLocally: jest.fn(),
 }));
 
@@ -68,43 +68,43 @@ jest.mock('@/lib/zk/verifier', () => ({
 // ---------------------------------------------------------------------------
 
 const mockDID: DID = {
-  uri: 'did:aethelred:testnet:0xabc',
-  identifier: '0xabc',
-  hash: '0xdeadbeef00000000000000000000000000000000000000000000000000000001' as Bytes32,
-  network: 'testnet',
+  uri: "did:aethelred:testnet:0xabc",
+  identifier: "0xabc",
+  hash: "0xdeadbeef00000000000000000000000000000000000000000000000000000001" as Bytes32,
+  network: "testnet",
 };
 
 const mockCircuitId =
-  '0xage0000000000000000000000000000000000000000000000000000000000001' as Bytes32;
+  "0xage0000000000000000000000000000000000000000000000000000000000001" as Bytes32;
 
-const makeZKProof = (id = 'proof-1'): ZKProof => ({
+const makeZKProof = (id = "proof-1"): ZKProof => ({
   id,
   circuitId: mockCircuitId,
-  circuitName: 'Age Proof',
-  proofSystem: 'groth16' as const,
+  circuitName: "Age Proof",
+  proofSystem: "groth16" as const,
   proof: {
-    a: ['1', '2'],
+    a: ["1", "2"],
     b: [
-      ['3', '4'],
-      ['5', '6'],
+      ["3", "4"],
+      ["5", "6"],
     ],
-    c: ['7', '8'],
+    c: ["7", "8"],
   },
-  publicInputs: ['18', '1700000000'],
-  publicOutputs: ['1', '1'],
+  publicInputs: ["18", "1700000000"],
+  publicOutputs: ["1", "1"],
   generatedAt: 1700000000,
   validityDuration: 86400,
   proofHash:
-    '0xproof000000000000000000000000000000000000000000000000000000000001' as Bytes32,
+    "0xproof000000000000000000000000000000000000000000000000000000000001" as Bytes32,
 });
 
-const makeProofRequest = (id = 'req-1'): ProofRequest => ({
+const makeProofRequest = (id = "req-1"): ProofRequest => ({
   id,
   circuitId: mockCircuitId,
-  circuitName: 'Age Proof',
-  publicInputs: { ageThresholdYears: '18', currentTimestamp: '1700000000' },
+  circuitName: "Age Proof",
+  publicInputs: { ageThresholdYears: "18", currentTimestamp: "1700000000" },
   verifierDid: mockDID,
-  purpose: 'Age verification',
+  purpose: "Age verification",
   expiresAt: 1800000000,
   fulfilled: false,
   createdAt: 1700000000,
@@ -145,18 +145,18 @@ afterEach(() => {
 // Tests
 // ---------------------------------------------------------------------------
 
-describe('ProofContext', () => {
+describe("ProofContext", () => {
   // =========================================================================
   // useProofs guard
   // =========================================================================
 
-  describe('useProofs() outside provider', () => {
-    it('throws when used without ProofProvider', () => {
-      const spy = jest.spyOn(console, 'error').mockImplementation(() => {});
+  describe("useProofs() outside provider", () => {
+    it("throws when used without ProofProvider", () => {
+      const spy = jest.spyOn(console, "error").mockImplementation(() => {});
 
       expect(() => {
         renderHook(() => useProofs());
-      }).toThrow('useProofs must be used within a <ProofProvider>');
+      }).toThrow("useProofs must be used within a <ProofProvider>");
 
       spy.mockRestore();
     });
@@ -166,8 +166,8 @@ describe('ProofContext', () => {
   // Default state
   // =========================================================================
 
-  describe('default state', () => {
-    it('provides default proof state', () => {
+  describe("default state", () => {
+    it("provides default proof state", () => {
       const { result } = renderHook(() => useProofs(), { wrapper });
 
       expect(result.current.proofState).toEqual({
@@ -185,9 +185,9 @@ describe('ProofContext', () => {
   // Proof request polling
   // =========================================================================
 
-  describe('proof request polling', () => {
-    it('polls for proof requests when registered', async () => {
-      const requests = [makeProofRequest('req-1'), makeProofRequest('req-2')];
+  describe("proof request polling", () => {
+    it("polls for proof requests when registered", async () => {
+      const requests = [makeProofRequest("req-1"), makeProofRequest("req-2")];
       (apiClient.listProofRequests as jest.Mock).mockResolvedValue(requests);
 
       mockIdentity.identity.isRegistered = true;
@@ -211,7 +211,7 @@ describe('ProofContext', () => {
       expect(apiClient.listProofRequests).toHaveBeenCalled();
     });
 
-    it('does not poll when identity is not registered', async () => {
+    it("does not poll when identity is not registered", async () => {
       mockIdentity.identity.isRegistered = false;
       mockIdentity.did = null;
 
@@ -224,9 +224,9 @@ describe('ProofContext', () => {
       expect(apiClient.listProofRequests).not.toHaveBeenCalled();
     });
 
-    it('silently handles poll errors', async () => {
+    it("silently handles poll errors", async () => {
       (apiClient.listProofRequests as jest.Mock).mockRejectedValue(
-        new Error('Poll error'),
+        new Error("Poll error"),
       );
 
       mockIdentity.identity.isRegistered = true;
@@ -247,8 +247,8 @@ describe('ProofContext', () => {
   // State cleanup when identity is cleared
   // =========================================================================
 
-  describe('state cleanup', () => {
-    it('clears proof state when identity.isRegistered becomes false', async () => {
+  describe("state cleanup", () => {
+    it("clears proof state when identity.isRegistered becomes false", async () => {
       (apiClient.listProofRequests as jest.Mock).mockResolvedValue([
         makeProofRequest(),
       ]);
@@ -278,8 +278,8 @@ describe('ProofContext', () => {
   // generateZKProof
   // =========================================================================
 
-  describe('generateZKProof', () => {
-    it('generates a proof and updates state', async () => {
+  describe("generateZKProof", () => {
+    it("generates a proof and updates state", async () => {
       const proof = makeZKProof();
       (generateProof as jest.Mock).mockResolvedValue(proof);
 
@@ -289,8 +289,8 @@ describe('ProofContext', () => {
       await act(async () => {
         resolvedProof = await result.current.generateZKProof(
           mockCircuitId,
-          { dateOfBirth: '946684800' },
-          { ageThresholdYears: '18' },
+          { dateOfBirth: "946684800" },
+          { ageThresholdYears: "18" },
         );
       });
 
@@ -300,9 +300,9 @@ describe('ProofContext', () => {
       expect(result.current.proofState.generationProgress).toBe(100);
     });
 
-    it('sets error state on generation failure', async () => {
+    it("sets error state on generation failure", async () => {
       (generateProof as jest.Mock).mockRejectedValue(
-        new Error('Witness computation failed'),
+        new Error("Witness computation failed"),
       );
 
       const { result } = renderHook(() => useProofs(), { wrapper });
@@ -312,8 +312,8 @@ describe('ProofContext', () => {
         try {
           await result.current.generateZKProof(
             mockCircuitId,
-            { dateOfBirth: '946684800' },
-            { ageThresholdYears: '18' },
+            { dateOfBirth: "946684800" },
+            { ageThresholdYears: "18" },
           );
         } catch (e) {
           caught = e;
@@ -321,15 +321,15 @@ describe('ProofContext', () => {
       });
 
       expect(caught).toBeInstanceOf(Error);
-      expect((caught as Error).message).toBe('Witness computation failed');
+      expect((caught as Error).message).toBe("Witness computation failed");
       expect(result.current.proofState.isGenerating).toBe(false);
       expect(result.current.proofState.generationProgress).toBe(0);
       expect(result.current.proofState.error).toBe(
-        'Witness computation failed',
+        "Witness computation failed",
       );
     });
 
-    it('prevents concurrent proof generation', async () => {
+    it("prevents concurrent proof generation", async () => {
       let resolveProof: (p: ZKProof) => void;
       (generateProof as jest.Mock).mockReturnValue(
         new Promise<ZKProof>((resolve) => {
@@ -343,8 +343,8 @@ describe('ProofContext', () => {
       const firstGeneration = act(() =>
         result.current.generateZKProof(
           mockCircuitId,
-          { dateOfBirth: '946684800' },
-          { ageThresholdYears: '18' },
+          { dateOfBirth: "946684800" },
+          { ageThresholdYears: "18" },
         ),
       );
 
@@ -353,11 +353,11 @@ describe('ProofContext', () => {
         act(() =>
           result.current.generateZKProof(
             mockCircuitId,
-            { dateOfBirth: '946684800' },
-            { ageThresholdYears: '18' },
+            { dateOfBirth: "946684800" },
+            { ageThresholdYears: "18" },
           ),
         ),
-      ).rejects.toThrow('A proof is already being generated');
+      ).rejects.toThrow("A proof is already being generated");
 
       // Clean up
       await act(async () => {
@@ -366,10 +366,10 @@ describe('ProofContext', () => {
       await firstGeneration;
     });
 
-    it('reports progress via onProgress callback in generateProof', async () => {
+    it("reports progress via onProgress callback in generateProof", async () => {
       (generateProof as jest.Mock).mockImplementation(
         async (_cid, _priv, _pub, onProgress) => {
-          onProgress?.(50, 'computing');
+          onProgress?.(50, "computing");
           return makeZKProof();
         },
       );
@@ -379,8 +379,8 @@ describe('ProofContext', () => {
       await act(async () => {
         await result.current.generateZKProof(
           mockCircuitId,
-          { dateOfBirth: '946684800' },
-          { ageThresholdYears: '18' },
+          { dateOfBirth: "946684800" },
+          { ageThresholdYears: "18" },
         );
       });
 
@@ -388,26 +388,22 @@ describe('ProofContext', () => {
       expect(result.current.proofState.generationProgress).toBe(100);
     });
 
-    it('handles non-Error thrown values', async () => {
-      (generateProof as jest.Mock).mockRejectedValue('string error');
+    it("handles non-Error thrown values", async () => {
+      (generateProof as jest.Mock).mockRejectedValue("string error");
 
       const { result } = renderHook(() => useProofs(), { wrapper });
 
       let caught: unknown;
       await act(async () => {
         try {
-          await result.current.generateZKProof(
-            mockCircuitId,
-            {},
-            {},
-          );
+          await result.current.generateZKProof(mockCircuitId, {}, {});
         } catch (e) {
           caught = e;
         }
       });
 
-      expect(caught).toBe('string error');
-      expect(result.current.proofState.error).toBe('Proof generation failed');
+      expect(caught).toBe("string error");
+      expect(result.current.proofState.error).toBe("Proof generation failed");
     });
   });
 
@@ -415,8 +411,8 @@ describe('ProofContext', () => {
   // verifyLocally
   // =========================================================================
 
-  describe('verifyLocally', () => {
-    it('verifies proof locally and stores result', async () => {
+  describe("verifyLocally", () => {
+    it("verifies proof locally and stores result", async () => {
       const proof = makeZKProof();
       const verificationResult: ProofVerification = {
         valid: true,
@@ -436,15 +432,15 @@ describe('ProofContext', () => {
 
       expect(verification).toEqual(verificationResult);
       expect(result.current.proofState.verificationResults.length).toBe(1);
-      expect(
-        result.current.proofState.verificationResults[0].verified,
-      ).toBe(true);
+      expect(result.current.proofState.verificationResults[0].verified).toBe(
+        true,
+      );
     });
 
-    it('handles verification failure', async () => {
+    it("handles verification failure", async () => {
       const proof = makeZKProof();
       (verifyProofLocally as jest.Mock).mockRejectedValue(
-        new Error('Verification module error'),
+        new Error("Verification module error"),
       );
 
       const { result } = renderHook(() => useProofs(), { wrapper });
@@ -459,13 +455,11 @@ describe('ProofContext', () => {
       });
 
       expect(caught).toBeInstanceOf(Error);
-      expect((caught as Error).message).toBe('Verification module error');
-      expect(result.current.proofState.error).toBe(
-        'Verification module error',
-      );
+      expect((caught as Error).message).toBe("Verification module error");
+      expect(result.current.proofState.error).toBe("Verification module error");
     });
 
-    it('handles non-Error thrown values in local verify', async () => {
+    it("handles non-Error thrown values in local verify", async () => {
       const proof = makeZKProof();
       (verifyProofLocally as jest.Mock).mockRejectedValue(42);
 
@@ -481,9 +475,7 @@ describe('ProofContext', () => {
       });
 
       expect(caught).toBe(42);
-      expect(result.current.proofState.error).toBe(
-        'Local verification failed',
-      );
+      expect(result.current.proofState.error).toBe("Local verification failed");
     });
   });
 
@@ -491,15 +483,15 @@ describe('ProofContext', () => {
   // submitProof
   // =========================================================================
 
-  describe('submitProof', () => {
-    it('submits proof to backend and stores result', async () => {
+  describe("submitProof", () => {
+    it("submits proof to backend and stores result", async () => {
       const proof = makeZKProof();
       const backendResult: ProofVerification = {
         valid: true,
         proofHash: proof.proofHash,
         circuitId: proof.circuitId,
         verifiedAt: 1700000000,
-        txHash: '0xtx123',
+        txHash: "0xtx123",
       };
 
       (apiClient.submitProof as jest.Mock).mockResolvedValue(backendResult);
@@ -515,10 +507,10 @@ describe('ProofContext', () => {
       expect(result.current.proofState.verificationResults.length).toBe(1);
     });
 
-    it('sets error on submission failure', async () => {
+    it("sets error on submission failure", async () => {
       const proof = makeZKProof();
       (apiClient.submitProof as jest.Mock).mockRejectedValue(
-        new Error('Backend rejected proof'),
+        new Error("Backend rejected proof"),
       );
 
       const { result } = renderHook(() => useProofs(), { wrapper });
@@ -533,13 +525,13 @@ describe('ProofContext', () => {
       });
 
       expect(caught).toBeInstanceOf(Error);
-      expect((caught as Error).message).toBe('Backend rejected proof');
-      expect(result.current.proofState.error).toBe('Backend rejected proof');
+      expect((caught as Error).message).toBe("Backend rejected proof");
+      expect(result.current.proofState.error).toBe("Backend rejected proof");
     });
 
-    it('handles non-Error submission failure', async () => {
+    it("handles non-Error submission failure", async () => {
       const proof = makeZKProof();
-      (apiClient.submitProof as jest.Mock).mockRejectedValue('network down');
+      (apiClient.submitProof as jest.Mock).mockRejectedValue("network down");
 
       const { result } = renderHook(() => useProofs(), { wrapper });
 
@@ -552,8 +544,8 @@ describe('ProofContext', () => {
         }
       });
 
-      expect(caught).toBe('network down');
-      expect(result.current.proofState.error).toBe('Proof submission failed');
+      expect(caught).toBe("network down");
+      expect(result.current.proofState.error).toBe("Proof submission failed");
     });
   });
 
@@ -561,12 +553,12 @@ describe('ProofContext', () => {
   // fulfillProofRequest
   // =========================================================================
 
-  describe('fulfillProofRequest', () => {
-    it('generates proof, verifies locally, and submits response', async () => {
-      const request = makeProofRequest('req-1');
+  describe("fulfillProofRequest", () => {
+    it("generates proof, verifies locally, and submits response", async () => {
+      const request = makeProofRequest("req-1");
       const proof = makeZKProof();
       const verifyResult: VerificationResult = {
-        requestId: 'req-1',
+        requestId: "req-1",
         verified: true,
         proof,
         attributeResults: [],
@@ -592,8 +584,8 @@ describe('ProofContext', () => {
 
       let fulfillResult: VerificationResult | undefined;
       await act(async () => {
-        fulfillResult = await result.current.fulfillProofRequest('req-1', {
-          dateOfBirth: '946684800',
+        fulfillResult = await result.current.fulfillProofRequest("req-1", {
+          dateOfBirth: "946684800",
         });
       });
 
@@ -602,27 +594,27 @@ describe('ProofContext', () => {
       expect(result.current.proofState.pendingRequests).toEqual([]);
     });
 
-    it('throws when proof request is not found', async () => {
+    it("throws when proof request is not found", async () => {
       const { result } = renderHook(() => useProofs(), { wrapper });
 
       await expect(
         act(() =>
-          result.current.fulfillProofRequest('nonexistent', {
-            dateOfBirth: '946684800',
+          result.current.fulfillProofRequest("nonexistent", {
+            dateOfBirth: "946684800",
           }),
         ),
-      ).rejects.toThrow('Proof request not found: nonexistent');
+      ).rejects.toThrow("Proof request not found: nonexistent");
     });
 
-    it('throws when local verification fails', async () => {
-      const request = makeProofRequest('req-1');
+    it("throws when local verification fails", async () => {
+      const request = makeProofRequest("req-1");
       const proof = makeZKProof();
 
       (apiClient.listProofRequests as jest.Mock).mockResolvedValue([request]);
       (generateProof as jest.Mock).mockResolvedValue(proof);
       (verifyProofLocally as jest.Mock).mockResolvedValue({
         valid: false,
-        error: 'Invalid witness',
+        error: "Invalid witness",
       });
 
       mockIdentity.identity.isRegistered = true;
@@ -636,15 +628,15 @@ describe('ProofContext', () => {
 
       await expect(
         act(() =>
-          result.current.fulfillProofRequest('req-1', {
-            dateOfBirth: '946684800',
+          result.current.fulfillProofRequest("req-1", {
+            dateOfBirth: "946684800",
           }),
         ),
-      ).rejects.toThrow('Generated proof failed local verification');
+      ).rejects.toThrow("Generated proof failed local verification");
     });
 
     it('uses "unknown reason" when local verification fails without error message', async () => {
-      const request = makeProofRequest('req-2');
+      const request = makeProofRequest("req-2");
       const proof = makeZKProof();
 
       (apiClient.listProofRequests as jest.Mock).mockResolvedValue([request]);
@@ -665,11 +657,11 @@ describe('ProofContext', () => {
 
       await expect(
         act(() =>
-          result.current.fulfillProofRequest('req-2', {
-            dateOfBirth: '946684800',
+          result.current.fulfillProofRequest("req-2", {
+            dateOfBirth: "946684800",
           }),
         ),
-      ).rejects.toThrow('unknown reason');
+      ).rejects.toThrow("unknown reason");
     });
   });
 
@@ -677,9 +669,9 @@ describe('ProofContext', () => {
   // dismissRequest
   // =========================================================================
 
-  describe('dismissRequest', () => {
-    it('removes a request from pending list', async () => {
-      const requests = [makeProofRequest('req-1'), makeProofRequest('req-2')];
+  describe("dismissRequest", () => {
+    it("removes a request from pending list", async () => {
+      const requests = [makeProofRequest("req-1"), makeProofRequest("req-2")];
       (apiClient.listProofRequests as jest.Mock).mockResolvedValue(requests);
 
       mockIdentity.identity.isRegistered = true;
@@ -692,16 +684,16 @@ describe('ProofContext', () => {
       });
 
       act(() => {
-        result.current.dismissRequest('req-1');
+        result.current.dismissRequest("req-1");
       });
 
       expect(result.current.proofState.pendingRequests).toHaveLength(1);
-      expect(result.current.proofState.pendingRequests[0].id).toBe('req-2');
+      expect(result.current.proofState.pendingRequests[0].id).toBe("req-2");
     });
 
-    it('is a no-op when request ID is not found', async () => {
+    it("is a no-op when request ID is not found", async () => {
       (apiClient.listProofRequests as jest.Mock).mockResolvedValue([
-        makeProofRequest('req-1'),
+        makeProofRequest("req-1"),
       ]);
 
       mockIdentity.identity.isRegistered = true;
@@ -714,7 +706,7 @@ describe('ProofContext', () => {
       });
 
       act(() => {
-        result.current.dismissRequest('nonexistent');
+        result.current.dismissRequest("nonexistent");
       });
 
       expect(result.current.proofState.pendingRequests).toHaveLength(1);
@@ -725,8 +717,8 @@ describe('ProofContext', () => {
   // clearProofs
   // =========================================================================
 
-  describe('clearProofs', () => {
-    it('clears generated proofs and verification results', async () => {
+  describe("clearProofs", () => {
+    it("clears generated proofs and verification results", async () => {
       const proof = makeZKProof();
       (generateProof as jest.Mock).mockResolvedValue(proof);
 
@@ -751,10 +743,10 @@ describe('ProofContext', () => {
   // clearError
   // =========================================================================
 
-  describe('clearError', () => {
-    it('clears the error from state', async () => {
+  describe("clearError", () => {
+    it("clears the error from state", async () => {
       (generateProof as jest.Mock).mockRejectedValue(
-        new Error('Something went wrong'),
+        new Error("Something went wrong"),
       );
 
       const { result } = renderHook(() => useProofs(), { wrapper });
@@ -767,7 +759,7 @@ describe('ProofContext', () => {
         }
       });
 
-      expect(result.current.proofState.error).toBe('Something went wrong');
+      expect(result.current.proofState.error).toBe("Something went wrong");
 
       act(() => {
         result.current.clearError();
@@ -781,9 +773,9 @@ describe('ProofContext', () => {
   // refreshRequests
   // =========================================================================
 
-  describe('refreshRequests', () => {
-    it('manually refreshes pending requests', async () => {
-      const requests = [makeProofRequest('req-fresh')];
+  describe("refreshRequests", () => {
+    it("manually refreshes pending requests", async () => {
+      const requests = [makeProofRequest("req-fresh")];
       (apiClient.listProofRequests as jest.Mock).mockResolvedValue(requests);
 
       mockIdentity.identity.isRegistered = true;
@@ -795,7 +787,10 @@ describe('ProofContext', () => {
         expect(result.current.proofState.pendingRequests.length).toBe(1);
       });
 
-      const newRequests = [makeProofRequest('req-fresh'), makeProofRequest('req-fresh-2')];
+      const newRequests = [
+        makeProofRequest("req-fresh"),
+        makeProofRequest("req-fresh-2"),
+      ];
       (apiClient.listProofRequests as jest.Mock).mockResolvedValue(newRequests);
 
       await act(() => result.current.refreshRequests());
@@ -803,7 +798,7 @@ describe('ProofContext', () => {
       expect(result.current.proofState.pendingRequests).toEqual(newRequests);
     });
 
-    it('does nothing when not registered', async () => {
+    it("does nothing when not registered", async () => {
       mockIdentity.identity.isRegistered = false;
       mockIdentity.did = null;
 

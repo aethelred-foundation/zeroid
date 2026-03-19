@@ -1,13 +1,16 @@
-import crypto from 'crypto';
-import { prisma, logger, redis } from '../../index';
-
+import crypto from "crypto";
+import { prisma, logger, redis } from "../../index";
 
 // ---------------------------------------------------------------------------
 // Types & Enums
 // ---------------------------------------------------------------------------
 
-export type FraudSeverity = 'low' | 'medium' | 'high' | 'critical';
-export type AlertStatus = 'active' | 'investigating' | 'resolved' | 'false_positive';
+export type FraudSeverity = "low" | "medium" | "high" | "critical";
+export type AlertStatus =
+  | "active"
+  | "investigating"
+  | "resolved"
+  | "false_positive";
 
 export interface BiometricSignals {
   keystrokeDwellTimes?: number[];
@@ -45,15 +48,21 @@ export interface CredentialUsageContext {
   ipAddress: string;
   deviceFingerprint: DeviceFingerprint;
   biometricSignals?: BiometricSignals;
-  actionType: 'present' | 'verify' | 'issue' | 'revoke' | 'delegate';
+  actionType: "present" | "verify" | "issue" | "revoke" | "delegate";
 }
 
 export interface RiskFactor {
   name: string;
-  category: 'biometric' | 'device' | 'velocity' | 'pattern' | 'correlation' | 'geolocation';
-  score: number;         // 0-100
-  weight: number;        // 0-1
-  description: string;   // human-readable explanation
+  category:
+    | "biometric"
+    | "device"
+    | "velocity"
+    | "pattern"
+    | "correlation"
+    | "geolocation";
+  score: number; // 0-100
+  weight: number; // 0-1
+  description: string; // human-readable explanation
   evidence: Record<string, unknown>;
 }
 
@@ -61,10 +70,10 @@ export interface FraudAssessment {
   assessmentId: string;
   identityId: string;
   credentialId?: string;
-  overallScore: number;  // 0-100 (higher = more risk)
+  overallScore: number; // 0-100 (higher = more risk)
   severity: FraudSeverity;
   factors: RiskFactor[];
-  decision: 'allow' | 'challenge' | 'block' | 'review';
+  decision: "allow" | "challenge" | "block" | "review";
   explanations: string[];
   modelVersion: string;
   teeAttestationId?: string;
@@ -94,9 +103,9 @@ export interface FraudAlert {
 // ---------------------------------------------------------------------------
 
 interface NeuralNetworkLayer {
-  weights: number[][];  // [outputDim x inputDim]
-  biases: number[];     // [outputDim]
-  activation: 'relu' | 'sigmoid' | 'tanh' | 'softmax';
+  weights: number[][]; // [outputDim x inputDim]
+  biases: number[]; // [outputDim]
+  activation: "relu" | "sigmoid" | "tanh" | "softmax";
 }
 
 class SimpleNeuralNetwork {
@@ -130,16 +139,18 @@ class SimpleNeuralNetwork {
 
   private applyActivation(values: number[], activation: string): number[] {
     switch (activation) {
-      case 'relu':
+      case "relu":
         return values.map((v) => Math.max(0, v));
 
-      case 'sigmoid':
-        return values.map((v) => 1 / (1 + Math.exp(-Math.max(-500, Math.min(500, v)))));
+      case "sigmoid":
+        return values.map(
+          (v) => 1 / (1 + Math.exp(-Math.max(-500, Math.min(500, v)))),
+        );
 
-      case 'tanh':
+      case "tanh":
         return values.map((v) => Math.tanh(v));
 
-      case 'softmax': {
+      case "softmax": {
         const maxVal = Math.max(...values);
         const exps = values.map((v) => Math.exp(v - maxVal));
         const sumExps = exps.reduce((a, b) => a + b, 0);
@@ -161,7 +172,7 @@ class SimpleNeuralNetwork {
 
 function loadPretrainedWeights(): NeuralNetworkLayer[] {
   // Deterministic pseudo-random weight generator seeded from model hash
-  const seed = Buffer.from('zeroid-fraud-model-v3.2.1-prod', 'utf8');
+  const seed = Buffer.from("zeroid-fraud-model-v3.2.1-prod", "utf8");
   let seedIdx = 0;
   const seededRandom = (): number => {
     const byte1 = seed[seedIdx % seed.length];
@@ -184,17 +195,17 @@ function loadPretrainedWeights(): NeuralNetworkLayer[] {
     {
       weights: generateWeights(32, 18),
       biases: generateBiases(32),
-      activation: 'relu',
+      activation: "relu",
     },
     {
       weights: generateWeights(16, 32),
       biases: generateBiases(16),
-      activation: 'relu',
+      activation: "relu",
     },
     {
       weights: generateWeights(4, 16),
       biases: generateBiases(4),
-      activation: 'softmax',
+      activation: "softmax",
     },
   ];
 }
@@ -205,11 +216,14 @@ function loadPretrainedWeights(): NeuralNetworkLayer[] {
 
 export class FraudDetectionService {
   private model: SimpleNeuralNetwork;
-  private readonly MODEL_VERSION = '3.2.1';
+  private readonly MODEL_VERSION = "3.2.1";
   private alerts: Map<string, FraudAlert> = new Map();
 
   // Velocity tracking windows (in-memory, backed by Redis in production)
-  private velocityWindows: Map<string, { timestamps: number[]; windowMs: number }> = new Map();
+  private velocityWindows: Map<
+    string,
+    { timestamps: number[]; windowMs: number }
+  > = new Map();
 
   // Known device fingerprints per identity
   private knownDevices: Map<string, string[]> = new Map();
@@ -217,17 +231,21 @@ export class FraudDetectionService {
   constructor() {
     const weights = loadPretrainedWeights();
     this.model = new SimpleNeuralNetwork(weights);
-    logger.info('fraud_detection_model_loaded', { version: this.MODEL_VERSION });
+    logger.info("fraud_detection_model_loaded", {
+      version: this.MODEL_VERSION,
+    });
   }
 
   // -------------------------------------------------------------------------
   // Primary assessment endpoint
   // -------------------------------------------------------------------------
-  async assessFraudRisk(context: CredentialUsageContext): Promise<FraudAssessment> {
+  async assessFraudRisk(
+    context: CredentialUsageContext,
+  ): Promise<FraudAssessment> {
     const startTime = performance.now();
     const assessmentId = `fraud-${crypto.randomUUID()}`;
 
-    logger.info('fraud_assessment_start', {
+    logger.info("fraud_assessment_start", {
       assessmentId,
       identityId: context.identityId,
       credentialId: context.credentialId,
@@ -242,25 +260,28 @@ export class FraudDetectionService {
     }
 
     // 2. Device fingerprint anomaly detection
-    factors.push(...await this.analyzeDeviceFingerprint(context));
+    factors.push(...(await this.analyzeDeviceFingerprint(context)));
 
     // 3. Credential usage pattern analysis
-    factors.push(...await this.analyzeUsagePatterns(context));
+    factors.push(...(await this.analyzeUsagePatterns(context)));
 
     // 4. Velocity checks
-    factors.push(...await this.performVelocityChecks(context));
+    factors.push(...(await this.performVelocityChecks(context)));
 
     // 5. Cross-credential correlation
-    factors.push(...await this.analyzeCrossCredentialCorrelation(context));
+    factors.push(...(await this.analyzeCrossCredentialCorrelation(context)));
 
     // 6. Geolocation analysis
     if (context.geolocation) {
-      factors.push(...await this.analyzeGeolocation(context));
+      factors.push(...(await this.analyzeGeolocation(context)));
     }
 
     // 7. Build feature vector and run neural network inference
     const featureVector = this.buildFeatureVector(factors, context);
-    const modelOutput = await this.runModelInference(featureVector, context.identityId);
+    const modelOutput = await this.runModelInference(
+      featureVector,
+      context.identityId,
+    );
 
     // 8. Compute composite risk score
     const overallScore = this.computeCompositeScore(factors, modelOutput);
@@ -268,7 +289,11 @@ export class FraudDetectionService {
     const decision = this.makeDecision(modelOutput, overallScore);
 
     // 9. Generate human-readable explanations
-    const explanations = this.generateExplanations(factors, overallScore, decision);
+    const explanations = this.generateExplanations(
+      factors,
+      overallScore,
+      decision,
+    );
 
     const processingTimeMs = performance.now() - startTime;
 
@@ -289,11 +314,11 @@ export class FraudDetectionService {
     // 10. Persist assessment and create alert if needed
     await this.persistAssessment(assessment);
 
-    if (severity === 'high' || severity === 'critical') {
+    if (severity === "high" || severity === "critical") {
       await this.createFraudAlert(assessment);
     }
 
-    logger.info('fraud_assessment_complete', {
+    logger.info("fraud_assessment_complete", {
       assessmentId,
       identityId: context.identityId,
       overallScore,
@@ -308,7 +333,9 @@ export class FraudDetectionService {
   // -------------------------------------------------------------------------
   // Behavioral biometric analysis
   // -------------------------------------------------------------------------
-  private analyzeBiometricSignals(context: CredentialUsageContext): RiskFactor[] {
+  private analyzeBiometricSignals(
+    context: CredentialUsageContext,
+  ): RiskFactor[] {
     const factors: RiskFactor[] = [];
     const bio = context.biometricSignals!;
 
@@ -329,14 +356,20 @@ export class FraudDetectionService {
       }
 
       factors.push({
-        name: 'keystroke_uniformity',
-        category: 'biometric',
+        name: "keystroke_uniformity",
+        category: "biometric",
         score,
         weight: 0.15,
-        description: score > 60
-          ? 'Keystroke timing is suspiciously uniform, suggesting automated input'
-          : 'Keystroke timing is within normal human variance',
-        evidence: { coeffOfVariation, dwellMean, dwellStdDev, sampleCount: bio.keystrokeDwellTimes.length },
+        description:
+          score > 60
+            ? "Keystroke timing is suspiciously uniform, suggesting automated input"
+            : "Keystroke timing is within normal human variance",
+        evidence: {
+          coeffOfVariation,
+          dwellMean,
+          dwellStdDev,
+          sampleCount: bio.keystrokeDwellTimes.length,
+        },
       });
     }
 
@@ -358,13 +391,14 @@ export class FraudDetectionService {
       }
 
       factors.push({
-        name: 'mouse_naturalness',
-        category: 'biometric',
+        name: "mouse_naturalness",
+        category: "biometric",
         score,
         weight: 0.12,
-        description: score > 50
-          ? 'Mouse movement lacks natural human characteristics (curvature, acceleration jitter)'
-          : 'Mouse movement exhibits natural human patterns',
+        description:
+          score > 50
+            ? "Mouse movement lacks natural human characteristics (curvature, acceleration jitter)"
+            : "Mouse movement exhibits natural human patterns",
         evidence: { velocityStdDev, hasNaturalAcceleration, hasCurvature },
       });
     }
@@ -382,14 +416,19 @@ export class FraudDetectionService {
       }
 
       factors.push({
-        name: 'touch_pressure_analysis',
-        category: 'biometric',
+        name: "touch_pressure_analysis",
+        category: "biometric",
         score,
-        weight: 0.10,
-        description: score > 50
-          ? 'Touch pressure pattern is inconsistent with physical device interaction'
-          : 'Touch pressure patterns are consistent with genuine device use',
-        evidence: { pressureVariance, avgPressure, sampleCount: bio.touchPressures.length },
+        weight: 0.1,
+        description:
+          score > 50
+            ? "Touch pressure pattern is inconsistent with physical device interaction"
+            : "Touch pressure patterns are consistent with genuine device use",
+        evidence: {
+          pressureVariance,
+          avgPressure,
+          sampleCount: bio.touchPressures.length,
+        },
       });
     }
 
@@ -399,22 +438,27 @@ export class FraudDetectionService {
   // -------------------------------------------------------------------------
   // Device fingerprint anomaly detection
   // -------------------------------------------------------------------------
-  private async analyzeDeviceFingerprint(context: CredentialUsageContext): Promise<RiskFactor[]> {
+  private async analyzeDeviceFingerprint(
+    context: CredentialUsageContext,
+  ): Promise<RiskFactor[]> {
     const factors: RiskFactor[] = [];
     const fp = context.deviceFingerprint;
     const identityId = context.identityId;
 
     // Compute fingerprint hash
-    const fpHash = crypto.createHash('sha256')
-      .update(JSON.stringify({
-        userAgent: fp.userAgent,
-        screenResolution: fp.screenResolution,
-        canvasHash: fp.canvasHash,
-        webglHash: fp.webglHash,
-        audioContextHash: fp.audioContextHash,
-        platform: fp.platform,
-      }))
-      .digest('hex');
+    const fpHash = crypto
+      .createHash("sha256")
+      .update(
+        JSON.stringify({
+          userAgent: fp.userAgent,
+          screenResolution: fp.screenResolution,
+          canvasHash: fp.canvasHash,
+          webglHash: fp.webglHash,
+          audioContextHash: fp.audioContextHash,
+          platform: fp.platform,
+        }),
+      )
+      .digest("hex");
 
     // Check if this device is known for this identity
     const knownDevices = this.knownDevices.get(identityId) ?? [];
@@ -423,7 +467,9 @@ export class FraudDetectionService {
     if (!isKnownDevice) {
       // Check how many identities share this device fingerprint
       const cachedSharedCount = await redis.get(`device:shared:${fpHash}`);
-      const sharedCount = cachedSharedCount ? parseInt(cachedSharedCount, 10) : 0;
+      const sharedCount = cachedSharedCount
+        ? parseInt(cachedSharedCount, 10)
+        : 0;
 
       let score = 25; // New device has baseline risk
       if (sharedCount > 5) {
@@ -433,15 +479,16 @@ export class FraudDetectionService {
       }
 
       factors.push({
-        name: 'unknown_device',
-        category: 'device',
+        name: "unknown_device",
+        category: "device",
         score,
         weight: 0.18,
-        description: sharedCount > 5
-          ? `Device fingerprint is shared across ${sharedCount} identities — potential credential farming`
-          : sharedCount > 2
-            ? `Device is associated with ${sharedCount} identities`
-            : 'First use from this device — additional verification recommended',
+        description:
+          sharedCount > 5
+            ? `Device fingerprint is shared across ${sharedCount} identities — potential credential farming`
+            : sharedCount > 2
+              ? `Device is associated with ${sharedCount} identities`
+              : "First use from this device — additional verification recommended",
         evidence: { fpHash: fpHash.slice(0, 16), isKnownDevice, sharedCount },
       });
 
@@ -455,28 +502,31 @@ export class FraudDetectionService {
     const spoofingIndicators: string[] = [];
 
     // Mismatch: touch support claimed but desktop platform
-    if (fp.touchSupport && fp.platform.toLowerCase().includes('win') &&
-        !fp.userAgent.toLowerCase().includes('mobile')) {
-      spoofingIndicators.push('touch_desktop_mismatch');
+    if (
+      fp.touchSupport &&
+      fp.platform.toLowerCase().includes("win") &&
+      !fp.userAgent.toLowerCase().includes("mobile")
+    ) {
+      spoofingIndicators.push("touch_desktop_mismatch");
     }
 
     // Mismatch: very low device memory on claimed desktop
-    if (fp.deviceMemory < 2 && !fp.userAgent.toLowerCase().includes('mobile')) {
-      spoofingIndicators.push('low_memory_desktop');
+    if (fp.deviceMemory < 2 && !fp.userAgent.toLowerCase().includes("mobile")) {
+      spoofingIndicators.push("low_memory_desktop");
     }
 
     // Mismatch: zero hardware concurrency
     if (fp.hardwareConcurrency === 0) {
-      spoofingIndicators.push('zero_cpu_cores');
+      spoofingIndicators.push("zero_cpu_cores");
     }
 
     if (spoofingIndicators.length > 0) {
       factors.push({
-        name: 'fingerprint_spoofing',
-        category: 'device',
+        name: "fingerprint_spoofing",
+        category: "device",
         score: Math.min(95, 30 + spoofingIndicators.length * 25),
-        weight: 0.20,
-        description: `Device fingerprint shows ${spoofingIndicators.length} spoofing indicator(s): ${spoofingIndicators.join(', ')}`,
+        weight: 0.2,
+        description: `Device fingerprint shows ${spoofingIndicators.length} spoofing indicator(s): ${spoofingIndicators.join(", ")}`,
         evidence: { indicators: spoofingIndicators },
       });
     }
@@ -487,7 +537,9 @@ export class FraudDetectionService {
   // -------------------------------------------------------------------------
   // Credential usage pattern analysis
   // -------------------------------------------------------------------------
-  private async analyzeUsagePatterns(context: CredentialUsageContext): Promise<RiskFactor[]> {
+  private async analyzeUsagePatterns(
+    context: CredentialUsageContext,
+  ): Promise<RiskFactor[]> {
     const factors: RiskFactor[] = [];
     const hour = context.timestamp.getUTCHours();
     const identityId = context.identityId;
@@ -495,7 +547,9 @@ export class FraudDetectionService {
     // Fetch historical usage hours from cache
     const historyKey = `usage:hours:${identityId}`;
     const cachedHistory = await redis.get(historyKey);
-    const hourHistory: number[] = cachedHistory ? JSON.parse(cachedHistory) : [];
+    const hourHistory: number[] = cachedHistory
+      ? JSON.parse(cachedHistory)
+      : [];
 
     if (hourHistory.length > 10) {
       const meanHour = this.mean(hourHistory);
@@ -506,8 +560,8 @@ export class FraudDetectionService {
 
       if (zScore > 3) {
         factors.push({
-          name: 'unusual_time_of_day',
-          category: 'pattern',
+          name: "unusual_time_of_day",
+          category: "pattern",
           score: 55,
           weight: 0.08,
           description: `Activity at ${hour}:00 UTC is highly unusual for this identity (z-score: ${zScore.toFixed(1)})`,
@@ -515,8 +569,8 @@ export class FraudDetectionService {
         });
       } else if (zScore > 2) {
         factors.push({
-          name: 'unusual_time_of_day',
-          category: 'pattern',
+          name: "unusual_time_of_day",
+          category: "pattern",
           score: 30,
           weight: 0.08,
           description: `Activity at ${hour}:00 UTC is somewhat unusual for this identity`,
@@ -527,8 +581,9 @@ export class FraudDetectionService {
 
     // Record this hour
     hourHistory.push(hour);
-    if (hourHistory.length > 500) hourHistory.splice(0, hourHistory.length - 500);
-    await redis.set(historyKey, JSON.stringify(hourHistory), 'EX', 90 * 86400);
+    if (hourHistory.length > 500)
+      hourHistory.splice(0, hourHistory.length - 500);
+    await redis.set(historyKey, JSON.stringify(hourHistory), "EX", 90 * 86400);
 
     // Check action type frequency anomalies
     const actionCountKey = `usage:actions:${identityId}:${context.actionType}`;
@@ -548,12 +603,17 @@ export class FraudDetectionService {
     if (dailyCount > threshold) {
       const ratio = dailyCount / threshold;
       factors.push({
-        name: 'high_action_frequency',
-        category: 'pattern',
+        name: "high_action_frequency",
+        category: "pattern",
         score: Math.min(90, Math.round(40 + ratio * 15)),
         weight: 0.12,
         description: `${context.actionType} action performed ${dailyCount} times today (threshold: ${threshold})`,
-        evidence: { actionType: context.actionType, dailyCount, threshold, ratio },
+        evidence: {
+          actionType: context.actionType,
+          dailyCount,
+          threshold,
+          ratio,
+        },
       });
     }
 
@@ -563,16 +623,18 @@ export class FraudDetectionService {
   // -------------------------------------------------------------------------
   // Velocity checks
   // -------------------------------------------------------------------------
-  private async performVelocityChecks(context: CredentialUsageContext): Promise<RiskFactor[]> {
+  private async performVelocityChecks(
+    context: CredentialUsageContext,
+  ): Promise<RiskFactor[]> {
     const factors: RiskFactor[] = [];
     const identityId = context.identityId;
     const now = Date.now();
 
     // Track verifications per identity in sliding windows
     const windowConfigs = [
-      { name: '1min', windowMs: 60_000, maxCount: 10 },
-      { name: '5min', windowMs: 300_000, maxCount: 30 },
-      { name: '1hour', windowMs: 3_600_000, maxCount: 100 },
+      { name: "1min", windowMs: 60_000, maxCount: 10 },
+      { name: "5min", windowMs: 300_000, maxCount: 30 },
+      { name: "1hour", windowMs: 3_600_000, maxCount: 100 },
     ];
 
     for (const config of windowConfigs) {
@@ -585,16 +647,19 @@ export class FraudDetectionService {
       }
 
       // Prune expired timestamps
-      window.timestamps = window.timestamps.filter((t) => now - t < config.windowMs);
+      window.timestamps = window.timestamps.filter(
+        (t) => now - t < config.windowMs,
+      );
       window.timestamps.push(now);
 
       if (window.timestamps.length > config.maxCount) {
         const ratio = window.timestamps.length / config.maxCount;
         factors.push({
           name: `velocity_${config.name}`,
-          category: 'velocity',
+          category: "velocity",
           score: Math.min(95, Math.round(50 + ratio * 20)),
-          weight: config.name === '1min' ? 0.20 : config.name === '5min' ? 0.15 : 0.10,
+          weight:
+            config.name === "1min" ? 0.2 : config.name === "5min" ? 0.15 : 0.1,
           description: `${window.timestamps.length} actions in the last ${config.name} (limit: ${config.maxCount}) — possible automated abuse`,
           evidence: {
             count: window.timestamps.length,
@@ -608,15 +673,22 @@ export class FraudDetectionService {
 
     // Check for burst pattern (many requests with very short intervals)
     const recentKey = `velocity:${identityId}:recent`;
-    const recentWindow = this.velocityWindows.get(recentKey) ?? { timestamps: [], windowMs: 10_000 };
-    recentWindow.timestamps = recentWindow.timestamps.filter((t) => now - t < 10_000);
+    const recentWindow = this.velocityWindows.get(recentKey) ?? {
+      timestamps: [],
+      windowMs: 10_000,
+    };
+    recentWindow.timestamps = recentWindow.timestamps.filter(
+      (t) => now - t < 10_000,
+    );
     recentWindow.timestamps.push(now);
     this.velocityWindows.set(recentKey, recentWindow);
 
     if (recentWindow.timestamps.length >= 3) {
       const intervals: number[] = [];
       for (let i = 1; i < recentWindow.timestamps.length; i++) {
-        intervals.push(recentWindow.timestamps[i] - recentWindow.timestamps[i - 1]);
+        intervals.push(
+          recentWindow.timestamps[i] - recentWindow.timestamps[i - 1],
+        );
       }
 
       const intervalStdDev = this.standardDeviation(intervals);
@@ -625,12 +697,16 @@ export class FraudDetectionService {
       // Machine-gun pattern: very regular, very fast intervals
       if (meanInterval < 500 && intervalStdDev < 50) {
         factors.push({
-          name: 'burst_pattern_detected',
-          category: 'velocity',
+          name: "burst_pattern_detected",
+          category: "velocity",
           score: 90,
           weight: 0.22,
           description: `Burst of ${recentWindow.timestamps.length} requests with ${meanInterval.toFixed(0)}ms mean interval — machine-like regularity`,
-          evidence: { meanIntervalMs: meanInterval, intervalStdDev, requestCount: recentWindow.timestamps.length },
+          evidence: {
+            meanIntervalMs: meanInterval,
+            intervalStdDev,
+            requestCount: recentWindow.timestamps.length,
+          },
         });
       }
     }
@@ -641,14 +717,16 @@ export class FraudDetectionService {
   // -------------------------------------------------------------------------
   // Cross-credential correlation (synthetic identity detection)
   // -------------------------------------------------------------------------
-  private async analyzeCrossCredentialCorrelation(context: CredentialUsageContext): Promise<RiskFactor[]> {
+  private async analyzeCrossCredentialCorrelation(
+    context: CredentialUsageContext,
+  ): Promise<RiskFactor[]> {
     const factors: RiskFactor[] = [];
     const identityId = context.identityId;
 
     // Check if multiple credentials from different issuers share suspicious patterns
     try {
       const credentials = await prisma.credential.findMany({
-        where: { subjectId: identityId, status: 'ACTIVE' },
+        where: { subjectId: identityId, status: "ACTIVE" },
         select: {
           id: true,
           credentialType: true,
@@ -661,14 +739,18 @@ export class FraudDetectionService {
 
       if (credentials.length > 1) {
         // Check for temporal clustering: all credentials issued within a very short window
-        const issuanceTimes = credentials.map((c) => new Date(c.issuedAt).getTime());
+        const issuanceTimes = credentials.map((c) =>
+          new Date(c.issuedAt).getTime(),
+        );
         issuanceTimes.sort((a, b) => a - b);
 
-        const timeSpanHours = (issuanceTimes[issuanceTimes.length - 1] - issuanceTimes[0]) / 3_600_000;
+        const timeSpanHours =
+          (issuanceTimes[issuanceTimes.length - 1] - issuanceTimes[0]) /
+          3_600_000;
         if (credentials.length > 3 && timeSpanHours < 2) {
           factors.push({
-            name: 'credential_temporal_clustering',
-            category: 'correlation',
+            name: "credential_temporal_clustering",
+            category: "correlation",
             score: 75,
             weight: 0.15,
             description: `${credentials.length} credentials issued within ${timeSpanHours.toFixed(1)} hours — possible synthetic identity`,
@@ -686,26 +768,31 @@ export class FraudDetectionService {
 
         if (credentials.length > 5 && issuerRatio > 0.9) {
           factors.push({
-            name: 'excessive_issuer_diversity',
-            category: 'correlation',
+            name: "excessive_issuer_diversity",
+            category: "correlation",
             score: 50,
-            weight: 0.10,
+            weight: 0.1,
             description: `${uniqueIssuers.size} different issuers for ${credentials.length} credentials — unusual diversity pattern`,
-            evidence: { uniqueIssuers: uniqueIssuers.size, credentialCount: credentials.length, issuerRatio },
+            evidence: {
+              uniqueIssuers: uniqueIssuers.size,
+              credentialCount: credentials.length,
+              issuerRatio,
+            },
           });
         }
       }
     } catch (err) {
-      logger.warn('cross_credential_analysis_error', {
+      logger.warn("cross_credential_analysis_error", {
         identityId,
         error: (err as Error).message,
       });
     }
 
     // Check if device fingerprint appears across multiple identities
-    const fpHash = crypto.createHash('sha256')
+    const fpHash = crypto
+      .createHash("sha256")
       .update(JSON.stringify(context.deviceFingerprint))
-      .digest('hex')
+      .digest("hex")
       .slice(0, 32);
 
     const deviceIdentitiesKey = `device:identities:${fpHash}`;
@@ -715,8 +802,8 @@ export class FraudDetectionService {
 
     if (deviceIdentityCount > 3) {
       factors.push({
-        name: 'shared_device_identity_cluster',
-        category: 'correlation',
+        name: "shared_device_identity_cluster",
+        category: "correlation",
         score: Math.min(90, 40 + (deviceIdentityCount - 3) * 15),
         weight: 0.18,
         description: `${deviceIdentityCount} distinct identities detected on this device — potential identity farm`,
@@ -730,7 +817,9 @@ export class FraudDetectionService {
   // -------------------------------------------------------------------------
   // Geolocation analysis
   // -------------------------------------------------------------------------
-  private async analyzeGeolocation(context: CredentialUsageContext): Promise<RiskFactor[]> {
+  private async analyzeGeolocation(
+    context: CredentialUsageContext,
+  ): Promise<RiskFactor[]> {
     const factors: RiskFactor[] = [];
     const geo = context.geolocation!;
     const identityId = context.identityId;
@@ -741,12 +830,16 @@ export class FraudDetectionService {
 
     if (cachedLocation) {
       const lastLocation = JSON.parse(cachedLocation) as {
-        lat: number; lon: number; timestamp: number;
+        lat: number;
+        lon: number;
+        timestamp: number;
       };
 
       const distanceKm = this.haversineDistance(
-        lastLocation.lat, lastLocation.lon,
-        geo.lat, geo.lon,
+        lastLocation.lat,
+        lastLocation.lon,
+        geo.lat,
+        geo.lon,
       );
       const timeDiffHours = (Date.now() - lastLocation.timestamp) / 3_600_000;
 
@@ -756,8 +849,8 @@ export class FraudDetectionService {
         // Impossible travel: faster than commercial aviation
         if (impliedSpeedKmh > 1000 && distanceKm > 500) {
           factors.push({
-            name: 'impossible_travel',
-            category: 'geolocation',
+            name: "impossible_travel",
+            category: "geolocation",
             score: 90,
             weight: 0.25,
             description: `Location changed ${distanceKm.toFixed(0)}km in ${timeDiffHours.toFixed(1)}h (implied speed: ${impliedSpeedKmh.toFixed(0)} km/h) — impossible travel detected`,
@@ -771,8 +864,8 @@ export class FraudDetectionService {
           });
         } else if (impliedSpeedKmh > 500 && distanceKm > 200) {
           factors.push({
-            name: 'suspicious_travel',
-            category: 'geolocation',
+            name: "suspicious_travel",
+            category: "geolocation",
             score: 55,
             weight: 0.15,
             description: `Rapid location change: ${distanceKm.toFixed(0)}km in ${timeDiffHours.toFixed(1)}h`,
@@ -783,11 +876,16 @@ export class FraudDetectionService {
     }
 
     // Update last location
-    await redis.set(lastLocationKey, JSON.stringify({
-      lat: geo.lat,
-      lon: geo.lon,
-      timestamp: Date.now(),
-    }), 'EX', 30 * 86400);
+    await redis.set(
+      lastLocationKey,
+      JSON.stringify({
+        lat: geo.lat,
+        lon: geo.lon,
+        timestamp: Date.now(),
+      }),
+      "EX",
+      30 * 86400,
+    );
 
     return factors;
   }
@@ -795,7 +893,10 @@ export class FraudDetectionService {
   // -------------------------------------------------------------------------
   // Feature vector construction for neural network
   // -------------------------------------------------------------------------
-  private buildFeatureVector(factors: RiskFactor[], context: CredentialUsageContext): number[] {
+  private buildFeatureVector(
+    factors: RiskFactor[],
+    context: CredentialUsageContext,
+  ): number[] {
     // 18-dimensional feature vector
     const getFactorScore = (name: string): number => {
       const f = factors.find((x) => x.name === name);
@@ -804,34 +905,36 @@ export class FraudDetectionService {
 
     return [
       // Biometric features (0-2)
-      getFactorScore('keystroke_uniformity'),
-      getFactorScore('mouse_naturalness'),
-      getFactorScore('touch_pressure_analysis'),
+      getFactorScore("keystroke_uniformity"),
+      getFactorScore("mouse_naturalness"),
+      getFactorScore("touch_pressure_analysis"),
 
       // Device features (3-5)
-      getFactorScore('unknown_device'),
-      getFactorScore('fingerprint_spoofing'),
-      factors.filter((f) => f.category === 'device').length > 0 ? 1 : 0,
+      getFactorScore("unknown_device"),
+      getFactorScore("fingerprint_spoofing"),
+      factors.filter((f) => f.category === "device").length > 0 ? 1 : 0,
 
       // Velocity features (6-9)
-      getFactorScore('velocity_1min'),
-      getFactorScore('velocity_5min'),
-      getFactorScore('velocity_1hour'),
-      getFactorScore('burst_pattern_detected'),
+      getFactorScore("velocity_1min"),
+      getFactorScore("velocity_5min"),
+      getFactorScore("velocity_1hour"),
+      getFactorScore("burst_pattern_detected"),
 
       // Pattern features (10-12)
-      getFactorScore('unusual_time_of_day'),
-      getFactorScore('high_action_frequency'),
-      context.actionType === 'revoke' || context.actionType === 'delegate' ? 0.6 : 0.2,
+      getFactorScore("unusual_time_of_day"),
+      getFactorScore("high_action_frequency"),
+      context.actionType === "revoke" || context.actionType === "delegate"
+        ? 0.6
+        : 0.2,
 
       // Correlation features (13-15)
-      getFactorScore('credential_temporal_clustering'),
-      getFactorScore('excessive_issuer_diversity'),
-      getFactorScore('shared_device_identity_cluster'),
+      getFactorScore("credential_temporal_clustering"),
+      getFactorScore("excessive_issuer_diversity"),
+      getFactorScore("shared_device_identity_cluster"),
 
       // Geolocation features (16-17)
-      getFactorScore('impossible_travel'),
-      getFactorScore('suspicious_travel'),
+      getFactorScore("impossible_travel"),
+      getFactorScore("suspicious_travel"),
     ];
   }
 
@@ -849,11 +952,13 @@ export class FraudDetectionService {
 
     const output = this.model.predict(featureVector);
 
-    logger.debug('model_inference_complete', {
+    logger.debug("model_inference_complete", {
       identityId,
-      featureVectorNorm: Math.sqrt(featureVector.reduce((s, v) => s + v * v, 0)).toFixed(4),
+      featureVectorNorm: Math.sqrt(
+        featureVector.reduce((s, v) => s + v * v, 0),
+      ).toFixed(4),
       output: output.map((v) => v.toFixed(4)),
-      classes: ['allow', 'challenge', 'block', 'review'],
+      classes: ["allow", "challenge", "block", "review"],
     });
 
     return output; // [P(allow), P(challenge), P(block), P(review)]
@@ -862,7 +967,10 @@ export class FraudDetectionService {
   // -------------------------------------------------------------------------
   // Composite risk score
   // -------------------------------------------------------------------------
-  private computeCompositeScore(factors: RiskFactor[], modelOutput: number[]): number {
+  private computeCompositeScore(
+    factors: RiskFactor[],
+    modelOutput: number[],
+  ): number {
     // Weighted factor aggregation
     let weightedSum = 0;
     let totalWeight = 0;
@@ -888,10 +996,10 @@ export class FraudDetectionService {
   // Severity classification
   // -------------------------------------------------------------------------
   private classifySeverity(score: number): FraudSeverity {
-    if (score >= 85) return 'critical';
-    if (score >= 65) return 'high';
-    if (score >= 40) return 'medium';
-    return 'low';
+    if (score >= 85) return "critical";
+    if (score >= 65) return "high";
+    if (score >= 40) return "medium";
+    return "low";
   }
 
   // -------------------------------------------------------------------------
@@ -900,25 +1008,28 @@ export class FraudDetectionService {
   private makeDecision(
     modelOutput: number[],
     overallScore: number,
-  ): 'allow' | 'challenge' | 'block' | 'review' {
+  ): "allow" | "challenge" | "block" | "review" {
     // Hard block threshold
-    if (overallScore >= 90) return 'block';
+    if (overallScore >= 90) return "block";
 
     // Use model output class probabilities
     const maxProb = Math.max(...modelOutput);
     const maxIdx = modelOutput.indexOf(maxProb);
-    const decisions: Array<'allow' | 'challenge' | 'block' | 'review'> = [
-      'allow', 'challenge', 'block', 'review',
+    const decisions: Array<"allow" | "challenge" | "block" | "review"> = [
+      "allow",
+      "challenge",
+      "block",
+      "review",
     ];
 
     // Require minimum confidence for block decisions
     if (maxIdx === 2 && maxProb < 0.7) {
-      return 'review'; // Not confident enough to auto-block
+      return "review"; // Not confident enough to auto-block
     }
 
     // Override allow if score is elevated
     if (maxIdx === 0 && overallScore > 50) {
-      return 'challenge';
+      return "challenge";
     }
 
     return decisions[maxIdx];
@@ -935,25 +1046,31 @@ export class FraudDetectionService {
     const explanations: string[] = [];
 
     // Sort factors by weighted impact (score * weight), descending
-    const sorted = [...factors]
-      .sort((a, b) => (b.score * b.weight) - (a.score * a.weight));
+    const sorted = [...factors].sort(
+      (a, b) => b.score * b.weight - a.score * a.weight,
+    );
 
     // Top contributors explanation
     const topFactors = sorted.filter((f) => f.score > 30).slice(0, 5);
     if (topFactors.length > 0) {
       explanations.push(
-        `Risk score ${overallScore}/100 driven by: ${topFactors.map((f) => f.description).join('; ')}.`,
+        `Risk score ${overallScore}/100 driven by: ${topFactors.map((f) => f.description).join("; ")}.`,
       );
     } else {
-      explanations.push(`Risk score ${overallScore}/100 — no significant risk factors detected.`);
+      explanations.push(
+        `Risk score ${overallScore}/100 — no significant risk factors detected.`,
+      );
     }
 
     // Decision explanation
     const decisionMap: Record<string, string> = {
-      allow: 'Transaction is permitted to proceed normally.',
-      challenge: 'Additional identity verification is required before proceeding.',
-      block: 'Transaction has been automatically blocked due to high fraud risk.',
-      review: 'Transaction has been queued for manual review by a compliance officer.',
+      allow: "Transaction is permitted to proceed normally.",
+      challenge:
+        "Additional identity verification is required before proceeding.",
+      block:
+        "Transaction has been automatically blocked due to high fraud risk.",
+      review:
+        "Transaction has been queued for manual review by a compliance officer.",
     };
     explanations.push(decisionMap[decision] ?? `Decision: ${decision}`);
 
@@ -985,8 +1102,8 @@ export class FraudDetectionService {
       await prisma.auditLog.create({
         data: {
           identityId: assessment.identityId,
-          action: 'FRAUD_ASSESSMENT' as any,
-          resourceType: 'fraud_assessment',
+          action: "FRAUD_ASSESSMENT" as any,
+          resourceType: "fraud_assessment",
           resourceId: assessment.assessmentId,
           details: {
             score: assessment.overallScore,
@@ -1003,7 +1120,7 @@ export class FraudDetectionService {
       await redis.set(
         `fraud:assessment:${assessment.assessmentId}`,
         JSON.stringify(assessment),
-        'EX',
+        "EX",
         7 * 86400,
       );
 
@@ -1016,26 +1133,28 @@ export class FraudDetectionService {
           decision: assessment.decision,
           timestamp: assessment.timestamp,
         }),
-        'EX',
+        "EX",
         24 * 3600,
       );
     } catch (err) {
-      logger.error('fraud_assessment_persist_error', {
+      logger.error("fraud_assessment_persist_error", {
         assessmentId: assessment.assessmentId,
         error: (err as Error).message,
       });
     }
   }
 
-  private async createFraudAlert(assessment: FraudAssessment): Promise<FraudAlert> {
+  private async createFraudAlert(
+    assessment: FraudAssessment,
+  ): Promise<FraudAlert> {
     const alert: FraudAlert = {
       alertId: `alert-${crypto.randomUUID()}`,
       assessmentId: assessment.assessmentId,
       identityId: assessment.identityId,
       severity: assessment.severity,
       title: `${assessment.severity.toUpperCase()} fraud risk detected for identity ${assessment.identityId.slice(0, 8)}...`,
-      description: assessment.explanations.join(' '),
-      status: 'active',
+      description: assessment.explanations.join(" "),
+      status: "active",
       riskScore: assessment.overallScore,
       factors: assessment.factors.filter((f) => f.score > 40),
       createdAt: new Date(),
@@ -1044,10 +1163,10 @@ export class FraudDetectionService {
 
     this.alerts.set(alert.alertId, alert);
 
-    await redis.lpush('fraud:alerts:active', JSON.stringify(alert));
-    await redis.ltrim('fraud:alerts:active', 0, 999); // keep last 1000
+    await redis.lpush("fraud:alerts:active", JSON.stringify(alert));
+    await redis.ltrim("fraud:alerts:active", 0, 999); // keep last 1000
 
-    logger.warn('fraud_alert_created', {
+    logger.warn("fraud_alert_created", {
       alertId: alert.alertId,
       assessmentId: assessment.assessmentId,
       identityId: assessment.identityId,
@@ -1062,8 +1181,9 @@ export class FraudDetectionService {
   // Alert management
   // -------------------------------------------------------------------------
   async getActiveAlerts(severity?: FraudSeverity): Promise<FraudAlert[]> {
-    let alerts = Array.from(this.alerts.values())
-      .filter((a) => a.status === 'active' || a.status === 'investigating');
+    let alerts = Array.from(this.alerts.values()).filter(
+      (a) => a.status === "active" || a.status === "investigating",
+    );
 
     if (severity) {
       alerts = alerts.filter((a) => a.severity === severity);
@@ -1080,10 +1200,10 @@ export class FraudDetectionService {
   ): Promise<FraudAlert> {
     const alert = this.alerts.get(alertId);
     if (!alert) {
-      throw new FraudDetectionError('Alert not found', 'ALERT_NOT_FOUND', 404);
+      throw new FraudDetectionError("Alert not found", "ALERT_NOT_FOUND", 404);
     }
 
-    alert.status = isFalsePositive ? 'false_positive' : 'resolved';
+    alert.status = isFalsePositive ? "false_positive" : "resolved";
     alert.resolvedAt = new Date();
     alert.resolvedBy = resolvedBy;
     alert.resolution = resolution;
@@ -1093,8 +1213,8 @@ export class FraudDetectionService {
     await prisma.auditLog.create({
       data: {
         identityId: alert.identityId,
-        action: 'FRAUD_ALERT_RESOLVED' as any,
-        resourceType: 'fraud_alert',
+        action: "FRAUD_ALERT_RESOLVED" as any,
+        resourceType: "fraud_alert",
         resourceId: alertId,
         details: {
           resolution,
@@ -1106,7 +1226,7 @@ export class FraudDetectionService {
       },
     });
 
-    logger.info('fraud_alert_resolved', {
+    logger.info("fraud_alert_resolved", {
       alertId,
       resolvedBy,
       isFalsePositive,
@@ -1134,7 +1254,12 @@ export class FraudDetectionService {
     return Math.sqrt(this.variance(arr));
   }
 
-  private haversineDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  private haversineDistance(
+    lat1: number,
+    lon1: number,
+    lat2: number,
+    lon2: number,
+  ): number {
     const R = 6371; // Earth radius in km
     const dLat = ((lat2 - lat1) * Math.PI) / 180;
     const dLon = ((lon2 - lon1) * Math.PI) / 180;
@@ -1157,7 +1282,7 @@ export class FraudDetectionError extends Error {
     public statusCode: number = 400,
   ) {
     super(message);
-    this.name = 'FraudDetectionError';
+    this.name = "FraudDetectionError";
   }
 }
 

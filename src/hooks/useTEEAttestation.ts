@@ -5,22 +5,19 @@
  * node health monitoring, and on-chain attestation verification.
  */
 
-import { useReadContract } from 'wagmi';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { type Address } from 'viem';
-import { toast } from 'sonner';
-import { apiClient } from '@/lib/api/client';
-import {
-  TEE_REGISTRY_ADDRESS,
-  TEE_REGISTRY_ABI,
-} from '@/config/constants';
+import { useReadContract } from "wagmi";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { type Address } from "viem";
+import { toast } from "sonner";
+import { apiClient } from "@/lib/api/client";
+import { TEE_REGISTRY_ADDRESS, TEE_REGISTRY_ABI } from "@/config/constants";
 import type {
   AttestationStatus,
   AttestationReport,
   TEENode,
   TEENodeHealth,
   VerifyAttestationParams,
-} from '@/types';
+} from "@/types";
 
 // ---------------------------------------------------------------------------
 // Attestation status (on-chain registry + API enrichment)
@@ -30,13 +27,13 @@ export function useAttestationStatus(enclaveId: string | undefined) {
   const { data: onChainStatus, isLoading: isOnChainLoading } = useReadContract({
     address: TEE_REGISTRY_ADDRESS as Address,
     abi: TEE_REGISTRY_ABI,
-    functionName: 'attestationStatus',
+    functionName: "attestationStatus",
     args: enclaveId ? [enclaveId] : undefined,
     query: { enabled: !!enclaveId, refetchInterval: 60_000 },
   });
 
   const apiQuery = useQuery({
-    queryKey: ['attestation', enclaveId],
+    queryKey: ["attestation", enclaveId],
     queryFn: () =>
       apiClient.get<AttestationReport>(`/v1/tee/attestation/${enclaveId}`),
     enabled: !!enclaveId,
@@ -49,8 +46,8 @@ export function useAttestationStatus(enclaveId: string | undefined) {
     ...apiQuery,
     onChainStatus: status,
     isOnChainLoading,
-    isAttested: status === 'verified',
-    isExpired: status === 'expired',
+    isAttested: status === "verified",
+    isExpired: status === "expired",
   };
 }
 
@@ -70,7 +67,7 @@ export function useVerifyAttestation() {
         mrEnclave: string;
         mrSigner: string;
         reportData: string;
-      }>('/v1/tee/verify', {
+      }>("/v1/tee/verify", {
         quote: params.quote,
         expectedMrEnclave: params.expectedMrEnclave,
         expectedMrSigner: params.expectedMrSigner,
@@ -81,18 +78,21 @@ export function useVerifyAttestation() {
     },
     onSuccess: (data) => {
       if (data.valid) {
-        toast.success('Attestation verified', {
+        toast.success("Attestation verified", {
           description: `Enclave ${data.enclaveId.slice(0, 16)}... is trusted`,
         });
       } else {
-        toast.error('Attestation verification failed', {
-          description: 'The enclave could not be verified against root of trust',
+        toast.error("Attestation verification failed", {
+          description:
+            "The enclave could not be verified against root of trust",
         });
       }
-      queryClient.invalidateQueries({ queryKey: ['attestation'] });
+      queryClient.invalidateQueries({ queryKey: ["attestation"] });
     },
     onError: (err: Error) => {
-      toast.error('Attestation verification error', { description: err.message });
+      toast.error("Attestation verification error", {
+        description: err.message,
+      });
     },
   });
 }
@@ -103,10 +103,10 @@ export function useVerifyAttestation() {
 
 export function useTEENodes(activeOnly = true) {
   return useQuery({
-    queryKey: ['teeNodes', activeOnly],
+    queryKey: ["teeNodes", activeOnly],
     queryFn: () => {
       const params = new URLSearchParams();
-      if (activeOnly) params.set('active', 'true');
+      if (activeOnly) params.set("active", "true");
       return apiClient.get<TEENode[]>(`/v1/tee/nodes?${params.toString()}`);
     },
     staleTime: 60_000,
@@ -120,7 +120,7 @@ export function useTEENodes(activeOnly = true) {
 
 export function useNodeHealth(nodeId: string | undefined) {
   return useQuery({
-    queryKey: ['teeNodeHealth', nodeId],
+    queryKey: ["teeNodeHealth", nodeId],
     queryFn: () =>
       apiClient.get<TEENodeHealth>(`/v1/tee/nodes/${nodeId}/health`),
     enabled: !!nodeId,
@@ -135,7 +135,7 @@ export function useNodeHealth(nodeId: string | undefined) {
 
 export function useTEENetworkStatus() {
   return useQuery({
-    queryKey: ['teeNetworkStatus'],
+    queryKey: ["teeNetworkStatus"],
     queryFn: () =>
       apiClient.get<{
         totalNodes: number;
@@ -143,7 +143,7 @@ export function useTEENetworkStatus() {
         attestedNodes: number;
         avgUptime: number;
         lastRefresh: number;
-      }>('/v1/tee/network/status'),
+      }>("/v1/tee/network/status"),
     staleTime: 30_000,
     refetchInterval: 60_000,
   });

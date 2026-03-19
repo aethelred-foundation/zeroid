@@ -13,14 +13,14 @@ import type {
   AttestationType,
   Bytes32,
   Address,
-} from '@/types';
+} from "@/types";
 import {
   TEE_SERVICE_URL,
   TEE_ENDPOINTS,
   TEE_FRESHNESS_REQUIREMENTS,
   TEE_NODE_POLL_INTERVAL_MS,
-} from '@/config/constants';
-import { withRetry, withTimeout, isExpired } from '@/lib/utils';
+} from "@/config/constants";
+import { withRetry, withTimeout, isExpired } from "@/lib/utils";
 
 // ============================================================================
 // Types
@@ -80,7 +80,7 @@ export async function fetchTEENodes(): Promise<TEENode[]> {
       const res = await withTimeout(
         fetch(`${TEE_SERVICE_URL}${TEE_ENDPOINTS.NODE_STATUS}`),
         10_000,
-        'TEE node status request timed out',
+        "TEE node status request timed out",
       );
       if (!res.ok) {
         throw new Error(`TEE service returned HTTP ${res.status}`);
@@ -175,12 +175,12 @@ export async function verifyAttestation(
     async () => {
       const res = await withTimeout(
         fetch(`${TEE_SERVICE_URL}${TEE_ENDPOINTS.ATTESTATION_VERIFY}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ enclaveHash }),
         }),
         15_000,
-        'Attestation verification request timed out',
+        "Attestation verification request timed out",
       );
       if (!res.ok) {
         throw new Error(`Attestation verification failed: HTTP ${res.status}`);
@@ -208,7 +208,9 @@ export function isAttestationFresh(attestation: TEEAttestation): boolean {
   if (now >= attestation.expiresAt) return false;
 
   // Check platform-specific freshness
-  const platformKey = TEEPlatform[attestation.platform] as keyof typeof TEE_FRESHNESS_REQUIREMENTS;
+  const platformKey = TEEPlatform[
+    attestation.platform
+  ] as keyof typeof TEE_FRESHNESS_REQUIREMENTS;
   const maxAge = TEE_FRESHNESS_REQUIREMENTS[platformKey];
   if (maxAge === undefined) return false;
 
@@ -218,10 +220,10 @@ export function isAttestationFresh(attestation: TEEAttestation): boolean {
 
 // Re-export the enum so callers don't need a separate import
 const TEEPlatform = {
-  0: 'Unknown',
-  1: 'IntelSGX',
-  2: 'AMDSEV',
-  3: 'ArmTrustZone',
+  0: "Unknown",
+  1: "IntelSGX",
+  2: "AMDSEV",
+  3: "ArmTrustZone",
 } as const;
 
 /**
@@ -232,12 +234,12 @@ const TEEPlatform = {
  */
 export function getPlatformLabel(platform: number): string {
   const labels: Record<number, string> = {
-    0: 'Unknown',
-    1: 'Intel SGX',
-    2: 'AMD SEV',
-    3: 'ARM TrustZone',
+    0: "Unknown",
+    1: "Intel SGX",
+    2: "AMD SEV",
+    3: "ARM TrustZone",
   };
-  return labels[platform] ?? 'Unknown';
+  return labels[platform] ?? "Unknown";
 }
 
 /**
@@ -248,11 +250,11 @@ export function getPlatformLabel(platform: number): string {
  */
 export function getAttestationTypeLabel(type: string): string {
   const labels: Record<string, string> = {
-    remote: 'Remote Attestation',
-    local: 'Local Attestation',
-    self: 'Self Attestation (Dev)',
+    remote: "Remote Attestation",
+    local: "Local Attestation",
+    self: "Self Attestation (Dev)",
   };
-  return labels[type] ?? 'Unknown';
+  return labels[type] ?? "Unknown";
 }
 
 // ============================================================================
@@ -275,22 +277,22 @@ export async function requestBiometricVerification(
 ): Promise<BiometricVerificationResult> {
   const response = await withTimeout(
     fetch(`${TEE_SERVICE_URL}${TEE_ENDPOINTS.BIOMETRIC_VERIFY}`, {
-      method: 'POST',
+      method: "POST",
       headers: {
-        'Content-Type': 'application/json',
+        "Content-Type": "application/json",
         Authorization: `Bearer ${authToken}`,
       },
       body: JSON.stringify(payload),
     }),
     30_000,
-    'Biometric verification request timed out',
+    "Biometric verification request timed out",
   );
 
   if (!response.ok) {
     const errorBody = await response.json().catch(() => ({}));
     return {
       success: false,
-      verificationId: '',
+      verificationId: "",
       enclaveHash: payload.enclaveHash,
       error:
         (errorBody as Record<string, string>).message ||
@@ -323,24 +325,27 @@ export async function requestCredentialIssuance(
 ): Promise<{ credentialHash: Bytes32; txHash: string }> {
   const response = await withTimeout(
     fetch(`${TEE_SERVICE_URL}${TEE_ENDPOINTS.CREDENTIAL_ISSUE}`, {
-      method: 'POST',
+      method: "POST",
       headers: {
-        'Content-Type': 'application/json',
+        "Content-Type": "application/json",
         Authorization: `Bearer ${authToken}`,
       },
       body: JSON.stringify({ verificationId, schemaHash, attributes }),
     }),
     30_000,
-    'Credential issuance request timed out',
+    "Credential issuance request timed out",
   );
 
   if (!response.ok) {
     const errorBody = await response.json().catch(() => ({}));
     throw new Error(
       (errorBody as Record<string, string>).message ||
-      `Credential issuance failed: HTTP ${response.status}`,
+        `Credential issuance failed: HTTP ${response.status}`,
     );
   }
 
-  return response.json() as Promise<{ credentialHash: Bytes32; txHash: string }>;
+  return response.json() as Promise<{
+    credentialHash: Bytes32;
+    txHash: string;
+  }>;
 }

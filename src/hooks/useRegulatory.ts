@@ -6,11 +6,11 @@
  * data sovereignty status queries.
  */
 
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useAccount } from 'wagmi';
-import { toast } from 'sonner';
-import { apiClient } from '@/lib/api/client';
-import type { ISODateString } from '@/types';
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useAccount } from "wagmi";
+import { toast } from "sonner";
+import { apiClient } from "@/lib/api/client";
+import type { ISODateString } from "@/types";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -20,7 +20,7 @@ export interface Jurisdiction {
   id: string;
   name: string;
   code: string;
-  region: 'mena' | 'eu' | 'americas' | 'apac' | 'africa';
+  region: "mena" | "eu" | "americas" | "apac" | "africa";
   regulatoryAuthority: string;
   authorityUrl: string;
   frameworks: string[];
@@ -36,7 +36,7 @@ export interface JurisdictionRequirements {
   reportingObligations: ReportingObligation[];
   kycLevel: number;
   amlThresholds: AMLThreshold[];
-  updateFrequency: 'daily' | 'weekly' | 'monthly' | 'quarterly';
+  updateFrequency: "daily" | "weekly" | "monthly" | "quarterly";
 }
 
 export interface RequiredCredential {
@@ -49,16 +49,22 @@ export interface RequiredCredential {
 }
 
 export interface ConsentRequirement {
-  type: 'explicit' | 'implicit' | 'opt_out';
+  type: "explicit" | "implicit" | "opt_out";
   purpose: string;
   retentionDays: number;
   withdrawalEnabled: boolean;
-  granularity: 'per_attribute' | 'per_credential' | 'blanket';
+  granularity: "per_attribute" | "per_credential" | "blanket";
 }
 
 export interface ReportingObligation {
   type: string;
-  frequency: 'real_time' | 'daily' | 'weekly' | 'monthly' | 'quarterly' | 'annual';
+  frequency:
+    | "real_time"
+    | "daily"
+    | "weekly"
+    | "monthly"
+    | "quarterly"
+    | "annual";
   authority: string;
   format: string;
   thresholdAmount?: number;
@@ -68,13 +74,17 @@ export interface ReportingObligation {
 export interface AMLThreshold {
   transactionType: string;
   amountUSD: number;
-  action: 'report' | 'block' | 'enhanced_due_diligence';
+  action: "report" | "block" | "enhanced_due_diligence";
 }
 
 export interface ComplianceStatus {
   jurisdictionId: string;
   jurisdictionName: string;
-  overallStatus: 'compliant' | 'partially_compliant' | 'non_compliant' | 'pending';
+  overallStatus:
+    | "compliant"
+    | "partially_compliant"
+    | "non_compliant"
+    | "pending";
   score: number;
   credentialStatus: CredentialComplianceItem[];
   lastAssessedAt: ISODateString;
@@ -85,7 +95,7 @@ export interface ComplianceStatus {
 export interface CredentialComplianceItem {
   schemaId: string;
   schemaName: string;
-  status: 'valid' | 'expired' | 'missing' | 'pending' | 'expiring_soon';
+  status: "valid" | "expired" | "missing" | "pending" | "expiring_soon";
   expiresAt?: ISODateString;
   daysUntilExpiry?: number;
 }
@@ -94,7 +104,7 @@ export interface CrossBorderAssessment {
   fromJurisdiction: string;
   toJurisdiction: string;
   eligible: boolean;
-  riskLevel: 'low' | 'medium' | 'high' | 'prohibited';
+  riskLevel: "low" | "medium" | "high" | "prohibited";
   requiredActions: string[];
   additionalCredentials: string[];
   estimatedProcessingDays: number;
@@ -113,8 +123,8 @@ export interface GapAnalysis {
 
 export interface ComplianceGap {
   requirement: string;
-  category: 'credential' | 'consent' | 'reporting' | 'data_residency';
-  severity: 'critical' | 'high' | 'medium' | 'low';
+  category: "credential" | "consent" | "reporting" | "data_residency";
+  severity: "critical" | "high" | "medium" | "low";
   description: string;
   remediationSteps: string[];
   estimatedEffort: string;
@@ -126,8 +136,13 @@ export interface RegulatoryUpdate {
   jurisdictionName: string;
   title: string;
   summary: string;
-  category: 'new_regulation' | 'amendment' | 'guidance' | 'enforcement' | 'deadline';
-  severity: 'critical' | 'high' | 'medium' | 'low';
+  category:
+    | "new_regulation"
+    | "amendment"
+    | "guidance"
+    | "enforcement"
+    | "deadline";
+  severity: "critical" | "high" | "medium" | "low";
   effectiveDate: ISODateString;
   publishedAt: ISODateString;
   sourceUrl: string;
@@ -167,13 +182,15 @@ export interface GDPRComplianceStatus {
 // ---------------------------------------------------------------------------
 
 const regulatoryKeys = {
-  all: ['regulatory'] as const,
-  jurisdictions: () => [...regulatoryKeys.all, 'jurisdictions'] as const,
-  requirements: (id: string) => [...regulatoryKeys.all, 'requirements', id] as const,
-  compliance: (id: string) => [...regulatoryKeys.all, 'compliance', id] as const,
-  gaps: (id: string) => [...regulatoryKeys.all, 'gaps', id] as const,
-  feed: () => [...regulatoryKeys.all, 'feed'] as const,
-  sovereignty: () => [...regulatoryKeys.all, 'sovereignty'] as const,
+  all: ["regulatory"] as const,
+  jurisdictions: () => [...regulatoryKeys.all, "jurisdictions"] as const,
+  requirements: (id: string) =>
+    [...regulatoryKeys.all, "requirements", id] as const,
+  compliance: (id: string) =>
+    [...regulatoryKeys.all, "compliance", id] as const,
+  gaps: (id: string) => [...regulatoryKeys.all, "gaps", id] as const,
+  feed: () => [...regulatoryKeys.all, "feed"] as const,
+  sovereignty: () => [...regulatoryKeys.all, "sovereignty"] as const,
 };
 
 // ---------------------------------------------------------------------------
@@ -184,14 +201,18 @@ export function useJurisdictions() {
   return useQuery({
     queryKey: regulatoryKeys.jurisdictions(),
     queryFn: () =>
-      apiClient.get<Jurisdiction[]>('/api/v1/regulatory/jurisdictions') as unknown as Jurisdiction[],
+      apiClient.get<Jurisdiction[]>(
+        "/api/v1/regulatory/jurisdictions",
+      ) as unknown as Jurisdiction[],
     staleTime: 300_000,
   });
 }
 
-export function useJurisdictionRequirements(jurisdictionId: string | undefined) {
+export function useJurisdictionRequirements(
+  jurisdictionId: string | undefined,
+) {
   return useQuery({
-    queryKey: regulatoryKeys.requirements(jurisdictionId ?? ''),
+    queryKey: regulatoryKeys.requirements(jurisdictionId ?? ""),
     queryFn: () =>
       apiClient.get<JurisdictionRequirements>(
         `/api/v1/regulatory/jurisdictions/${jurisdictionId}/requirements`,
@@ -209,7 +230,7 @@ export function useComplianceStatus(jurisdictionId: string | undefined) {
   const { address } = useAccount();
 
   return useQuery({
-    queryKey: regulatoryKeys.compliance(jurisdictionId ?? ''),
+    queryKey: regulatoryKeys.compliance(jurisdictionId ?? ""),
     queryFn: () =>
       apiClient.get<ComplianceStatus>(
         `/api/v1/regulatory/compliance/${jurisdictionId}`,
@@ -232,23 +253,23 @@ export function useCheckCrossBorder() {
       toJurisdiction: string;
     }): Promise<CrossBorderAssessment> => {
       return apiClient.post<CrossBorderAssessment>(
-        '/api/v1/regulatory/cross-border/check',
+        "/api/v1/regulatory/cross-border/check",
         params,
       ) as unknown as CrossBorderAssessment;
     },
     onSuccess: (data) => {
       if (data.eligible) {
-        toast.success('Cross-border transfer eligible', {
+        toast.success("Cross-border transfer eligible", {
           description: `Risk level: ${data.riskLevel}, est. ${data.estimatedProcessingDays} day(s)`,
         });
       } else {
-        toast.warning('Cross-border transfer not eligible', {
+        toast.warning("Cross-border transfer not eligible", {
           description: `${data.restrictions.length} restriction(s) apply`,
         });
       }
     },
     onError: (err: Error) => {
-      toast.error('Cross-border check failed', { description: err.message });
+      toast.error("Cross-border check failed", { description: err.message });
     },
   });
 }
@@ -261,7 +282,7 @@ export function useGapAnalysis(jurisdictionId: string | undefined) {
   const { address } = useAccount();
 
   return useQuery({
-    queryKey: regulatoryKeys.gaps(jurisdictionId ?? ''),
+    queryKey: regulatoryKeys.gaps(jurisdictionId ?? ""),
     queryFn: () =>
       apiClient.get<GapAnalysis>(
         `/api/v1/regulatory/gap-analysis/${jurisdictionId}`,
@@ -280,7 +301,9 @@ export function useRegulatoryFeed() {
   return useQuery({
     queryKey: regulatoryKeys.feed(),
     queryFn: () =>
-      apiClient.get<RegulatoryUpdate[]>('/api/v1/regulatory/feed') as unknown as RegulatoryUpdate[],
+      apiClient.get<RegulatoryUpdate[]>(
+        "/api/v1/regulatory/feed",
+      ) as unknown as RegulatoryUpdate[],
     staleTime: 60_000,
     refetchInterval: 300_000,
   });
@@ -297,7 +320,7 @@ export function useDataSovereigntyStatus() {
     queryKey: regulatoryKeys.sovereignty(),
     queryFn: () =>
       apiClient.get<DataSovereigntyStatus>(
-        '/api/v1/regulatory/data-sovereignty',
+        "/api/v1/regulatory/data-sovereignty",
         { owner: address as string },
       ) as unknown as DataSovereigntyStatus,
     enabled: !!address,

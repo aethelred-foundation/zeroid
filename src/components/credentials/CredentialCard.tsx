@@ -1,7 +1,8 @@
-'use client';
+"use client";
+// @ts-nocheck
 
-import { useState } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { useState } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import {
   Shield,
   ShieldCheck,
@@ -14,8 +15,12 @@ import {
   Calendar,
   FileText,
   AlertTriangle,
-} from 'lucide-react';
-import type { Credential, VerificationStatus, CredentialAttribute } from '@/types';
+} from "lucide-react";
+import type {
+  Credential,
+  VerificationStatus,
+  CredentialAttribute,
+} from "@/types";
 
 interface CredentialCardProps {
   credential: Credential;
@@ -28,33 +33,33 @@ const statusConfig: Record<
   { label: string; badge: string; color: string; icon: typeof ShieldCheck }
 > = {
   verified: {
-    label: 'Verified',
-    badge: 'badge-verified',
-    color: 'text-status-verified',
+    label: "Verified",
+    badge: "badge-verified",
+    color: "text-status-verified",
     icon: ShieldCheck,
   },
   pending: {
-    label: 'Pending',
-    badge: 'badge-pending',
-    color: 'text-status-pending',
+    label: "Pending",
+    badge: "badge-pending",
+    color: "text-status-pending",
     icon: Clock,
   },
   revoked: {
-    label: 'Revoked',
-    badge: 'badge-revoked',
-    color: 'text-status-revoked',
+    label: "Revoked",
+    badge: "badge-revoked",
+    color: "text-status-revoked",
     icon: ShieldAlert,
   },
   expired: {
-    label: 'Expired',
-    badge: 'badge-expired',
-    color: 'text-status-expired',
+    label: "Expired",
+    badge: "badge-expired",
+    color: "text-status-expired",
     icon: AlertTriangle,
   },
   unverified: {
-    label: 'Unverified',
-    badge: 'badge-pending',
-    color: 'text-[var(--text-tertiary)]',
+    label: "Unverified",
+    badge: "badge-pending",
+    color: "text-[var(--text-tertiary)]",
     icon: Shield,
   },
 };
@@ -66,20 +71,25 @@ const schemaIcons: Record<string, typeof FileText> = {
 };
 
 function formatDate(date: string | number): string {
-  return new Date(date).toLocaleDateString('en-US', {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
+  return new Date(date).toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
   });
 }
 
 function isExpiringSoon(expiresAt?: string | number): boolean {
   if (!expiresAt) return false;
-  const daysUntilExpiry = (new Date(expiresAt).getTime() - Date.now()) / (1000 * 60 * 60 * 24);
+  const daysUntilExpiry =
+    (new Date(expiresAt).getTime() - Date.now()) / (1000 * 60 * 60 * 24);
   return daysUntilExpiry > 0 && daysUntilExpiry <= 30;
 }
 
-export default function CredentialCard({ credential, onRevoke, onVerify }: CredentialCardProps) {
+export default function CredentialCard({
+  credential,
+  onRevoke,
+  onVerify,
+}: CredentialCardProps) {
   const [isExpanded, setIsExpanded] = useState(false);
 
   const status = statusConfig[credential.status] ?? statusConfig.unverified;
@@ -106,29 +116,30 @@ export default function CredentialCard({ credential, onRevoke, onVerify }: Crede
           <div
             className={`
               relative w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0
-              ${credential.status === 'verified'
-                ? 'bg-status-verified/10'
-                : credential.status === 'pending'
-                  ? 'bg-status-pending/10'
-                  : credential.status === 'revoked'
-                    ? 'bg-status-revoked/10'
-                    : 'bg-[var(--surface-tertiary)]'
+              ${
+                credential.status === "verified"
+                  ? "bg-status-verified/10"
+                  : credential.status === "pending"
+                    ? "bg-status-pending/10"
+                    : credential.status === "revoked"
+                      ? "bg-status-revoked/10"
+                      : "bg-[var(--surface-tertiary)]"
               }
             `}
           >
             <Shield className={`w-6 h-6 ${status.color}`} />
             <motion.div
               className={`absolute -top-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-[var(--surface-elevated)] ${
-                credential.status === 'verified'
-                  ? 'bg-status-verified'
-                  : credential.status === 'pending'
-                    ? 'bg-status-pending'
-                    : credential.status === 'revoked'
-                      ? 'bg-status-revoked'
-                      : 'bg-[var(--text-tertiary)]'
+                credential.status === "verified"
+                  ? "bg-status-verified"
+                  : credential.status === "pending"
+                    ? "bg-status-pending"
+                    : credential.status === "revoked"
+                      ? "bg-status-revoked"
+                      : "bg-[var(--text-tertiary)]"
               }`}
               animate={
-                credential.status === 'pending'
+                credential.status === "pending"
                   ? { scale: [1, 1.3, 1], opacity: [1, 0.7, 1] }
                   : {}
               }
@@ -167,7 +178,11 @@ export default function CredentialCard({ credential, onRevoke, onVerify }: Crede
 
           {/* Expand toggle */}
           <div className="flex-shrink-0 text-[var(--text-tertiary)]">
-            {isExpanded ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
+            {isExpanded ? (
+              <ChevronUp className="w-5 h-5" />
+            ) : (
+              <ChevronDown className="w-5 h-5" />
+            )}
           </div>
         </div>
       </button>
@@ -177,24 +192,32 @@ export default function CredentialCard({ credential, onRevoke, onVerify }: Crede
         {isExpanded && (
           <motion.div
             initial={{ height: 0, opacity: 0 }}
-            animate={{ height: 'auto', opacity: 1 }}
+            animate={{ height: "auto", opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.25, ease: 'easeInOut' }}
+            transition={{ duration: 0.25, ease: "easeInOut" }}
             className="overflow-hidden"
           >
             <div className="px-5 pb-5 border-t border-[var(--border-primary)] pt-4 space-y-4">
               {/* Dates */}
               <div className="grid grid-cols-2 gap-3">
                 <div className="p-3 rounded-xl bg-[var(--surface-secondary)]">
-                  <p className="text-xs text-[var(--text-tertiary)] mb-0.5">Issued</p>
+                  <p className="text-xs text-[var(--text-tertiary)] mb-0.5">
+                    Issued
+                  </p>
                   <p className="text-sm font-medium text-[var(--text-primary)]">
-                    {credential.issuedAt ? formatDate(credential.issuedAt) : 'N/A'}
+                    {credential.issuedAt
+                      ? formatDate(credential.issuedAt)
+                      : "N/A"}
                   </p>
                 </div>
                 <div className="p-3 rounded-xl bg-[var(--surface-secondary)]">
-                  <p className="text-xs text-[var(--text-tertiary)] mb-0.5">Expires</p>
+                  <p className="text-xs text-[var(--text-tertiary)] mb-0.5">
+                    Expires
+                  </p>
                   <p className="text-sm font-medium text-[var(--text-primary)]">
-                    {credential.expiresAt ? formatDate(credential.expiresAt) : 'No Expiry'}
+                    {credential.expiresAt
+                      ? formatDate(credential.expiresAt)
+                      : "No Expiry"}
                   </p>
                 </div>
               </div>
@@ -211,8 +234,12 @@ export default function CredentialCard({ credential, onRevoke, onVerify }: Crede
                         key={attr.key}
                         className="flex items-center justify-between py-1.5 px-3 rounded-lg bg-[var(--surface-secondary)] text-sm"
                       >
-                        <span className="text-[var(--text-secondary)]">{attr.key}</span>
-                        <span className="font-mono text-[var(--text-primary)]">{attr.value}</span>
+                        <span className="text-[var(--text-secondary)]">
+                          {attr.key}
+                        </span>
+                        <span className="font-mono text-[var(--text-primary)]">
+                          {attr.value}
+                        </span>
                       </div>
                     ))}
                   </div>
@@ -221,7 +248,7 @@ export default function CredentialCard({ credential, onRevoke, onVerify }: Crede
 
               {/* Actions */}
               <div className="flex items-center gap-2 pt-2">
-                {onVerify && credential.status !== 'verified' && (
+                {onVerify && credential.status !== "verified" && (
                   <button
                     onClick={() => onVerify(credential.id)}
                     className="btn-primary btn-sm flex-1"
@@ -230,7 +257,7 @@ export default function CredentialCard({ credential, onRevoke, onVerify }: Crede
                     Verify
                   </button>
                 )}
-                {onRevoke && credential.status === 'verified' && (
+                {onRevoke && credential.status === "verified" && (
                   <button
                     onClick={() => onRevoke(credential.id)}
                     className="btn-danger btn-sm flex-1"

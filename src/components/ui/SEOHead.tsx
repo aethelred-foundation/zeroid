@@ -1,5 +1,5 @@
-import React from 'react';
-import Head from 'next/head';
+import React from "react";
+import Head from "next/head";
 
 // ============================================================
 // SEO Head Component
@@ -10,42 +10,42 @@ interface SEOHeadProps {
   description?: string;
   canonical?: string;
   ogImage?: string;
-  ogType?: 'website' | 'article';
+  ogType?: "website" | "article";
   noIndex?: boolean;
   keywords?: string[];
-  twitterCard?: 'summary' | 'summary_large_image';
+  twitterCard?: "summary" | "summary_large_image";
 }
 
-const SITE_NAME = 'ZeroID on Aethelred';
+const SITE_NAME = "ZeroID on Aethelred";
 const DEFAULT_DESCRIPTION =
-  'Self-sovereign identity management on the Aethelred blockchain. Create, manage, and verify decentralized identities and verifiable credentials with zero-knowledge proof privacy.';
-const DEFAULT_OG_IMAGE = '/og-zeroid.png';
-const BASE_URL = 'https://zeroid.aethelred.io';
+  "Self-sovereign identity management on the Aethelred blockchain. Create, manage, and verify decentralized identities and verifiable credentials with zero-knowledge proof privacy.";
+const DEFAULT_OG_IMAGE = "/og-zeroid.png";
+const BASE_URL = "https://zeroid.aethelred.io";
 
 export function SEOHead({
   title,
   description = DEFAULT_DESCRIPTION,
   canonical,
   ogImage = DEFAULT_OG_IMAGE,
-  ogType = 'website',
+  ogType = "website",
   noIndex = false,
   keywords = [],
-  twitterCard = 'summary_large_image',
+  twitterCard = "summary_large_image",
 }: SEOHeadProps) {
   const fullTitle = title ? `${title} | ${SITE_NAME}` : SITE_NAME;
   const canonicalUrl = canonical ? `${BASE_URL}${canonical}` : undefined;
 
   const defaultKeywords = [
-    'self-sovereign identity',
-    'SSI',
-    'DID',
-    'decentralized identity',
-    'verifiable credentials',
-    'zero-knowledge proofs',
-    'ZKP',
-    'Aethelred',
-    'blockchain identity',
-    'Web3 identity',
+    "self-sovereign identity",
+    "SSI",
+    "DID",
+    "decentralized identity",
+    "verifiable credentials",
+    "zero-knowledge proofs",
+    "ZKP",
+    "Aethelred",
+    "blockchain identity",
+    "Web3 identity",
   ];
 
   const allKeywords = [...new Set([...defaultKeywords, ...keywords])];
@@ -54,7 +54,7 @@ export function SEOHead({
     <Head>
       <title>{fullTitle}</title>
       <meta name="description" content={description} />
-      <meta name="keywords" content={allKeywords.join(', ')} />
+      <meta name="keywords" content={allKeywords.join(", ")} />
 
       {/* Canonical */}
       {canonicalUrl && <link rel="canonical" href={canonicalUrl} />}

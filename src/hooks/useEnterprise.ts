@@ -6,11 +6,11 @@
  * ZeroID into their existing identity infrastructure.
  */
 
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useAccount } from 'wagmi';
-import { toast } from 'sonner';
-import { apiClient } from '@/lib/api/client';
-import type { ISODateString } from '@/types';
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useAccount } from "wagmi";
+import { toast } from "sonner";
+import { apiClient } from "@/lib/api/client";
+import type { ISODateString } from "@/types";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -50,18 +50,18 @@ export interface APIKeyWithSecret extends APIKey {
 }
 
 export type APIScope =
-  | 'identity:read'
-  | 'identity:write'
-  | 'credential:read'
-  | 'credential:write'
-  | 'credential:verify'
-  | 'proof:generate'
-  | 'proof:verify'
-  | 'compliance:read'
-  | 'compliance:write'
-  | 'agent:manage'
-  | 'webhook:manage'
-  | 'analytics:read';
+  | "identity:read"
+  | "identity:write"
+  | "credential:read"
+  | "credential:write"
+  | "credential:verify"
+  | "proof:generate"
+  | "proof:verify"
+  | "compliance:read"
+  | "compliance:write"
+  | "agent:manage"
+  | "webhook:manage"
+  | "analytics:read";
 
 export interface WebhookConfig {
   url: string;
@@ -88,17 +88,17 @@ export interface Webhook {
 }
 
 export type WebhookEvent =
-  | 'identity.created'
-  | 'identity.updated'
-  | 'identity.suspended'
-  | 'credential.issued'
-  | 'credential.revoked'
-  | 'credential.expired'
-  | 'verification.completed'
-  | 'verification.failed'
-  | 'compliance.alert'
-  | 'agent.action'
-  | 'bridge.completed';
+  | "identity.created"
+  | "identity.updated"
+  | "identity.suspended"
+  | "credential.issued"
+  | "credential.revoked"
+  | "credential.expired"
+  | "verification.completed"
+  | "verification.failed"
+  | "compliance.alert"
+  | "agent.action"
+  | "bridge.completed";
 
 export interface RetryPolicy {
   maxRetries: number;
@@ -135,7 +135,7 @@ export interface SLAReport {
 export interface SLAIncident {
   id: string;
   title: string;
-  severity: 'minor' | 'major' | 'critical';
+  severity: "minor" | "major" | "critical";
   startedAt: ISODateString;
   resolvedAt?: ISODateString;
   durationMinutes: number;
@@ -143,7 +143,7 @@ export interface SLAIncident {
   rootCause?: string;
 }
 
-export type ReportPeriod = 'day' | 'week' | 'month' | 'quarter' | 'year';
+export type ReportPeriod = "day" | "week" | "month" | "quarter" | "year";
 
 export interface UsageMetrics {
   period: ReportPeriod;
@@ -181,11 +181,13 @@ export interface DailyUsage {
 // ---------------------------------------------------------------------------
 
 const enterpriseKeys = {
-  all: ['enterprise'] as const,
-  apiKeys: () => [...enterpriseKeys.all, 'api-keys'] as const,
-  webhooks: () => [...enterpriseKeys.all, 'webhooks'] as const,
-  sla: (period: ReportPeriod) => [...enterpriseKeys.all, 'sla', period] as const,
-  usage: (period: ReportPeriod) => [...enterpriseKeys.all, 'usage', period] as const,
+  all: ["enterprise"] as const,
+  apiKeys: () => [...enterpriseKeys.all, "api-keys"] as const,
+  webhooks: () => [...enterpriseKeys.all, "webhooks"] as const,
+  sla: (period: ReportPeriod) =>
+    [...enterpriseKeys.all, "sla", period] as const,
+  usage: (period: ReportPeriod) =>
+    [...enterpriseKeys.all, "usage", period] as const,
 };
 
 // ---------------------------------------------------------------------------
@@ -198,7 +200,7 @@ export function useAPIKeys() {
   return useQuery({
     queryKey: enterpriseKeys.apiKeys(),
     queryFn: () =>
-      apiClient.get<APIKey[]>('/api/v1/enterprise/api-keys', {
+      apiClient.get<APIKey[]>("/api/v1/enterprise/api-keys", {
         owner: address as string,
       }) as unknown as APIKey[],
     enabled: !!address,
@@ -212,20 +214,20 @@ export function useCreateAPIKey() {
 
   return useMutation({
     mutationFn: async (config: APIKeyConfig): Promise<APIKeyWithSecret> => {
-      return apiClient.post<APIKeyWithSecret>('/api/v1/enterprise/api-keys', {
+      return apiClient.post<APIKeyWithSecret>("/api/v1/enterprise/api-keys", {
         ...config,
         ownerAddress: address,
       }) as unknown as APIKeyWithSecret;
     },
     onSuccess: (data) => {
-      toast.success('API key created', {
+      toast.success("API key created", {
         description: `"${data.name}" — copy the secret now, it will not be shown again`,
         duration: 10_000,
       });
       queryClient.invalidateQueries({ queryKey: enterpriseKeys.apiKeys() });
     },
     onError: (err: Error) => {
-      toast.error('API key creation failed', { description: err.message });
+      toast.error("API key creation failed", { description: err.message });
     },
   });
 }
@@ -238,11 +240,11 @@ export function useRevokeAPIKey() {
       await apiClient.del(`/api/v1/enterprise/api-keys/${keyId}`);
     },
     onSuccess: () => {
-      toast.success('API key revoked');
+      toast.success("API key revoked");
       queryClient.invalidateQueries({ queryKey: enterpriseKeys.apiKeys() });
     },
     onError: (err: Error) => {
-      toast.error('Key revocation failed', { description: err.message });
+      toast.error("Key revocation failed", { description: err.message });
     },
   });
 }
@@ -257,7 +259,7 @@ export function useWebhooks() {
   return useQuery({
     queryKey: enterpriseKeys.webhooks(),
     queryFn: () =>
-      apiClient.get<Webhook[]>('/api/v1/enterprise/webhooks', {
+      apiClient.get<Webhook[]>("/api/v1/enterprise/webhooks", {
         owner: address as string,
       }) as unknown as Webhook[],
     enabled: !!address,
@@ -271,19 +273,19 @@ export function useRegisterWebhook() {
 
   return useMutation({
     mutationFn: async (config: WebhookConfig): Promise<Webhook> => {
-      return apiClient.post<Webhook>('/api/v1/enterprise/webhooks', {
+      return apiClient.post<Webhook>("/api/v1/enterprise/webhooks", {
         ...config,
         ownerAddress: address,
       }) as unknown as Webhook;
     },
     onSuccess: (data) => {
-      toast.success('Webhook registered', {
+      toast.success("Webhook registered", {
         description: `Listening for ${data.events.length} event type(s) at ${data.url}`,
       });
       queryClient.invalidateQueries({ queryKey: enterpriseKeys.webhooks() });
     },
     onError: (err: Error) => {
-      toast.error('Webhook registration failed', { description: err.message });
+      toast.error("Webhook registration failed", { description: err.message });
     },
   });
 }
@@ -298,17 +300,17 @@ export function useTestWebhook() {
     },
     onSuccess: (data) => {
       if (data.delivered) {
-        toast.success('Webhook test delivered', {
+        toast.success("Webhook test delivered", {
           description: `Status ${data.statusCode}, ${data.responseTimeMs}ms`,
         });
       } else {
-        toast.error('Webhook test failed', {
+        toast.error("Webhook test failed", {
           description: data.error ?? `Status ${data.statusCode}`,
         });
       }
     },
     onError: (err: Error) => {
-      toast.error('Webhook test request failed', { description: err.message });
+      toast.error("Webhook test request failed", { description: err.message });
     },
   });
 }
@@ -317,13 +319,13 @@ export function useTestWebhook() {
 // SLA Report
 // ---------------------------------------------------------------------------
 
-export function useSLAReport(period: ReportPeriod = 'month') {
+export function useSLAReport(period: ReportPeriod = "month") {
   const { address } = useAccount();
 
   return useQuery({
     queryKey: enterpriseKeys.sla(period),
     queryFn: () =>
-      apiClient.get<SLAReport>('/api/v1/enterprise/sla', {
+      apiClient.get<SLAReport>("/api/v1/enterprise/sla", {
         period,
         owner: address as string,
       }) as unknown as SLAReport,
@@ -336,13 +338,13 @@ export function useSLAReport(period: ReportPeriod = 'month') {
 // Usage Metrics
 // ---------------------------------------------------------------------------
 
-export function useUsageMetrics(period: ReportPeriod = 'month') {
+export function useUsageMetrics(period: ReportPeriod = "month") {
   const { address } = useAccount();
 
   return useQuery({
     queryKey: enterpriseKeys.usage(period),
     queryFn: () =>
-      apiClient.get<UsageMetrics>('/api/v1/enterprise/usage', {
+      apiClient.get<UsageMetrics>("/api/v1/enterprise/usage", {
         period,
         owner: address as string,
       }) as unknown as UsageMetrics,

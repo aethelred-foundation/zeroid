@@ -1,7 +1,7 @@
-'use client';
+"use client";
 
-import { useState } from 'react';
-import { motion } from 'framer-motion';
+import { useState } from "react";
+import { motion } from "framer-motion";
 import {
   History,
   Search,
@@ -18,23 +18,33 @@ import {
   ArrowRight,
   FileText,
   Calendar,
-} from 'lucide-react';
-import AppLayout from '@/components/layout/AppLayout';
-import AuditTimeline from '@/components/audit/AuditTimeline';
-import { StatusBadge } from '@/components/ui/StatusBadge';
-import { useAudit } from '@/hooks/useAudit';
+} from "lucide-react";
+import AppLayout from "@/components/layout/AppLayout";
+import AuditTimeline from "@/components/audit/AuditTimeline";
+import { StatusBadge } from "@/components/ui/StatusBadge";
+import { useAudit } from "@/hooks/useAudit";
 
-type AuditCategory = 'all' | 'credentials' | 'verifications' | 'governance' | 'identity';
+type AuditCategory =
+  | "all"
+  | "credentials"
+  | "verifications"
+  | "governance"
+  | "identity";
 
 export default function AuditPage() {
   const { auditLog, isLoading } = useAudit();
-  const [category, setCategory] = useState<AuditCategory>('all');
-  const [searchQuery, setSearchQuery] = useState('');
-  const [dateRange, setDateRange] = useState<'24h' | '7d' | '30d' | 'all'>('7d');
+  const [category, setCategory] = useState<AuditCategory>("all");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [dateRange, setDateRange] = useState<"24h" | "7d" | "30d" | "all">(
+    "7d",
+  );
 
   const filteredLog = (auditLog ?? []).filter((entry: any) => {
-    if (category !== 'all' && entry.category !== category) return false;
-    if (searchQuery && !entry.action.toLowerCase().includes(searchQuery.toLowerCase()))
+    if (category !== "all" && entry.category !== category) return false;
+    if (
+      searchQuery &&
+      !entry.action.toLowerCase().includes(searchQuery.toLowerCase())
+    )
       return false;
     return true;
   });
@@ -67,11 +77,23 @@ export default function AuditPage() {
         <div className="flex items-center gap-2">
           {(
             [
-              { id: 'all' as const, label: 'All Events', icon: History },
-              { id: 'credentials' as const, label: 'Credentials', icon: ShieldCheck },
-              { id: 'verifications' as const, label: 'Verifications', icon: Fingerprint },
-              { id: 'governance' as const, label: 'Governance', icon: FileText },
-              { id: 'identity' as const, label: 'Identity', icon: Key },
+              { id: "all" as const, label: "All Events", icon: History },
+              {
+                id: "credentials" as const,
+                label: "Credentials",
+                icon: ShieldCheck,
+              },
+              {
+                id: "verifications" as const,
+                label: "Verifications",
+                icon: Fingerprint,
+              },
+              {
+                id: "governance" as const,
+                label: "Governance",
+                icon: FileText,
+              },
+              { id: "identity" as const, label: "Identity", icon: Key },
             ] as const
           ).map((cat) => (
             <button
@@ -79,8 +101,8 @@ export default function AuditPage() {
               onClick={() => setCategory(cat.id)}
               className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all ${
                 category === cat.id
-                  ? 'bg-brand-600 text-white'
-                  : 'bg-[var(--surface-secondary)] text-[var(--text-secondary)] hover:bg-[var(--surface-tertiary)]'
+                  ? "bg-brand-600 text-white"
+                  : "bg-[var(--surface-secondary)] text-[var(--text-secondary)] hover:bg-[var(--surface-tertiary)]"
               }`}
             >
               <cat.icon className="w-4 h-4" />
@@ -102,17 +124,17 @@ export default function AuditPage() {
             />
           </div>
           <div className="flex items-center gap-1 p-1 bg-[var(--surface-secondary)] rounded-xl">
-            {(['24h', '7d', '30d', 'all'] as const).map((range) => (
+            {(["24h", "7d", "30d", "all"] as const).map((range) => (
               <button
                 key={range}
                 onClick={() => setDateRange(range)}
                 className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
                   dateRange === range
-                    ? 'bg-[var(--surface-elevated)] text-[var(--text-primary)] shadow-sm'
-                    : 'text-[var(--text-secondary)]'
+                    ? "bg-[var(--surface-elevated)] text-[var(--text-primary)] shadow-sm"
+                    : "text-[var(--text-secondary)]"
                 }`}
               >
-                {range === 'all' ? 'All' : range}
+                {range === "all" ? "All" : range}
               </button>
             ))}
           </div>
@@ -125,38 +147,48 @@ export default function AuditPage() {
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           {[
             {
-              label: 'Total Events',
+              label: "Total Events",
               value: auditLog?.length ?? 0,
               icon: History,
-              color: 'text-brand-500',
+              color: "text-brand-500",
             },
             {
-              label: 'Credentials Issued',
-              value: auditLog?.filter((e: any) => e.action === 'credential_issued').length ?? 0,
+              label: "Credentials Issued",
+              value:
+                auditLog?.filter((e: any) => e.action === "credential_issued")
+                  .length ?? 0,
               icon: ShieldCheck,
-              color: 'text-status-verified',
+              color: "text-status-verified",
             },
             {
-              label: 'Proofs Generated',
-              value: auditLog?.filter((e: any) => e.action === 'proof_generated').length ?? 0,
+              label: "Proofs Generated",
+              value:
+                auditLog?.filter((e: any) => e.action === "proof_generated")
+                  .length ?? 0,
               icon: Fingerprint,
-              color: 'text-identity-chrome',
+              color: "text-identity-chrome",
             },
             {
-              label: 'Revocations',
-              value: auditLog?.filter((e: any) => e.action === 'credential_revoked').length ?? 0,
+              label: "Revocations",
+              value:
+                auditLog?.filter((e: any) => e.action === "credential_revoked")
+                  .length ?? 0,
               icon: XCircle,
-              color: 'text-status-revoked',
+              color: "text-status-revoked",
             },
           ].map((stat) => (
             <div key={stat.label} className="card p-4">
               <div className="flex items-center gap-3">
-                <div className={`w-10 h-10 rounded-xl bg-[var(--surface-secondary)] flex items-center justify-center ${stat.color}`}>
+                <div
+                  className={`w-10 h-10 rounded-xl bg-[var(--surface-secondary)] flex items-center justify-center ${stat.color}`}
+                >
                   <stat.icon className="w-5 h-5" />
                 </div>
                 <div>
                   <div className="text-2xl font-bold">{stat.value}</div>
-                  <div className="text-xs text-[var(--text-tertiary)]">{stat.label}</div>
+                  <div className="text-xs text-[var(--text-tertiary)]">
+                    {stat.label}
+                  </div>
                 </div>
               </div>
             </div>

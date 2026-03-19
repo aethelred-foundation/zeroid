@@ -5,22 +5,22 @@
  * for the ZeroID dApp with RainbowKit integration.
  */
 
-import { http, createConfig, createStorage } from 'wagmi';
-import { injected, walletConnect, coinbaseWallet } from 'wagmi/connectors';
-import { getDefaultConfig } from '@rainbow-me/rainbowkit';
+import { http, createConfig, createStorage } from "wagmi";
+import { injected, walletConnect, coinbaseWallet } from "wagmi/connectors";
+import { getDefaultConfig } from "@rainbow-me/rainbowkit";
 import {
   aethelredMainnet,
   aethelredTestnet,
   aethelredDevnet,
   activeChain,
-} from './chains';
+} from "./chains";
 
 // ---------------------------------------------------------------------------
 // WalletConnect Project ID
 // ---------------------------------------------------------------------------
 
 const WALLETCONNECT_PROJECT_ID =
-  process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID || '';
+  process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID || "";
 
 // ---------------------------------------------------------------------------
 // SSR-Safe Storage
@@ -35,7 +35,7 @@ export const noopStorage = {
 
 /** SSR-safe storage adapter: uses localStorage in browsers, no-ops on server. */
 export const ssrSafeStorage =
-  typeof window !== 'undefined' ? window.localStorage : noopStorage;
+  typeof window !== "undefined" ? window.localStorage : noopStorage;
 
 // ---------------------------------------------------------------------------
 // RainbowKit Configuration
@@ -49,7 +49,7 @@ export const ssrSafeStorage =
  */
 export const wagmiConfig = WALLETCONNECT_PROJECT_ID
   ? getDefaultConfig({
-      appName: 'ZeroID by Aethelred',
+      appName: "ZeroID by Aethelred",
       projectId: WALLETCONNECT_PROJECT_ID,
       chains: [aethelredMainnet, aethelredTestnet, aethelredDevnet],
       ssr: true,
@@ -64,8 +64,8 @@ function createFallbackConfig() {
   const connectors = [
     injected({ shimDisconnect: true }),
     coinbaseWallet({
-      appName: 'ZeroID by Aethelred',
-      appLogoUrl: 'https://zeroid.aethelred.network/icon.png',
+      appName: "ZeroID by Aethelred",
+      appLogoUrl: "https://zeroid.aethelred.network/icon.png",
     }),
   ];
 
@@ -81,7 +81,7 @@ function createFallbackConfig() {
     transports,
     storage: createStorage({
       storage: ssrSafeStorage,
-      key: 'zeroid-wallet',
+      key: "zeroid-wallet",
     }),
     ssr: true,
   });

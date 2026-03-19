@@ -12,10 +12,10 @@ import type {
   Groth16Proof,
   ZKProof,
   ProofSystem,
-} from '@/types';
-import { CIRCUITS, PROOF_GENERATION_TIMEOUT_MS } from '@/config/constants';
-import { withTimeout } from '@/lib/utils';
-import { keccak256, toBytes, toHex } from 'viem';
+} from "@/types";
+import { CIRCUITS, PROOF_GENERATION_TIMEOUT_MS } from "@/config/constants";
+import { withTimeout } from "@/lib/utils";
+import { keccak256, toBytes, toHex } from "viem";
 
 // ============================================================================
 // Types
@@ -109,15 +109,17 @@ export async function generateProof(
   // 1. Resolve circuit metadata
   const circuit = CIRCUITS[circuitId];
   if (!circuit) {
-    throw new Error(`Unknown circuit: ${circuitId}. Available circuits: ${Object.keys(CIRCUITS).join(', ')}`);
+    throw new Error(
+      `Unknown circuit: ${circuitId}. Available circuits: ${Object.keys(CIRCUITS).join(", ")}`,
+    );
   }
 
-  onProgress?.(5, 'Loading circuit artifacts');
+  onProgress?.(5, "Loading circuit artifacts");
 
   // 2. Load snarkjs dynamically (it is a large module)
   const snarkjs = await loadSnarkjs();
 
-  onProgress?.(15, 'Fetching WASM proving circuit');
+  onProgress?.(15, "Fetching WASM proving circuit");
 
   // 3. Fetch artifacts in parallel
   const [wasmBuffer, zkeyBuffer] = await Promise.all([
@@ -125,7 +127,7 @@ export async function generateProof(
     fetchArtifact(circuit.zkeyPath),
   ]);
 
-  onProgress?.(40, 'Preparing witness inputs');
+  onProgress?.(40, "Preparing witness inputs");
 
   // 4. Merge public and private inputs into the witness input map
   const witnessInput: Record<string, string> = {
@@ -135,14 +137,16 @@ export async function generateProof(
 
   // Validate that all required inputs are present
   const allExpectedInputs = [...circuit.publicInputs, ...circuit.privateInputs];
-  const missingInputs = allExpectedInputs.filter((key) => !(key in witnessInput));
+  const missingInputs = allExpectedInputs.filter(
+    (key) => !(key in witnessInput),
+  );
   if (missingInputs.length > 0) {
     throw new Error(
-      `Missing circuit inputs for ${circuit.name}: ${missingInputs.join(', ')}`,
+      `Missing circuit inputs for ${circuit.name}: ${missingInputs.join(", ")}`,
     );
   }
 
-  onProgress?.(50, 'Generating ZK proof (this may take a moment)');
+  onProgress?.(50, "Generating ZK proof (this may take a moment)");
 
   // 5. Generate the proof with a timeout
   const result = await withTimeout(
@@ -155,7 +159,7 @@ export async function generateProof(
     `Proof generation timed out after ${PROOF_GENERATION_TIMEOUT_MS / 1000}s for circuit ${circuit.name}`,
   );
 
-  onProgress?.(90, 'Packaging proof');
+  onProgress?.(90, "Packaging proof");
 
   // 6. Convert snarkjs proof format to our Groth16Proof type
   const groth16Proof: Groth16Proof = {
@@ -169,9 +173,7 @@ export async function generateProof(
 
   // 7. Compute proof hash for deduplication / reference
   const proofBytes = toBytes(
-    toHex(
-      new TextEncoder().encode(JSON.stringify(groth16Proof)),
-    ),
+    toHex(new TextEncoder().encode(JSON.stringify(groth16Proof))),
   );
   const proofHash = keccak256(proofBytes) as Bytes32;
 
@@ -186,7 +188,7 @@ export async function generateProof(
     id: `proof-${now}-${Math.random().toString(36).slice(2, 10)}`,
     circuitId,
     circuitName: circuit.name,
-    proofSystem: 'groth16' as ProofSystem,
+    proofSystem: "groth16" as ProofSystem,
     proof: groth16Proof,
     publicInputs: publicInputValues,
     publicOutputs: publicOutputValues,
@@ -195,7 +197,7 @@ export async function generateProof(
     proofHash,
   };
 
-  onProgress?.(100, 'Proof generated successfully');
+  onProgress?.(100, "Proof generated successfully");
 
   return zkProof;
 }
@@ -258,6 +260,6 @@ export function getAvailableCircuits(): CircuitMeta[] {
  * Dynamically import snarkjs to avoid bundling it in the initial chunk.
  * snarkjs is ~2MB and only needed when generating proofs.
  */
-async function loadSnarkjs(): Promise<typeof import('snarkjs')> {
-  return import('snarkjs');
+async function loadSnarkjs(): Promise<typeof import("snarkjs")> {
+  return import("snarkjs");
 }

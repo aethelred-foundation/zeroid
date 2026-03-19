@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from "next/server";
 
 export async function POST(request: NextRequest) {
   try {
@@ -7,23 +7,23 @@ export async function POST(request: NextRequest) {
 
     if (!credentialHash || !proof) {
       return NextResponse.json(
-        { error: 'Missing credentialHash or proof' },
-        { status: 400 }
+        { error: "Missing credentialHash or proof" },
+        { status: 400 },
       );
     }
 
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4003';
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4003";
     const response = await fetch(`${apiUrl}/api/v1/credentials/verify`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ credentialHash, proof, attributeName }),
     });
 
     if (!response.ok) {
       const error = await response.json();
       return NextResponse.json(
-        { error: error.message ?? 'Verification failed' },
-        { status: response.status }
+        { error: error.message ?? "Verification failed" },
+        { status: response.status },
       );
     }
 
@@ -31,8 +31,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(result);
   } catch (error) {
     return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
+      { error: "Internal server error" },
+      { status: 500 },
     );
   }
 }

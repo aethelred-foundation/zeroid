@@ -1,6 +1,6 @@
-import { Request, Response, NextFunction } from 'express';
-import { z, ZodSchema, ZodError } from 'zod';
-import { logger } from '../index';
+import { Request, Response, NextFunction } from "express";
+import { z, ZodSchema, ZodError } from "zod";
+import { logger } from "../index";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -21,7 +21,7 @@ export function validate(schemas: ValidationTarget) {
     if (schemas.body) {
       const result = schemas.body.safeParse(req.body);
       if (!result.success) {
-        errors.push({ target: 'body', issues: result.error.issues });
+        errors.push({ target: "body", issues: result.error.issues });
       } else {
         req.body = result.data;
       }
@@ -30,7 +30,7 @@ export function validate(schemas: ValidationTarget) {
     if (schemas.query) {
       const result = schemas.query.safeParse(req.query);
       if (!result.success) {
-        errors.push({ target: 'query', issues: result.error.issues });
+        errors.push({ target: "query", issues: result.error.issues });
       } else {
         (req as Request).query = result.data;
       }
@@ -39,7 +39,7 @@ export function validate(schemas: ValidationTarget) {
     if (schemas.params) {
       const result = schemas.params.safeParse(req.params);
       if (!result.success) {
-        errors.push({ target: 'params', issues: result.error.issues });
+        errors.push({ target: "params", issues: result.error.issues });
       } else {
         req.params = result.data;
       }
@@ -49,21 +49,21 @@ export function validate(schemas: ValidationTarget) {
       const formattedErrors = errors.flatMap(({ target, issues }) =>
         issues.map((issue) => ({
           target,
-          path: issue.path.join('.'),
+          path: issue.path.join("."),
           message: issue.message,
           code: issue.code,
         })),
       );
 
-      logger.warn('validation_failed', {
+      logger.warn("validation_failed", {
         path: req.path,
         method: req.method,
         errors: formattedErrors,
       });
 
       res.status(400).json({
-        error: 'Validation failed',
-        code: 'VALIDATION_ERROR',
+        error: "Validation failed",
+        code: "VALIDATION_ERROR",
         details: formattedErrors,
       });
       return;
@@ -77,64 +77,78 @@ export function validate(schemas: ValidationTarget) {
 // Shared Zod schemas
 // ---------------------------------------------------------------------------
 
-export const didSchema = z.string().regex(
-  /^did:aethelred:[a-zA-Z0-9._-]+$/,
-  'Invalid DID format. Expected: did:aethelred:<identifier>',
-);
+export const didSchema = z
+  .string()
+  .regex(
+    /^did:aethelred:[a-zA-Z0-9._-]+$/,
+    "Invalid DID format. Expected: did:aethelred:<identifier>",
+  );
 
-export const uuidSchema = z.string().uuid('Invalid UUID format');
+export const uuidSchema = z.string().uuid("Invalid UUID format");
 
 export const paginationSchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
   sortBy: z.string().optional(),
-  sortOrder: z.enum(['asc', 'desc']).default('desc'),
+  sortOrder: z.enum(["asc", "desc"]).default("desc"),
 });
 
-export const publicKeySchema = z.string().min(32).max(512).regex(
-  /^[A-Za-z0-9+/=]+$/,
-  'Public key must be base64-encoded',
-);
+export const publicKeySchema = z
+  .string()
+  .min(32)
+  .max(512)
+  .regex(/^[A-Za-z0-9+/=]+$/, "Public key must be base64-encoded");
 
 export const credentialTypeSchema = z.enum([
-  'NATIONAL_ID',
-  'PASSPORT',
-  'DRIVERS_LICENSE',
-  'PROOF_OF_ADDRESS',
-  'KYC_LEVEL_1',
-  'KYC_LEVEL_2',
-  'KYC_LEVEL_3',
-  'ACCREDITED_INVESTOR',
-  'PROFESSIONAL_LICENSE',
-  'EDUCATION',
-  'EMPLOYMENT',
-  'CUSTOM',
+  "NATIONAL_ID",
+  "PASSPORT",
+  "DRIVERS_LICENSE",
+  "PROOF_OF_ADDRESS",
+  "KYC_LEVEL_1",
+  "KYC_LEVEL_2",
+  "KYC_LEVEL_3",
+  "ACCREDITED_INVESTOR",
+  "PROFESSIONAL_LICENSE",
+  "EDUCATION",
+  "EMPLOYMENT",
+  "CUSTOM",
 ]);
 
-export const dateRangeSchema = z.object({
-  from: z.coerce.date().optional(),
-  to: z.coerce.date().optional(),
-}).refine(
-  (data) => {
-    if (data.from && data.to) return data.from <= data.to;
-    return true;
-  },
-  { message: 'from must be before to' },
-);
+export const dateRangeSchema = z
+  .object({
+    from: z.coerce.date().optional(),
+    to: z.coerce.date().optional(),
+  })
+  .refine(
+    (data) => {
+      if (data.from && data.to) return data.from <= data.to;
+      return true;
+    },
+    { message: "from must be before to" },
+  );
 
 // ---------------------------------------------------------------------------
 // Validation helpers
 // ---------------------------------------------------------------------------
-export function parseOrThrow<T>(schema: ZodSchema<T>, data: unknown, context: string): T {
+export function parseOrThrow<T>(
+  schema: ZodSchema<T>,
+  data: unknown,
+  context: string,
+): T {
   try {
     return schema.parse(data);
   } catch (err) {
     if (err instanceof ZodError) {
-      const details = err.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
-      throw Object.assign(new Error(`Validation failed in ${context}: ${details}`), {
-        statusCode: 400,
-        code: 'VALIDATION_ERROR',
-      });
+      const details = err.issues
+        .map((i) => `${i.path.join(".")}: ${i.message}`)
+        .join("; ");
+      throw Object.assign(
+        new Error(`Validation failed in ${context}: ${details}`),
+        {
+          statusCode: 400,
+          code: "VALIDATION_ERROR",
+        },
+      );
     }
     throw err;
   }
@@ -167,7 +181,7 @@ export const verifyCredentialSchema = z.object({
 
 export const createSchemaSchema = z.object({
   name: z.string().min(3).max(100),
-  version: z.string().regex(/^\d+\.\d+\.\d+$/, 'Version must be semver format'),
+  version: z.string().regex(/^\d+\.\d+\.\d+$/, "Version must be semver format"),
   description: z.string().min(10).max(1000),
   schemaDefinition: z.record(z.unknown()),
 });

@@ -120,10 +120,15 @@ export interface BatchUpdateResult {
 /** Hash inputs to a field element using SHA-256 */
 async function hashToField(...inputs: string[]): Promise<FieldElement> {
   const encoder = new TextEncoder();
-  const data = encoder.encode(inputs.join('|'));
-  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+  const data = encoder.encode(inputs.join("|"));
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
   const hashArray = new Uint8Array(hashBuffer);
-  return '0x' + Array.from(hashArray).map((b) => b.toString(16).padStart(2, '0')).join('');
+  return (
+    "0x" +
+    Array.from(hashArray)
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("")
+  );
 }
 
 /** Compute a mock pairing check (structural placeholder for WASM pairing) */
@@ -135,8 +140,8 @@ async function computePairingCheck(
 ): Promise<boolean> {
   // In production, this delegates to a WASM BLS12-381 pairing library.
   // Here we verify structural consistency.
-  const lhs = await hashToField('PAIRING_LHS', a, b);
-  const rhs = await hashToField('PAIRING_RHS', c, d);
+  const lhs = await hashToField("PAIRING_LHS", a, b);
+  const rhs = await hashToField("PAIRING_RHS", c, d);
   // Structural check — actual pairing equality is done in WASM
   return lhs.length === rhs.length && lhs.length > 0;
 }
@@ -164,16 +169,18 @@ export async function verifyNonMembershipWitness(
   // Check 1: Structural completeness
   const structureValid = !!witness.c && !!witness.d && !!witness.element;
   checks.push({
-    name: 'witness_structure',
+    name: "witness_structure",
     passed: structureValid,
-    detail: structureValid ? 'All witness components present' : 'Missing witness fields',
+    detail: structureValid
+      ? "All witness components present"
+      : "Missing witness fields",
   });
 
   // Check 2: Version compatibility
   const needsUpdate = witness.accumulatorVersion < accumulatorState.version;
   const versionGap = accumulatorState.version - witness.accumulatorVersion;
   checks.push({
-    name: 'version_check',
+    name: "version_check",
     passed: !needsUpdate,
     detail: needsUpdate
       ? `Witness is ${versionGap} version(s) behind (v${witness.accumulatorVersion} vs v${accumulatorState.version})`
@@ -184,24 +191,27 @@ export async function verifyNonMembershipWitness(
   const { g1, g2, z } = accumulatorState.publicParams;
   const pairingValid = await computePairingCheck(
     witness.c,
-    await hashToField('ACC_ELEM_G2', witness.element, g2),
+    await hashToField("ACC_ELEM_G2", witness.element, g2),
     accumulatorState.value,
     g2,
   );
   checks.push({
-    name: 'pairing_check',
+    name: "pairing_check",
     passed: pairingValid,
-    detail: 'Pairing equation satisfied',
+    detail: "Pairing equation satisfied",
   });
 
   // Check 4: Element field validity (not zero, not identity)
   const elementValid =
-    witness.element !== '0x0000000000000000000000000000000000000000000000000000000000000000' &&
+    witness.element !==
+      "0x0000000000000000000000000000000000000000000000000000000000000000" &&
     witness.element.length === 66;
   checks.push({
-    name: 'element_validity',
+    name: "element_validity",
     passed: elementValid,
-    detail: elementValid ? 'Element is a valid field element' : 'Invalid element encoding',
+    detail: elementValid
+      ? "Element is a valid field element"
+      : "Invalid element encoding",
   });
 
   // Check 5: Witness freshness (must not be older than 7 days without update)
@@ -209,7 +219,7 @@ export async function verifyNonMembershipWitness(
   const witnessAge = Math.floor(Date.now() / 1000) - witness.createdAt;
   const freshnessValid = witnessAge <= maxWitnessAgeSeconds;
   checks.push({
-    name: 'freshness',
+    name: "freshness",
     passed: freshnessValid,
     detail: `Witness age: ${Math.floor(witnessAge / 3600)} hours`,
   });
@@ -252,7 +262,7 @@ export async function updateWitnessWithDelta(
   // Check that the element being witnessed was not added (which would invalidate non-membership)
   if (delta.additions.includes(witness.element)) {
     throw new Error(
-      'Element was added to accumulator — non-membership witness is no longer valid',
+      "Element was added to accumulator — non-membership witness is no longer valid",
     );
   }
 
@@ -261,9 +271,9 @@ export async function updateWitnessWithDelta(
 
   // Process additions: for each added element, adjust witness
   for (const addition of delta.additions) {
-    const diff = await hashToField('ACC_DIFF', addition, witness.element);
-    updatedC = await hashToField('ACC_UPDATE_C_ADD', updatedC, diff);
-    updatedD = await hashToField('ACC_UPDATE_D_ADD', updatedD, diff, addition);
+    const diff = await hashToField("ACC_DIFF", addition, witness.element);
+    updatedC = await hashToField("ACC_UPDATE_C_ADD", updatedC, diff);
+    updatedD = await hashToField("ACC_UPDATE_D_ADD", updatedD, diff, addition);
   }
 
   // Process removals: for each removed element, adjust witness
@@ -273,9 +283,9 @@ export async function updateWitnessWithDelta(
       // The witness remains valid (non-membership is preserved)
       continue;
     }
-    const diff = await hashToField('ACC_DIFF', removal, witness.element);
-    updatedC = await hashToField('ACC_UPDATE_C_REM', updatedC, diff);
-    updatedD = await hashToField('ACC_UPDATE_D_REM', updatedD, diff, removal);
+    const diff = await hashToField("ACC_DIFF", removal, witness.element);
+    updatedC = await hashToField("ACC_UPDATE_C_REM", updatedC, diff);
+    updatedD = await hashToField("ACC_UPDATE_D_REM", updatedD, diff, removal);
   }
 
   return {
@@ -329,7 +339,7 @@ export class AccumulatorTracker {
       version: delta.toVersion,
       size: this.state.size + delta.additions.length - delta.removals.length,
       lastUpdatedAt: delta.timestamp,
-      stateHash: '', // Will be recomputed
+      stateHash: "", // Will be recomputed
     };
 
     this.deltaHistory.push(delta);
@@ -344,7 +354,9 @@ export class AccumulatorTracker {
   }
 
   /** Check if a witness needs updating */
-  witnessNeedsUpdate(witness: NonMembershipWitness | MembershipWitness): boolean {
+  witnessNeedsUpdate(
+    witness: NonMembershipWitness | MembershipWitness,
+  ): boolean {
     return witness.accumulatorVersion < this.state.version;
   }
 
@@ -387,13 +399,19 @@ export async function batchUpdateWitnesses(
   const failedElements: FieldElement[] = [];
 
   // Sort deltas by version to ensure correct sequential application
-  const sortedDeltas = [...deltas].sort((a, b) => a.fromVersion - b.fromVersion);
+  const sortedDeltas = [...deltas].sort(
+    (a, b) => a.fromVersion - b.fromVersion,
+  );
 
   // Pre-compute shared diff values for each delta's additions and removals
   // This avoids redundant hashing across witnesses
   const diffCache = new Map<string, FieldElement>();
 
-  async function getCachedDiff(a: string, b: string, tag: string): Promise<FieldElement> {
+  async function getCachedDiff(
+    a: string,
+    b: string,
+    tag: string,
+  ): Promise<FieldElement> {
     const key = `${tag}:${a}:${b}`;
     const cached = diffCache.get(key);
     if (cached) return cached;
@@ -421,23 +439,41 @@ export async function batchUpdateWitnesses(
 
         // Check if element was added (invalidates non-membership)
         if (delta.additions.includes(current.element)) {
-          throw new Error('Element was added to accumulator');
+          throw new Error("Element was added to accumulator");
         }
 
         let updatedC = current.c;
         let updatedD = current.d;
 
         for (const addition of delta.additions) {
-          const diff = await getCachedDiff(addition, current.element, 'ACC_DIFF');
-          updatedC = await hashToField('ACC_UPDATE_C_ADD', updatedC, diff);
-          updatedD = await hashToField('ACC_UPDATE_D_ADD', updatedD, diff, addition);
+          const diff = await getCachedDiff(
+            addition,
+            current.element,
+            "ACC_DIFF",
+          );
+          updatedC = await hashToField("ACC_UPDATE_C_ADD", updatedC, diff);
+          updatedD = await hashToField(
+            "ACC_UPDATE_D_ADD",
+            updatedD,
+            diff,
+            addition,
+          );
         }
 
         for (const removal of delta.removals) {
           if (removal === current.element) continue;
-          const diff = await getCachedDiff(removal, current.element, 'ACC_DIFF');
-          updatedC = await hashToField('ACC_UPDATE_C_REM', updatedC, diff);
-          updatedD = await hashToField('ACC_UPDATE_D_REM', updatedD, diff, removal);
+          const diff = await getCachedDiff(
+            removal,
+            current.element,
+            "ACC_DIFF",
+          );
+          updatedC = await hashToField("ACC_UPDATE_C_REM", updatedC, diff);
+          updatedD = await hashToField(
+            "ACC_UPDATE_D_REM",
+            updatedD,
+            diff,
+            removal,
+          );
         }
 
         current = {
@@ -460,8 +496,14 @@ export async function batchUpdateWitnesses(
   return {
     updatedWitnesses,
     failedElements,
-    fromVersion: witnesses.length > 0 ? Math.min(...witnesses.map((w) => w.accumulatorVersion)) : 0,
-    toVersion: sortedDeltas.length > 0 ? sortedDeltas[sortedDeltas.length - 1].toVersion : 0,
+    fromVersion:
+      witnesses.length > 0
+        ? Math.min(...witnesses.map((w) => w.accumulatorVersion))
+        : 0,
+    toVersion:
+      sortedDeltas.length > 0
+        ? sortedDeltas[sortedDeltas.length - 1].toVersion
+        : 0,
     processingTimeMs,
   };
 }

@@ -6,21 +6,26 @@
  * leaves the enclave — only template hashes are returned to the client.
  */
 
-import { useState, useCallback, useRef, useEffect } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useAccount } from 'wagmi';
-import { toast } from 'sonner';
-import { apiClient } from '@/lib/api/client';
-import { TEE_SERVICE_URL } from '@/config/constants';
-import type { Bytes32, ISODateString } from '@/types';
+import { useState, useCallback, useRef, useEffect } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useAccount } from "wagmi";
+import { toast } from "sonner";
+import { apiClient } from "@/lib/api/client";
+import { TEE_SERVICE_URL } from "@/config/constants";
+import type { Bytes32, ISODateString } from "@/types";
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-export type BiometricModality = 'face' | 'fingerprint' | 'iris';
+export type BiometricModality = "face" | "fingerprint" | "iris";
 
-export type CameraState = 'idle' | 'initializing' | 'active' | 'paused' | 'error';
+export type CameraState =
+  | "idle"
+  | "initializing"
+  | "active"
+  | "paused"
+  | "error";
 
 export interface LivenessResult {
   passed: boolean;
@@ -32,7 +37,7 @@ export interface LivenessResult {
 }
 
 export interface LivenessChallenge {
-  type: 'blink' | 'turn_left' | 'turn_right' | 'smile' | 'nod';
+  type: "blink" | "turn_left" | "turn_right" | "smile" | "nod";
   completed: boolean;
   confidenceScore: number;
 }
@@ -80,8 +85,8 @@ export interface EnrolledModality {
 // ---------------------------------------------------------------------------
 
 const biometricKeys = {
-  all: ['biometrics'] as const,
-  status: () => [...biometricKeys.all, 'status'] as const,
+  all: ["biometrics"] as const,
+  status: () => [...biometricKeys.all, "status"] as const,
 };
 
 // ---------------------------------------------------------------------------
@@ -89,12 +94,12 @@ const biometricKeys = {
 // ---------------------------------------------------------------------------
 
 export function useCameraState() {
-  const [cameraState, setCameraState] = useState<CameraState>('idle');
+  const [cameraState, setCameraState] = useState<CameraState>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
   const startCamera = useCallback(async () => {
-    setCameraState('initializing');
+    setCameraState("initializing");
     setErrorMessage(null);
 
     try {
@@ -102,16 +107,17 @@ export function useCameraState() {
         video: {
           width: { ideal: 1280 },
           height: { ideal: 720 },
-          facingMode: 'user',
+          facingMode: "user",
         },
       });
       streamRef.current = stream;
-      setCameraState('active');
+      setCameraState("active");
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Camera access denied';
+      const message =
+        err instanceof Error ? err.message : "Camera access denied";
       setErrorMessage(message);
-      setCameraState('error');
-      toast.error('Camera access failed', { description: message });
+      setCameraState("error");
+      toast.error("Camera access failed", { description: message });
     }
   }, []);
 
@@ -120,7 +126,7 @@ export function useCameraState() {
       streamRef.current.getTracks().forEach((track) => {
         track.enabled = false;
       });
-      setCameraState('paused');
+      setCameraState("paused");
     }
   }, []);
 
@@ -129,7 +135,7 @@ export function useCameraState() {
       streamRef.current.getTracks().forEach((track) => {
         track.enabled = true;
       });
-      setCameraState('active');
+      setCameraState("active");
     }
   }, []);
 
@@ -138,7 +144,7 @@ export function useCameraState() {
       streamRef.current.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
     }
-    setCameraState('idle');
+    setCameraState("idle");
     setErrorMessage(null);
   }, []);
 
@@ -172,26 +178,23 @@ export function useStartLivenessCheck() {
       frameData: string; // base64-encoded, encrypted for enclave
       enclaveHash: Bytes32;
     }): Promise<LivenessResult> => {
-      return apiClient.post<LivenessResult>(
-        '/api/v1/tee/biometric/liveness',
-        {
-          frameData: params.frameData,
-          enclaveHash: params.enclaveHash,
-          sessionId: params.sessionId,
-        },
-      ) as unknown as LivenessResult;
+      return apiClient.post<LivenessResult>("/api/v1/tee/biometric/liveness", {
+        frameData: params.frameData,
+        enclaveHash: params.enclaveHash,
+        sessionId: params.sessionId,
+      }) as unknown as LivenessResult;
     },
     onSuccess: (data) => {
       if (data.passed) {
-        toast.success('Liveness check passed', {
+        toast.success("Liveness check passed", {
           description: `Confidence: ${(data.confidence * 100).toFixed(1)}%`,
         });
       } else {
-        toast.warning('Liveness check failed — please try again');
+        toast.warning("Liveness check failed — please try again");
       }
     },
     onError: (err: Error) => {
-      toast.error('Liveness check error', { description: err.message });
+      toast.error("Liveness check error", { description: err.message });
     },
   });
 }
@@ -209,7 +212,7 @@ export function useCaptureBiometric() {
       livenessSessionId: string;
     }): Promise<BiometricCapture> => {
       return apiClient.post<BiometricCapture>(
-        '/api/v1/tee/biometric/capture',
+        "/api/v1/tee/biometric/capture",
         params,
       ) as unknown as BiometricCapture;
     },
@@ -219,7 +222,7 @@ export function useCaptureBiometric() {
       });
     },
     onError: (err: Error) => {
-      toast.error('Biometric capture failed', { description: err.message });
+      toast.error("Biometric capture failed", { description: err.message });
     },
   });
 }
@@ -237,23 +240,23 @@ export function useVerifyBiometric() {
       livenessSessionId: string;
     }): Promise<BiometricVerificationResult> => {
       return apiClient.post<BiometricVerificationResult>(
-        '/api/v1/tee/biometric/verify',
+        "/api/v1/tee/biometric/verify",
         params,
       ) as unknown as BiometricVerificationResult;
     },
     onSuccess: (data) => {
       if (data.verified) {
-        toast.success('Biometric verified', {
+        toast.success("Biometric verified", {
           description: `Match score: ${(data.matchScore * 100).toFixed(1)}% (threshold: ${(data.threshold * 100).toFixed(0)}%)`,
         });
       } else {
-        toast.error('Biometric verification failed', {
+        toast.error("Biometric verification failed", {
           description: `Match score ${(data.matchScore * 100).toFixed(1)}% below threshold ${(data.threshold * 100).toFixed(0)}%`,
         });
       }
     },
     onError: (err: Error) => {
-      toast.error('Verification error', { description: err.message });
+      toast.error("Verification error", { description: err.message });
     },
   });
 }
@@ -268,10 +271,9 @@ export function useBiometricStatus() {
   return useQuery({
     queryKey: biometricKeys.status(),
     queryFn: () =>
-      apiClient.get<BiometricEnrollmentStatus>(
-        '/api/v1/tee/biometric/status',
-        { owner: address as string },
-      ) as unknown as BiometricEnrollmentStatus,
+      apiClient.get<BiometricEnrollmentStatus>("/api/v1/tee/biometric/status", {
+        owner: address as string,
+      }) as unknown as BiometricEnrollmentStatus,
     enabled: !!address,
     staleTime: 60_000,
   });
@@ -293,7 +295,7 @@ export function useEnrollBiometric() {
       livenessSessionId: string;
     }): Promise<EnrolledModality> => {
       return apiClient.post<EnrolledModality>(
-        '/api/v1/tee/biometric/enroll',
+        "/api/v1/tee/biometric/enroll",
         params,
       ) as unknown as EnrolledModality;
     },
@@ -304,7 +306,7 @@ export function useEnrollBiometric() {
       queryClient.invalidateQueries({ queryKey: biometricKeys.status() });
     },
     onError: (err: Error) => {
-      toast.error('Enrollment failed', { description: err.message });
+      toast.error("Enrollment failed", { description: err.message });
     },
   });
 }

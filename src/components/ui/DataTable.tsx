@@ -1,7 +1,7 @@
-'use client';
+"use client";
 
-import React, { useState, useMemo, useCallback } from 'react';
-import { motion } from 'framer-motion';
+import React, { useState, useMemo, useCallback } from "react";
+import { motion } from "framer-motion";
 import {
   ChevronUp,
   ChevronDown,
@@ -9,22 +9,22 @@ import {
   ChevronLeft,
   ChevronRight,
   Inbox,
-} from 'lucide-react';
+} from "lucide-react";
 
-import { EmptyState } from './EmptyState';
+import { EmptyState } from "./EmptyState";
 
 // ============================================================
 // DataTable Types
 // ============================================================
 
-export type SortDirection = 'asc' | 'desc' | null;
+export type SortDirection = "asc" | "desc" | null;
 
 export interface Column<T> {
   key: string;
   header: string;
   sortable?: boolean;
   width?: string;
-  align?: 'left' | 'center' | 'right';
+  align?: "left" | "center" | "right";
   render?: (value: unknown, row: T, index: number) => React.ReactNode;
   accessor?: (row: T) => unknown;
 }
@@ -57,10 +57,10 @@ interface DataTableProps<T> {
 // ============================================================
 
 function SortIcon({ direction }: { direction: SortDirection }) {
-  if (direction === 'asc') {
+  if (direction === "asc") {
     return <ChevronUp className="w-3.5 h-3.5 text-cyan-400" />;
   }
-  if (direction === 'desc') {
+  if (direction === "desc") {
     return <ChevronDown className="w-3.5 h-3.5 text-cyan-400" />;
   }
   return <ChevronsUpDown className="w-3.5 h-3.5 text-zero-600" />;
@@ -88,8 +88,8 @@ function Pagination({
   const startItem = (currentPage - 1) * pageSize + 1;
   const endItem = Math.min(currentPage * pageSize, totalItems);
 
-  const getVisiblePages = (): (number | 'ellipsis')[] => {
-    const pages: (number | 'ellipsis')[] = [];
+  const getVisiblePages = (): (number | "ellipsis")[] => {
+    const pages: (number | "ellipsis")[] = [];
 
     if (totalPages <= 7) {
       for (let i = 1; i <= totalPages; i++) pages.push(i);
@@ -99,7 +99,7 @@ function Pagination({
     pages.push(1);
 
     if (currentPage > 3) {
-      pages.push('ellipsis');
+      pages.push("ellipsis");
     }
 
     const start = Math.max(2, currentPage - 1);
@@ -110,7 +110,7 @@ function Pagination({
     }
 
     if (currentPage < totalPages - 2) {
-      pages.push('ellipsis');
+      pages.push("ellipsis");
     }
 
     pages.push(totalPages);
@@ -137,8 +137,11 @@ function Pagination({
         </button>
 
         {getVisiblePages().map((page, i) =>
-          page === 'ellipsis' ? (
-            <span key={`ellipsis-${i}`} className="px-1.5 text-zero-600 text-sm">
+          page === "ellipsis" ? (
+            <span
+              key={`ellipsis-${i}`}
+              className="px-1.5 text-zero-600 text-sm"
+            >
               ...
             </span>
           ) : (
@@ -147,13 +150,13 @@ function Pagination({
               onClick={() => onPageChange(page)}
               className={`w-8 h-8 rounded-lg text-xs font-medium transition-colors ${
                 currentPage === page
-                  ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/30'
-                  : 'text-zero-400 hover:bg-zero-800 hover:text-zero-200'
+                  ? "bg-cyan-500/20 text-cyan-400 border border-cyan-500/30"
+                  : "text-zero-400 hover:bg-zero-800 hover:text-zero-200"
               }`}
             >
               {page}
             </button>
-          )
+          ),
         )}
 
         <button
@@ -180,11 +183,11 @@ export function DataTable<T>({
   pageSize = 10,
   sortable = true,
   loading = false,
-  emptyTitle = 'No data found',
-  emptyDescription = 'There are no records to display.',
+  emptyTitle = "No data found",
+  emptyDescription = "There are no records to display.",
   emptyAction,
   onRowClick,
-  className = '',
+  className = "",
   stickyHeader = false,
 }: DataTableProps<T>) {
   const [sortState, setSortState] = useState<SortState>({
@@ -198,14 +201,16 @@ export function DataTable<T>({
     (columnKey: string) => {
       setSortState((prev) => {
         if (prev.column === columnKey) {
-          if (prev.direction === 'asc') return { column: columnKey, direction: 'desc' };
-          if (prev.direction === 'desc') return { column: null, direction: null };
+          if (prev.direction === "asc")
+            return { column: columnKey, direction: "desc" };
+          if (prev.direction === "desc")
+            return { column: null, direction: null };
         }
-        return { column: columnKey, direction: 'asc' };
+        return { column: columnKey, direction: "asc" };
       });
       setCurrentPage(1);
     },
-    [sortable]
+    [sortable],
   );
 
   // Sort data
@@ -228,15 +233,15 @@ export function DataTable<T>({
       if (bVal == null) return -1;
 
       let comparison = 0;
-      if (typeof aVal === 'string' && typeof bVal === 'string') {
+      if (typeof aVal === "string" && typeof bVal === "string") {
         comparison = aVal.localeCompare(bVal);
-      } else if (typeof aVal === 'number' && typeof bVal === 'number') {
+      } else if (typeof aVal === "number" && typeof bVal === "number") {
         comparison = aVal - bVal;
       } else {
         comparison = String(aVal).localeCompare(String(bVal));
       }
 
-      return sortState.direction === 'desc' ? -comparison : comparison;
+      return sortState.direction === "desc" ? -comparison : comparison;
     });
   }, [data, sortState, columns]);
 
@@ -244,13 +249,15 @@ export function DataTable<T>({
   const totalPages = Math.max(1, Math.ceil(sortedData.length / pageSize));
   const paginatedData = sortedData.slice(
     (currentPage - 1) * pageSize,
-    currentPage * pageSize
+    currentPage * pageSize,
   );
 
   // Loading state
   if (loading) {
     return (
-      <div className={`bg-zero-900 border border-zero-800 rounded-2xl overflow-hidden ${className}`}>
+      <div
+        className={`bg-zero-900 border border-zero-800 rounded-2xl overflow-hidden ${className}`}
+      >
         <div className="space-y-0">
           {/* Header skeleton */}
           <div className="flex gap-4 px-4 py-3 border-b border-zero-800">
@@ -263,7 +270,10 @@ export function DataTable<T>({
           </div>
           {/* Row skeletons */}
           {Array.from({ length: 5 }).map((_, i) => (
-            <div key={i} className="flex gap-4 px-4 py-3.5 border-b border-zero-800/50">
+            <div
+              key={i}
+              className="flex gap-4 px-4 py-3.5 border-b border-zero-800/50"
+            >
               {columns.map((col) => (
                 <div
                   key={col.key}
@@ -281,7 +291,9 @@ export function DataTable<T>({
   // Empty state
   if (data.length === 0) {
     return (
-      <div className={`bg-zero-900 border border-zero-800 rounded-2xl overflow-hidden ${className}`}>
+      <div
+        className={`bg-zero-900 border border-zero-800 rounded-2xl overflow-hidden ${className}`}
+      >
         <EmptyState
           icon={<Inbox className="w-7 h-7 text-zero-500" />}
           title={emptyTitle}
@@ -295,22 +307,26 @@ export function DataTable<T>({
 
   const alignClass = (align?: string) => {
     switch (align) {
-      case 'center':
-        return 'text-center';
-      case 'right':
-        return 'text-right';
+      case "center":
+        return "text-center";
+      case "right":
+        return "text-right";
       default:
-        return 'text-left';
+        return "text-left";
     }
   };
 
   return (
-    <div className={`bg-zero-900 border border-zero-800 rounded-2xl overflow-hidden ${className}`}>
+    <div
+      className={`bg-zero-900 border border-zero-800 rounded-2xl overflow-hidden ${className}`}
+    >
       <div className="overflow-x-auto">
         <table className="w-full">
           {/* Table header */}
           <thead>
-            <tr className={`border-b border-zero-800 ${stickyHeader ? 'sticky top-0 bg-zero-900 z-10' : ''}`}>
+            <tr
+              className={`border-b border-zero-800 ${stickyHeader ? "sticky top-0 bg-zero-900 z-10" : ""}`}
+            >
               {columns.map((column) => {
                 const isSortable = sortable && column.sortable !== false;
                 const currentDirection =
@@ -320,14 +336,16 @@ export function DataTable<T>({
                   <th
                     key={column.key}
                     className={`px-4 py-3 text-xs font-medium text-zero-500 uppercase tracking-wider ${alignClass(column.align)} ${
-                      isSortable ? 'cursor-pointer select-none hover:text-zero-300' : ''
+                      isSortable
+                        ? "cursor-pointer select-none hover:text-zero-300"
+                        : ""
                     }`}
                     style={column.width ? { width: column.width } : undefined}
                     onClick={() => isSortable && handleSort(column.key)}
                   >
                     <div
                       className={`inline-flex items-center gap-1 ${
-                        column.align === 'right' ? 'flex-row-reverse' : ''
+                        column.align === "right" ? "flex-row-reverse" : ""
                       }`}
                     >
                       {column.header}
@@ -351,8 +369,8 @@ export function DataTable<T>({
                   transition={{ delay: rowIndex * 0.03 }}
                   className={`border-b border-zero-800/50 last:border-b-0 transition-colors ${
                     onRowClick
-                      ? 'cursor-pointer hover:bg-zero-800/50'
-                      : 'hover:bg-zero-800/30'
+                      ? "cursor-pointer hover:bg-zero-800/50"
+                      : "hover:bg-zero-800/30"
                   }`}
                   onClick={() => onRowClick?.(row, globalIndex)}
                 >
@@ -365,11 +383,13 @@ export function DataTable<T>({
                       <td
                         key={column.key}
                         className={`px-4 py-3.5 text-sm text-zero-300 ${alignClass(column.align)}`}
-                        style={column.width ? { width: column.width } : undefined}
+                        style={
+                          column.width ? { width: column.width } : undefined
+                        }
                       >
                         {column.render
                           ? column.render(value, row, globalIndex)
-                          : (value as React.ReactNode) ?? '-'}
+                          : ((value as React.ReactNode) ?? "-")}
                       </td>
                     );
                   })}

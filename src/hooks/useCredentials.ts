@@ -5,21 +5,21 @@
  * Credential status transitions: pending -> verified -> (expired | revoked).
  */
 
-import { useAccount, useReadContract, useWriteContract } from 'wagmi';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { type Address, type Hash } from 'viem';
-import { toast } from 'sonner';
-import { apiClient } from '@/lib/api/client';
+import { useAccount, useReadContract, useWriteContract } from "wagmi";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { type Address, type Hash } from "viem";
+import { toast } from "sonner";
+import { apiClient } from "@/lib/api/client";
 import {
   CREDENTIAL_REGISTRY_ADDRESS,
   CREDENTIAL_REGISTRY_ABI,
-} from '@/config/constants';
+} from "@/config/constants";
 import type {
   Credential,
   CredentialStatus,
   CredentialRequest,
   CredentialDetails,
-} from '@/types';
+} from "@/types";
 
 // ---------------------------------------------------------------------------
 // List credentials for the connected wallet
@@ -29,10 +29,10 @@ export function useCredentials(status?: CredentialStatus) {
   const { address } = useAccount();
 
   const params = new URLSearchParams();
-  if (status) params.set('status', status);
+  if (status) params.set("status", status);
 
   return useQuery({
-    queryKey: ['credentials', address, status],
+    queryKey: ["credentials", address, status],
     queryFn: () =>
       apiClient.get<{ credentials: Credential[]; total: number }>(
         `/v1/credentials/${address}?${params.toString()}`,
@@ -51,15 +51,17 @@ export function useCredentialDetails(credentialId: string | undefined) {
   const { data: onChainHash, isLoading: isHashLoading } = useReadContract({
     address: CREDENTIAL_REGISTRY_ADDRESS as Address,
     abi: CREDENTIAL_REGISTRY_ABI,
-    functionName: 'credentialHash',
+    functionName: "credentialHash",
     args: credentialId ? [credentialId] : undefined,
     query: { enabled: !!credentialId },
   });
 
   const apiQuery = useQuery({
-    queryKey: ['credential', credentialId],
+    queryKey: ["credential", credentialId],
     queryFn: () =>
-      apiClient.get<CredentialDetails>(`/v1/credentials/detail/${credentialId}`),
+      apiClient.get<CredentialDetails>(
+        `/v1/credentials/detail/${credentialId}`,
+      ),
     enabled: !!credentialId,
     staleTime: 20_000,
   });
@@ -86,7 +88,7 @@ export function useRequestCredential() {
   return useMutation({
     mutationFn: async (request: CredentialRequest) => {
       const response = await apiClient.post<{ credentialId: string }>(
-        '/v1/credentials/request',
+        "/v1/credentials/request",
         {
           holderAddress: address,
           issuerDid: request.issuerDid,
@@ -98,13 +100,13 @@ export function useRequestCredential() {
       return response;
     },
     onSuccess: (data) => {
-      toast.success('Credential requested', {
+      toast.success("Credential requested", {
         description: `Request ${data.credentialId.slice(0, 12)}... submitted to issuer`,
       });
-      queryClient.invalidateQueries({ queryKey: ['credentials', address] });
+      queryClient.invalidateQueries({ queryKey: ["credentials", address] });
     },
     onError: (err: Error) => {
-      toast.error('Credential request failed', { description: err.message });
+      toast.error("Credential request failed", { description: err.message });
     },
   });
 }
@@ -123,7 +125,7 @@ export function useRevokeCredential() {
       const hash = await writeContractAsync({
         address: CREDENTIAL_REGISTRY_ADDRESS as Address,
         abi: CREDENTIAL_REGISTRY_ABI,
-        functionName: 'revokeCredential',
+        functionName: "revokeCredential",
         args: [credentialId],
       });
 
@@ -136,12 +138,12 @@ export function useRevokeCredential() {
       return hash;
     },
     onSuccess: () => {
-      toast.success('Credential revoked');
-      queryClient.invalidateQueries({ queryKey: ['credentials'] });
-      queryClient.invalidateQueries({ queryKey: ['credential'] });
+      toast.success("Credential revoked");
+      queryClient.invalidateQueries({ queryKey: ["credentials"] });
+      queryClient.invalidateQueries({ queryKey: ["credential"] });
     },
     onError: (err: Error) => {
-      toast.error('Revocation failed', { description: err.message });
+      toast.error("Revocation failed", { description: err.message });
     },
   });
 }
