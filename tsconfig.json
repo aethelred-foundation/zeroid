@@ -14,6 +14,7 @@
     "jsx": "preserve",
     "incremental": true,
     "forceConsistentCasingInFileNames": true,
+    "types": ["jest", "node", "react", "react-dom"],
     "plugins": [
       {
         "name": "next"
@@ -30,5 +31,5 @@
     }
   },
   "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
-  "exclude": ["node_modules", "build", "circuits", "backend"]
+  "exclude": ["node_modules", "build", "circuits", "backend", "test/hardhat", "hardhat.config.ts"]
 }
