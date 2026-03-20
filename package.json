@@ -96,7 +96,6 @@
   },
   "overrides": {
     "underscore": ">=1.13.7",
-    "glob": ">=10.4.0",
     "fast-xml-parser": ">=5.5.6"
   }
 }
