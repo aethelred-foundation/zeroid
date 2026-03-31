@@ -53,12 +53,10 @@ const mockConnectors = [
   { id: "walletconnect", name: "WalletConnect" },
 ];
 
-const mockUseAccount = jest.fn(
-  (): { address: string | undefined; isConnected: boolean } => ({
-    address: undefined,
-    isConnected: false,
-  }),
-);
+const mockUseAccount = jest.fn(() => ({
+  address: undefined,
+  isConnected: false,
+}));
 jest.mock("wagmi", () => ({
   useAccount: () => mockUseAccount(),
   useConnect: () => ({ connectors: mockConnectors, connect: mockConnect }),

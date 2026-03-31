@@ -60,7 +60,7 @@ jest.mock("@/components/layout/AppLayout", () => ({
   ),
 }));
 
-const mockUseIdentity = jest.fn((): any => ({
+const mockUseIdentity = jest.fn(() => ({
   identity: {
     did: "did:aethelred:zeroid:0x1234",
     status: "Active",
@@ -134,10 +134,7 @@ describe("IdentityPage", () => {
   });
 
   it("shows connect wallet message when not connected", () => {
-    mockUseAccount.mockReturnValue({
-      address: undefined as any,
-      isConnected: false,
-    });
+    mockUseAccount.mockReturnValue({ address: undefined, isConnected: false });
     render(<IdentityPage />);
     expect(screen.getByText("Connect Your Wallet")).toBeInTheDocument();
   });
@@ -222,9 +219,8 @@ describe("IdentityPage", () => {
       },
       delegates: [
         {
-          delegate: "0xabcdef1234567890abcdef1234567890abcdef12",
+          address: "0xabcdef1234567890abcdef1234567890abcdef12",
           permissions: ["issue", "verify"],
-          expiry: "1735689600",
         },
       ],
       isLoading: false,
@@ -233,7 +229,8 @@ describe("IdentityPage", () => {
     });
     render(<IdentityPage />);
     fireEvent.click(screen.getByText("Delegates"));
-    expect(screen.getByText(/0xabcd.*ef12/)).toBeInTheDocument();
+    expect(screen.getByText("0xabcd...ef12")).toBeInTheDocument();
+    expect(screen.getByText("issue, verify")).toBeInTheDocument();
     // Click revoke
     fireEvent.click(screen.getByText("Revoke"));
     expect(mockRevokeDelegate).toHaveBeenCalledWith(

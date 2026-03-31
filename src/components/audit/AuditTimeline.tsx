@@ -1,4 +1,3 @@
-// @ts-nocheck
 "use client";
 
 import { useState, useMemo } from "react";
@@ -84,8 +83,7 @@ function formatTimestamp(ts: string | number): { date: string; time: string } {
 }
 
 export default function AuditTimeline({ did, limit = 50 }: AuditTimelineProps) {
-  const { auditLog: events, isLoading } = useAudit();
-  const error = null;
+  const { events, isLoading, error } = useAudit(did, limit);
   const [filterType, setFilterType] = useState<AuditEventType | "all">("all");
   const [showFilter, setShowFilter] = useState(false);
 
@@ -199,7 +197,9 @@ export default function AuditTimeline({ did, limit = 50 }: AuditTimelineProps) {
               const config =
                 eventConfig[event.type] ?? eventConfig["credential-verified"];
               const EventIcon = config.icon;
-              const { date, time } = formatTimestamp(event.timestamp);
+              const { date, time } = formatTimestamp(
+                event.timestamp ?? Date.now(),
+              );
 
               return (
                 <motion.div

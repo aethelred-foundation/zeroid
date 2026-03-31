@@ -60,20 +60,30 @@ const mockUseAudit = useAudit as jest.Mock;
 describe("AuditTimeline", () => {
   beforeEach(() => {
     mockUseAudit.mockReturnValue({
-      auditLog: mockEvents,
+      events: mockEvents,
       isLoading: false,
-      total: mockEvents.length,
+      error: null,
     });
   });
 
   it("renders loading state", () => {
-    mockUseAudit.mockReturnValue({ auditLog: [], isLoading: true, total: 0 });
+    mockUseAudit.mockReturnValue({ events: [], isLoading: true, error: null });
     render(<AuditTimeline />);
     expect(screen.getByText("Loading audit trail...")).toBeInTheDocument();
   });
 
+  it("renders error state", () => {
+    mockUseAudit.mockReturnValue({
+      events: [],
+      isLoading: false,
+      error: new Error("fail"),
+    });
+    render(<AuditTimeline />);
+    expect(screen.getByText("Failed to load audit events")).toBeInTheDocument();
+  });
+
   it("renders empty state when no events", () => {
-    mockUseAudit.mockReturnValue({ auditLog: [], isLoading: false, total: 0 });
+    mockUseAudit.mockReturnValue({ events: [], isLoading: false, error: null });
     render(<AuditTimeline />);
     expect(screen.getByText("No audit events found")).toBeInTheDocument();
   });
@@ -131,16 +141,16 @@ describe("AuditTimeline", () => {
     ).toBeGreaterThanOrEqual(1);
   });
 
-  it("passes did and limit props to component", () => {
+  it("passes did and limit to useAudit hook", () => {
     render(<AuditTimeline did="did:test:123" limit={10} />);
-    expect(mockUseAudit).toHaveBeenCalled();
+    expect(mockUseAudit).toHaveBeenCalledWith("did:test:123", 10);
   });
 
   // --- NEW TESTS for uncovered branches/functions ---
 
-  it("calls useAudit hook on render", () => {
+  it("uses default limit of 50 when not specified", () => {
     render(<AuditTimeline />);
-    expect(mockUseAudit).toHaveBeenCalled();
+    expect(mockUseAudit).toHaveBeenCalledWith(undefined, 50);
   });
 
   it("filters events by credential-revoked type", () => {
@@ -223,7 +233,7 @@ describe("AuditTimeline", () => {
 
   it("renders events without description", () => {
     mockUseAudit.mockReturnValue({
-      auditLog: [
+      events: [
         {
           id: "evt-no-desc",
           type: "credential-verified" as const,
@@ -231,7 +241,7 @@ describe("AuditTimeline", () => {
         },
       ],
       isLoading: false,
-      total: 1,
+      error: null,
     });
     render(<AuditTimeline />);
     expect(screen.getByText("Credential Verified")).toBeInTheDocument();
@@ -239,7 +249,7 @@ describe("AuditTimeline", () => {
 
   it("renders events without transactionHash", () => {
     mockUseAudit.mockReturnValue({
-      auditLog: [
+      events: [
         {
           id: "evt-no-tx",
           type: "proof-verified" as const,
@@ -248,7 +258,7 @@ describe("AuditTimeline", () => {
         },
       ],
       isLoading: false,
-      total: 1,
+      error: null,
     });
     render(<AuditTimeline />);
     expect(screen.getByText("Proof verified successfully")).toBeInTheDocument();
@@ -301,9 +311,9 @@ describe("AuditTimeline", () => {
       },
     ];
     mockUseAudit.mockReturnValue({
-      auditLog: allTypeEvents,
+      events: allTypeEvents,
       isLoading: false,
-      total: allTypeEvents.length,
+      error: null,
     });
     render(<AuditTimeline />);
     expect(screen.getByText("Credential Issued")).toBeInTheDocument();
@@ -317,9 +327,9 @@ describe("AuditTimeline", () => {
 
   it("renders null events as empty array", () => {
     mockUseAudit.mockReturnValue({
-      auditLog: null,
+      events: null,
       isLoading: false,
-      total: 0,
+      error: null,
     });
     render(<AuditTimeline />);
     expect(screen.getByText("No audit events found")).toBeInTheDocument();
@@ -354,7 +364,7 @@ describe("AuditTimeline", () => {
 
   it("displays formatted date and time for events", () => {
     mockUseAudit.mockReturnValue({
-      auditLog: [
+      events: [
         {
           id: "evt-date",
           type: "credential-issued" as const,
@@ -363,7 +373,7 @@ describe("AuditTimeline", () => {
         },
       ],
       isLoading: false,
-      total: 1,
+      error: null,
     });
     render(<AuditTimeline />);
     // Date should be formatted like "Jan 15, 2026"
@@ -389,7 +399,7 @@ describe("AuditTimeline", () => {
 
   it("uses fallback eventConfig for unknown event type (covers line 175)", () => {
     mockUseAudit.mockReturnValue({
-      auditLog: [
+      events: [
         {
           id: "evt-unknown",
           type: "unknown-type" as any,
@@ -398,7 +408,7 @@ describe("AuditTimeline", () => {
         },
       ],
       isLoading: false,
-      total: 1,
+      error: null,
     });
     render(<AuditTimeline />);
     // The fallback is eventConfig['credential-verified'] which has label "Credential Verified"

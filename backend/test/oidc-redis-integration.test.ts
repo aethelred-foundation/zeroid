@@ -13,31 +13,28 @@
  * Run with:
  *   REDIS_URL=redis://localhost:6379 npx jest --testPathPattern=oidc-redis-integration --forceExit
  */
-import crypto from "crypto";
-import Redis from "ioredis";
+import crypto from 'crypto';
+import Redis from 'ioredis';
 
 // ---------------------------------------------------------------------------
 // Generate RSA-2048 key pair BEFORE any module loads
 // ---------------------------------------------------------------------------
-const { publicKey, privateKey } = crypto.generateKeyPairSync("rsa", {
+const { publicKey, privateKey } = crypto.generateKeyPairSync('rsa', {
   modulusLength: 2048,
 });
 
-const PRIVATE_PEM = privateKey.export({
-  type: "pkcs8",
-  format: "pem",
-}) as string;
-const PUBLIC_PEM = publicKey.export({ type: "spki", format: "pem" }) as string;
+const PRIVATE_PEM = privateKey.export({ type: 'pkcs8', format: 'pem' }) as string;
+const PUBLIC_PEM = publicKey.export({ type: 'spki', format: 'pem' }) as string;
 
 process.env.OIDC_SIGNING_PRIVATE_KEY = PRIVATE_PEM;
 process.env.OIDC_SIGNING_PUBLIC_KEY = PUBLIC_PEM;
-process.env.JWT_SECRET = "test-jwt-secret-that-is-at-least-32-chars!!";
-process.env.NODE_ENV = "test";
+process.env.JWT_SECRET = 'test-jwt-secret-that-is-at-least-32-chars!!';
+process.env.NODE_ENV = 'test';
 
 // ---------------------------------------------------------------------------
 // Real Redis connection — skip entire suite if unavailable
 // ---------------------------------------------------------------------------
-const REDIS_URL = process.env.REDIS_URL ?? "redis://localhost:6379";
+const REDIS_URL = process.env.REDIS_URL ?? 'redis://localhost:6379';
 let realRedis: Redis | null = null;
 let redisAvailable = false;
 
@@ -60,11 +57,11 @@ beforeAll(async () => {
 afterAll(async () => {
   if (realRedis) {
     // Clean up test keys
-    const keys = await realRedis.keys("oidc:*");
+    const keys = await realRedis.keys('oidc:*');
     if (keys.length > 0) {
       await realRedis.del(...keys);
     }
-    const sessionKeys = await realRedis.keys("session:*");
+    const sessionKeys = await realRedis.keys('session:*');
     if (sessionKeys.length > 0) {
       await realRedis.del(...sessionKeys);
     }
@@ -75,20 +72,20 @@ afterAll(async () => {
 // ---------------------------------------------------------------------------
 // Wire the REAL Redis into the mock so OIDCBridge uses it
 // ---------------------------------------------------------------------------
-jest.mock("../src/index", () => {
+jest.mock('../src/index', () => {
   // We need to defer Redis access because realRedis is set in beforeAll
   const handler: ProxyHandler<Record<string, unknown>> = {
     get(_target, prop: string) {
       // @ts-ignore - accessing module-level variable
-      const redis = require("./oidc-redis-integration.test").realRedisProxy;
-      if (redis && typeof (redis as any)[prop] === "function") {
+      const redis = require('./oidc-redis-integration.test').realRedisProxy;
+      if (redis && typeof (redis as any)[prop] === 'function') {
         return (...args: unknown[]) => (redis as any)[prop](...args);
       }
       return undefined;
     },
   };
 
-  const { Registry } = require("prom-client");
+  const { Registry } = require('prom-client');
   return {
     logger: {
       info: jest.fn(),
@@ -115,7 +112,8 @@ jest.mock("../src/index", () => {
 // ---------------------------------------------------------------------------
 // Direct Redis atomicity tests
 // ---------------------------------------------------------------------------
-describe("OIDC Real-Redis Integration: atomic operations", () => {
+describe('OIDC Real-Redis Integration: atomic operations', () => {
+
   const skipIfNoRedis = () => {
     if (!redisAvailable || !realRedis) {
       return true;
@@ -126,7 +124,7 @@ describe("OIDC Real-Redis Integration: atomic operations", () => {
   beforeEach(async () => {
     if (!redisAvailable || !realRedis) return;
     // Clean test namespace
-    const keys = await realRedis!.keys("test:oidc:*");
+    const keys = await realRedis!.keys('test:oidc:*');
     if (keys.length > 0) {
       await realRedis!.del(...keys);
     }
@@ -135,9 +133,9 @@ describe("OIDC Real-Redis Integration: atomic operations", () => {
   // -------------------------------------------------------------------------
   // 1. Lua CAS for auth-code redemption: exactly one winner
   // -------------------------------------------------------------------------
-  it("concurrent Lua CAS auth-code redemption — exactly one wins", async () => {
+  it('concurrent Lua CAS auth-code redemption — exactly one wins', async () => {
     if (skipIfNoRedis()) {
-      console.log("⏭  Skipping: Redis not available at", REDIS_URL);
+      console.log('⏭  Skipping: Redis not available at', REDIS_URL);
       return;
     }
 
@@ -145,13 +143,13 @@ describe("OIDC Real-Redis Integration: atomic operations", () => {
 
     // Seed an auth code record with redeemed=false
     const codeRecord = JSON.stringify({
-      code: "test-code-abc",
-      clientId: "client-1",
-      subjectId: "user-1",
+      code: 'test-code-abc',
+      clientId: 'client-1',
+      subjectId: 'user-1',
       redeemed: false,
       createdAt: Date.now(),
     });
-    await realRedis!.set(codeKey, codeRecord, "EX", 60);
+    await realRedis!.set(codeKey, codeRecord, 'EX', 60);
 
     // Lua CAS script: atomically check redeemed=false, set redeemed=true
     const luaCAS = `
@@ -169,31 +167,31 @@ describe("OIDC Real-Redis Integration: atomic operations", () => {
     const concurrency = 10;
     const results = await Promise.allSettled(
       Array.from({ length: concurrency }, () =>
-        realRedis!.eval(luaCAS, 1, codeKey, "redeemed", "false", "true"),
+        realRedis!.eval(luaCAS, 1, codeKey, 'redeemed', 'false', 'true'),
       ),
     );
 
     const winners = results.filter(
-      (r) => r.status === "fulfilled" && r.value !== null,
+      (r) => r.status === 'fulfilled' && r.value !== null,
     );
     const losers = results.filter(
-      (r) => r.status === "fulfilled" && r.value === null,
+      (r) => r.status === 'fulfilled' && r.value === null,
     );
 
     expect(winners).toHaveLength(1);
     expect(losers).toHaveLength(concurrency - 1);
 
     // Verify the record is now redeemed
-    const final = JSON.parse((await realRedis!.get(codeKey)) as string);
+    const final = JSON.parse(await realRedis!.get(codeKey) as string);
     expect(final.redeemed).toBe(true);
   });
 
   // -------------------------------------------------------------------------
   // 2. GETDEL for refresh-token rotation: exactly one winner
   // -------------------------------------------------------------------------
-  it("concurrent GETDEL refresh-token rotation — exactly one wins", async () => {
+  it('concurrent GETDEL refresh-token rotation — exactly one wins', async () => {
     if (skipIfNoRedis()) {
-      console.log("⏭  Skipping: Redis not available at", REDIS_URL);
+      console.log('⏭  Skipping: Redis not available at', REDIS_URL);
       return;
     }
 
@@ -201,26 +199,26 @@ describe("OIDC Real-Redis Integration: atomic operations", () => {
 
     // Seed a refresh token record
     const tokenRecord = JSON.stringify({
-      refreshToken: "rt-abc-123",
-      clientId: "client-1",
-      subjectId: "user-1",
+      refreshToken: 'rt-abc-123',
+      clientId: 'client-1',
+      subjectId: 'user-1',
       createdAt: Date.now(),
     });
-    await realRedis!.set(refreshKey, tokenRecord, "EX", 60);
+    await realRedis!.set(refreshKey, tokenRecord, 'EX', 60);
 
     // Fire 10 concurrent GETDEL attempts
     const concurrency = 10;
     const results = await Promise.allSettled(
       Array.from({ length: concurrency }, () =>
-        realRedis!.call("GETDEL", refreshKey),
+        realRedis!.call('GETDEL', refreshKey),
       ),
     );
 
     const winners = results.filter(
-      (r) => r.status === "fulfilled" && r.value !== null,
+      (r) => r.status === 'fulfilled' && r.value !== null,
     );
     const losers = results.filter(
-      (r) => r.status === "fulfilled" && r.value === null,
+      (r) => r.status === 'fulfilled' && r.value === null,
     );
 
     expect(winners).toHaveLength(1);
@@ -234,22 +232,22 @@ describe("OIDC Real-Redis Integration: atomic operations", () => {
   // -------------------------------------------------------------------------
   // 3. CAS replay after successful redemption is rejected
   // -------------------------------------------------------------------------
-  it("CAS replay after successful redemption returns null", async () => {
+  it('CAS replay after successful redemption returns null', async () => {
     if (skipIfNoRedis()) {
-      console.log("⏭  Skipping: Redis not available at", REDIS_URL);
+      console.log('⏭  Skipping: Redis not available at', REDIS_URL);
       return;
     }
 
     const codeKey = `test:oidc:authcode:replay:${crypto.randomUUID()}`;
 
     const codeRecord = JSON.stringify({
-      code: "test-code-replay",
-      clientId: "client-1",
-      subjectId: "user-1",
+      code: 'test-code-replay',
+      clientId: 'client-1',
+      subjectId: 'user-1',
       redeemed: false,
       createdAt: Date.now(),
     });
-    await realRedis!.set(codeKey, codeRecord, "EX", 60);
+    await realRedis!.set(codeKey, codeRecord, 'EX', 60);
 
     const luaCAS = `
       local current = redis.call('GET', KEYS[1])
@@ -263,56 +261,37 @@ describe("OIDC Real-Redis Integration: atomic operations", () => {
     `;
 
     // First redemption succeeds
-    const first = await realRedis!.eval(
-      luaCAS,
-      1,
-      codeKey,
-      "redeemed",
-      "false",
-      "true",
-    );
+    const first = await realRedis!.eval(luaCAS, 1, codeKey, 'redeemed', 'false', 'true');
     expect(first).not.toBeNull();
 
     // Replay attempt returns null
-    const replay = await realRedis!.eval(
-      luaCAS,
-      1,
-      codeKey,
-      "redeemed",
-      "false",
-      "true",
-    );
+    const replay = await realRedis!.eval(luaCAS, 1, codeKey, 'redeemed', 'false', 'true');
     expect(replay).toBeNull();
   });
 
   // -------------------------------------------------------------------------
   // 4. GETDEL replay after rotation returns null
   // -------------------------------------------------------------------------
-  it("GETDEL replay after rotation returns null", async () => {
+  it('GETDEL replay after rotation returns null', async () => {
     if (skipIfNoRedis()) {
-      console.log("⏭  Skipping: Redis not available at", REDIS_URL);
+      console.log('⏭  Skipping: Redis not available at', REDIS_URL);
       return;
     }
 
     const refreshKey = `test:oidc:refresh:replay:${crypto.randomUUID()}`;
 
-    await realRedis!.set(
-      refreshKey,
-      JSON.stringify({
-        refreshToken: "rt-replay-test",
-        clientId: "client-1",
-        createdAt: Date.now(),
-      }),
-      "EX",
-      60,
-    );
+    await realRedis!.set(refreshKey, JSON.stringify({
+      refreshToken: 'rt-replay-test',
+      clientId: 'client-1',
+      createdAt: Date.now(),
+    }), 'EX', 60);
 
     // First GETDEL succeeds
-    const first = await realRedis!.call("GETDEL", refreshKey);
+    const first = await realRedis!.call('GETDEL', refreshKey);
     expect(first).not.toBeNull();
 
     // Replay returns null
-    const replay = await realRedis!.call("GETDEL", refreshKey);
+    const replay = await realRedis!.call('GETDEL', refreshKey);
     expect(replay).toBeNull();
   });
 });

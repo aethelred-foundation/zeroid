@@ -81,7 +81,7 @@ const makeZKProof = (id = "proof-1"): ZKProof => ({
   id,
   circuitId: mockCircuitId,
   circuitName: "Age Proof",
-  proofSystem: "groth16" as any,
+  proofSystem: "groth16" as const,
   proof: {
     a: ["1", "2"],
     b: [

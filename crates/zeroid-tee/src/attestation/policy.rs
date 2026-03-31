@@ -2,6 +2,7 @@
 ///
 /// Each TEE platform can define minimum freshness windows, required features,
 /// and allowed enclave measurements.
+
 use crate::attestation::report::{AttestationReport, Platform};
 use crate::error::{Result, ZeroIdTeeError};
 
@@ -24,10 +25,10 @@ impl AttestationPolicy {
     /// Create a new policy with sensible defaults for `platform`.
     pub fn new(platform: Platform) -> Self {
         let (max_age, min_window) = match platform {
-            Platform::IntelSGX => (3600, 300), // 1 hour max age, 5 min window
-            Platform::AMDSEV => (7200, 600),   // 2 hours, 10 min
-            Platform::ArmTrustZone => (3600, 300), // 1 hour, 5 min
-            Platform::Unknown => (1800, 60),   // strict for unknown
+            Platform::IntelSGX => (3600, 300),       // 1 hour max age, 5 min window
+            Platform::AMDSEV => (7200, 600),          // 2 hours, 10 min
+            Platform::ArmTrustZone => (3600, 300),    // 1 hour, 5 min
+            Platform::Unknown => (1800, 60),          // strict for unknown
         };
         Self {
             platform,

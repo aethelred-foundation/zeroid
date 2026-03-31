@@ -43,7 +43,6 @@ export const CONTRACT_ADDRESSES = {
 export const IDENTITY_REGISTRY_ADDRESS = CONTRACT_ADDRESSES.identityRegistry;
 export const CREDENTIAL_REGISTRY_ADDRESS =
   CONTRACT_ADDRESSES.credentialRegistry;
-export const TEE_REGISTRY_ADDRESS = CONTRACT_ADDRESSES.teeAttestation;
 
 // Minimal ABIs for on-chain reads/writes
 export const IDENTITY_REGISTRY_ABI = [
@@ -129,30 +128,10 @@ export const CREDENTIAL_REGISTRY_ABI = [
   },
 ] as const;
 
-export const TEE_REGISTRY_ABI = [
-  {
-    type: "function",
-    name: "attestationStatus",
-    inputs: [{ name: "enclaveId", type: "string" }],
-    outputs: [{ name: "", type: "string" }],
-    stateMutability: "view",
-  },
-  {
-    type: "function",
-    name: "registerAttestation",
-    inputs: [
-      { name: "enclaveId", type: "string" },
-      { name: "mrEnclave", type: "bytes32" },
-      { name: "mrSigner", type: "bytes32" },
-    ],
-    outputs: [],
-    stateMutability: "nonpayable",
-  },
-] as const;
-
 export const GOVERNANCE_ADDRESS = CONTRACT_ADDRESSES.governanceModule;
 export const GOVERNANCE_TOKEN_ADDRESS = CONTRACT_ADDRESSES.aethelToken;
 export const ZK_VERIFIER_ADDRESS = CONTRACT_ADDRESSES.zkVerifier;
+export const TEE_REGISTRY_ADDRESS = CONTRACT_ADDRESSES.teeAttestation;
 export const ZK_CIRCUIT_BASE_URL =
   process.env.NEXT_PUBLIC_ZK_CIRCUIT_BASE_URL || "/circuits";
 
@@ -250,6 +229,16 @@ export const ZK_VERIFIER_ABI = [
       { name: "input", type: "uint256[]" },
     ],
     outputs: [{ name: "", type: "bool" }],
+    stateMutability: "view",
+  },
+] as const;
+
+export const TEE_REGISTRY_ABI = [
+  {
+    type: "function",
+    name: "attestationStatus",
+    inputs: [{ name: "enclaveId", type: "bytes32" }],
+    outputs: [{ name: "", type: "string" }],
     stateMutability: "view",
   },
 ] as const;

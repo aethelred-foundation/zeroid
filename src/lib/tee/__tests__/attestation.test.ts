@@ -74,7 +74,7 @@ const mockFetch = jest.fn();
 
 const NOW_SECONDS = Math.floor(Date.now() / 1000);
 
-function makeNode(overrides: Record<string, unknown> = {}): any {
+function makeNode(overrides: Record<string, unknown> = {}) {
   return {
     id: "node-1",
     operator: "0xoperator1",

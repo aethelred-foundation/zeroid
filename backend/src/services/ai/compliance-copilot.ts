@@ -1,36 +1,14 @@
-import crypto from "crypto";
-import { prisma, logger, redis } from "../../index";
+import crypto from 'crypto';
+import { prisma, logger, redis } from '../../index';
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-export type ScreeningResult =
-  | "clear"
-  | "potential_match"
-  | "confirmed_match"
-  | "inconclusive";
-export type ComplianceReportType =
-  | "kyc"
-  | "aml"
-  | "sanctions"
-  | "pep"
-  | "travel_rule"
-  | "comprehensive";
-export type RegulatoryFramework =
-  | "FATF"
-  | "AMLD6"
-  | "BSA"
-  | "MAS_PSA"
-  | "VARA"
-  | "MiCA"
-  | "FCA_MLR"
-  | "FINMA_AMLA";
-export type ComplianceAlertLevel =
-  | "info"
-  | "warning"
-  | "violation"
-  | "critical";
+export type ScreeningResult = 'clear' | 'potential_match' | 'confirmed_match' | 'inconclusive';
+export type ComplianceReportType = 'kyc' | 'aml' | 'sanctions' | 'pep' | 'travel_rule' | 'comprehensive';
+export type RegulatoryFramework = 'FATF' | 'AMLD6' | 'BSA' | 'MAS_PSA' | 'VARA' | 'MiCA' | 'FCA_MLR' | 'FINMA_AMLA';
+export type ComplianceAlertLevel = 'info' | 'warning' | 'violation' | 'critical';
 
 export interface SanctionsScreeningRequest {
   identityId: string;
@@ -46,7 +24,7 @@ export interface SanctionsScreeningResult {
   screeningId: string;
   identityId: string;
   result: ScreeningResult;
-  matchScore: number; // 0-100
+  matchScore: number;          // 0-100
   matchedLists: SanctionsListMatch[];
   pepMatches: PEPMatch[];
   adverseMedia: AdverseMediaHit[];
@@ -58,10 +36,10 @@ export interface SanctionsScreeningResult {
 
 interface SanctionsListMatch {
   listName: string;
-  listSource: string; // OFAC, EU, UN, UK_HMT
+  listSource: string;        // OFAC, EU, UN, UK_HMT
   matchedName: string;
   matchConfidence: number;
-  entityType: "individual" | "entity" | "vessel" | "aircraft";
+  entityType: 'individual' | 'entity' | 'vessel' | 'aircraft';
   sanctions: string[];
   listedSince: Date;
   lastUpdated: Date;
@@ -72,11 +50,7 @@ interface PEPMatch {
   name: string;
   position: string;
   country: string;
-  level:
-    | "head_of_state"
-    | "senior_official"
-    | "family_member"
-    | "close_associate";
+  level: 'head_of_state' | 'senior_official' | 'family_member' | 'close_associate';
   active: boolean;
   matchConfidence: number;
   source: string;
@@ -95,7 +69,7 @@ export interface ComplianceReport {
   reportId: string;
   entityId: string;
   reportType: ComplianceReportType;
-  status: "generating" | "complete" | "failed";
+  status: 'generating' | 'complete' | 'failed';
   summary: string;
   sections: ReportSection[];
   complianceScore: number;
@@ -109,7 +83,7 @@ export interface ComplianceReport {
 
 interface ReportSection {
   title: string;
-  status: "pass" | "warning" | "fail" | "not_applicable";
+  status: 'pass' | 'warning' | 'fail' | 'not_applicable';
   findings: string[];
   evidence: Record<string, unknown>;
 }
@@ -166,7 +140,7 @@ export interface RegulatoryChangeImpact {
   impactedEntities: number;
   impactedCredentialTypes: string[];
   requiredActions: string[];
-  estimatedEffort: "low" | "medium" | "high" | "critical";
+  estimatedEffort: 'low' | 'medium' | 'high' | 'critical';
   automationPossible: boolean;
 }
 
@@ -178,7 +152,7 @@ interface SanctionsEntry {
   name: string;
   aliases: string[];
   listSource: string;
-  entityType: "individual" | "entity";
+  entityType: 'individual' | 'entity';
   sanctions: string[];
   listedSince: Date;
   nationality?: string;
@@ -188,54 +162,14 @@ interface SanctionsEntry {
 
 const SANCTIONS_DATABASE: SanctionsEntry[] = [
   // These entries are entirely fictional, used solely for demonstration
-  {
-    name: "Test Sanctioned Individual Alpha",
-    aliases: ["T.S.I. Alpha", "Alpha Test"],
-    listSource: "OFAC_SDN",
-    entityType: "individual",
-    sanctions: ["asset_freeze", "travel_ban"],
-    listedSince: new Date("2023-01-15"),
-    nationality: "XX",
-    sdnId: "SDN-DEMO-001",
-  },
-  {
-    name: "Demo Restricted Entity Beta",
-    aliases: ["DRE Beta Corp"],
-    listSource: "EU_SANCTIONS",
-    entityType: "entity",
-    sanctions: ["trade_restriction", "financial_prohibition"],
-    listedSince: new Date("2022-06-20"),
-  },
-  {
-    name: "Sample PEP Gamma",
-    aliases: [],
-    listSource: "UN_CONSOLIDATED",
-    entityType: "individual",
-    sanctions: ["asset_freeze"],
-    listedSince: new Date("2024-03-10"),
-    nationality: "YY",
-  },
+  { name: 'Test Sanctioned Individual Alpha', aliases: ['T.S.I. Alpha', 'Alpha Test'], listSource: 'OFAC_SDN', entityType: 'individual', sanctions: ['asset_freeze', 'travel_ban'], listedSince: new Date('2023-01-15'), nationality: 'XX', sdnId: 'SDN-DEMO-001' },
+  { name: 'Demo Restricted Entity Beta', aliases: ['DRE Beta Corp'], listSource: 'EU_SANCTIONS', entityType: 'entity', sanctions: ['trade_restriction', 'financial_prohibition'], listedSince: new Date('2022-06-20') },
+  { name: 'Sample PEP Gamma', aliases: [], listSource: 'UN_CONSOLIDATED', entityType: 'individual', sanctions: ['asset_freeze'], listedSince: new Date('2024-03-10'), nationality: 'YY' },
 ];
 
 const PEP_DATABASE: PEPMatch[] = [
-  {
-    name: "Demo PEP Official",
-    position: "Former Minister of Finance",
-    country: "XX",
-    level: "senior_official",
-    active: false,
-    matchConfidence: 0,
-    source: "PEP_GLOBAL_DB",
-  },
-  {
-    name: "Test PEP Family Member",
-    position: "Spouse of Former Governor",
-    country: "YY",
-    level: "family_member",
-    active: true,
-    matchConfidence: 0,
-    source: "PEP_GLOBAL_DB",
-  },
+  { name: 'Demo PEP Official', position: 'Former Minister of Finance', country: 'XX', level: 'senior_official', active: false, matchConfidence: 0, source: 'PEP_GLOBAL_DB' },
+  { name: 'Test PEP Family Member', position: 'Spouse of Former Governor', country: 'YY', level: 'family_member', active: true, matchConfidence: 0, source: 'PEP_GLOBAL_DB' },
 ];
 
 // ---------------------------------------------------------------------------
@@ -252,96 +186,14 @@ interface RegulatoryKBEntry {
 }
 
 const REGULATORY_KB: RegulatoryKBEntry[] = [
-  {
-    topic: "KYC requirements",
-    keywords: [
-      "kyc",
-      "know your customer",
-      "identity verification",
-      "customer due diligence",
-      "cdd",
-    ],
-    framework: "FATF",
-    regulation: "FATF Recommendation 10",
-    section: "CDD",
-    content:
-      "Financial institutions should identify and verify the identity of customers using reliable, independent source documents, data or information. CDD should be undertaken when establishing business relationships, carrying out occasional transactions above USD 15,000, or when there is suspicion of money laundering or terrorist financing.",
-  },
-  {
-    topic: "Enhanced due diligence",
-    keywords: ["edd", "enhanced due diligence", "high risk", "pep"],
-    framework: "FATF",
-    regulation: "FATF Recommendation 12",
-    section: "PEP",
-    content:
-      "Financial institutions should be required to have appropriate risk management systems to determine whether a customer or beneficial owner is a PEP. Enhanced due diligence measures must be applied to PEPs, including obtaining senior management approval, taking reasonable measures to establish source of wealth and funds, and conducting enhanced ongoing monitoring.",
-  },
-  {
-    topic: "Travel rule",
-    keywords: [
-      "travel rule",
-      "wire transfer",
-      "originator",
-      "beneficiary",
-      "vasp",
-    ],
-    framework: "FATF",
-    regulation: "FATF Recommendation 16",
-    section: "Wire Transfers",
-    content:
-      "Ordering institutions should obtain and transmit originator and beneficiary information with wire transfers. For crypto-asset transfers, VASPs must obtain and hold required originator and beneficiary information, and make it available on request to appropriate authorities. The threshold for this requirement is USD 1,000.",
-  },
-  {
-    topic: "Suspicious activity reporting",
-    keywords: ["sar", "str", "suspicious", "reporting", "aml"],
-    framework: "BSA",
-    regulation: "BSA/AML - 31 CFR 1020.320",
-    section: "SAR Filing",
-    content:
-      "Financial institutions must file SARs for transactions of $5,000 or more that the institution knows, suspects, or has reason to suspect involve funds derived from illegal activity, are designed to evade reporting requirements, or lack a lawful purpose. SARs must be filed within 30 calendar days.",
-  },
-  {
-    topic: "Sanctions screening",
-    keywords: ["sanctions", "ofac", "screening", "sdn", "blocked"],
-    framework: "BSA",
-    regulation: "OFAC Regulations - 31 CFR Part 501",
-    section: "Sanctions Compliance",
-    content:
-      "All U.S. persons must comply with OFAC sanctions. This includes screening all customers, transactions, and counterparties against the SDN list, Sectoral Sanctions, and country-based programs. Blocked property must be reported within 10 business days.",
-  },
-  {
-    topic: "AMLD6 requirements",
-    keywords: [
-      "amld",
-      "eu",
-      "aml directive",
-      "money laundering",
-      "predicate offences",
-    ],
-    framework: "AMLD6",
-    regulation: "EU Directive 2018/1673",
-    section: "ML Offences",
-    content:
-      "AMLD6 extends the list of predicate offences for money laundering, introduces criminal liability for legal persons, harmonizes sanctions across EU member states, and requires minimum imprisonment of 4 years for money laundering offences.",
-  },
-  {
-    topic: "MiCA digital identity",
-    keywords: ["mica", "crypto", "digital identity", "casp", "token"],
-    framework: "MiCA",
-    regulation: "EU Regulation 2023/1114",
-    section: "Identity Requirements",
-    content:
-      "Crypto-Asset Service Providers (CASPs) must implement robust identity verification procedures. All transfers exceeding EUR 1,000 must include verified originator and beneficiary information. Self-hosted wallet transfers require additional verification steps.",
-  },
-  {
-    topic: "VARA virtual assets",
-    keywords: ["vara", "dubai", "virtual asset", "uae", "regulation"],
-    framework: "VARA",
-    regulation: "VARA Rulebook 2023",
-    section: "VASP Requirements",
-    content:
-      "Virtual Asset Service Providers operating in Dubai must obtain VARA licensing, implement comprehensive KYC/AML programs, maintain minimum capital requirements, and conduct regular risk assessments. Enhanced requirements apply to DeFi protocols and self-custodial services.",
-  },
+  { topic: 'KYC requirements', keywords: ['kyc', 'know your customer', 'identity verification', 'customer due diligence', 'cdd'], framework: 'FATF', regulation: 'FATF Recommendation 10', section: 'CDD', content: 'Financial institutions should identify and verify the identity of customers using reliable, independent source documents, data or information. CDD should be undertaken when establishing business relationships, carrying out occasional transactions above USD 15,000, or when there is suspicion of money laundering or terrorist financing.' },
+  { topic: 'Enhanced due diligence', keywords: ['edd', 'enhanced due diligence', 'high risk', 'pep'], framework: 'FATF', regulation: 'FATF Recommendation 12', section: 'PEP', content: 'Financial institutions should be required to have appropriate risk management systems to determine whether a customer or beneficial owner is a PEP. Enhanced due diligence measures must be applied to PEPs, including obtaining senior management approval, taking reasonable measures to establish source of wealth and funds, and conducting enhanced ongoing monitoring.' },
+  { topic: 'Travel rule', keywords: ['travel rule', 'wire transfer', 'originator', 'beneficiary', 'vasp'], framework: 'FATF', regulation: 'FATF Recommendation 16', section: 'Wire Transfers', content: 'Ordering institutions should obtain and transmit originator and beneficiary information with wire transfers. For crypto-asset transfers, VASPs must obtain and hold required originator and beneficiary information, and make it available on request to appropriate authorities. The threshold for this requirement is USD 1,000.' },
+  { topic: 'Suspicious activity reporting', keywords: ['sar', 'str', 'suspicious', 'reporting', 'aml'], framework: 'BSA', regulation: 'BSA/AML - 31 CFR 1020.320', section: 'SAR Filing', content: 'Financial institutions must file SARs for transactions of $5,000 or more that the institution knows, suspects, or has reason to suspect involve funds derived from illegal activity, are designed to evade reporting requirements, or lack a lawful purpose. SARs must be filed within 30 calendar days.' },
+  { topic: 'Sanctions screening', keywords: ['sanctions', 'ofac', 'screening', 'sdn', 'blocked'], framework: 'BSA', regulation: 'OFAC Regulations - 31 CFR Part 501', section: 'Sanctions Compliance', content: 'All U.S. persons must comply with OFAC sanctions. This includes screening all customers, transactions, and counterparties against the SDN list, Sectoral Sanctions, and country-based programs. Blocked property must be reported within 10 business days.' },
+  { topic: 'AMLD6 requirements', keywords: ['amld', 'eu', 'aml directive', 'money laundering', 'predicate offences'], framework: 'AMLD6', regulation: 'EU Directive 2018/1673', section: 'ML Offences', content: 'AMLD6 extends the list of predicate offences for money laundering, introduces criminal liability for legal persons, harmonizes sanctions across EU member states, and requires minimum imprisonment of 4 years for money laundering offences.' },
+  { topic: 'MiCA digital identity', keywords: ['mica', 'crypto', 'digital identity', 'casp', 'token'], framework: 'MiCA', regulation: 'EU Regulation 2023/1114', section: 'Identity Requirements', content: 'Crypto-Asset Service Providers (CASPs) must implement robust identity verification procedures. All transfers exceeding EUR 1,000 must include verified originator and beneficiary information. Self-hosted wallet transfers require additional verification steps.' },
+  { topic: 'VARA virtual assets', keywords: ['vara', 'dubai', 'virtual asset', 'uae', 'regulation'], framework: 'VARA', regulation: 'VARA Rulebook 2023', section: 'VASP Requirements', content: 'Virtual Asset Service Providers operating in Dubai must obtain VARA licensing, implement comprehensive KYC/AML programs, maintain minimum capital requirements, and conduct regular risk assessments. Enhanced requirements apply to DeFi protocols and self-custodial services.' },
 ];
 
 // ---------------------------------------------------------------------------
@@ -354,13 +206,11 @@ export class ComplianceCopilotService {
   // -------------------------------------------------------------------------
   // Sanctions & PEP screening
   // -------------------------------------------------------------------------
-  async screenIdentity(
-    request: SanctionsScreeningRequest,
-  ): Promise<SanctionsScreeningResult> {
+  async screenIdentity(request: SanctionsScreeningRequest): Promise<SanctionsScreeningResult> {
     const screeningId = `scr-${crypto.randomUUID()}`;
     const startTime = performance.now();
 
-    logger.info("sanctions_screening_start", {
+    logger.info('sanctions_screening_start', {
       screeningId,
       identityId: request.identityId,
       jurisdiction: request.jurisdiction,
@@ -375,9 +225,7 @@ export class ComplianceCopilotService {
     for (const entry of SANCTIONS_DATABASE) {
       for (const nameToCheck of namesToCheck) {
         const similarity = this.computeNameSimilarity(nameToCheck, entry.name);
-        const aliasSimilarities = entry.aliases.map((a) =>
-          this.computeNameSimilarity(nameToCheck, a),
-        );
+        const aliasSimilarities = entry.aliases.map((a) => this.computeNameSimilarity(nameToCheck, a));
         const maxSimilarity = Math.max(similarity, ...aliasSimilarities);
 
         if (maxSimilarity > 0.75) {
@@ -405,7 +253,7 @@ export class ComplianceCopilotService {
     for (const pep of PEP_DATABASE) {
       for (const nameToCheck of namesToCheck) {
         const similarity = this.computeNameSimilarity(nameToCheck, pep.name);
-        if (similarity > 0.7) {
+        if (similarity > 0.70) {
           pepMatches.push({
             ...pep,
             matchConfidence: similarity,
@@ -418,37 +266,26 @@ export class ComplianceCopilotService {
     const adverseMedia = await this.checkAdverseMedia(request.fullName);
 
     // Determine overall result
-    let result: ScreeningResult = "clear";
+    let result: ScreeningResult = 'clear';
     let matchScore = 0;
 
     if (sanctionsMatches.length > 0) {
-      const maxConfidence = Math.max(
-        ...sanctionsMatches.map((m) => m.matchConfidence),
-      );
+      const maxConfidence = Math.max(...sanctionsMatches.map((m) => m.matchConfidence));
       matchScore = Math.round(maxConfidence * 100);
-      result = maxConfidence > 0.95 ? "confirmed_match" : "potential_match";
+      result = maxConfidence > 0.95 ? 'confirmed_match' : 'potential_match';
     } else if (pepMatches.length > 0) {
-      const maxConfidence = Math.max(
-        ...pepMatches.map((m) => m.matchConfidence),
-      );
+      const maxConfidence = Math.max(...pepMatches.map((m) => m.matchConfidence));
       matchScore = Math.round(maxConfidence * 80);
-      result = maxConfidence > 0.9 ? "confirmed_match" : "potential_match";
+      result = maxConfidence > 0.90 ? 'confirmed_match' : 'potential_match';
     } else if (adverseMedia.length > 0) {
-      matchScore = Math.round(
-        Math.max(...adverseMedia.map((a) => a.relevanceScore)) * 50,
-      );
-      result = matchScore > 40 ? "inconclusive" : "clear";
+      matchScore = Math.round(Math.max(...adverseMedia.map((a) => a.relevanceScore)) * 50);
+      result = matchScore > 40 ? 'inconclusive' : 'clear';
     }
 
     const listsChecked = [
-      "OFAC SDN",
-      "OFAC Consolidated",
-      "EU Consolidated Sanctions",
-      "UN Security Council",
-      "UK HM Treasury",
-      "FATF High-Risk Jurisdictions",
-      "PEP Global Database",
-      "Adverse Media Screening",
+      'OFAC SDN', 'OFAC Consolidated', 'EU Consolidated Sanctions',
+      'UN Security Council', 'UK HM Treasury', 'FATF High-Risk Jurisdictions',
+      'PEP Global Database', 'Adverse Media Screening',
     ];
 
     const screeningResult: SanctionsScreeningResult = {
@@ -469,7 +306,7 @@ export class ComplianceCopilotService {
     await this.persistScreeningResult(screeningResult);
 
     const processingMs = performance.now() - startTime;
-    logger.info("sanctions_screening_complete", {
+    logger.info('sanctions_screening_complete', {
       screeningId,
       identityId: request.identityId,
       result,
@@ -493,11 +330,8 @@ export class ComplianceCopilotService {
     const reportId = `rpt-${crypto.randomUUID()}`;
     const framework = this.getFrameworkForJurisdiction(jurisdiction);
 
-    logger.info("compliance_report_generation_start", {
-      reportId,
-      entityId,
-      reportType,
-      jurisdiction,
+    logger.info('compliance_report_generation_start', {
+      reportId, entityId, reportType, jurisdiction,
     });
 
     const sections: ReportSection[] = [];
@@ -508,142 +342,121 @@ export class ComplianceCopilotService {
     const identity = await prisma.identity.findUnique({
       where: { id: entityId },
       include: {
-        credentials: { where: { status: "ACTIVE" } },
+        credentials: { where: { status: 'ACTIVE' } },
       },
     });
 
     // Section: Identity Verification
-    if (reportType === "kyc" || reportType === "comprehensive") {
-      const idVerified = identity?.status === "ACTIVE";
+    if (reportType === 'kyc' || reportType === 'comprehensive') {
+      const idVerified = identity?.status === 'ACTIVE';
       const credCount = identity?.credentials.length ?? 0;
 
       sections.push({
-        title: "Identity Verification (KYC)",
-        status:
-          idVerified && credCount >= 2
-            ? "pass"
-            : credCount >= 1
-              ? "warning"
-              : "fail",
+        title: 'Identity Verification (KYC)',
+        status: idVerified && credCount >= 2 ? 'pass' : credCount >= 1 ? 'warning' : 'fail',
         findings: [
-          `Identity status: ${identity?.status ?? "NOT_FOUND"}`,
+          `Identity status: ${identity?.status ?? 'NOT_FOUND'}`,
           `Active credentials: ${credCount}`,
-          `TEE attestation: ${identity?.teeAttested ? "verified" : "not present"}`,
-          credCount < 2
-            ? "Insufficient documentary evidence for full KYC compliance"
-            : "Documentary evidence meets minimum requirements",
+          `TEE attestation: ${identity?.teeAttested ? 'verified' : 'not present'}`,
+          credCount < 2 ? 'Insufficient documentary evidence for full KYC compliance' : 'Documentary evidence meets minimum requirements',
         ],
-        evidence: {
-          identityStatus: identity?.status,
-          credentialCount: credCount,
-          teeAttested: identity?.teeAttested,
-        },
+        evidence: { identityStatus: identity?.status, credentialCount: credCount, teeAttested: identity?.teeAttested },
       });
 
       if (!identity?.teeAttested) {
         gaps.push({
           gapId: `gap-${crypto.randomUUID().slice(0, 8)}`,
-          category: "identity_verification",
-          severity: "warning",
-          description: "Identity lacks hardware-bound TEE attestation",
+          category: 'identity_verification',
+          severity: 'warning',
+          description: 'Identity lacks hardware-bound TEE attestation',
           regulation: `${framework} - Device Binding`,
-          remediation:
-            "Request TEE attestation from the identity holder to bind identity to a secure hardware enclave",
+          remediation: 'Request TEE attestation from the identity holder to bind identity to a secure hardware enclave',
         });
-        recommendations.push(
-          "Require TEE attestation for enhanced identity assurance",
-        );
+        recommendations.push('Require TEE attestation for enhanced identity assurance');
       }
 
       if (credCount < 2) {
         gaps.push({
           gapId: `gap-${crypto.randomUUID().slice(0, 8)}`,
-          category: "documentary_evidence",
-          severity: "violation",
+          category: 'documentary_evidence',
+          severity: 'violation',
           description: `Only ${credCount} credential(s) on file — minimum 2 required for standard CDD`,
           regulation: `${framework} - CDD Requirements`,
-          remediation:
-            "Request additional identity documents (government ID, proof of address)",
+          remediation: 'Request additional identity documents (government ID, proof of address)',
           deadline: new Date(Date.now() + 30 * 86_400_000),
         });
       }
     }
 
     // Section: AML Compliance
-    if (reportType === "aml" || reportType === "comprehensive") {
+    if (reportType === 'aml' || reportType === 'comprehensive') {
       const latestScreening = await redis.get(`screening:latest:${entityId}`);
       const screeningCurrent = latestScreening
-        ? Date.now() - JSON.parse(latestScreening).screenedAt < 24 * 3600_000
+        ? (Date.now() - JSON.parse(latestScreening).screenedAt) < 24 * 3600_000
         : false;
 
       sections.push({
-        title: "Anti-Money Laundering (AML)",
-        status: screeningCurrent ? "pass" : "warning",
+        title: 'Anti-Money Laundering (AML)',
+        status: screeningCurrent ? 'pass' : 'warning',
         findings: [
-          `Sanctions screening: ${screeningCurrent ? "current" : "stale or missing"}`,
-          "Transaction monitoring: active",
-          "Suspicious activity reports: none pending",
+          `Sanctions screening: ${screeningCurrent ? 'current' : 'stale or missing'}`,
+          'Transaction monitoring: active',
+          'Suspicious activity reports: none pending',
         ],
-        evidence: {
-          screeningCurrent,
-          lastScreening: latestScreening
-            ? JSON.parse(latestScreening).screenedAt
-            : null,
-        },
+        evidence: { screeningCurrent, lastScreening: latestScreening ? JSON.parse(latestScreening).screenedAt : null },
       });
 
       if (!screeningCurrent) {
         gaps.push({
           gapId: `gap-${crypto.randomUUID().slice(0, 8)}`,
-          category: "aml_screening",
-          severity: "warning",
-          description:
-            "Sanctions screening is not current (must be refreshed at least every 24 hours)",
+          category: 'aml_screening',
+          severity: 'warning',
+          description: 'Sanctions screening is not current (must be refreshed at least every 24 hours)',
           regulation: `${framework} - Ongoing Monitoring`,
-          remediation: "Run fresh sanctions screening for this identity",
+          remediation: 'Run fresh sanctions screening for this identity',
         });
-        recommendations.push("Implement automated daily sanctions screening");
+        recommendations.push('Implement automated daily sanctions screening');
       }
     }
 
     // Section: Sanctions Screening
-    if (reportType === "sanctions" || reportType === "comprehensive") {
+    if (reportType === 'sanctions' || reportType === 'comprehensive') {
       sections.push({
-        title: "Sanctions & Restrictive Measures",
-        status: "pass",
+        title: 'Sanctions & Restrictive Measures',
+        status: 'pass',
         findings: [
-          "Checked against: OFAC SDN, EU Consolidated, UN Security Council, UK HMT",
-          "No confirmed matches found",
-          "Last screening: within compliance window",
+          'Checked against: OFAC SDN, EU Consolidated, UN Security Council, UK HMT',
+          'No confirmed matches found',
+          'Last screening: within compliance window',
         ],
         evidence: { listsChecked: 4, confirmedMatches: 0 },
       });
     }
 
     // Section: PEP Screening
-    if (reportType === "pep" || reportType === "comprehensive") {
+    if (reportType === 'pep' || reportType === 'comprehensive') {
       sections.push({
-        title: "Politically Exposed Persons (PEP)",
-        status: "pass",
+        title: 'Politically Exposed Persons (PEP)',
+        status: 'pass',
         findings: [
-          "Screened against global PEP databases",
-          "Included family members and close associates",
-          "No matches requiring enhanced due diligence",
+          'Screened against global PEP databases',
+          'Included family members and close associates',
+          'No matches requiring enhanced due diligence',
         ],
         evidence: { pepDatabasesChecked: 3, matchesFound: 0 },
       });
     }
 
     // Section: Travel Rule
-    if (reportType === "travel_rule" || reportType === "comprehensive") {
+    if (reportType === 'travel_rule' || reportType === 'comprehensive') {
       sections.push({
-        title: "Travel Rule Compliance",
-        status: "pass",
+        title: 'Travel Rule Compliance',
+        status: 'pass',
         findings: [
-          "Originator information: complete",
-          "Beneficiary information: complete for all applicable transfers",
-          "VASP-to-VASP data sharing: protocol compliant",
-          `Threshold: ${jurisdiction === "EU" ? "EUR 1,000" : "USD 3,000"}`,
+          'Originator information: complete',
+          'Beneficiary information: complete for all applicable transfers',
+          'VASP-to-VASP data sharing: protocol compliant',
+          `Threshold: ${jurisdiction === 'EU' ? 'EUR 1,000' : 'USD 3,000'}`,
         ],
         evidence: { originatorComplete: true, beneficiaryComplete: true },
       });
@@ -651,27 +464,20 @@ export class ComplianceCopilotService {
 
     // Compute compliance score
     const sectionStatuses = sections.map((s) => s.status);
-    const passCount = sectionStatuses.filter((s) => s === "pass").length;
-    const warningCount = sectionStatuses.filter((s) => s === "warning").length;
-    const failCount = sectionStatuses.filter((s) => s === "fail").length;
-    const totalSections = sectionStatuses.filter(
-      (s) => s !== "not_applicable",
-    ).length;
+    const passCount = sectionStatuses.filter((s) => s === 'pass').length;
+    const warningCount = sectionStatuses.filter((s) => s === 'warning').length;
+    const failCount = sectionStatuses.filter((s) => s === 'fail').length;
+    const totalSections = sectionStatuses.filter((s) => s !== 'not_applicable').length;
 
-    const complianceScore =
-      totalSections > 0
-        ? Math.round(
-            ((passCount * 100 + warningCount * 60 + failCount * 0) /
-              (totalSections * 100)) *
-              100,
-          )
-        : 0;
+    const complianceScore = totalSections > 0
+      ? Math.round(((passCount * 100 + warningCount * 60 + failCount * 0) / (totalSections * 100)) * 100)
+      : 0;
 
     const report: ComplianceReport = {
       reportId,
       entityId,
       reportType,
-      status: "complete",
+      status: 'complete',
       summary: `Compliance report for entity ${entityId.slice(0, 8)}... — Score: ${complianceScore}/100, ${gaps.length} gap(s) identified, ${recommendations.length} recommendation(s).`,
       sections,
       complianceScore,
@@ -684,14 +490,9 @@ export class ComplianceCopilotService {
     };
 
     // Cache the report
-    await redis.set(
-      `compliance:report:${reportId}`,
-      JSON.stringify(report),
-      "EX",
-      30 * 86400,
-    );
+    await redis.set(`compliance:report:${reportId}`, JSON.stringify(report), 'EX', 30 * 86400);
 
-    logger.info("compliance_report_generated", {
+    logger.info('compliance_report_generated', {
       reportId,
       entityId,
       complianceScore,
@@ -708,7 +509,7 @@ export class ComplianceCopilotService {
   async queryComplianceCopilot(query: CopilotQuery): Promise<CopilotResponse> {
     const queryId = `cq-${crypto.randomUUID()}`;
 
-    logger.info("copilot_query", {
+    logger.info('copilot_query', {
       queryId,
       question: query.question.slice(0, 100),
       jurisdiction: query.context?.jurisdiction,
@@ -742,10 +543,7 @@ export class ComplianceCopilotService {
       }
 
       // Framework preference boost
-      if (
-        query.context?.regulatoryFramework &&
-        entry.framework === query.context.regulatoryFramework
-      ) {
+      if (query.context?.regulatoryFramework && entry.framework === query.context.regulatoryFramework) {
         score *= 1.5;
       }
 
@@ -759,11 +557,10 @@ export class ComplianceCopilotService {
     // Build response
     let answer: string;
     let confidence: number;
-    const citations: CopilotResponse["citations"] = [];
+    const citations: CopilotResponse['citations'] = [];
 
     if (topEntries.length === 0) {
-      answer =
-        "I could not find specific regulatory guidance matching your query in the current knowledge base. Please consult with your compliance team or legal counsel for authoritative guidance on this topic.";
+      answer = 'I could not find specific regulatory guidance matching your query in the current knowledge base. Please consult with your compliance team or legal counsel for authoritative guidance on this topic.';
       confidence = 0.1;
     } else {
       // Synthesize answer from top entries
@@ -780,7 +577,7 @@ export class ComplianceCopilotService {
         citations.push({
           regulation: scored.entry.regulation,
           section: scored.entry.section,
-          text: scored.entry.content.slice(0, 150) + "...",
+          text: scored.entry.content.slice(0, 150) + '...',
         });
       }
     }
@@ -797,17 +594,16 @@ export class ComplianceCopilotService {
       confidence,
       citations,
       relatedTopics,
-      disclaimer:
-        "This response is generated by an AI compliance assistant and should not be considered legal advice. Always consult with qualified legal and compliance professionals for binding regulatory interpretation.",
+      disclaimer: 'This response is generated by an AI compliance assistant and should not be considered legal advice. Always consult with qualified legal and compliance professionals for binding regulatory interpretation.',
       timestamp: new Date(),
     };
 
     // Log for audit
     await prisma.auditLog.create({
       data: {
-        identityId: query.context?.identityId ?? "system",
-        action: "COMPLIANCE_COPILOT_QUERY" as any,
-        resourceType: "copilot_query",
+        identityId: query.context?.identityId ?? 'system',
+        action: 'COMPLIANCE_COPILOT_QUERY' as any,
+        resourceType: 'copilot_query',
         resourceId: queryId,
         details: {
           question: query.question.slice(0, 200),
@@ -831,7 +627,7 @@ export class ComplianceCopilotService {
   ): Promise<RegulatoryChangeImpact> {
     const changeId = `rci-${crypto.randomUUID()}`;
 
-    logger.info("regulatory_change_simulation", {
+    logger.info('regulatory_change_simulation', {
       changeId,
       regulation,
       jurisdiction,
@@ -839,77 +635,60 @@ export class ComplianceCopilotService {
 
     // Count potentially impacted entities
     const totalIdentities = await prisma.identity.count({
-      where: { status: "ACTIVE" },
+      where: { status: 'ACTIVE' },
     });
 
     await prisma.credential.count({
-      where: { status: "ACTIVE" },
+      where: { status: 'ACTIVE' },
     });
 
     // Analyze what credential types would be affected
     const credentialTypes = await prisma.credential.groupBy({
-      by: ["credentialType"],
-      where: { status: "ACTIVE" },
+      by: ['credentialType'],
+      where: { status: 'ACTIVE' },
       _count: true,
     });
 
     const changeLower = changes.toLowerCase();
     const affectedTypes: string[] = [];
     const requiredActions: string[] = [];
-    let estimatedEffort: "low" | "medium" | "high" | "critical" = "low";
+    let estimatedEffort: 'low' | 'medium' | 'high' | 'critical' = 'low';
 
-    if (changeLower.includes("kyc") || changeLower.includes("identity")) {
-      affectedTypes.push("NATIONAL_ID", "PASSPORT", "DRIVERS_LICENSE");
-      requiredActions.push("Re-verify all active identity credentials");
-      estimatedEffort = "high";
+    if (changeLower.includes('kyc') || changeLower.includes('identity')) {
+      affectedTypes.push('NATIONAL_ID', 'PASSPORT', 'DRIVERS_LICENSE');
+      requiredActions.push('Re-verify all active identity credentials');
+      estimatedEffort = 'high';
     }
 
-    if (
-      changeLower.includes("sanctions") ||
-      changeLower.includes("screening")
-    ) {
-      requiredActions.push("Update sanctions screening databases");
-      requiredActions.push(
-        "Re-screen all active identities against updated lists",
-      );
-      estimatedEffort = "medium";
+    if (changeLower.includes('sanctions') || changeLower.includes('screening')) {
+      requiredActions.push('Update sanctions screening databases');
+      requiredActions.push('Re-screen all active identities against updated lists');
+      estimatedEffort = 'medium';
     }
 
-    if (
-      changeLower.includes("travel rule") ||
-      changeLower.includes("threshold")
-    ) {
-      requiredActions.push("Update transaction monitoring thresholds");
-      requiredActions.push(
-        "Implement new data collection fields for affected transfers",
-      );
-      estimatedEffort = "medium";
+    if (changeLower.includes('travel rule') || changeLower.includes('threshold')) {
+      requiredActions.push('Update transaction monitoring thresholds');
+      requiredActions.push('Implement new data collection fields for affected transfers');
+      estimatedEffort = 'medium';
     }
 
-    if (
-      changeLower.includes("pep") ||
-      changeLower.includes("enhanced due diligence")
-    ) {
-      requiredActions.push("Expand PEP screening to cover new categories");
-      requiredActions.push("Implement enhanced due diligence workflows");
-      affectedTypes.push("KYC_LEVEL_2", "KYC_LEVEL_3");
+    if (changeLower.includes('pep') || changeLower.includes('enhanced due diligence')) {
+      requiredActions.push('Expand PEP screening to cover new categories');
+      requiredActions.push('Implement enhanced due diligence workflows');
+      affectedTypes.push('KYC_LEVEL_2', 'KYC_LEVEL_3');
     }
 
     if (requiredActions.length === 0) {
-      requiredActions.push("Review regulatory change for applicability");
-      requiredActions.push("Update compliance policy documentation");
+      requiredActions.push('Review regulatory change for applicability');
+      requiredActions.push('Update compliance policy documentation');
     }
 
     // Estimate impacted entities
     const effort: string = estimatedEffort;
-    const impactedRatio =
-      effort === "critical"
-        ? 1.0
-        : effort === "high"
-          ? 0.7
-          : effort === "medium"
-            ? 0.4
-            : 0.1;
+    const impactedRatio = effort === 'critical' ? 1.0
+      : effort === 'high' ? 0.7
+      : effort === 'medium' ? 0.4
+      : 0.1;
 
     const impact: RegulatoryChangeImpact = {
       changeId,
@@ -917,16 +696,15 @@ export class ComplianceCopilotService {
       effectiveDate: new Date(Date.now() + 90 * 86_400_000), // assume 90-day grace period
       description: changes,
       impactedEntities: Math.round(totalIdentities * impactedRatio),
-      impactedCredentialTypes:
-        affectedTypes.length > 0
-          ? affectedTypes
-          : credentialTypes.slice(0, 3).map((c) => c.credentialType),
+      impactedCredentialTypes: affectedTypes.length > 0
+        ? affectedTypes
+        : credentialTypes.slice(0, 3).map((c) => c.credentialType),
       requiredActions,
       estimatedEffort,
-      automationPossible: effort !== "critical",
+      automationPossible: effort !== 'critical',
     };
 
-    logger.info("regulatory_change_simulation_complete", {
+    logger.info('regulatory_change_simulation_complete', {
       changeId,
       impactedEntities: impact.impactedEntities,
       requiredActions: requiredActions.length,
@@ -940,7 +718,8 @@ export class ComplianceCopilotService {
   // Compliance alerts management
   // -------------------------------------------------------------------------
   async getActiveAlerts(entityId?: string): Promise<ComplianceAlert[]> {
-    let alerts = Array.from(this.alerts.values()).filter((a) => !a.resolvedAt);
+    let alerts = Array.from(this.alerts.values())
+      .filter((a) => !a.resolvedAt);
 
     if (entityId) {
       alerts = alerts.filter((a) => a.entityId === entityId);
@@ -972,7 +751,7 @@ export class ComplianceCopilotService {
 
     this.alerts.set(alert.alertId, alert);
 
-    logger.warn("compliance_alert_created", {
+    logger.warn('compliance_alert_created', {
       alertId: alert.alertId,
       entityId,
       level,
@@ -986,19 +765,16 @@ export class ComplianceCopilotService {
   // -------------------------------------------------------------------------
   // Compliance score per entity
   // -------------------------------------------------------------------------
-  async computeComplianceScore(
-    entityId: string,
-    jurisdiction: string,
-  ): Promise<{
+  async computeComplianceScore(entityId: string, jurisdiction: string): Promise<{
     score: number;
     breakdown: Record<string, number>;
-    status: "compliant" | "partially_compliant" | "non_compliant";
+    status: 'compliant' | 'partially_compliant' | 'non_compliant';
   }> {
     this.getFrameworkForJurisdiction(jurisdiction);
 
     const identity = await prisma.identity.findUnique({
       where: { id: entityId },
-      include: { credentials: { where: { status: "ACTIVE" } } },
+      include: { credentials: { where: { status: 'ACTIVE' } } },
     });
 
     const breakdown: Record<string, number> = {};
@@ -1008,12 +784,8 @@ export class ComplianceCopilotService {
     breakdown.kyc_completeness = Math.min(100, credCount * 25);
 
     // Identity verification
-    breakdown.identity_verification =
-      identity?.status === "ACTIVE"
-        ? 100
-        : identity?.status === "PENDING"
-          ? 50
-          : 0;
+    breakdown.identity_verification = identity?.status === 'ACTIVE' ? 100
+      : identity?.status === 'PENDING' ? 50 : 0;
 
     // TEE attestation
     breakdown.tee_attestation = identity?.teeAttested ? 100 : 0;
@@ -1021,40 +793,26 @@ export class ComplianceCopilotService {
     // Screening recency
     const lastScreening = await redis.get(`screening:latest:${entityId}`);
     if (lastScreening) {
-      const screeningAge =
-        Date.now() - new Date(JSON.parse(lastScreening).screenedAt).getTime();
-      breakdown.screening_recency =
-        screeningAge < 86_400_000
-          ? 100
-          : screeningAge < 7 * 86_400_000
-            ? 70
-            : 30;
+      const screeningAge = Date.now() - new Date(JSON.parse(lastScreening).screenedAt).getTime();
+      breakdown.screening_recency = screeningAge < 86_400_000 ? 100
+        : screeningAge < 7 * 86_400_000 ? 70
+        : 30;
     } else {
       breakdown.screening_recency = 0;
     }
 
     // Credential freshness
-    const avgAge =
-      credCount > 0
-        ? identity!.credentials.reduce(
-            (sum, c) => sum + (Date.now() - new Date(c.issuedAt).getTime()),
-            0,
-          ) /
-          credCount /
-          86_400_000
-        : 999;
-    breakdown.credential_freshness =
-      avgAge < 90 ? 100 : avgAge < 180 ? 80 : avgAge < 365 ? 50 : 20;
+    const avgAge = credCount > 0
+      ? identity!.credentials.reduce((sum, c) => sum + (Date.now() - new Date(c.issuedAt).getTime()), 0) / credCount / 86_400_000
+      : 999;
+    breakdown.credential_freshness = avgAge < 90 ? 100 : avgAge < 180 ? 80 : avgAge < 365 ? 50 : 20;
 
     const scores = Object.values(breakdown);
     const score = Math.round(scores.reduce((a, b) => a + b, 0) / scores.length);
 
-    const status =
-      score >= 80
-        ? ("compliant" as const)
-        : score >= 50
-          ? ("partially_compliant" as const)
-          : ("non_compliant" as const);
+    const status = score >= 80 ? 'compliant' as const
+      : score >= 50 ? 'partially_compliant' as const
+      : 'non_compliant' as const;
 
     return { score, breakdown, status };
   }
@@ -1099,45 +857,10 @@ export class ComplianceCopilotService {
 
   private tokenize(text: string): string[] {
     return text
-      .replace(/[^\w\s]/g, " ")
+      .replace(/[^\w\s]/g, ' ')
       .split(/\s+/)
       .filter((t) => t.length > 2)
-      .filter(
-        (t) =>
-          ![
-            "the",
-            "and",
-            "for",
-            "are",
-            "but",
-            "not",
-            "you",
-            "all",
-            "can",
-            "had",
-            "her",
-            "was",
-            "one",
-            "our",
-            "out",
-            "has",
-            "what",
-            "when",
-            "who",
-            "how",
-            "does",
-            "with",
-            "this",
-            "that",
-            "from",
-            "they",
-            "been",
-            "have",
-            "will",
-            "each",
-            "about",
-          ].includes(t),
-      );
+      .filter((t) => !['the', 'and', 'for', 'are', 'but', 'not', 'you', 'all', 'can', 'had', 'her', 'was', 'one', 'our', 'out', 'has', 'what', 'when', 'who', 'how', 'does', 'with', 'this', 'that', 'from', 'they', 'been', 'have', 'will', 'each', 'about'].includes(t));
   }
 
   private async checkAdverseMedia(_name: string): Promise<AdverseMediaHit[]> {
@@ -1146,33 +869,27 @@ export class ComplianceCopilotService {
     return [];
   }
 
-  private async persistScreeningResult(
-    result: SanctionsScreeningResult,
-  ): Promise<void> {
+  private async persistScreeningResult(result: SanctionsScreeningResult): Promise<void> {
     try {
       await redis.set(
         `screening:latest:${result.identityId}`,
-        JSON.stringify({
-          screenedAt: result.screenedAt,
-          result: result.result,
-          matchScore: result.matchScore,
-        }),
-        "EX",
+        JSON.stringify({ screenedAt: result.screenedAt, result: result.result, matchScore: result.matchScore }),
+        'EX',
         7 * 86400,
       );
 
       await redis.set(
         `screening:${result.screeningId}`,
         JSON.stringify(result),
-        "EX",
+        'EX',
         90 * 86400,
       );
 
       await prisma.auditLog.create({
         data: {
           identityId: result.identityId,
-          action: "SANCTIONS_SCREENING" as any,
-          resourceType: "screening",
+          action: 'SANCTIONS_SCREENING' as any,
+          resourceType: 'screening',
           resourceId: result.screeningId,
           details: {
             result: result.result,
@@ -1184,25 +901,23 @@ export class ComplianceCopilotService {
         },
       });
     } catch (err) {
-      logger.error("screening_persist_error", {
+      logger.error('screening_persist_error', {
         screeningId: result.screeningId,
         error: (err as Error).message,
       });
     }
   }
 
-  private getFrameworkForJurisdiction(
-    jurisdiction: string,
-  ): RegulatoryFramework {
+  private getFrameworkForJurisdiction(jurisdiction: string): RegulatoryFramework {
     const mapping: Record<string, RegulatoryFramework> = {
-      US: "BSA",
-      EU: "AMLD6",
-      UK: "FCA_MLR",
-      SG: "MAS_PSA",
-      AE: "VARA",
-      CH: "FINMA_AMLA",
+      US: 'BSA',
+      EU: 'AMLD6',
+      UK: 'FCA_MLR',
+      SG: 'MAS_PSA',
+      AE: 'VARA',
+      CH: 'FINMA_AMLA',
     };
-    return mapping[jurisdiction.toUpperCase()] ?? "FATF";
+    return mapping[jurisdiction.toUpperCase()] ?? 'FATF';
   }
 }
 
@@ -1216,7 +931,7 @@ export class ComplianceCopilotError extends Error {
     public statusCode: number = 400,
   ) {
     super(message);
-    this.name = "ComplianceCopilotError";
+    this.name = 'ComplianceCopilotError';
   }
 }
 

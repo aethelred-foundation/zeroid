@@ -1,22 +1,16 @@
 {
-  "extends": ["next"],
-  "plugins": ["@typescript-eslint"],
-  "parser": "@typescript-eslint/parser",
+  "extends": ["next/core-web-vitals"],
+  "ignorePatterns": ["lib/openzeppelin-contracts/**"],
   "rules": {
-    "react/no-unescaped-entities": "off",
-    "react-hooks/exhaustive-deps": "warn",
-    "react/display-name": "off",
-    "import/no-anonymous-default-export": "off"
+    "react/no-unescaped-entities": "off"
   },
-  "ignorePatterns": [
-    "node_modules/",
-    ".next/",
-    "contracts/",
-    "test/foundry/",
-    "lib/",
-    "artifacts/",
-    "cache/",
-    "circuits/",
-    "build/"
+  "overrides": [
+    {
+      "files": ["**/__tests__/**/*", "**/*.test.*", "src/mocks/setup.ts"],
+      "rules": {
+        "no-console": "off",
+        "react/display-name": "off"
+      }
+    }
   ]
 }

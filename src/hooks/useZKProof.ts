@@ -11,6 +11,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { type Address, type Hash } from "viem";
 import { toast } from "sonner";
 import { apiClient } from "@/lib/api/client";
+import { ProofSystem } from "@/types";
 import {
   ZK_VERIFIER_ADDRESS,
   ZK_VERIFIER_ABI,
@@ -18,18 +19,13 @@ import {
 } from "@/config/constants";
 import type {
   ZKCircuitType,
+  ZKProof,
   ZKProofInput,
   ProofHistoryEntry,
   ProofProgress,
+  Groth16Proof,
+  Bytes32,
 } from "@/types";
-
-/** Local proof shape produced by snarkjs Groth16 fullProve */
-interface ZKProof {
-  circuitType: ZKCircuitType;
-  proof: unknown;
-  publicSignals: string[];
-  generatedAt: number;
-}
 
 // ---------------------------------------------------------------------------
 // Progress state for proof generation
@@ -42,6 +38,7 @@ type ProofStage =
   | "generating"
   | "done"
   | "error";
+const EMPTY_BYTES32 = `0x${"0".repeat(64)}` as Bytes32;
 
 export function useZKProof() {
   const queryClient = useQueryClient();
@@ -89,11 +86,24 @@ export function useZKProof() {
         setProgress({ stage: "done", percent: 100 });
         toast.success("Proof generated successfully");
 
+        const generatedAt = Math.floor(Date.now() / 1000);
         const zkProof: ZKProof = {
+          id: `${circuitType}-${generatedAt}`,
+          circuitId: EMPTY_BYTES32,
+          circuitName: circuitType,
+          proofSystem: ProofSystem.Groth16,
+          proof: proof as Groth16Proof,
+          publicInputs: publicSignals,
+          publicOutputs: [],
+          generatedAt,
+          validityDuration: 0,
+          proofHash: EMPTY_BYTES32,
           circuitType,
-          proof,
           publicSignals,
-          generatedAt: Date.now(),
+          protocol: "groth16",
+          curve: "bn128",
+          createdAt: generatedAt,
+          publicInputCount: publicSignals.length,
         };
 
         return zkProof;

@@ -1,4 +1,3 @@
-// @ts-nocheck
 "use client";
 
 import { useState, useCallback } from "react";
@@ -77,13 +76,14 @@ export default function VotingPanel({
     delegatedTo,
     isLoading: governanceLoading,
   } = useGovernance();
+  const proposalId = String(proposal.id);
 
   const handleSubmitVote = useCallback(async () => {
     if (!selectedVote) return;
     setIsSubmitting(true);
     setError(null);
     try {
-      await vote(proposal.id, selectedVote);
+      await vote(proposalId, selectedVote);
       setHasVoted(true);
       onVoteSubmitted?.();
     } catch (err) {
@@ -91,7 +91,7 @@ export default function VotingPanel({
     } finally {
       setIsSubmitting(false);
     }
-  }, [selectedVote, proposal.id, vote, onVoteSubmitted]);
+  }, [selectedVote, proposalId, vote, onVoteSubmitted]);
 
   const handleDelegate = useCallback(async () => {
     if (!delegateAddress) return;
@@ -115,7 +115,7 @@ export default function VotingPanel({
           Cast Your Vote
         </h3>
         <p className="text-xs text-[var(--text-secondary)] mt-1">
-          Proposal #{proposal.id.slice(0, 8)}
+          Proposal #{proposalId.slice(0, 8)}
         </p>
       </div>
 

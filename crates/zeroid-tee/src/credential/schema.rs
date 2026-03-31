@@ -2,6 +2,7 @@
 ///
 /// A schema defines the structure of a verifiable credential: which attributes
 /// it contains and their types.
+
 use crate::crypto::hash::keccak256;
 use crate::error::{Result, ZeroIdTeeError};
 
@@ -196,7 +197,9 @@ mod tests {
     #[test]
     fn validate_all_attributes_present() {
         let s = identity_schema();
-        assert!(s.validate_attributes(&["name", "age", "verified"]).is_ok());
+        assert!(s
+            .validate_attributes(&["name", "age", "verified"])
+            .is_ok());
     }
 
     #[test]

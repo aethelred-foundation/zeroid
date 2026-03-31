@@ -1,14 +1,14 @@
-import { z } from "zod";
-import { createLogger, format, transports } from "winston";
-import crypto from "crypto";
+import { z } from 'zod';
+import { createLogger, format, transports } from 'winston';
+import crypto from 'crypto';
 
 // ---------------------------------------------------------------------------
 // Logger
 // ---------------------------------------------------------------------------
 const logger = createLogger({
-  level: process.env.LOG_LEVEL ?? "info",
+  level: process.env.LOG_LEVEL ?? 'info',
   format: format.combine(format.timestamp(), format.json()),
-  defaultMeta: { service: "sanctions-screening" },
+  defaultMeta: { service: 'sanctions-screening' },
   transports: [new transports.Console()],
 });
 
@@ -17,58 +17,25 @@ const logger = createLogger({
 // ---------------------------------------------------------------------------
 export const ScreeningRequestSchema = z.object({
   entityId: z.string(),
-  entityType: z.enum(["individual", "corporate", "vessel", "aircraft"]),
-  names: z.array(
-    z.object({
-      fullName: z.string().min(1),
-      nameType: z.enum(["primary", "alias", "former", "transliteration"]),
-      script: z
-        .enum(["latin", "arabic", "cyrillic", "cjk", "other"])
-        .default("latin"),
-    }),
-  ),
+  entityType: z.enum(['individual', 'corporate', 'vessel', 'aircraft']),
+  names: z.array(z.object({
+    fullName: z.string().min(1),
+    nameType: z.enum(['primary', 'alias', 'former', 'transliteration']),
+    script: z.enum(['latin', 'arabic', 'cyrillic', 'cjk', 'other']).default('latin'),
+  })),
   dateOfBirth: z.string().optional(),
   nationality: z.string().optional(),
-  identifiers: z
-    .array(
-      z.object({
-        type: z.enum([
-          "passport",
-          "national_id",
-          "tax_id",
-          "registration_number",
-        ]),
-        value: z.string(),
-        country: z.string().optional(),
-      }),
-    )
-    .default([]),
-  addresses: z
-    .array(
-      z.object({
-        country: z.string(),
-        city: z.string().optional(),
-        fullAddress: z.string().optional(),
-      }),
-    )
-    .default([]),
-  screenAgainst: z
-    .array(
-      z.enum([
-        "ofac_sdn",
-        "eu_consolidated",
-        "un_sanctions",
-        "uae_local",
-        "pep_database",
-      ]),
-    )
-    .default([
-      "ofac_sdn",
-      "eu_consolidated",
-      "un_sanctions",
-      "uae_local",
-      "pep_database",
-    ]),
+  identifiers: z.array(z.object({
+    type: z.enum(['passport', 'national_id', 'tax_id', 'registration_number']),
+    value: z.string(),
+    country: z.string().optional(),
+  })).default([]),
+  addresses: z.array(z.object({
+    country: z.string(),
+    city: z.string().optional(),
+    fullAddress: z.string().optional(),
+  })).default([]),
+  screenAgainst: z.array(z.enum(['ofac_sdn', 'eu_consolidated', 'un_sanctions', 'uae_local', 'pep_database'])).default(['ofac_sdn', 'eu_consolidated', 'un_sanctions', 'uae_local', 'pep_database']),
 });
 
 export type ScreeningRequest = z.infer<typeof ScreeningRequestSchema>;
@@ -76,7 +43,7 @@ export type ScreeningRequest = z.infer<typeof ScreeningRequestSchema>;
 export const BatchScreeningRequestSchema = z.object({
   clientId: z.string(),
   requests: z.array(ScreeningRequestSchema).min(1).max(1000),
-  priority: z.enum(["high", "normal", "low"]).default("normal"),
+  priority: z.enum(['high', 'normal', 'low']).default('normal'),
   callbackUrl: z.string().url().optional(),
 });
 
@@ -84,7 +51,7 @@ export type BatchScreeningRequest = z.infer<typeof BatchScreeningRequestSchema>;
 
 export const FalsePositiveDecisionSchema = z.object({
   matchId: z.string().uuid(),
-  decision: z.enum(["confirmed_match", "false_positive", "escalate"]),
+  decision: z.enum(['confirmed_match', 'false_positive', 'escalate']),
   reason: z.string().min(10),
   decidedBy: z.string(),
   evidenceRefs: z.array(z.string()).default([]),
@@ -101,7 +68,7 @@ export interface SanctionsMatch {
   listEntryId: string;
   matchedName: string;
   matchScore: number;
-  matchType: "exact" | "fuzzy" | "partial" | "phonetic" | "transliteration";
+  matchType: 'exact' | 'fuzzy' | 'partial' | 'phonetic' | 'transliteration';
   matchedFields: string[];
   listingDetails: {
     programs: string[];
@@ -109,14 +76,14 @@ export interface SanctionsMatch {
     remarks: string;
     sdnType?: string;
   };
-  status: "pending_review" | "confirmed_match" | "false_positive" | "escalated";
+  status: 'pending_review' | 'confirmed_match' | 'false_positive' | 'escalated';
 }
 
 export interface ScreeningResult {
   screeningId: string;
   entityId: string;
   timestamp: string;
-  overallRisk: "clear" | "potential_match" | "confirmed_match";
+  overallRisk: 'clear' | 'potential_match' | 'confirmed_match';
   matches: SanctionsMatch[];
   listsScreened: string[];
   processingTimeMs: number;
@@ -136,22 +103,22 @@ export interface AuditEntry {
 // Arabic/Latin transliteration map
 // ---------------------------------------------------------------------------
 const ARABIC_LATIN_MAP: Record<string, string[]> = {
-  محمد: ["mohammed", "muhammad", "mohamed", "mohamad", "muhamad"],
-  أحمد: ["ahmed", "ahmad"],
-  عبد: ["abd", "abdul", "abdel", "abdal"],
-  الله: ["allah", "alla"],
-  الرحمن: ["alrahman", "al-rahman", "arrahman"],
-  علي: ["ali", "aly"],
-  حسن: ["hassan", "hasan", "hasen"],
-  حسين: ["hussein", "husain", "hussain", "hossein"],
-  خالد: ["khalid", "khaled"],
-  إبراهيم: ["ibrahim", "ebrahim", "abraham"],
-  عمر: ["omar", "omer", "umar"],
-  يوسف: ["youssef", "yusuf", "yousef", "joseph"],
-  سلطان: ["sultan", "soltan"],
-  سعيد: ["said", "saeed", "saeid"],
-  ناصر: ["nasser", "naser", "nasir"],
-  فاطمة: ["fatima", "fatma", "fatemeh"],
+  'محمد': ['mohammed', 'muhammad', 'mohamed', 'mohamad', 'muhamad'],
+  'أحمد': ['ahmed', 'ahmad'],
+  'عبد': ['abd', 'abdul', 'abdel', 'abdal'],
+  'الله': ['allah', 'alla'],
+  'الرحمن': ['alrahman', 'al-rahman', 'arrahman'],
+  'علي': ['ali', 'aly'],
+  'حسن': ['hassan', 'hasan', 'hasen'],
+  'حسين': ['hussein', 'husain', 'hussain', 'hossein'],
+  'خالد': ['khalid', 'khaled'],
+  'إبراهيم': ['ibrahim', 'ebrahim', 'abraham'],
+  'عمر': ['omar', 'omer', 'umar'],
+  'يوسف': ['youssef', 'yusuf', 'yousef', 'joseph'],
+  'سلطان': ['sultan', 'soltan'],
+  'سعيد': ['said', 'saeed', 'saeid'],
+  'ناصر': ['nasser', 'naser', 'nasir'],
+  'فاطمة': ['fatima', 'fatma', 'fatemeh'],
 };
 
 // ---------------------------------------------------------------------------
@@ -168,18 +135,16 @@ export class SanctionsScreeningService {
   constructor(matchThreshold = 0.78) {
     this.matchThreshold = matchThreshold;
     this.initializeLists();
-    logger.info("SanctionsScreeningService initialized", {
-      threshold: matchThreshold,
-    });
+    logger.info('SanctionsScreeningService initialized', { threshold: matchThreshold });
   }
 
   private initializeLists(): void {
     // Initialize with empty lists; in production these are synced from regulatory feeds
-    this.sanctionsLists.set("ofac_sdn", []);
-    this.sanctionsLists.set("eu_consolidated", []);
-    this.sanctionsLists.set("un_sanctions", []);
-    this.sanctionsLists.set("uae_local", []);
-    this.sanctionsLists.set("pep_database", []);
+    this.sanctionsLists.set('ofac_sdn', []);
+    this.sanctionsLists.set('eu_consolidated', []);
+    this.sanctionsLists.set('un_sanctions', []);
+    this.sanctionsLists.set('uae_local', []);
+    this.sanctionsLists.set('pep_database', []);
   }
 
   // -------------------------------------------------------------------------
@@ -205,22 +170,17 @@ export class SanctionsScreeningService {
     const resolved = deduped.map((m) => {
       const fp = this.falsePositives.get(m.matchId);
       if (fp) {
-        m.status =
-          fp.decision === "false_positive"
-            ? "false_positive"
-            : fp.decision === "confirmed_match"
-              ? "confirmed_match"
-              : "escalated";
+        m.status = fp.decision === 'false_positive' ? 'false_positive' : fp.decision === 'confirmed_match' ? 'confirmed_match' : 'escalated';
       }
       return m;
     });
 
-    const activeMatches = resolved.filter((m) => m.status !== "false_positive");
-    let overallRisk: ScreeningResult["overallRisk"] = "clear";
-    if (activeMatches.some((m) => m.status === "confirmed_match")) {
-      overallRisk = "confirmed_match";
-    } else if (activeMatches.some((m) => m.status === "pending_review")) {
-      overallRisk = "potential_match";
+    const activeMatches = resolved.filter((m) => m.status !== 'false_positive');
+    let overallRisk: ScreeningResult['overallRisk'] = 'clear';
+    if (activeMatches.some((m) => m.status === 'confirmed_match')) {
+      overallRisk = 'confirmed_match';
+    } else if (activeMatches.some((m) => m.status === 'pending_review')) {
+      overallRisk = 'potential_match';
     }
 
     const result: ScreeningResult = {
@@ -231,26 +191,21 @@ export class SanctionsScreeningService {
       matches: resolved,
       listsScreened: [...parsed.screenAgainst],
       processingTimeMs: Date.now() - startTime,
-      nextScreeningDate: new Date(
-        Date.now() + 24 * 60 * 60 * 1000,
-      ).toISOString(),
+      nextScreeningDate: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
     };
 
     this.screeningResults.set(screeningId, result);
-    this.logAudit(screeningId, "screening_completed", "system", {
+    this.logAudit(screeningId, 'screening_completed', 'system', {
       entityId: parsed.entityId,
       matchCount: resolved.length,
       overallRisk,
     });
 
     if (this.continuousMonitoringEntities.has(parsed.entityId)) {
-      logger.info("continuous_monitoring_screening", {
-        entityId: parsed.entityId,
-        screeningId,
-      });
+      logger.info('continuous_monitoring_screening', { entityId: parsed.entityId, screeningId });
     }
 
-    logger.info("screening_complete", {
+    logger.info('screening_complete', {
       screeningId,
       entityId: parsed.entityId,
       overallRisk,
@@ -275,11 +230,7 @@ export class SanctionsScreeningService {
     const batchId = crypto.randomUUID();
     const startTime = Date.now();
 
-    logger.info("batch_screening_started", {
-      batchId,
-      clientId: parsed.clientId,
-      count: parsed.requests.length,
-    });
+    logger.info('batch_screening_started', { batchId, clientId: parsed.clientId, count: parsed.requests.length });
 
     const results: ScreeningResult[] = [];
     const summary = { clear: 0, potentialMatch: 0, confirmedMatch: 0 };
@@ -288,56 +239,36 @@ export class SanctionsScreeningService {
     const chunkSize = 50;
     for (let i = 0; i < parsed.requests.length; i += chunkSize) {
       const chunk = parsed.requests.slice(i, i + chunkSize);
-      const chunkResults = await Promise.all(
-        chunk.map((req) => this.screenEntity(req)),
-      );
+      const chunkResults = await Promise.all(chunk.map((req) => this.screenEntity(req)));
       for (const result of chunkResults) {
         results.push(result);
-        if (result.overallRisk === "clear") summary.clear++;
-        else if (result.overallRisk === "potential_match")
-          summary.potentialMatch++;
+        if (result.overallRisk === 'clear') summary.clear++;
+        else if (result.overallRisk === 'potential_match') summary.potentialMatch++;
         else summary.confirmedMatch++;
       }
     }
 
     const processingTimeMs = Date.now() - startTime;
-    logger.info("batch_screening_complete", {
-      batchId,
-      summary,
-      durationMs: processingTimeMs,
-    });
+    logger.info('batch_screening_complete', { batchId, summary, durationMs: processingTimeMs });
 
-    return {
-      batchId,
-      totalEntities: results.length,
-      results,
-      summary,
-      processingTimeMs,
-    };
+    return { batchId, totalEntities: results.length, results, summary, processingTimeMs };
   }
 
   // -------------------------------------------------------------------------
   // Name matching with fuzzy/transliteration support
   // -------------------------------------------------------------------------
-  private matchAgainstList(
-    request: ScreeningRequest,
-    entries: SanctionsListEntry[],
-    listName: string,
-  ): SanctionsMatch[] {
+  private matchAgainstList(request: ScreeningRequest, entries: SanctionsListEntry[], listName: string): SanctionsMatch[] {
     const matches: SanctionsMatch[] = [];
 
     for (const entry of entries) {
       let bestScore = 0;
-      let bestMatchType: SanctionsMatch["matchType"] = "fuzzy";
+      let bestMatchType: SanctionsMatch['matchType'] = 'fuzzy';
       const matchedFields: string[] = [];
-      let matchedName = "";
+      let matchedName = '';
 
       for (const inputName of request.names) {
         const normalizedInput = this.normalizeName(inputName.fullName);
-        const transliterations = this.getTransliterations(
-          inputName.fullName,
-          inputName.script,
-        );
+        const transliterations = this.getTransliterations(inputName.fullName, inputName.script);
         const allInputVariants = [normalizedInput, ...transliterations];
 
         for (const entryName of entry.names) {
@@ -347,10 +278,9 @@ export class SanctionsScreeningService {
             // Exact match
             if (variant === normalizedEntry) {
               bestScore = 1.0;
-              bestMatchType =
-                variant === normalizedInput ? "exact" : "transliteration";
+              bestMatchType = variant === normalizedInput ? 'exact' : 'transliteration';
               matchedName = entryName;
-              matchedFields.push("name");
+              matchedFields.push('name');
               break;
             }
 
@@ -358,14 +288,9 @@ export class SanctionsScreeningService {
             const score = this.jaroWinklerDistance(variant, normalizedEntry);
             if (score > bestScore) {
               bestScore = score;
-              bestMatchType =
-                variant !== normalizedInput
-                  ? "transliteration"
-                  : score > 0.95
-                    ? "partial"
-                    : "fuzzy";
+              bestMatchType = variant !== normalizedInput ? 'transliteration' : score > 0.95 ? 'partial' : 'fuzzy';
               matchedName = entryName;
-              if (!matchedFields.includes("name")) matchedFields.push("name");
+              if (!matchedFields.includes('name')) matchedFields.push('name');
             }
 
             // Phonetic matching (Soundex)
@@ -373,10 +298,9 @@ export class SanctionsScreeningService {
               const phoneticScore = Math.max(bestScore, 0.85);
               if (phoneticScore > bestScore) {
                 bestScore = phoneticScore;
-                bestMatchType = "phonetic";
+                bestMatchType = 'phonetic';
                 matchedName = entryName;
-                if (!matchedFields.includes("name_phonetic"))
-                  matchedFields.push("name_phonetic");
+                if (!matchedFields.includes('name_phonetic')) matchedFields.push('name_phonetic');
               }
             }
           }
@@ -387,26 +311,19 @@ export class SanctionsScreeningService {
       if (request.dateOfBirth && entry.dateOfBirth) {
         if (request.dateOfBirth === entry.dateOfBirth) {
           bestScore = Math.min(1.0, bestScore + 0.1);
-          matchedFields.push("date_of_birth");
+          matchedFields.push('date_of_birth');
         }
       }
 
       // Nationality matching
-      if (
-        request.nationality &&
-        entry.nationalities?.includes(request.nationality)
-      ) {
+      if (request.nationality && entry.nationalities?.includes(request.nationality)) {
         bestScore = Math.min(1.0, bestScore + 0.05);
-        matchedFields.push("nationality");
+        matchedFields.push('nationality');
       }
 
       // Identifier matching
       for (const id of request.identifiers) {
-        if (
-          entry.identifiers?.some(
-            (eid) => eid.value === id.value && eid.type === id.type,
-          )
-        ) {
+        if (entry.identifiers?.some((eid) => eid.value === id.value && eid.type === id.type)) {
           bestScore = Math.min(1.0, bestScore + 0.2);
           matchedFields.push(`identifier_${id.type}`);
         }
@@ -424,10 +341,10 @@ export class SanctionsScreeningService {
           listingDetails: {
             programs: entry.programs,
             listedDate: entry.listedDate,
-            remarks: entry.remarks ?? "",
+            remarks: entry.remarks ?? '',
             sdnType: entry.sdnType,
           },
-          status: "pending_review",
+          status: 'pending_review',
         });
       }
     }
@@ -439,7 +356,7 @@ export class SanctionsScreeningService {
   // Transliteration support
   // -------------------------------------------------------------------------
   private getTransliterations(name: string, script: string): string[] {
-    if (script !== "arabic") return [];
+    if (script !== 'arabic') return [];
 
     const variants: string[] = [];
     const words = name.split(/\s+/);
@@ -453,11 +370,9 @@ export class SanctionsScreeningService {
 
     // Generate combinations for multi-word names
     if (words.length > 1) {
-      const wordVariants = words.map(
-        (w) => ARABIC_LATIN_MAP[w] ?? [this.normalizeName(w)],
-      );
+      const wordVariants = words.map((w) => ARABIC_LATIN_MAP[w] ?? [this.normalizeName(w)]);
       const combinations = this.cartesianProduct(wordVariants);
-      variants.push(...combinations.map((combo) => combo.join(" ")));
+      variants.push(...combinations.map((combo) => combo.join(' ')));
     }
 
     return [...new Set(variants.map((v) => this.normalizeName(v)))];
@@ -513,11 +428,7 @@ export class SanctionsScreeningService {
       k++;
     }
 
-    const jaro =
-      (matches / s1.length +
-        matches / s2.length +
-        (matches - transpositions / 2) / matches) /
-      3;
+    const jaro = (matches / s1.length + matches / s2.length + (matches - transpositions / 2) / matches) / 3;
 
     // Winkler bonus for common prefix
     let prefix = 0;
@@ -533,31 +444,19 @@ export class SanctionsScreeningService {
   // Soundex (phonetic encoding)
   // -------------------------------------------------------------------------
   private soundex(name: string): string {
-    if (!name) return "";
+    if (!name) return '';
     const upper = name.toUpperCase();
     const codes: Record<string, string> = {
-      B: "1",
-      F: "1",
-      P: "1",
-      V: "1",
-      C: "2",
-      G: "2",
-      J: "2",
-      K: "2",
-      Q: "2",
-      S: "2",
-      X: "2",
-      Z: "2",
-      D: "3",
-      T: "3",
-      L: "4",
-      M: "5",
-      N: "5",
-      R: "6",
+      B: '1', F: '1', P: '1', V: '1',
+      C: '2', G: '2', J: '2', K: '2', Q: '2', S: '2', X: '2', Z: '2',
+      D: '3', T: '3',
+      L: '4',
+      M: '5', N: '5',
+      R: '6',
     };
 
     let result = upper[0];
-    let lastCode = codes[upper[0]] ?? "0";
+    let lastCode = codes[upper[0]] ?? '0';
 
     for (let i = 1; i < upper.length && result.length < 4; i++) {
       const code = codes[upper[i]];
@@ -565,11 +464,11 @@ export class SanctionsScreeningService {
         result += code;
         lastCode = code;
       } else if (!code) {
-        lastCode = "0";
+        lastCode = '0';
       }
     }
 
-    return result.padEnd(4, "0");
+    return result.padEnd(4, '0');
   }
 
   // -------------------------------------------------------------------------
@@ -578,10 +477,10 @@ export class SanctionsScreeningService {
   private normalizeName(name: string): string {
     return name
       .toLowerCase()
-      .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .replace(/[^a-z0-9\s]/g, "")
-      .replace(/\s+/g, " ")
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9\s]/g, '')
+      .replace(/\s+/g, ' ')
       .trim();
   }
 
@@ -607,17 +506,12 @@ export class SanctionsScreeningService {
     const parsed = FalsePositiveDecisionSchema.parse(decision);
     this.falsePositives.set(parsed.matchId, parsed);
 
-    this.logAudit(
-      parsed.matchId,
-      `match_${parsed.decision}`,
-      parsed.decidedBy,
-      {
-        reason: parsed.reason,
-        evidenceRefs: parsed.evidenceRefs,
-      },
-    );
+    this.logAudit(parsed.matchId, `match_${parsed.decision}`, parsed.decidedBy, {
+      reason: parsed.reason,
+      evidenceRefs: parsed.evidenceRefs,
+    });
 
-    logger.info("match_resolved", {
+    logger.info('match_resolved', {
       matchId: parsed.matchId,
       decision: parsed.decision,
       decidedBy: parsed.decidedBy,
@@ -629,36 +523,27 @@ export class SanctionsScreeningService {
   // -------------------------------------------------------------------------
   enableContinuousMonitoring(entityId: string): void {
     this.continuousMonitoringEntities.add(entityId);
-    logger.info("continuous_monitoring_enabled", { entityId });
+    logger.info('continuous_monitoring_enabled', { entityId });
   }
 
   disableContinuousMonitoring(entityId: string): void {
     this.continuousMonitoringEntities.delete(entityId);
-    logger.info("continuous_monitoring_disabled", { entityId });
+    logger.info('continuous_monitoring_disabled', { entityId });
   }
 
-  async onListUpdate(
-    listName: string,
-    updatedEntries: SanctionsListEntry[],
-  ): Promise<ScreeningResult[]> {
+  async onListUpdate(listName: string, updatedEntries: SanctionsListEntry[]): Promise<ScreeningResult[]> {
     this.sanctionsLists.set(listName, updatedEntries);
-    logger.info("sanctions_list_updated", {
-      listName,
-      entryCount: updatedEntries.length,
-    });
+    logger.info('sanctions_list_updated', { listName, entryCount: updatedEntries.length });
 
     // Re-screen all continuously monitored entities
     const results: ScreeningResult[] = [];
     for (const entityId of this.continuousMonitoringEntities) {
       const lastResult = [...this.screeningResults.values()]
         .filter((r) => r.entityId === entityId)
-        .sort(
-          (a, b) =>
-            new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
-        )[0];
+        .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0];
 
       if (lastResult) {
-        logger.info("re_screening_on_list_update", { entityId, listName });
+        logger.info('re_screening_on_list_update', { entityId, listName });
       }
     }
 
@@ -675,10 +560,7 @@ export class SanctionsScreeningService {
   getEntityScreenings(entityId: string): ScreeningResult[] {
     return [...this.screeningResults.values()]
       .filter((r) => r.entityId === entityId)
-      .sort(
-        (a, b) =>
-          new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
-      );
+      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
   }
 
   // -------------------------------------------------------------------------
@@ -688,12 +570,7 @@ export class SanctionsScreeningService {
     return this.auditLog.filter((e) => e.screeningId === screeningId);
   }
 
-  private logAudit(
-    screeningId: string,
-    action: string,
-    performedBy: string,
-    details: Record<string, unknown>,
-  ): void {
+  private logAudit(screeningId: string, action: string, performedBy: string, details: Record<string, unknown>): void {
     this.auditLog.push({
       id: crypto.randomUUID(),
       screeningId,
@@ -709,10 +586,10 @@ export class SanctionsScreeningService {
   // -------------------------------------------------------------------------
   setMatchThreshold(threshold: number): void {
     if (threshold < 0 || threshold > 1) {
-      throw new Error("Threshold must be between 0 and 1");
+      throw new Error('Threshold must be between 0 and 1');
     }
     this.matchThreshold = threshold;
-    logger.info("match_threshold_updated", { threshold });
+    logger.info('match_threshold_updated', { threshold });
   }
 }
 

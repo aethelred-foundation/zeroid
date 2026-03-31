@@ -1,5 +1,5 @@
-import crypto from "crypto";
-import { prisma, logger, redis } from "../../index";
+import crypto from 'crypto';
+import { prisma, logger, redis } from '../../index';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -7,16 +7,16 @@ import { prisma, logger, redis } from "../../index";
 
 export interface KeystrokeEvent {
   key: string;
-  downTimestamp: number; // ms since epoch
+  downTimestamp: number;   // ms since epoch
   upTimestamp: number;
-  pressure?: number; // 0-1 (touch keyboards)
+  pressure?: number;       // 0-1 (touch keyboards)
 }
 
 export interface MouseEvent {
   x: number;
   y: number;
   timestamp: number;
-  type: "move" | "click" | "scroll";
+  type: 'move' | 'click' | 'scroll';
   button?: number;
   scrollDelta?: number;
 }
@@ -25,10 +25,10 @@ export interface TouchEvent {
   x: number;
   y: number;
   timestamp: number;
-  pressure: number; // 0-1
+  pressure: number;        // 0-1
   radiusX: number;
   radiusY: number;
-  type: "start" | "move" | "end";
+  type: 'start' | 'move' | 'end';
 }
 
 export interface BiometricSession {
@@ -51,7 +51,7 @@ export interface BiometricTemplate {
   sampleCount: number;
   createdAt: Date;
   updatedAt: Date;
-  confidence: number; // 0-1, increases with more samples
+  confidence: number;       // 0-1, increases with more samples
 }
 
 interface KeystrokeProfile {
@@ -60,8 +60,8 @@ interface KeystrokeProfile {
   meanFlightTime: number;
   stdDevFlightTime: number;
   digramTimings: Map<string, { mean: number; stdDev: number }>;
-  typingSpeed: number; // chars per minute
-  errorRate: number; // fraction of backspaces
+  typingSpeed: number;       // chars per minute
+  errorRate: number;         // fraction of backspaces
   rhythmSignature: number[]; // FFT-derived rhythm features
 }
 
@@ -88,14 +88,14 @@ export interface BiometricMatchResult {
   matchId: string;
   identityId: string;
   sessionId: string;
-  overallScore: number; // 0-1 (1 = perfect match)
+  overallScore: number;     // 0-1 (1 = perfect match)
   keystrokeScore: number;
   mouseScore: number;
   touchScore: number;
-  isLive: boolean; // liveness detection result
+  isLive: boolean;          // liveness detection result
   isBotLikely: boolean;
   confidence: number;
-  verdict: "match" | "partial_match" | "mismatch" | "insufficient_data";
+  verdict: 'match' | 'partial_match' | 'mismatch' | 'insufficient_data';
   details: string[];
   timestamp: Date;
 }
@@ -103,8 +103,8 @@ export interface BiometricMatchResult {
 export interface ContinuousAuthScore {
   identityId: string;
   sessionId: string;
-  score: number; // 0-1, rolling authentication confidence
-  windowSize: number; // events in current window
+  score: number;            // 0-1, rolling authentication confidence
+  windowSize: number;       // events in current window
   alerts: string[];
   lastUpdated: Date;
 }
@@ -131,13 +131,8 @@ export class BehavioralBiometricsService {
   } {
     if (events.length < 5) {
       return {
-        dwellTimes: [],
-        flightTimes: [],
-        digramTimings: new Map(),
-        typingSpeed: 0,
-        errorRate: 0,
-        rhythmFeatures: [],
-        botProbability: 0.5,
+        dwellTimes: [], flightTimes: [], digramTimings: new Map(),
+        typingSpeed: 0, errorRate: 0, rhythmFeatures: [], botProbability: 0.5,
       };
     }
 
@@ -168,21 +163,17 @@ export class BehavioralBiometricsService {
     }
 
     // Typing speed (chars per minute)
-    const totalTimeMs =
-      events[events.length - 1].upTimestamp - events[0].downTimestamp;
-    const typingSpeed =
-      totalTimeMs > 0 ? events.length / (totalTimeMs / 60000) : 0;
+    const totalTimeMs = events[events.length - 1].upTimestamp - events[0].downTimestamp;
+    const typingSpeed = totalTimeMs > 0 ? (events.length / (totalTimeMs / 60000)) : 0;
 
     // Error rate (backspace/delete proportion)
-    const errorKeys = events.filter(
-      (e) => e.key === "Backspace" || e.key === "Delete",
+    const errorKeys = events.filter((e) =>
+      e.key === 'Backspace' || e.key === 'Delete',
     ).length;
     const errorRate = events.length > 0 ? errorKeys / events.length : 0;
 
     // Rhythm features via simplified spectral analysis
-    const rhythmFeatures = this.extractRhythmFeatures(
-      dwellTimes.concat(flightTimes),
-    );
+    const rhythmFeatures = this.extractRhythmFeatures(dwellTimes.concat(flightTimes));
 
     // Bot probability based on timing uniformity
     const dwellCV = this.coefficientOfVariation(dwellTimes);
@@ -200,13 +191,8 @@ export class BehavioralBiometricsService {
     }
 
     return {
-      dwellTimes,
-      flightTimes,
-      digramTimings,
-      typingSpeed,
-      errorRate,
-      rhythmFeatures,
-      botProbability,
+      dwellTimes, flightTimes, digramTimings,
+      typingSpeed, errorRate, rhythmFeatures, botProbability,
     };
   }
 
@@ -221,15 +207,12 @@ export class BehavioralBiometricsService {
     angleDistribution: number[];
     botProbability: number;
   } {
-    const moveEvents = events.filter((e) => e.type === "move");
+    const moveEvents = events.filter((e) => e.type === 'move');
 
     if (moveEvents.length < 10) {
       return {
-        velocities: [],
-        accelerations: [],
-        curvatures: [],
-        straightnessIndex: 0,
-        angleDistribution: new Array(8).fill(0),
+        velocities: [], accelerations: [], curvatures: [],
+        straightnessIndex: 0, angleDistribution: new Array(8).fill(0),
         botProbability: 0.5,
       };
     }
@@ -289,10 +272,9 @@ export class BehavioralBiometricsService {
 
     const directDistance = Math.sqrt(
       (moveEvents[moveEvents.length - 1].x - moveEvents[0].x) ** 2 +
-        (moveEvents[moveEvents.length - 1].y - moveEvents[0].y) ** 2,
+      (moveEvents[moveEvents.length - 1].y - moveEvents[0].y) ** 2,
     );
-    const straightnessIndex =
-      directDistance > 0 ? 1 - directDistance / totalPath : 0;
+    const straightnessIndex = directDistance > 0 ? 1 - (directDistance / totalPath) : 0;
 
     // Angle distribution (8 bins)
     const angleDistribution = new Array(8).fill(0);
@@ -321,12 +303,8 @@ export class BehavioralBiometricsService {
     }
 
     return {
-      velocities,
-      accelerations,
-      curvatures,
-      straightnessIndex,
-      angleDistribution,
-      botProbability,
+      velocities, accelerations, curvatures,
+      straightnessIndex, angleDistribution, botProbability,
     };
   }
 
@@ -343,12 +321,8 @@ export class BehavioralBiometricsService {
   } {
     if (events.length < 3) {
       return {
-        pressures: [],
-        contactAreas: [],
-        swipeVelocities: [],
-        tapDurations: [],
-        gestureComplexity: 0,
-        botProbability: 0.5,
+        pressures: [], contactAreas: [], swipeVelocities: [],
+        tapDurations: [], gestureComplexity: 0, botProbability: 0.5,
       };
     }
 
@@ -360,12 +334,12 @@ export class BehavioralBiometricsService {
     let currentGesture: TouchEvent[] = [];
 
     for (const event of events) {
-      if (event.type === "start") {
+      if (event.type === 'start') {
         if (currentGesture.length > 0) gestures.push(currentGesture);
         currentGesture = [event];
       } else {
         currentGesture.push(event);
-        if (event.type === "end") {
+        if (event.type === 'end') {
           gestures.push(currentGesture);
           currentGesture = [];
         }
@@ -383,13 +357,11 @@ export class BehavioralBiometricsService {
       const first = gesture[0];
       const last = gesture[gesture.length - 1];
       const duration = last.timestamp - first.timestamp;
-      const distance = Math.sqrt(
-        (last.x - first.x) ** 2 + (last.y - first.y) ** 2,
-      );
+      const distance = Math.sqrt((last.x - first.x) ** 2 + (last.y - first.y) ** 2);
 
       if (distance > 20 && duration > 0) {
         // Swipe
-        swipeVelocities.push((distance / duration) * 1000); // px/s
+        swipeVelocities.push(distance / duration * 1000); // px/s
       } else if (duration > 0) {
         // Tap
         tapDurations.push(duration);
@@ -398,46 +370,35 @@ export class BehavioralBiometricsService {
 
     // Gesture complexity (unique gesture types, direction changes)
     const directionChanges = this.countDirectionChanges(events);
-    const gestureComplexity = Math.min(
-      1.0,
-      gestures.length * 0.1 + directionChanges * 0.05,
-    );
+    const gestureComplexity = Math.min(1.0, (gestures.length * 0.1 + directionChanges * 0.05));
 
     // Bot detection
-    const pressureCV = this.coefficientOfVariation(
-      pressures.filter((p) => p > 0),
-    );
+    const pressureCV = this.coefficientOfVariation(pressures.filter((p) => p > 0));
     let botProbability = 0;
 
     if (pressures.every((p) => p === 0)) {
       botProbability = 0.95; // Programmatic events have zero pressure
     } else if (pressureCV < 0.02) {
-      botProbability = 0.8; // Unnaturally uniform pressure
+      botProbability = 0.8;  // Unnaturally uniform pressure
     } else if (contactAreas.every((a) => a === contactAreas[0])) {
-      botProbability = 0.7; // Identical contact areas
+      botProbability = 0.7;  // Identical contact areas
     } else {
       botProbability = 0.05;
     }
 
     return {
-      pressures,
-      contactAreas,
-      swipeVelocities,
-      tapDurations,
-      gestureComplexity,
-      botProbability,
+      pressures, contactAreas, swipeVelocities,
+      tapDurations, gestureComplexity, botProbability,
     };
   }
 
   // -------------------------------------------------------------------------
   // Session fingerprinting & template matching
   // -------------------------------------------------------------------------
-  async processSession(
-    session: BiometricSession,
-  ): Promise<BiometricMatchResult> {
+  async processSession(session: BiometricSession): Promise<BiometricMatchResult> {
     const matchId = `bm-${crypto.randomUUID()}`;
 
-    logger.info("biometric_session_processing", {
+    logger.info('biometric_session_processing', {
       matchId,
       sessionId: session.sessionId,
       identityId: session.identityId,
@@ -452,7 +413,7 @@ export class BehavioralBiometricsService {
     const touchAnalysis = this.analyzeTouchBehavior(session.touchEvents);
 
     // Get or create template for this identity
-    let template = this.templates.get(session.identityId);
+    const template = this.templates.get(session.identityId);
     const details: string[] = [];
 
     let keystrokeScore = 0.5;
@@ -461,10 +422,7 @@ export class BehavioralBiometricsService {
 
     if (template && template.sampleCount >= 3) {
       // Match against existing template
-      keystrokeScore = this.matchKeystrokeProfile(
-        keystrokeAnalysis,
-        template.keystrokeProfile,
-      );
+      keystrokeScore = this.matchKeystrokeProfile(keystrokeAnalysis, template.keystrokeProfile);
       mouseScore = this.matchMouseProfile(mouseAnalysis, template.mouseProfile);
       touchScore = this.matchTouchProfile(touchAnalysis, template.touchProfile);
 
@@ -472,43 +430,29 @@ export class BehavioralBiometricsService {
       details.push(`Mouse match: ${(mouseScore * 100).toFixed(1)}%`);
       details.push(`Touch match: ${(touchScore * 100).toFixed(1)}%`);
     } else {
-      details.push(
-        "Building biometric profile (insufficient samples for matching)",
-      );
+      details.push('Building biometric profile (insufficient samples for matching)');
     }
 
     // Update template with new session data
-    await this.updateTemplate(
-      session.identityId,
-      keystrokeAnalysis,
-      mouseAnalysis,
-      touchAnalysis,
-    );
+    await this.updateTemplate(session.identityId, keystrokeAnalysis, mouseAnalysis, touchAnalysis);
 
     // Liveness detection
-    const isLive = this.detectLiveness(
-      keystrokeAnalysis,
-      mouseAnalysis,
-      touchAnalysis,
-    );
+    const isLive = this.detectLiveness(keystrokeAnalysis, mouseAnalysis, touchAnalysis);
 
     // Combined bot probability (weighted average)
-    const combinedBotProb =
+    const combinedBotProb = (
       keystrokeAnalysis.botProbability * 0.4 +
       mouseAnalysis.botProbability * 0.35 +
-      touchAnalysis.botProbability * 0.25;
+      touchAnalysis.botProbability * 0.25
+    );
     const isBotLikely = combinedBotProb > 0.6;
 
     if (isBotLikely) {
-      details.push(
-        `Bot probability: ${(combinedBotProb * 100).toFixed(1)}% — automated behavior detected`,
-      );
+      details.push(`Bot probability: ${(combinedBotProb * 100).toFixed(1)}% — automated behavior detected`);
     }
 
     if (!isLive) {
-      details.push(
-        "Liveness check failed — possible replay or emulation attack",
-      );
+      details.push('Liveness check failed — possible replay or emulation attack');
     }
 
     // Compute weights based on data availability
@@ -527,18 +471,14 @@ export class BehavioralBiometricsService {
       tWeight /= totalWeight;
     }
 
-    const overallScore =
-      keystrokeScore * kWeight + mouseScore * mWeight + touchScore * tWeight;
-    const confidence = Math.min(
-      1.0,
-      (totalWeight * (template?.sampleCount ?? 1)) / 5,
-    );
+    const overallScore = keystrokeScore * kWeight + mouseScore * mWeight + touchScore * tWeight;
+    const confidence = Math.min(1.0, totalWeight * (template?.sampleCount ?? 1) / 5);
 
-    let verdict: BiometricMatchResult["verdict"] = "insufficient_data";
+    let verdict: BiometricMatchResult['verdict'] = 'insufficient_data';
     if (confidence >= 0.5) {
-      if (overallScore >= 0.75) verdict = "match";
-      else if (overallScore >= 0.5) verdict = "partial_match";
-      else verdict = "mismatch";
+      if (overallScore >= 0.75) verdict = 'match';
+      else if (overallScore >= 0.5) verdict = 'partial_match';
+      else verdict = 'mismatch';
     }
 
     const result: BiometricMatchResult = {
@@ -561,14 +501,9 @@ export class BehavioralBiometricsService {
     await this.persistMatchResult(result);
 
     // Update continuous auth score
-    this.updateContinuousAuth(
-      session.identityId,
-      session.sessionId,
-      overallScore,
-      isBotLikely,
-    );
+    this.updateContinuousAuth(session.identityId, session.sessionId, overallScore, isBotLikely);
 
-    logger.info("biometric_session_processed", {
+    logger.info('biometric_session_processed', {
       matchId,
       identityId: session.identityId,
       overallScore: overallScore.toFixed(3),
@@ -583,10 +518,7 @@ export class BehavioralBiometricsService {
   // -------------------------------------------------------------------------
   // Continuous authentication
   // -------------------------------------------------------------------------
-  getContinuousAuthScore(
-    identityId: string,
-    sessionId: string,
-  ): ContinuousAuthScore | null {
+  getContinuousAuthScore(identityId: string, sessionId: string): ContinuousAuthScore | null {
     const key = `${identityId}:${sessionId}`;
     return this.continuousScores.get(key) ?? null;
   }
@@ -608,15 +540,11 @@ export class BehavioralBiometricsService {
       const updatedScore = alpha * newScore + (1 - alpha) * existing.score;
 
       if (updatedScore < existing.score - 0.2) {
-        alerts.push(
-          "Significant drop in behavioral match — re-authentication recommended",
-        );
+        alerts.push('Significant drop in behavioral match — re-authentication recommended');
       }
 
       if (isBotDetected) {
-        alerts.push(
-          "Automated behavior detected during continuous authentication",
-        );
+        alerts.push('Automated behavior detected during continuous authentication');
       }
 
       this.continuousScores.set(key, {
@@ -633,9 +561,7 @@ export class BehavioralBiometricsService {
         sessionId,
         score: newScore,
         windowSize: 1,
-        alerts: isBotDetected
-          ? ["Bot behavior detected on initial assessment"]
-          : [],
+        alerts: isBotDetected ? ['Bot behavior detected on initial assessment'] : [],
         lastUpdated: new Date(),
       });
     }
@@ -700,35 +626,21 @@ export class BehavioralBiometricsService {
       const tp = existing.touchProfile;
 
       if (keystroke.dwellTimes.length > 0) {
-        kp.meanDwellTime =
-          (1 - alpha) * kp.meanDwellTime +
-          alpha * this.mean(keystroke.dwellTimes);
-        kp.stdDevDwellTime =
-          (1 - alpha) * kp.stdDevDwellTime +
-          alpha * this.stdDev(keystroke.dwellTimes);
-        kp.meanFlightTime =
-          (1 - alpha) * kp.meanFlightTime +
-          alpha * this.mean(keystroke.flightTimes);
-        kp.typingSpeed =
-          (1 - alpha) * kp.typingSpeed + alpha * keystroke.typingSpeed;
+        kp.meanDwellTime = (1 - alpha) * kp.meanDwellTime + alpha * this.mean(keystroke.dwellTimes);
+        kp.stdDevDwellTime = (1 - alpha) * kp.stdDevDwellTime + alpha * this.stdDev(keystroke.dwellTimes);
+        kp.meanFlightTime = (1 - alpha) * kp.meanFlightTime + alpha * this.mean(keystroke.flightTimes);
+        kp.typingSpeed = (1 - alpha) * kp.typingSpeed + alpha * keystroke.typingSpeed;
       }
 
       if (mouse.velocities.length > 0) {
-        mp.meanVelocity =
-          (1 - alpha) * mp.meanVelocity + alpha * this.mean(mouse.velocities);
-        mp.stdDevVelocity =
-          (1 - alpha) * mp.stdDevVelocity +
-          alpha * this.stdDev(mouse.velocities);
-        mp.straightnessIndex =
-          (1 - alpha) * mp.straightnessIndex + alpha * mouse.straightnessIndex;
+        mp.meanVelocity = (1 - alpha) * mp.meanVelocity + alpha * this.mean(mouse.velocities);
+        mp.stdDevVelocity = (1 - alpha) * mp.stdDevVelocity + alpha * this.stdDev(mouse.velocities);
+        mp.straightnessIndex = (1 - alpha) * mp.straightnessIndex + alpha * mouse.straightnessIndex;
       }
 
       if (touch.pressures.length > 0) {
-        tp.meanPressure =
-          (1 - alpha) * tp.meanPressure + alpha * this.mean(touch.pressures);
-        tp.stdDevPressure =
-          (1 - alpha) * tp.stdDevPressure +
-          alpha * this.stdDev(touch.pressures);
+        tp.meanPressure = (1 - alpha) * tp.meanPressure + alpha * this.mean(touch.pressures);
+        tp.stdDevPressure = (1 - alpha) * tp.stdDevPressure + alpha * this.stdDev(touch.pressures);
       }
 
       existing.sampleCount++;
@@ -751,37 +663,17 @@ export class BehavioralBiometricsService {
 
     // Dwell time similarity
     const dwellMean = this.mean(analysis.dwellTimes);
-    scores.push(
-      this.gaussianSimilarity(
-        dwellMean,
-        profile.meanDwellTime,
-        profile.stdDevDwellTime * 2 || 30,
-      ),
-    );
+    scores.push(this.gaussianSimilarity(dwellMean, profile.meanDwellTime, profile.stdDevDwellTime * 2 || 30));
 
     // Flight time similarity
     const flightMean = this.mean(analysis.flightTimes);
-    scores.push(
-      this.gaussianSimilarity(
-        flightMean,
-        profile.meanFlightTime,
-        profile.stdDevFlightTime * 2 || 50,
-      ),
-    );
+    scores.push(this.gaussianSimilarity(flightMean, profile.meanFlightTime, profile.stdDevFlightTime * 2 || 50));
 
     // Typing speed similarity
-    scores.push(
-      this.gaussianSimilarity(
-        analysis.typingSpeed,
-        profile.typingSpeed,
-        profile.typingSpeed * 0.3 || 20,
-      ),
-    );
+    scores.push(this.gaussianSimilarity(analysis.typingSpeed, profile.typingSpeed, profile.typingSpeed * 0.3 || 20));
 
     // Error rate similarity
-    scores.push(
-      this.gaussianSimilarity(analysis.errorRate, profile.errorRate, 0.05),
-    );
+    scores.push(this.gaussianSimilarity(analysis.errorRate, profile.errorRate, 0.05));
 
     return this.mean(scores);
   }
@@ -794,27 +686,16 @@ export class BehavioralBiometricsService {
 
     const scores: number[] = [];
 
-    scores.push(
-      this.gaussianSimilarity(
-        this.mean(analysis.velocities),
-        profile.meanVelocity,
-        profile.stdDevVelocity * 2 || 100,
-      ),
-    );
+    scores.push(this.gaussianSimilarity(
+      this.mean(analysis.velocities), profile.meanVelocity, profile.stdDevVelocity * 2 || 100,
+    ));
 
-    scores.push(
-      this.gaussianSimilarity(
-        analysis.straightnessIndex,
-        profile.straightnessIndex,
-        0.15,
-      ),
-    );
+    scores.push(this.gaussianSimilarity(
+      analysis.straightnessIndex, profile.straightnessIndex, 0.15,
+    ));
 
     // Angle distribution similarity (cosine similarity)
-    const cosineSim = this.cosineSimilarity(
-      analysis.angleDistribution,
-      profile.movementAngleDistribution,
-    );
+    const cosineSim = this.cosineSimilarity(analysis.angleDistribution, profile.movementAngleDistribution);
     scores.push(cosineSim);
 
     return this.mean(scores);
@@ -828,32 +709,20 @@ export class BehavioralBiometricsService {
 
     const scores: number[] = [];
 
-    scores.push(
-      this.gaussianSimilarity(
-        this.mean(analysis.pressures),
-        profile.meanPressure,
-        profile.stdDevPressure * 2 || 0.1,
-      ),
-    );
+    scores.push(this.gaussianSimilarity(
+      this.mean(analysis.pressures), profile.meanPressure, profile.stdDevPressure * 2 || 0.1,
+    ));
 
     if (analysis.swipeVelocities.length > 0) {
-      scores.push(
-        this.gaussianSimilarity(
-          this.mean(analysis.swipeVelocities),
-          profile.swipeVelocityMean,
-          profile.swipeVelocityMean * 0.3 || 100,
-        ),
-      );
+      scores.push(this.gaussianSimilarity(
+        this.mean(analysis.swipeVelocities), profile.swipeVelocityMean, profile.swipeVelocityMean * 0.3 || 100,
+      ));
     }
 
     if (analysis.tapDurations.length > 0) {
-      scores.push(
-        this.gaussianSimilarity(
-          this.mean(analysis.tapDurations),
-          profile.tapDurationMean,
-          profile.tapDurationMean * 0.3 || 50,
-        ),
-      );
+      scores.push(this.gaussianSimilarity(
+        this.mean(analysis.tapDurations), profile.tapDurationMean, profile.tapDurationMean * 0.3 || 50,
+      ));
     }
 
     return this.mean(scores);
@@ -878,17 +747,14 @@ export class BehavioralBiometricsService {
     // Mouse liveness: natural mouse has acceleration jitter
     if (mouse.accelerations.length >= 5) {
       const hasJitter = mouse.accelerations.some((a) => Math.abs(a) > 10);
-      const hasCurvature =
-        mouse.curvatures.length > 0 && this.mean(mouse.curvatures) > 0.005;
+      const hasCurvature = mouse.curvatures.length > 0 && this.mean(mouse.curvatures) > 0.005;
       signals.push(hasJitter || hasCurvature);
     }
 
     // Touch liveness: real touches have non-zero, varying pressure
     if (touch.pressures.length >= 3) {
       const hasNonZero = touch.pressures.some((p) => p > 0);
-      const hasVariation =
-        this.coefficientOfVariation(touch.pressures.filter((p) => p > 0)) >
-        0.03;
+      const hasVariation = this.coefficientOfVariation(touch.pressures.filter((p) => p > 0)) > 0.03;
       signals.push(hasNonZero && hasVariation);
     }
 
@@ -901,22 +767,20 @@ export class BehavioralBiometricsService {
   // -------------------------------------------------------------------------
   // Persistence
   // -------------------------------------------------------------------------
-  private async persistMatchResult(
-    result: BiometricMatchResult,
-  ): Promise<void> {
+  private async persistMatchResult(result: BiometricMatchResult): Promise<void> {
     try {
       await redis.set(
         `biometric:match:${result.matchId}`,
         JSON.stringify(result),
-        "EX",
+        'EX',
         7 * 86400,
       );
 
       await prisma.auditLog.create({
         data: {
           identityId: result.identityId,
-          action: "BIOMETRIC_ANALYSIS" as any,
-          resourceType: "biometric_match",
+          action: 'BIOMETRIC_ANALYSIS' as any,
+          resourceType: 'biometric_match',
           resourceId: result.matchId,
           details: {
             overallScore: result.overallScore,
@@ -928,7 +792,7 @@ export class BehavioralBiometricsService {
         },
       });
     } catch (err) {
-      logger.error("biometric_persist_error", {
+      logger.error('biometric_persist_error', {
         matchId: result.matchId,
         error: (err as Error).message,
       });
@@ -946,9 +810,7 @@ export class BehavioralBiometricsService {
   private stdDev(arr: number[]): number {
     if (arr.length < 2) return 0;
     const m = this.mean(arr);
-    return Math.sqrt(
-      arr.reduce((sum, v) => sum + (v - m) ** 2, 0) / (arr.length - 1),
-    );
+    return Math.sqrt(arr.reduce((sum, v) => sum + (v - m) ** 2, 0) / (arr.length - 1));
   }
 
   private coefficientOfVariation(arr: number[]): number {
@@ -957,20 +819,14 @@ export class BehavioralBiometricsService {
     return this.stdDev(arr) / Math.abs(m);
   }
 
-  private gaussianSimilarity(
-    value: number,
-    mean: number,
-    sigma: number,
-  ): number {
+  private gaussianSimilarity(value: number, mean: number, sigma: number): number {
     if (sigma <= 0) sigma = 1;
     return Math.exp(-0.5 * ((value - mean) / sigma) ** 2);
   }
 
   private cosineSimilarity(a: number[], b: number[]): number {
     if (a.length !== b.length || a.length === 0) return 0;
-    let dot = 0,
-      normA = 0,
-      normB = 0;
+    let dot = 0, normA = 0, normB = 0;
     for (let i = 0; i < a.length; i++) {
       dot += a[i] * b[i];
       normA += a[i] * a[i];
@@ -987,8 +843,7 @@ export class BehavioralBiometricsService {
     const features: number[] = [];
 
     for (let k = 1; k <= Math.min(8, N / 2); k++) {
-      let real = 0,
-        imag = 0;
+      let real = 0, imag = 0;
       for (let n = 0; n < N; n++) {
         const angle = (2 * Math.PI * k * n) / N;
         real += timings[n] * Math.cos(angle);
@@ -1001,7 +856,7 @@ export class BehavioralBiometricsService {
   }
 
   private countDirectionChanges(events: TouchEvent[]): number {
-    const moveEvents = events.filter((e) => e.type === "move");
+    const moveEvents = events.filter((e) => e.type === 'move');
     if (moveEvents.length < 3) return 0;
 
     let changes = 0;

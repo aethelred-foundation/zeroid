@@ -21,7 +21,11 @@ import type {
   DelegateRecord,
   CreateIdentityParams,
   UpdateProfileParams,
+  Bytes32,
 } from "@/types";
+
+const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000" as Address;
+const EMPTY_BYTES32 = `0x${"0".repeat(64)}` as Bytes32;
 
 // ---------------------------------------------------------------------------
 // On-chain DID resolution
@@ -134,22 +138,47 @@ export function useUpdateProfile() {
 
 export function useIdentity() {
   const { didHash, hasIdentity, delegates, isLoading } = useOnChainIdentity();
-  const { data: profile, isLoading: isProfileLoading } = useIdentityProfile();
+  const profileQuery = useIdentityProfile();
+  const profile = profileQuery.data;
   const createMutation = useCreateIdentity();
   const { delegateControl, revokeDelegate } = useDelegateControl();
+  const { address } = useAccount();
+
+  const createIdentity = useCallback(
+    async (params?: Partial<CreateIdentityParams>) =>
+      createMutation.mutateAsync({
+        didDocumentHash: params?.didDocumentHash ?? EMPTY_BYTES32,
+        recoveryAddress: params?.recoveryAddress ?? address ?? ZERO_ADDRESS,
+        didDocument: params?.didDocument ?? { id: "did:aethelred:pending" },
+        publicKeys: params?.publicKeys ?? [],
+      }),
+    [address, createMutation],
+  );
+
+  const normalizedDid =
+    typeof profile?.did === "string"
+      ? profile.did
+      : (profile?.did?.uri ?? didHash);
 
   return {
     identity: {
-      did: didHash,
+      did: normalizedDid,
       didHash,
       hasIdentity,
       delegates,
       isRegistered: hasIdentity,
       profile: profile ?? null,
+      credentialCount: profile?.credentialCount ?? 0,
+      verificationCount: profile?.verificationCount ?? 0,
+      verificationStatus: profile?.verificationStatus ?? "unverified",
+      createdAt: profile?.createdAt,
     },
     delegates,
-    isLoading: isLoading || isProfileLoading,
-    createIdentity: createMutation.mutateAsync,
+    isLoading: isLoading || profileQuery.isLoading,
+    error: profileQuery.error as Error | null,
+    createIdentity,
+    registerOnChain: createIdentity,
+    delegateControl,
     revokeDelegate,
   };
 }

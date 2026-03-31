@@ -1,4 +1,3 @@
-// @ts-nocheck
 "use client";
 
 import { useState } from "react";
@@ -23,7 +22,10 @@ import AppLayout from "@/components/layout/AppLayout";
 import VerificationFlow from "@/components/verification/VerificationFlow";
 import SelectiveDisclosureBuilder from "@/components/verification/SelectiveDisclosureBuilder";
 import ProofVisualization from "@/components/zkp/ProofVisualization";
-import { StatusBadge } from "@/components/ui/StatusBadge";
+import {
+  StatusBadge,
+  type CredentialStatus as BadgeStatus,
+} from "@/components/ui/StatusBadge";
 import { useVerification } from "@/hooks/useVerification";
 import { useZKProof } from "@/hooks/useZKProof";
 
@@ -204,10 +206,7 @@ export default function VerificationPage() {
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -10 }}
             >
-              <SelectiveDisclosureBuilder
-                requestedAttributes={[]}
-                onComplete={() => {}}
-              />
+              <SelectiveDisclosureBuilder />
             </motion.div>
           )}
 
@@ -226,42 +225,69 @@ export default function VerificationPage() {
                 </div>
                 <div className="divide-y divide-[var(--border-secondary)]">
                   {(verificationHistory ?? []).length > 0 ? (
-                    verificationHistory?.map((verification, i) => (
-                      <div
-                        key={verification.id}
-                        className="p-4 flex items-center gap-4 hover:bg-[var(--surface-secondary)] transition-colors cursor-pointer"
-                        onClick={() => setSelectedProof(verification.id)}
-                      >
+                    verificationHistory?.map((verification) => {
+                      const proofId = verification.id ?? verification.requestId;
+                      const proofType =
+                        verification.proofType ??
+                        verification.proof?.circuitName ??
+                        "Verification";
+                      const verifier =
+                        verification.verifier ?? "Unknown verifier";
+                      const status =
+                        verification.status ??
+                        (verification.verified ? "verified" : "pending");
+                      const timestamp =
+                        verification.timestamp ??
+                        verification.createdAt ??
+                        verification.verifiedAt;
+                      const badgeStatus: BadgeStatus =
+                        status === "completed" || status === "verified"
+                          ? "verified"
+                          : status === "expired"
+                            ? "expired"
+                            : status === "failed" ||
+                                status === "rejected" ||
+                                status === "revoked"
+                              ? "revoked"
+                              : "pending";
+
+                      return (
                         <div
-                          className={`w-10 h-10 rounded-xl flex items-center justify-center ${
-                            verification.status === "verified"
-                              ? "bg-status-verified/10 text-status-verified"
-                              : verification.status === "pending"
-                                ? "bg-status-pending/10 text-status-pending"
-                                : "bg-status-revoked/10 text-status-revoked"
-                          }`}
+                          key={proofId}
+                          className="p-4 flex items-center gap-4 hover:bg-[var(--surface-secondary)] transition-colors cursor-pointer"
+                          onClick={() => setSelectedProof(proofId)}
                         >
-                          <Fingerprint className="w-5 h-5" />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="font-medium text-sm">
-                            {verification.proofType} Proof
+                          <div
+                            className={`w-10 h-10 rounded-xl flex items-center justify-center ${
+                              badgeStatus === "verified"
+                                ? "bg-status-verified/10 text-status-verified"
+                                : badgeStatus === "pending"
+                                  ? "bg-status-pending/10 text-status-pending"
+                                  : "bg-status-revoked/10 text-status-revoked"
+                            }`}
+                          >
+                            <Fingerprint className="w-5 h-5" />
                           </div>
-                          <div className="text-xs text-[var(--text-tertiary)]">
-                            Requested by {verification.verifier}
+                          <div className="flex-1 min-w-0">
+                            <div className="font-medium text-sm">
+                              {proofType} Proof
+                            </div>
+                            <div className="text-xs text-[var(--text-tertiary)]">
+                              Requested by {verifier}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-3">
+                            <StatusBadge status={badgeStatus} />
+                            <span className="text-xs text-[var(--text-tertiary)]">
+                              {timestamp
+                                ? new Date(timestamp).toLocaleDateString()
+                                : "Unknown date"}
+                            </span>
+                            <ArrowRight className="w-4 h-4 text-[var(--text-tertiary)]" />
                           </div>
                         </div>
-                        <div className="flex items-center gap-3">
-                          <StatusBadge status={verification.status as any} />
-                          <span className="text-xs text-[var(--text-tertiary)]">
-                            {new Date(
-                              verification.timestamp,
-                            ).toLocaleDateString()}
-                          </span>
-                          <ArrowRight className="w-4 h-4 text-[var(--text-tertiary)]" />
-                        </div>
-                      </div>
-                    ))
+                      );
+                    })
                   ) : (
                     <div className="p-12 text-center">
                       <History className="w-12 h-12 mx-auto mb-3 text-[var(--text-tertiary)]" />
@@ -280,7 +306,6 @@ export default function VerificationPage() {
               {selectedProof && (
                 <div className="mt-6">
                   <ProofVisualization
-                    proof={{} as any}
                     proofId={selectedProof}
                     onClose={() => setSelectedProof(null)}
                   />

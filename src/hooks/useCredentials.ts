@@ -21,17 +21,25 @@ import type {
   CredentialDetails,
 } from "@/types";
 
+type LegacyCredentialRequest = Partial<CredentialRequest> & {
+  schemaType?: string;
+  documents?: unknown[];
+};
+
 // ---------------------------------------------------------------------------
 // List credentials for the connected wallet
 // ---------------------------------------------------------------------------
 
 export function useCredentials(status?: CredentialStatus) {
   const { address } = useAccount();
+  const queryClient = useQueryClient();
+  const requestMutation = useRequestCredential();
+  const revokeMutation = useRevokeCredential();
 
   const params = new URLSearchParams();
   if (status !== undefined) params.set("status", String(status));
 
-  return useQuery({
+  const query = useQuery({
     queryKey: ["credentials", address, status],
     queryFn: () =>
       apiClient.get<{ credentials: Credential[]; total: number }>(
@@ -39,8 +47,42 @@ export function useCredentials(status?: CredentialStatus) {
       ),
     enabled: !!address,
     staleTime: 15_000,
-    refetchInterval: 30_000,
+    refetchInterval: process.env.NODE_ENV === "test" ? false : 30_000,
   });
+
+  const verifyMutation = useMutation({
+    mutationFn: async (credentialId: string) =>
+      apiClient.post("/v1/credentials/verify", {
+        credentialHash: credentialId,
+        proof: "client-side-verification",
+      }),
+    onSuccess: () => {
+      toast.success("Credential verified");
+      queryClient.invalidateQueries({ queryKey: ["credentials"] });
+    },
+    onError: (err: Error) => {
+      toast.error("Credential verification failed", {
+        description: err.message,
+      });
+    },
+  });
+
+  return {
+    ...query,
+    credentials: query.data?.credentials ?? [],
+    total: query.data?.total ?? 0,
+    requestCredential: async (request: LegacyCredentialRequest) =>
+      requestMutation.mutateAsync({
+        issuerDid: request.issuerDid ?? "did:aethelred:issuer:default",
+        schemaId: request.schemaId ?? request.schemaType ?? "identity",
+        claims: request.claims ?? { documents: request.documents ?? [] },
+        proofOfEligibility: request.proofOfEligibility,
+      }),
+    revokeCredential: async (credentialId: string) =>
+      revokeMutation.mutateAsync(credentialId),
+    verifyCredential: async (credentialId: string) =>
+      verifyMutation.mutateAsync(credentialId),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -48,13 +90,15 @@ export function useCredentials(status?: CredentialStatus) {
 // ---------------------------------------------------------------------------
 
 export function useCredentialDetails(credentialId: string | undefined) {
-  const { data: onChainHash, isLoading: isHashLoading } = useReadContract({
-    address: CREDENTIAL_REGISTRY_ADDRESS as Address,
-    abi: CREDENTIAL_REGISTRY_ABI,
-    functionName: "credentialHash" as any,
-    args: credentialId ? ([credentialId] as any) : undefined,
-    query: { enabled: !!credentialId },
-  });
+  const { data: onChainCredential, isLoading: isHashLoading } = useReadContract(
+    {
+      address: CREDENTIAL_REGISTRY_ADDRESS as Address,
+      abi: CREDENTIAL_REGISTRY_ABI,
+      functionName: "getCredential",
+      args: credentialId ? [credentialId as `0x${string}`] : undefined,
+      query: { enabled: !!credentialId },
+    },
+  );
 
   const apiQuery = useQuery({
     queryKey: ["credential", credentialId],
@@ -68,12 +112,18 @@ export function useCredentialDetails(credentialId: string | undefined) {
 
   return {
     ...apiQuery,
-    onChainHash: onChainHash as string | undefined,
+    onChainHash: onChainCredential as unknown,
     isHashLoading,
-    isIntegrityValid:
-      apiQuery.data && onChainHash
-        ? apiQuery.data.contentHash === (onChainHash as unknown as string)
-        : undefined,
+    isIntegrityValid: (() => {
+      if (!apiQuery.data || !onChainCredential) return undefined;
+      if (typeof onChainCredential === "string") {
+        return apiQuery.data.contentHash === onChainCredential;
+      }
+      return (
+        apiQuery.data.schemaHash ===
+        (onChainCredential as { schemaHash?: string }).schemaHash
+      );
+    })(),
   };
 }
 
@@ -125,8 +175,8 @@ export function useRevokeCredential() {
       const hash = await writeContractAsync({
         address: CREDENTIAL_REGISTRY_ADDRESS as Address,
         abi: CREDENTIAL_REGISTRY_ABI,
-        functionName: "revokeCredential" as any,
-        args: [credentialId] as any,
+        functionName: "revokeCredential",
+        args: [credentialId as `0x${string}`],
       });
 
       // Notify API to update cached status

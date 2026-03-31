@@ -89,7 +89,9 @@ mod tests {
         let root = credential::selective::compute_credential_root(&attrs).unwrap();
         let req = DisclosureRequest::new(vec!["name".into()]);
         let proof = credential::selective::create_disclosure_proof(&attrs, &req).unwrap();
-        assert!(credential::selective::verify_disclosure_proof(&root, &proof).unwrap());
+        assert!(
+            credential::selective::verify_disclosure_proof(&root, &proof).unwrap()
+        );
 
         // 6. Seal/unseal data
         let sealed = ctx.seal(b"secret").unwrap();

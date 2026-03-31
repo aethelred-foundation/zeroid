@@ -9,7 +9,6 @@
 import type {
   TEEAttestation,
   TEENode,
-  TEEPlatform,
   AttestationType,
   Bytes32,
   Address,
@@ -29,7 +28,7 @@ import { withRetry, withTimeout, isExpired } from "@/lib/utils";
 /** Options for selecting a TEE node */
 export interface NodeSelectionOptions {
   /** Preferred platform (optional) */
-  preferredPlatform?: TEEPlatform;
+  preferredPlatform?: TEEAttestation["platform"];
   /** Maximum acceptable latency in milliseconds */
   maxLatencyMs?: number;
   /** Minimum required uptime percentage (0-100) */
@@ -208,8 +207,8 @@ export function isAttestationFresh(attestation: TEEAttestation): boolean {
   if (now >= attestation.expiresAt) return false;
 
   // Check platform-specific freshness
-  const platformKey = TEEPlatformLabels[
-    attestation.platform as keyof typeof TEEPlatformLabels
+  const platformKey = TEE_PLATFORM_LABELS[
+    attestation.platform
   ] as keyof typeof TEE_FRESHNESS_REQUIREMENTS;
   const maxAge = TEE_FRESHNESS_REQUIREMENTS[platformKey];
   if (maxAge === undefined) return false;
@@ -218,8 +217,8 @@ export function isAttestationFresh(attestation: TEEAttestation): boolean {
   return age <= maxAge;
 }
 
-// Platform label lookup
-const TEEPlatformLabels = {
+// Re-export the enum so callers don't need a separate import
+const TEE_PLATFORM_LABELS = {
   0: "Unknown",
   1: "IntelSGX",
   2: "AMDSEV",

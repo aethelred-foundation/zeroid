@@ -150,9 +150,8 @@ library ERC4337Utils {
         );
 
         if (range1 == range2) {
-            bool success =
-                aggregator1 == address(uint160(SIG_VALIDATION_SUCCESS)) &&
-                    aggregator2 == address(uint160(SIG_VALIDATION_SUCCESS));
+            bool success = aggregator1 == address(uint160(SIG_VALIDATION_SUCCESS)) &&
+                aggregator2 == address(uint160(SIG_VALIDATION_SUCCESS));
             uint48 validAfter = uint48(Math.max(validAfter1, validAfter2));
             uint48 validUntil = uint48(Math.min(validUntil1, validUntil2));
             return packValidationData(success, validAfter, validUntil, range1);
@@ -242,9 +241,8 @@ library ERC4337Utils {
      * If a paymaster signature is present, it is excluded from the returned data.
      */
     function paymasterData(PackedUserOperation calldata self) internal pure returns (bytes calldata) {
-        bool hasSignature =
-            self.paymasterAndData.length > 9 &&
-                bytes8(self.paymasterAndData[self.paymasterAndData.length - 8:]) == PAYMASTER_SIG_MAGIC;
+        bool hasSignature = self.paymasterAndData.length > 9 &&
+            bytes8(self.paymasterAndData[self.paymasterAndData.length - 8:]) == PAYMASTER_SIG_MAGIC;
         uint256 suffixLength = hasSignature ? _paymasterSignatureSize(self) + 10 : 0;
         return
             self.paymasterAndData.length < 52 + suffixLength

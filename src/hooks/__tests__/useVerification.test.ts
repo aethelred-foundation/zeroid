@@ -214,9 +214,7 @@ describe("useVerification hooks", () => {
       await act(async () => {
         await result.current.mutateAsync({
           requestId: "vreq-1",
-          selectedAttributes: [
-            { key: "fullName", credentialHash: "0xcred1" },
-          ] as any,
+          selectedAttributes: [{ key: "fullName", credentialHash: "0xcred1" }],
           proofData: "0xzkproof_data",
         });
       });
@@ -273,8 +271,7 @@ describe("useVerification hooks", () => {
       const verificationRequest = {
         id: "vreq-1",
         requiredCredentials: ["schema-1"],
-        requestedAttributes: ["fullName", "nationality"],
-        credentialHash: "schema-1",
+        requiredAttributes: ["fullName", "nationality"],
       };
       const userAttributes = [
         { key: "fullName", value: "Alice", credentialHash: "0xcred1" },

@@ -87,7 +87,7 @@ contract StdCheatsTest is Test {
     }
 
     function test_MakeAddrEquivalence() public {
-        (address addr, ) = makeAddrAndKey("1337");
+        (address addr,) = makeAddrAndKey("1337");
         assertEq(makeAddr("1337"), addr);
     }
 
@@ -402,18 +402,16 @@ contract StdCheatsTest is Test {
     function testFuzz_AssumeNotPrecompile(address addr) external {
         assumeNotPrecompile(addr, getChain("optimism_sepolia").chainId);
         assertTrue(
-            addr < address(1) ||
-                (addr > address(9) && addr < address(0x4200000000000000000000000000000000000000)) ||
-                addr > address(0x4200000000000000000000000000000000000800)
+            addr < address(1) || (addr > address(9) && addr < address(0x4200000000000000000000000000000000000000))
+                || addr > address(0x4200000000000000000000000000000000000800)
         );
     }
 
     function testFuzz_AssumeNotForgeAddress(address addr) external pure {
         assumeNotForgeAddress(addr);
         assertTrue(
-            addr != address(vm) &&
-                addr != 0x000000000000000000636F6e736F6c652e6c6f67 &&
-                addr != 0x4e59b44847b379578588920cA78FbF26c0B4956C
+            addr != address(vm) && addr != 0x000000000000000000636F6e736F6c652e6c6f67
+                && addr != 0x4e59b44847b379578588920cA78FbF26c0B4956C
         );
     }
 

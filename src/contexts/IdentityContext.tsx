@@ -76,6 +76,12 @@ const DEFAULT_IDENTITY_STATE: IdentityState = {
   error: null,
 };
 
+function getProfileDidHash(profile: IdentityProfile | null): Bytes32 | null {
+  if (!profile) return null;
+  if (typeof profile.did !== "string") return profile.did.hash;
+  return (profile.didHash as Bytes32 | undefined) ?? null;
+}
+
 // ============================================================================
 // Context
 // ============================================================================
@@ -169,7 +175,8 @@ export function IdentityProvider({ children }: { children: React.ReactNode }) {
         if (cancelled) return;
 
         if (profile) {
-          const credentials = await fetchCredentials(profile.did.hash);
+          const didHash = getProfileDidHash(profile);
+          const credentials = didHash ? await fetchCredentials(didHash) : [];
 
           if (cancelled) return;
 
@@ -216,7 +223,8 @@ export function IdentityProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!state.isRegistered || !state.profile) return;
 
-    const didHash = state.profile.did.hash;
+    const didHash = getProfileDidHash(state.profile);
+    if (!didHash) return;
     const interval = setInterval(async () => {
       try {
         const credentials = await fetchCredentials(didHash);
@@ -288,7 +296,9 @@ export function IdentityProvider({ children }: { children: React.ReactNode }) {
   const refreshCredentials = useCallback(async () => {
     if (!state.profile) return;
 
-    const credentials = await fetchCredentials(state.profile.did.hash);
+    const didHash = getProfileDidHash(state.profile);
+    if (!didHash) return;
+    const credentials = await fetchCredentials(didHash);
     setState((prev) => ({ ...prev, credentials }));
   }, [state.profile, fetchCredentials]);
 

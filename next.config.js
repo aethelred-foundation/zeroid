@@ -1,5 +1,6 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  output: 'standalone',
   typescript: {
     ignoreBuildErrors: false,
   },
@@ -10,37 +11,30 @@ const nextConfig = {
   images: {
     remotePatterns: [
       {
-        protocol: "https",
-        hostname: "*.aethelred.io",
+        protocol: 'https',
+        hostname: '*.aethelred.io',
       },
       {
-        protocol: "https",
-        hostname: "avatars.githubusercontent.com",
+        protocol: 'https',
+        hostname: 'avatars.githubusercontent.com',
       },
     ],
-    formats: ["image/avif", "image/webp"],
+    formats: ['image/avif', 'image/webp'],
   },
 
   async headers() {
     return [
       {
-        source: "/(.*)",
+        source: '/(.*)',
         headers: [
+          { key: 'Strict-Transport-Security', value: 'max-age=63072000; includeSubDomains; preload' },
+          { key: 'X-Content-Type-Options', value: 'nosniff' },
+          { key: 'X-Frame-Options', value: 'DENY' },
+          { key: 'X-XSS-Protection', value: '1; mode=block' },
+          { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
+          { key: 'Permissions-Policy', value: 'camera=(self), microphone=(), geolocation=(), interest-cohort=()' },
           {
-            key: "Strict-Transport-Security",
-            value: "max-age=63072000; includeSubDomains; preload",
-          },
-          { key: "X-Content-Type-Options", value: "nosniff" },
-          { key: "X-Frame-Options", value: "DENY" },
-          { key: "X-XSS-Protection", value: "1; mode=block" },
-          { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
-          {
-            key: "Permissions-Policy",
-            value:
-              "camera=(self), microphone=(), geolocation=(), interest-cohort=()",
-          },
-          {
-            key: "Content-Security-Policy",
+            key: 'Content-Security-Policy',
             value: [
               "default-src 'self'",
               "script-src 'self' 'unsafe-eval' 'unsafe-inline'",
@@ -49,7 +43,7 @@ const nextConfig = {
               "font-src 'self' data:",
               "connect-src 'self' wss: https:",
               "frame-ancestors 'none'",
-            ].join("; "),
+            ].join('; '),
           },
         ],
       },
@@ -58,6 +52,12 @@ const nextConfig = {
 
   webpack: (config, { isServer }) => {
     if (!isServer) {
+      config.resolve.alias = {
+        ...config.resolve.alias,
+        '@react-native-async-storage/async-storage': false,
+        'pino-pretty': false,
+      };
+
       config.resolve.fallback = {
         ...config.resolve.fallback,
         fs: false,
@@ -68,6 +68,13 @@ const nextConfig = {
         path: false,
         os: false,
       };
+
+      const webpack = require('webpack');
+      config.plugins.push(
+        new webpack.NormalModuleReplacementPlugin(/^node:/, (resource) => {
+          resource.request = resource.request.replace(/^node:/, '');
+        }),
+      );
     }
 
     // WASM support for ZK proof verification
@@ -79,16 +86,14 @@ const nextConfig = {
 
     config.module.rules.push({
       test: /\.wasm$/,
-      type: "webassembly/async",
+      type: 'webassembly/async',
     });
 
     return config;
   },
 
-  turbopack: {},
-
   experimental: {
-    optimizePackageImports: ["lucide-react", "recharts", "framer-motion"],
+    optimizePackageImports: ['lucide-react', 'recharts', 'framer-motion'],
   },
 };
 

@@ -1,4 +1,3 @@
-// @ts-nocheck
 "use client";
 
 import { useState, useEffect } from "react";
@@ -11,16 +10,10 @@ import {
   Clock,
   Fingerprint,
 } from "lucide-react";
-import type { ZKProof } from "@/types";
+import { ProofSystem, type ZKProof } from "@/types";
 
 interface ProofVisualizationProps {
-  proof: ZKProof & {
-    hash?: string;
-    protocol?: string;
-    curve?: string;
-    createdAt?: string | number;
-    publicInputCount?: number;
-  };
+  proof?: ZKProof;
   proofId?: string;
   isVerifying?: boolean;
   isVerified?: boolean;
@@ -30,12 +23,39 @@ interface ProofVisualizationProps {
 
 export default function ProofVisualization({
   proof,
+  proofId,
   isVerifying = false,
   isVerified = false,
   showDetails = true,
 }: ProofVisualizationProps) {
   const [copied, setCopied] = useState(false);
   const [ringProgress, setRingProgress] = useState(0);
+  const resolvedProof: ZKProof = proof ?? {
+    id: proofId ?? "unknown-proof",
+    circuitId:
+      "0x0000000000000000000000000000000000000000000000000000000000000000",
+    circuitName: "Proof",
+    proofSystem: ProofSystem.Groth16,
+    proof: {
+      a: ["0", "0"],
+      b: [
+        ["0", "0"],
+        ["0", "0"],
+      ],
+      c: ["0", "0"],
+    },
+    publicInputs: [],
+    publicOutputs: [],
+    generatedAt: 0,
+    validityDuration: 0,
+    proofHash:
+      "0x0000000000000000000000000000000000000000000000000000000000000000",
+    hash: proofId,
+    protocol: "Groth16",
+    curve: "BN254",
+    createdAt: 0,
+    publicInputCount: 0,
+  };
 
   useEffect(() => {
     if (isVerifying) {
@@ -52,7 +72,9 @@ export default function ProofVisualization({
 
   const handleCopyHash = async () => {
     try {
-      await navigator.clipboard.writeText(proof.hash);
+      await navigator.clipboard.writeText(
+        resolvedProof.hash ?? resolvedProof.proofHash,
+      );
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
@@ -183,7 +205,8 @@ export default function ProofVisualization({
               : "ZK Proof"}
         </p>
         <p className="text-xs text-[var(--text-tertiary)] mt-1">
-          {proof.protocol ?? "Groth16"} | {proof.curve ?? "BN254"}
+          {resolvedProof.protocol ?? "Groth16"} |{" "}
+          {resolvedProof.curve ?? "BN254"}
         </p>
       </div>
 
@@ -209,7 +232,7 @@ export default function ProofVisualization({
               </button>
             </div>
             <p className="font-mono text-xs text-[var(--text-primary)] break-all leading-relaxed">
-              {proof.hash}
+              {resolvedProof.hash ?? resolvedProof.proofHash}
             </p>
           </div>
 
@@ -221,8 +244,8 @@ export default function ProofVisualization({
               </p>
               <p className="text-sm font-medium text-[var(--text-primary)] flex items-center gap-1">
                 <Clock className="w-3 h-3" />
-                {proof.createdAt
-                  ? new Date(proof.createdAt).toLocaleTimeString()
+                {resolvedProof.createdAt
+                  ? new Date(resolvedProof.createdAt).toLocaleTimeString()
                   : "--"}
               </p>
             </div>
@@ -231,7 +254,7 @@ export default function ProofVisualization({
                 Public Inputs
               </p>
               <p className="text-sm font-medium text-[var(--text-primary)]">
-                {proof.publicInputCount ?? 0}
+                {resolvedProof.publicInputCount ?? 0}
               </p>
             </div>
           </div>

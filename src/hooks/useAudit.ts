@@ -21,12 +21,17 @@ import type {
 // Convenience wrapper — used by pages that need { auditLog }
 // ---------------------------------------------------------------------------
 
-export function useAudit() {
-  const result = useAuditLog();
+export function useAudit(did?: string, limit = 50) {
+  const result = useAuditLog({
+    entityId: did,
+    pageSize: limit,
+  });
   return {
     auditLog: result.data?.entries ?? [],
+    events: result.data?.entries ?? [],
     total: result.data?.total ?? 0,
     isLoading: result.isLoading,
+    error: result.error,
   };
 }
 

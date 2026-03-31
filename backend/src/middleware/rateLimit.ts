@@ -1,5 +1,5 @@
-import { Request, Response, NextFunction } from "express";
-import { redis, logger } from "../index";
+import { Request, Response, NextFunction } from 'express';
+import { redis, logger } from '../index';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -34,11 +34,7 @@ export function createRateLimiter(config: RateLimitConfig) {
 
   const windowSec = Math.ceil(windowMs / 1000);
 
-  return async (
-    req: Request,
-    res: Response,
-    next: NextFunction,
-  ): Promise<void> => {
+  return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const identifier = keyExtractor ? keyExtractor(req) : extractClientIP(req);
     const key = `${keyPrefix}:${identifier}`;
     const now = Date.now();
@@ -59,7 +55,7 @@ export function createRateLimiter(config: RateLimitConfig) {
       const results = await pipeline.exec();
       if (!results) {
         // Redis unavailable — fail open
-        logger.warn("rate_limit_redis_unavailable", { key });
+        logger.warn('rate_limit_redis_unavailable', { key });
         next();
         return;
       }
@@ -70,17 +66,17 @@ export function createRateLimiter(config: RateLimitConfig) {
 
       // Set rate limit headers
       if (includeHeaders) {
-        res.set("X-RateLimit-Limit", String(maxRequests));
-        res.set("X-RateLimit-Remaining", String(remaining));
-        res.set("X-RateLimit-Reset", String(resetTime));
-        res.set("X-RateLimit-Policy", `${maxRequests};w=${windowSec}`);
+        res.set('X-RateLimit-Limit', String(maxRequests));
+        res.set('X-RateLimit-Remaining', String(remaining));
+        res.set('X-RateLimit-Reset', String(resetTime));
+        res.set('X-RateLimit-Policy', `${maxRequests};w=${windowSec}`);
       }
 
       if (requestCount > maxRequests) {
         const retryAfter = Math.ceil(windowMs / 1000);
-        res.set("Retry-After", String(retryAfter));
+        res.set('Retry-After', String(retryAfter));
 
-        logger.warn("rate_limit_exceeded", {
+        logger.warn('rate_limit_exceeded', {
           key,
           identifier,
           requestCount,
@@ -94,8 +90,8 @@ export function createRateLimiter(config: RateLimitConfig) {
         }
 
         res.status(429).json({
-          error: "Too many requests",
-          code: "RATE_LIMIT_EXCEEDED",
+          error: 'Too many requests',
+          code: 'RATE_LIMIT_EXCEEDED',
           retryAfter,
         });
         return;
@@ -104,7 +100,7 @@ export function createRateLimiter(config: RateLimitConfig) {
       next();
     } catch (err) {
       // Fail open if Redis is unavailable
-      logger.error("rate_limit_error", {
+      logger.error('rate_limit_error', {
         error: (err as Error).message,
         key,
       });
@@ -121,35 +117,35 @@ export function createRateLimiter(config: RateLimitConfig) {
 export const authRateLimiter = createRateLimiter({
   windowMs: 15 * 60 * 1000, // 15 minutes
   maxRequests: 10,
-  keyPrefix: "rl:auth",
+  keyPrefix: 'rl:auth',
 });
 
 /** Standard API rate limiter */
 export const apiRateLimiter = createRateLimiter({
   windowMs: 60_000, // 1 minute
   maxRequests: 60,
-  keyPrefix: "rl:api",
+  keyPrefix: 'rl:api',
 });
 
 /** Strict limiter for credential issuance */
 export const credentialIssuanceLimiter = createRateLimiter({
   windowMs: 60_000,
   maxRequests: 10,
-  keyPrefix: "rl:credential:issue",
+  keyPrefix: 'rl:credential:issue',
 });
 
 /** Limiter for verification requests */
 export const verificationLimiter = createRateLimiter({
   windowMs: 60_000,
   maxRequests: 30,
-  keyPrefix: "rl:verify",
+  keyPrefix: 'rl:verify',
 });
 
 /** Limiter for governance actions */
 export const governanceLimiter = createRateLimiter({
   windowMs: 60_000,
   maxRequests: 15,
-  keyPrefix: "rl:governance",
+  keyPrefix: 'rl:governance',
 });
 
 // ---------------------------------------------------------------------------
@@ -165,22 +161,20 @@ function extractClientIP(req: Request): string {
 
   if (trustedProxy) {
     // Only trust forwarding headers when behind a known proxy
-    const forwarded = req.headers["x-forwarded-for"];
-    if (typeof forwarded === "string") {
-      return forwarded.split(",")[0].trim();
+    const forwarded = req.headers['x-forwarded-for'];
+    if (typeof forwarded === 'string') {
+      return forwarded.split(',')[0].trim();
     }
   }
 
   // Use socket peer address — not spoofable
-  return req.ip ?? req.socket.remoteAddress ?? "unknown";
+  return req.ip ?? req.socket.remoteAddress ?? 'unknown';
 }
 
 // ---------------------------------------------------------------------------
 // DID-based rate limiter (uses identity DID as key)
 // ---------------------------------------------------------------------------
-export function createDIDRateLimiter(
-  config: Omit<RateLimitConfig, "keyExtractor">,
-) {
+export function createDIDRateLimiter(config: Omit<RateLimitConfig, 'keyExtractor'>) {
   return createRateLimiter({
     ...config,
     keyExtractor: (req: Request) => {

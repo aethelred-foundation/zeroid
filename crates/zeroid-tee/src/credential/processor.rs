@@ -3,6 +3,7 @@
 /// The [`CredentialProcessor`] verifies credentials inside the trusted
 /// boundary, checking issuer authorisation, expiry, schema compliance, and
 /// producing a [`VerificationResult`].
+
 use crate::credential::schema::CredentialSchema;
 use crate::credential::selective::{compute_credential_root, AttributeSet};
 use crate::crypto::hash::keccak256;
@@ -124,7 +125,11 @@ impl CredentialProcessor {
     /// 3. Issuer is authorised (if any issuers are registered).
     /// 4. Schema exists and attributes conform to it (if schemas are registered).
     /// 5. Credential root is computable.
-    pub fn verify(&self, credential: &Credential, now: u64) -> Result<VerificationResult> {
+    pub fn verify(
+        &self,
+        credential: &Credential,
+        now: u64,
+    ) -> Result<VerificationResult> {
         // Check status
         match credential.status {
             CredentialStatus::Active => {}

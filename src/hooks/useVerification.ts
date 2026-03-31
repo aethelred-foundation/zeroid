@@ -104,16 +104,19 @@ export function useSelectAttributes(requestId: string | undefined) {
       const request = await apiClient.get<VerificationRequest>(
         `/v1/verification/${requestId}`,
       );
+      const requiredCredentials = request.requiredCredentials ?? [];
+      const requiredAttributes =
+        request.requiredAttributes ?? request.requestedAttributes ?? [];
 
       const userCredentials = await apiClient.get<AttributeSelection[]>(
         `/v1/credentials/${address}/attributes`,
-        { schemaIds: request.credentialHash },
+        { schemaIds: requiredCredentials.join(",") },
       );
 
       return {
         request,
         availableAttributes: userCredentials,
-        requiredAttributes: request.requestedAttributes,
+        requiredAttributes,
       };
     },
     enabled: !!requestId && !!address,
@@ -151,11 +154,24 @@ export function usePendingVerifications() {
 export function useVerification() {
   const history = useVerificationHistory();
   const pending = usePendingVerifications();
+  const respond = useRespondToVerification();
+
   return {
     verificationHistory: history.data?.items ?? [],
     pendingRequests: pending.data ?? [],
     total: history.data?.total ?? 0,
-    isLoading: history.isLoading,
+    isLoading: history.isLoading || pending.isLoading,
+    isVerifying: respond.isPending,
+    submitProof: async (params: {
+      proof: unknown;
+      requestId: string;
+      disclosedAttributes: AttributeSelection[];
+    }) =>
+      respond.mutateAsync({
+        requestId: params.requestId,
+        selectedAttributes: params.disclosedAttributes,
+        proofData: JSON.stringify(params.proof),
+      }),
   };
 }
 

@@ -4,7 +4,7 @@
 
 import { useState, useCallback } from "react";
 
-type ScanStatus = "idle" | "scanning" | "success" | "failed";
+type ScanStatus = "idle" | "scanning" | "success" | "complete" | "failed";
 
 export function useBiometric() {
   const [scanStatus, setScanStatus] = useState<ScanStatus>("idle");
@@ -18,6 +18,6 @@ export function useBiometric() {
   return {
     startScan,
     scanStatus,
-    isScanned: scanStatus === "success",
+    isScanned: scanStatus === "success" || scanStatus === "complete",
   };
 }

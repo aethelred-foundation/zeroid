@@ -1,4 +1,3 @@
-// @ts-nocheck
 "use client";
 
 import { useState, useCallback, useMemo } from "react";
@@ -27,15 +26,28 @@ interface AttributeState {
 }
 
 interface SelectiveDisclosureBuilderProps {
-  requestedAttributes: CredentialAttribute[];
-  onComplete: (selection: DisclosureSelection) => void;
+  requestedAttributes?: Array<CredentialAttribute | string>;
+  onComplete?: (selection: DisclosureSelection) => void;
 }
 
 export default function SelectiveDisclosureBuilder({
-  requestedAttributes,
-  onComplete,
+  requestedAttributes = [],
+  onComplete = () => {},
 }: SelectiveDisclosureBuilderProps) {
   const { credentials } = useCredentials();
+  const normalizedRequestedAttributes = useMemo(
+    () =>
+      requestedAttributes.map((attribute) =>
+        typeof attribute === "string"
+          ? {
+              key: attribute,
+              value: "",
+              hash: `0x${"0".repeat(64)}` as `0x${string}`,
+            }
+          : attribute,
+      ),
+    [requestedAttributes],
+  );
 
   const availableAttributes = useMemo(() => {
     if (!credentials) return [];
@@ -52,7 +64,9 @@ export default function SelectiveDisclosureBuilder({
 
   const [attributeStates, setAttributeStates] = useState<AttributeState[]>(() =>
     availableAttributes.map((attr) => {
-      const isRequested = requestedAttributes.some((r) => r.key === attr.key);
+      const isRequested = normalizedRequestedAttributes.some(
+        (r) => r.key === attr.key,
+      );
       return {
         attribute: attr,
         mode: isRequested ? "zk-prove" : "hidden",
@@ -83,6 +97,9 @@ export default function SelectiveDisclosureBuilder({
 
   const handleComplete = useCallback(() => {
     const selection: DisclosureSelection = {
+      revealedAttributes: attributeStates
+        .filter((s) => s.mode === "disclose")
+        .map((s) => s.attribute.key),
       disclosed: attributeStates
         .filter((s) => s.mode === "disclose")
         .map((s) => s.attribute),

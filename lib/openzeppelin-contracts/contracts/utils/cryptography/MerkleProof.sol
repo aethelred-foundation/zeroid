@@ -231,8 +231,9 @@ library MerkleProof {
             //   `proof` array.
             for (uint256 i = 0; i < proofFlagsLen; i++) {
                 bytes32 a = leafPos < leavesLen ? leaves[leafPos++] : hashes[hashPos++];
-                bytes32 b =
-                    proofFlags[i] ? (leafPos < leavesLen ? leaves[leafPos++] : hashes[hashPos++]) : proof[proofPos++];
+                bytes32 b = proofFlags[i]
+                    ? (leafPos < leavesLen ? leaves[leafPos++] : hashes[hashPos++])
+                    : proof[proofPos++];
                 hashes[i] = Hashes.commutativeKeccak256(a, b);
             }
             if (proofPos != proof.length) {
@@ -317,8 +318,9 @@ library MerkleProof {
             //   `proof` array.
             for (uint256 i = 0; i < proofFlagsLen; i++) {
                 bytes32 a = leafPos < leavesLen ? leaves[leafPos++] : hashes[hashPos++];
-                bytes32 b =
-                    proofFlags[i] ? (leafPos < leavesLen ? leaves[leafPos++] : hashes[hashPos++]) : proof[proofPos++];
+                bytes32 b = proofFlags[i]
+                    ? (leafPos < leavesLen ? leaves[leafPos++] : hashes[hashPos++])
+                    : proof[proofPos++];
                 hashes[i] = hasher(a, b);
             }
             if (proofPos != proof.length) {
@@ -401,8 +403,9 @@ library MerkleProof {
             //   `proof` array.
             for (uint256 i = 0; i < proofFlagsLen; i++) {
                 bytes32 a = leafPos < leavesLen ? leaves[leafPos++] : hashes[hashPos++];
-                bytes32 b =
-                    proofFlags[i] ? (leafPos < leavesLen ? leaves[leafPos++] : hashes[hashPos++]) : proof[proofPos++];
+                bytes32 b = proofFlags[i]
+                    ? (leafPos < leavesLen ? leaves[leafPos++] : hashes[hashPos++])
+                    : proof[proofPos++];
                 hashes[i] = Hashes.commutativeKeccak256(a, b);
             }
             if (proofPos != proof.length) {
@@ -487,8 +490,9 @@ library MerkleProof {
             //   `proof` array.
             for (uint256 i = 0; i < proofFlagsLen; i++) {
                 bytes32 a = leafPos < leavesLen ? leaves[leafPos++] : hashes[hashPos++];
-                bytes32 b =
-                    proofFlags[i] ? (leafPos < leavesLen ? leaves[leafPos++] : hashes[hashPos++]) : proof[proofPos++];
+                bytes32 b = proofFlags[i]
+                    ? (leafPos < leavesLen ? leaves[leafPos++] : hashes[hashPos++])
+                    : proof[proofPos++];
                 hashes[i] = hasher(a, b);
             }
             if (proofPos != proof.length) {

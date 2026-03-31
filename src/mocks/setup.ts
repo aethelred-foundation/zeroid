@@ -1,12 +1,5 @@
 import "@testing-library/jest-dom";
 
-// Polyfill ReadableStream for jsdom (needed by streaming / fetch APIs)
-if (typeof ReadableStream === "undefined") {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const { ReadableStream } = require("stream/web");
-  global.ReadableStream = ReadableStream;
-}
-
 // Polyfill TextEncoder/TextDecoder for jsdom
 import { TextEncoder, TextDecoder } from "util";
 
@@ -17,14 +10,14 @@ Object.assign(globalThis, {
 
 // Polyfill crypto.subtle for jsdom (needed by crypto modules)
 if (!globalThis.crypto?.subtle) {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  // eslint-disable-next-line global-require
   const { webcrypto } = require("crypto");
   Object.defineProperty(globalThis, "crypto", { value: webcrypto });
 }
 
 // Polyfill Request/Response for jsdom (needed by API route tests)
 if (typeof globalThis.Request === "undefined") {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  // eslint-disable-next-line global-require
   const { Request, Response, Headers } = require("undici");
   Object.assign(globalThis, { Request, Response, Headers });
 }

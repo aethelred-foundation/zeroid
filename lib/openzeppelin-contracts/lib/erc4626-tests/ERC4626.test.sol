@@ -34,19 +34,12 @@ abstract contract ERC4626Test is ERC4626Prop {
             vm.assume(_isEOA(user));
             // shares
             uint shares = init.share[i];
-            try IMockERC20(_underlying_).mint(user, shares) {} catch {
-                vm.assume(false);
-            }
+            try IMockERC20(_underlying_).mint(user, shares) {} catch { vm.assume(false); }
             _approve(_underlying_, user, _vault_, shares);
-            vm.prank(user);
-            try IERC4626(_vault_).deposit(shares, user) {} catch {
-                vm.assume(false);
-            }
+            vm.prank(user); try IERC4626(_vault_).deposit(shares, user) {} catch { vm.assume(false); }
             // assets
             uint assets = init.asset[i];
-            try IMockERC20(_underlying_).mint(user, assets) {} catch {
-                vm.assume(false);
-            }
+            try IMockERC20(_underlying_).mint(user, assets) {} catch { vm.assume(false); }
         }
 
         // setup initial yield for vault
@@ -55,19 +48,13 @@ abstract contract ERC4626Test is ERC4626Prop {
 
     // setup initial yield
     function setUpYield(Init memory init) public virtual {
-        if (init.yield >= 0) {
-            // gain
+        if (init.yield >= 0) { // gain
             uint gain = uint(init.yield);
-            try IMockERC20(_underlying_).mint(_vault_, gain) {} catch {
-                vm.assume(false);
-            } // this can be replaced by calling yield generating functions if provided by the vault
-        } else {
-            // loss
+            try IMockERC20(_underlying_).mint(_vault_, gain) {} catch { vm.assume(false); } // this can be replaced by calling yield generating functions if provided by the vault
+        } else { // loss
             vm.assume(init.yield > type(int).min); // avoid overflow in conversion
             uint loss = uint(-1 * init.yield);
-            try IMockERC20(_underlying_).burn(_vault_, loss) {} catch {
-                vm.assume(false);
-            } // this can be replaced by calling yield generating functions if provided by the vault
+            try IMockERC20(_underlying_).burn(_vault_, loss) {} catch { vm.assume(false); } // this can be replaced by calling yield generating functions if provided by the vault
         }
     }
 
@@ -111,16 +98,16 @@ abstract contract ERC4626Test is ERC4626Prop {
 
     function test_maxDeposit(Init memory init) public virtual {
         setUpVault(init);
-        address caller = init.user[0];
+        address caller   = init.user[0];
         address receiver = init.user[1];
         prop_maxDeposit(caller, receiver);
     }
 
     function test_previewDeposit(Init memory init, uint assets) public virtual {
         setUpVault(init);
-        address caller = init.user[0];
+        address caller   = init.user[0];
         address receiver = init.user[1];
-        address other = init.user[2];
+        address other    = init.user[2];
         assets = bound(assets, 0, _max_deposit(caller));
         _approve(_underlying_, caller, _vault_, type(uint).max);
         prop_previewDeposit(caller, receiver, other, assets);
@@ -128,7 +115,7 @@ abstract contract ERC4626Test is ERC4626Prop {
 
     function test_deposit(Init memory init, uint assets, uint allowance) public virtual {
         setUpVault(init);
-        address caller = init.user[0];
+        address caller   = init.user[0];
         address receiver = init.user[1];
         assets = bound(assets, 0, _max_deposit(caller));
         _approve(_underlying_, caller, _vault_, allowance);
@@ -141,16 +128,16 @@ abstract contract ERC4626Test is ERC4626Prop {
 
     function test_maxMint(Init memory init) public virtual {
         setUpVault(init);
-        address caller = init.user[0];
+        address caller   = init.user[0];
         address receiver = init.user[1];
         prop_maxMint(caller, receiver);
     }
 
     function test_previewMint(Init memory init, uint shares) public virtual {
         setUpVault(init);
-        address caller = init.user[0];
+        address caller   = init.user[0];
         address receiver = init.user[1];
-        address other = init.user[2];
+        address other    = init.user[2];
         shares = bound(shares, 0, _max_mint(caller));
         _approve(_underlying_, caller, _vault_, type(uint).max);
         prop_previewMint(caller, receiver, other, shares);
@@ -158,7 +145,7 @@ abstract contract ERC4626Test is ERC4626Prop {
 
     function test_mint(Init memory init, uint shares, uint allowance) public virtual {
         setUpVault(init);
-        address caller = init.user[0];
+        address caller   = init.user[0];
         address receiver = init.user[1];
         shares = bound(shares, 0, _max_mint(caller));
         _approve(_underlying_, caller, _vault_, allowance);
@@ -172,16 +159,16 @@ abstract contract ERC4626Test is ERC4626Prop {
     function test_maxWithdraw(Init memory init) public virtual {
         setUpVault(init);
         address caller = init.user[0];
-        address owner = init.user[1];
+        address owner  = init.user[1];
         prop_maxWithdraw(caller, owner);
     }
 
     function test_previewWithdraw(Init memory init, uint assets) public virtual {
         setUpVault(init);
-        address caller = init.user[0];
+        address caller   = init.user[0];
         address receiver = init.user[1];
-        address owner = init.user[2];
-        address other = init.user[3];
+        address owner    = init.user[2];
+        address other    = init.user[3];
         assets = bound(assets, 0, _max_withdraw(owner));
         _approve(_vault_, owner, caller, type(uint).max);
         prop_previewWithdraw(caller, receiver, owner, other, assets);
@@ -189,9 +176,9 @@ abstract contract ERC4626Test is ERC4626Prop {
 
     function test_withdraw(Init memory init, uint assets, uint allowance) public virtual {
         setUpVault(init);
-        address caller = init.user[0];
+        address caller   = init.user[0];
         address receiver = init.user[1];
-        address owner = init.user[2];
+        address owner    = init.user[2];
         assets = bound(assets, 0, _max_withdraw(owner));
         _approve(_vault_, owner, caller, allowance);
         prop_withdraw(caller, receiver, owner, assets);
@@ -199,15 +186,17 @@ abstract contract ERC4626Test is ERC4626Prop {
 
     function test_withdraw_zero_allowance(Init memory init, uint assets) public virtual {
         setUpVault(init);
-        address caller = init.user[0];
+        address caller   = init.user[0];
         address receiver = init.user[1];
-        address owner = init.user[2];
+        address owner    = init.user[2];
         assets = bound(assets, 0, _max_withdraw(owner));
         vm.assume(caller != owner);
         vm.assume(assets > 0);
         _approve(_vault_, owner, caller, 0);
         vm.prank(caller);
-        (bool success, ) = _vault_.call(abi.encodeWithSelector(IERC4626.withdraw.selector, assets, receiver, owner));
+        (bool success,) = _vault_.call(
+            abi.encodeWithSelector(IERC4626.withdraw.selector, assets, receiver, owner)
+        );
         assertFalse(success);
     }
 
@@ -218,16 +207,16 @@ abstract contract ERC4626Test is ERC4626Prop {
     function test_maxRedeem(Init memory init) public virtual {
         setUpVault(init);
         address caller = init.user[0];
-        address owner = init.user[1];
+        address owner  = init.user[1];
         prop_maxRedeem(caller, owner);
     }
 
     function test_previewRedeem(Init memory init, uint shares) public virtual {
         setUpVault(init);
-        address caller = init.user[0];
+        address caller   = init.user[0];
         address receiver = init.user[1];
-        address owner = init.user[2];
-        address other = init.user[3];
+        address owner    = init.user[2];
+        address other    = init.user[3];
         shares = bound(shares, 0, _max_redeem(owner));
         _approve(_vault_, owner, caller, type(uint).max);
         prop_previewRedeem(caller, receiver, owner, other, shares);
@@ -235,9 +224,9 @@ abstract contract ERC4626Test is ERC4626Prop {
 
     function test_redeem(Init memory init, uint shares, uint allowance) public virtual {
         setUpVault(init);
-        address caller = init.user[0];
+        address caller   = init.user[0];
         address receiver = init.user[1];
-        address owner = init.user[2];
+        address owner    = init.user[2];
         shares = bound(shares, 0, _max_redeem(owner));
         _approve(_vault_, owner, caller, allowance);
         prop_redeem(caller, receiver, owner, shares);
@@ -245,15 +234,17 @@ abstract contract ERC4626Test is ERC4626Prop {
 
     function test_redeem_zero_allowance(Init memory init, uint shares) public virtual {
         setUpVault(init);
-        address caller = init.user[0];
+        address caller   = init.user[0];
         address receiver = init.user[1];
-        address owner = init.user[2];
+        address owner    = init.user[2];
         shares = bound(shares, 0, _max_redeem(owner));
         vm.assume(caller != owner);
         vm.assume(shares > 0);
         _approve(_vault_, owner, caller, 0);
         vm.prank(caller);
-        (bool success, ) = _vault_.call(abi.encodeWithSelector(IERC4626.redeem.selector, shares, receiver, owner));
+        (bool success,) = _vault_.call(
+            abi.encodeWithSelector(IERC4626.redeem.selector, shares, receiver, owner)
+        );
         assertFalse(success);
     }
 
@@ -329,24 +320,16 @@ abstract contract ERC4626Test is ERC4626Prop {
     // utils
     //
 
-    function _isContract(address account) internal view returns (bool) {
-        return account.code.length > 0;
-    }
-    function _isEOA(address account) internal view returns (bool) {
-        return account.code.length == 0;
-    }
+    function _isContract(address account) internal view returns (bool) { return account.code.length > 0; }
+    function _isEOA     (address account) internal view returns (bool) { return account.code.length == 0; }
 
     function _approve(address token, address owner, address spender, uint amount) internal {
-        vm.prank(owner);
-        _safeApprove(token, spender, 0);
-        vm.prank(owner);
-        _safeApprove(token, spender, amount);
+        vm.prank(owner); _safeApprove(token, spender, 0);
+        vm.prank(owner); _safeApprove(token, spender, amount);
     }
 
     function _safeApprove(address token, address spender, uint amount) internal {
-        (bool success, bytes memory retdata) = token.call(
-            abi.encodeWithSelector(IERC20.approve.selector, spender, amount)
-        );
+        (bool success, bytes memory retdata) = token.call(abi.encodeWithSelector(IERC20.approve.selector, spender, amount));
         vm.assume(success);
         if (retdata.length > 0) vm.assume(abi.decode(retdata, (bool)));
     }

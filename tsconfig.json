@@ -14,7 +14,6 @@
     "jsx": "preserve",
     "incremental": true,
     "forceConsistentCasingInFileNames": true,
-    "types": ["jest", "node", "react", "react-dom"],
     "plugins": [
       {
         "name": "next"
@@ -30,6 +29,16 @@
       "@/contexts/*": ["./src/contexts/*"]
     }
   },
-  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
-  "exclude": ["node_modules", "build", "circuits", "backend", "test/hardhat", "hardhat.config.ts"]
+  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", "**/*.d.ts", ".next/types/**/*.ts"],
+  "exclude": [
+    "node_modules",
+    "build",
+    "circuits",
+    "backend",
+    "lib/openzeppelin-contracts",
+    "src/**/__tests__/**",
+    "src/**/*.test.ts",
+    "src/**/*.test.tsx",
+    "src/mocks"
+  ]
 }

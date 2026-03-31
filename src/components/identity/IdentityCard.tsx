@@ -1,4 +1,3 @@
-// @ts-nocheck
 "use client";
 
 import { useState } from "react";
@@ -15,7 +14,7 @@ import {
   CheckCircle2,
 } from "lucide-react";
 import { useIdentity } from "@/hooks/useIdentity";
-import type { IdentityProfile, VerificationStatus } from "@/types";
+import type { DID, IdentityProfile } from "@/types";
 
 interface IdentityCardProps {
   identity?: IdentityProfile;
@@ -23,8 +22,15 @@ interface IdentityCardProps {
   onViewDetails?: () => void;
 }
 
+type IdentityVerificationState =
+  | "verified"
+  | "pending"
+  | "revoked"
+  | "expired"
+  | "unverified";
+
 const statusConfig: Record<
-  VerificationStatus,
+  IdentityVerificationState,
   { label: string; badge: string; icon: typeof ShieldCheck; color: string }
 > = {
   verified: {
@@ -64,6 +70,11 @@ function truncateDID(did: string, chars = 8): string {
   return `${did.slice(0, chars + 6)}...${did.slice(-chars)}`;
 }
 
+function getDidString(did: string | DID | undefined): string {
+  if (!did) return "";
+  return typeof did === "string" ? did : did.uri;
+}
+
 export default function IdentityCard({
   identity: identityProp,
   compact = false,
@@ -71,13 +82,19 @@ export default function IdentityCard({
 }: IdentityCardProps) {
   const { identity: contextIdentity, isLoading, error } = useIdentity();
   const identity = identityProp ?? contextIdentity;
+  const did = getDidString(identity?.did);
+  const verificationStatus = (identity?.verificationStatus ??
+    "unverified") as IdentityVerificationState;
+  const credentialCount = identity?.credentialCount ?? 0;
+  const verificationCount = identity?.verificationCount ?? 0;
+  const createdAt = identity?.createdAt;
   const [copied, setCopied] = useState(false);
   const [isHovered, setIsHovered] = useState(false);
 
   const handleCopyDID = async () => {
-    if (!identity?.did) return;
+    if (!did) return;
     try {
-      await navigator.clipboard.writeText(identity.did);
+      await navigator.clipboard.writeText(did);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {}
@@ -148,8 +165,7 @@ export default function IdentityCard({
     );
   }
 
-  const status =
-    statusConfig[identity.verificationStatus] ?? statusConfig.unverified;
+  const status = statusConfig[verificationStatus] ?? statusConfig.unverified;
   const StatusIcon = status.icon;
 
   if (compact) {
@@ -165,7 +181,7 @@ export default function IdentityCard({
           </div>
           <div className="flex-1 min-w-0">
             <p className="text-[13px] font-medium truncate font-body">
-              {truncateDID(identity.did)}
+              {truncateDID(did)}
             </p>
             <span className={status.badge}>{status.label}</span>
           </div>
@@ -265,7 +281,7 @@ export default function IdentityCard({
           </p>
           <div className="flex items-center gap-2.5">
             <p className="font-mono text-[14px] tracking-wide text-white/70">
-              {truncateDID(identity.did, 14)}
+              {truncateDID(did, 14)}
             </p>
             <button
               onClick={handleCopyDID}
@@ -284,20 +300,16 @@ export default function IdentityCard({
         {/* Stats row */}
         <div className="grid grid-cols-3 gap-3 mb-8">
           {[
-            {
-              icon: Award,
-              value: identity.credentialCount ?? 0,
-              label: "Credentials",
-            },
+            { icon: Award, value: credentialCount, label: "Credentials" },
             {
               icon: ShieldCheck,
-              value: identity.verificationCount ?? 0,
+              value: verificationCount,
               label: "Verifications",
             },
             {
               icon: Clock,
-              value: identity.createdAt
-                ? new Date(identity.createdAt).toLocaleDateString("en-US", {
+              value: createdAt
+                ? new Date(createdAt).toLocaleDateString("en-US", {
                     month: "short",
                     year: "2-digit",
                   })

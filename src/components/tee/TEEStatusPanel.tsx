@@ -1,4 +1,3 @@
-// @ts-nocheck
 "use client";
 
 import { useState, useEffect } from "react";
@@ -36,6 +35,21 @@ const healthBg: Record<string, string> = {
   offline: "bg-status-revoked/10",
   unknown: "bg-[var(--surface-tertiary)]",
 };
+
+function normalizeHealth(node: TEENodeStatus): keyof typeof healthColors {
+  if (
+    node.health === "healthy" ||
+    node.health === "degraded" ||
+    node.health === "offline"
+  ) {
+    return node.health;
+  }
+  if (node.health === "unhealthy") return "offline";
+  if (node.status === "active") return "healthy";
+  if (node.status === "degraded") return "degraded";
+  if (node.status === "offline") return "offline";
+  return "unknown";
+}
 
 export default function TEEStatusPanel({
   compact = false,
@@ -179,35 +193,42 @@ export default function TEEStatusPanel({
               initial={{ opacity: 0, y: 5 }}
               animate={{ opacity: 1, y: 0 }}
             >
-              <div className="flex items-center gap-3">
-                <div
-                  className={`w-8 h-8 rounded-lg ${healthBg[node.health]} flex items-center justify-center`}
-                >
-                  <Server className={`w-4 h-4 ${healthColors[node.health]}`} />
-                </div>
-                <div>
-                  <p className="text-sm font-medium text-[var(--text-primary)]">
-                    {node.name}
-                  </p>
-                  <p className="text-xs text-[var(--text-tertiary)] font-mono">
-                    {node.region}
-                  </p>
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
-                {node.health === "healthy" ? (
-                  <CheckCircle2 className="w-4 h-4 text-status-verified" />
-                ) : node.health === "degraded" ? (
-                  <Activity className="w-4 h-4 text-status-pending" />
-                ) : (
-                  <XCircle className="w-4 h-4 text-status-revoked" />
-                )}
-                <span
-                  className={`text-xs font-medium capitalize ${healthColors[node.health]}`}
-                >
-                  {node.health}
-                </span>
-              </div>
+              {(() => {
+                const health = normalizeHealth(node);
+                return (
+                  <>
+                    <div className="flex items-center gap-3">
+                      <div
+                        className={`w-8 h-8 rounded-lg ${healthBg[health]} flex items-center justify-center`}
+                      >
+                        <Server className={`w-4 h-4 ${healthColors[health]}`} />
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium text-[var(--text-primary)]">
+                          {node.name ?? node.id}
+                        </p>
+                        <p className="text-xs text-[var(--text-tertiary)] font-mono">
+                          {node.region}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {health === "healthy" ? (
+                        <CheckCircle2 className="w-4 h-4 text-status-verified" />
+                      ) : health === "degraded" ? (
+                        <Activity className="w-4 h-4 text-status-pending" />
+                      ) : (
+                        <XCircle className="w-4 h-4 text-status-revoked" />
+                      )}
+                      <span
+                        className={`text-xs font-medium capitalize ${healthColors[health]}`}
+                      >
+                        {health}
+                      </span>
+                    </div>
+                  </>
+                );
+              })()}
             </motion.div>
           ))}
           {(!nodes || nodes.length === 0) && (

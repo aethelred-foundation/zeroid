@@ -1,4 +1,5 @@
 /// TEE node registration, health monitoring, and management.
+
 use crate::attestation::report::Platform;
 use crate::error::{Result, ZeroIdTeeError};
 use crate::registry::types::{NodeInfo, NodeStatus};
@@ -36,13 +37,8 @@ impl NodeRegistry {
                 "node already registered: {node_id}"
             )));
         }
-        self.nodes.push(NodeInfo::new(
-            node_id,
-            operator,
-            platform,
-            enclave_hash,
-            now,
-        ));
+        self.nodes
+            .push(NodeInfo::new(node_id, operator, platform, enclave_hash, now));
         Ok(())
     }
 
@@ -91,11 +87,10 @@ impl NodeRegistry {
         let mut count = 0;
         for node in &mut self.nodes {
             if (node.status == NodeStatus::Active || node.status == NodeStatus::Degraded)
-                && !node.is_alive(now, timeout)
-            {
-                node.status = NodeStatus::Offline;
-                count += 1;
-            }
+                && !node.is_alive(now, timeout) {
+                    node.status = NodeStatus::Offline;
+                    count += 1;
+                }
         }
         count
     }

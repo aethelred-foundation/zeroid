@@ -166,6 +166,13 @@ export function useBridgeCredential() {
 
   return useMutation({
     mutationFn: async (request: BridgeRequest): Promise<BridgeTransaction> => {
+      const recipient = (request.recipientAddress ?? address) as
+        | ViemAddress
+        | undefined;
+      if (!recipient) {
+        throw new Error("Wallet must be connected before bridging credentials");
+      }
+
       // 1. Initiate bridge on source chain
       const txHash = await writeContractAsync({
         address: CONTRACT_ADDRESSES.credentialRegistry as ViemAddress,
@@ -174,7 +181,7 @@ export function useBridgeCredential() {
         args: [
           request.credentialId as `0x${string}`,
           BigInt(request.destinationChainId),
-          (request.recipientAddress ?? address) as `0x${string}`,
+          recipient,
           request.preservePrivacy,
         ],
       });
@@ -187,7 +194,7 @@ export function useBridgeCredential() {
           destinationChainId: request.destinationChainId,
           sourceTxHash: txHash,
           senderAddress: address,
-          recipientAddress: request.recipientAddress ?? address,
+          recipientAddress: recipient,
           priority: request.priority,
           preservePrivacy: request.preservePrivacy,
         },

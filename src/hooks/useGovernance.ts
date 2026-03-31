@@ -8,7 +8,7 @@
 import { useCallback } from "react";
 import { useAccount, useReadContract, useWriteContract } from "wagmi";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { type Address, type Hash } from "viem";
+import { type Address, type Hash, parseEther } from "viem";
 import { toast } from "sonner";
 import { apiClient } from "@/lib/api/client";
 import {
@@ -200,15 +200,17 @@ export function useVote() {
       reason?: string;
     }): Promise<Hash> => {
       const fnName = params.reason ? "castVoteWithReason" : "castVote";
-      const args = params.reason
-        ? [params.proposalId, params.support, params.reason]
-        : [params.proposalId, params.support];
+      const args = (
+        params.reason
+          ? [params.proposalId, Number(params.support), params.reason]
+          : [params.proposalId, Number(params.support)]
+      ) as readonly [bigint, number] | readonly [bigint, number, string];
 
       return writeContractAsync({
         address: GOVERNANCE_ADDRESS as Address,
         abi: GOVERNANCE_ABI,
-        functionName: fnName as any,
-        args: args as any,
+        functionName: fnName as "castVote" | "castVoteWithReason",
+        args,
       });
     },
     onSuccess: () => {

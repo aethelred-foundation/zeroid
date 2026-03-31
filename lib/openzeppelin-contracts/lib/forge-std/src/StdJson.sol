@@ -93,11 +93,11 @@ library stdJson {
         return keyExists(json, key) ? readUint(json, key) : defaultValue;
     }
 
-    function readUintArrayOr(
-        string memory json,
-        string memory key,
-        uint256[] memory defaultValue
-    ) internal view returns (uint256[] memory) {
+    function readUintArrayOr(string memory json, string memory key, uint256[] memory defaultValue)
+        internal
+        view
+        returns (uint256[] memory)
+    {
         return keyExists(json, key) ? readUintArray(json, key) : defaultValue;
     }
 
@@ -105,59 +105,59 @@ library stdJson {
         return keyExists(json, key) ? readInt(json, key) : defaultValue;
     }
 
-    function readIntArrayOr(
-        string memory json,
-        string memory key,
-        int256[] memory defaultValue
-    ) internal view returns (int256[] memory) {
+    function readIntArrayOr(string memory json, string memory key, int256[] memory defaultValue)
+        internal
+        view
+        returns (int256[] memory)
+    {
         return keyExists(json, key) ? readIntArray(json, key) : defaultValue;
     }
 
-    function readBytes32Or(
-        string memory json,
-        string memory key,
-        bytes32 defaultValue
-    ) internal view returns (bytes32) {
+    function readBytes32Or(string memory json, string memory key, bytes32 defaultValue)
+        internal
+        view
+        returns (bytes32)
+    {
         return keyExists(json, key) ? readBytes32(json, key) : defaultValue;
     }
 
-    function readBytes32ArrayOr(
-        string memory json,
-        string memory key,
-        bytes32[] memory defaultValue
-    ) internal view returns (bytes32[] memory) {
+    function readBytes32ArrayOr(string memory json, string memory key, bytes32[] memory defaultValue)
+        internal
+        view
+        returns (bytes32[] memory)
+    {
         return keyExists(json, key) ? readBytes32Array(json, key) : defaultValue;
     }
 
-    function readStringOr(
-        string memory json,
-        string memory key,
-        string memory defaultValue
-    ) internal view returns (string memory) {
+    function readStringOr(string memory json, string memory key, string memory defaultValue)
+        internal
+        view
+        returns (string memory)
+    {
         return keyExists(json, key) ? readString(json, key) : defaultValue;
     }
 
-    function readStringArrayOr(
-        string memory json,
-        string memory key,
-        string[] memory defaultValue
-    ) internal view returns (string[] memory) {
+    function readStringArrayOr(string memory json, string memory key, string[] memory defaultValue)
+        internal
+        view
+        returns (string[] memory)
+    {
         return keyExists(json, key) ? readStringArray(json, key) : defaultValue;
     }
 
-    function readAddressOr(
-        string memory json,
-        string memory key,
-        address defaultValue
-    ) internal view returns (address) {
+    function readAddressOr(string memory json, string memory key, address defaultValue)
+        internal
+        view
+        returns (address)
+    {
         return keyExists(json, key) ? readAddress(json, key) : defaultValue;
     }
 
-    function readAddressArrayOr(
-        string memory json,
-        string memory key,
-        address[] memory defaultValue
-    ) internal view returns (address[] memory) {
+    function readAddressArrayOr(string memory json, string memory key, address[] memory defaultValue)
+        internal
+        view
+        returns (address[] memory)
+    {
         return keyExists(json, key) ? readAddressArray(json, key) : defaultValue;
     }
 
@@ -165,27 +165,27 @@ library stdJson {
         return keyExists(json, key) ? readBool(json, key) : defaultValue;
     }
 
-    function readBoolArrayOr(
-        string memory json,
-        string memory key,
-        bool[] memory defaultValue
-    ) internal view returns (bool[] memory) {
+    function readBoolArrayOr(string memory json, string memory key, bool[] memory defaultValue)
+        internal
+        view
+        returns (bool[] memory)
+    {
         return keyExists(json, key) ? readBoolArray(json, key) : defaultValue;
     }
 
-    function readBytesOr(
-        string memory json,
-        string memory key,
-        bytes memory defaultValue
-    ) internal view returns (bytes memory) {
+    function readBytesOr(string memory json, string memory key, bytes memory defaultValue)
+        internal
+        view
+        returns (bytes memory)
+    {
         return keyExists(json, key) ? readBytes(json, key) : defaultValue;
     }
 
-    function readBytesArrayOr(
-        string memory json,
-        string memory key,
-        bytes[] memory defaultValue
-    ) internal view returns (bytes[] memory) {
+    function readBytesArrayOr(string memory json, string memory key, bytes[] memory defaultValue)
+        internal
+        view
+        returns (bytes[] memory)
+    {
         return keyExists(json, key) ? readBytesArray(json, key) : defaultValue;
     }
 
@@ -197,7 +197,10 @@ library stdJson {
         return vm.serializeBool(jsonKey, key, value);
     }
 
-    function serialize(string memory jsonKey, string memory key, bool[] memory value) internal returns (string memory) {
+    function serialize(string memory jsonKey, string memory key, bool[] memory value)
+        internal
+        returns (string memory)
+    {
         return vm.serializeBool(jsonKey, key, value);
     }
 
@@ -205,11 +208,10 @@ library stdJson {
         return vm.serializeUint(jsonKey, key, value);
     }
 
-    function serialize(
-        string memory jsonKey,
-        string memory key,
-        uint256[] memory value
-    ) internal returns (string memory) {
+    function serialize(string memory jsonKey, string memory key, uint256[] memory value)
+        internal
+        returns (string memory)
+    {
         return vm.serializeUint(jsonKey, key, value);
     }
 
@@ -217,11 +219,10 @@ library stdJson {
         return vm.serializeInt(jsonKey, key, value);
     }
 
-    function serialize(
-        string memory jsonKey,
-        string memory key,
-        int256[] memory value
-    ) internal returns (string memory) {
+    function serialize(string memory jsonKey, string memory key, int256[] memory value)
+        internal
+        returns (string memory)
+    {
         return vm.serializeInt(jsonKey, key, value);
     }
 
@@ -229,11 +230,10 @@ library stdJson {
         return vm.serializeAddress(jsonKey, key, value);
     }
 
-    function serialize(
-        string memory jsonKey,
-        string memory key,
-        address[] memory value
-    ) internal returns (string memory) {
+    function serialize(string memory jsonKey, string memory key, address[] memory value)
+        internal
+        returns (string memory)
+    {
         return vm.serializeAddress(jsonKey, key, value);
     }
 
@@ -241,11 +241,10 @@ library stdJson {
         return vm.serializeBytes32(jsonKey, key, value);
     }
 
-    function serialize(
-        string memory jsonKey,
-        string memory key,
-        bytes32[] memory value
-    ) internal returns (string memory) {
+    function serialize(string memory jsonKey, string memory key, bytes32[] memory value)
+        internal
+        returns (string memory)
+    {
         return vm.serializeBytes32(jsonKey, key, value);
     }
 
@@ -253,23 +252,24 @@ library stdJson {
         return vm.serializeBytes(jsonKey, key, value);
     }
 
-    function serialize(
-        string memory jsonKey,
-        string memory key,
-        bytes[] memory value
-    ) internal returns (string memory) {
+    function serialize(string memory jsonKey, string memory key, bytes[] memory value)
+        internal
+        returns (string memory)
+    {
         return vm.serializeBytes(jsonKey, key, value);
     }
 
-    function serialize(string memory jsonKey, string memory key, string memory value) internal returns (string memory) {
+    function serialize(string memory jsonKey, string memory key, string memory value)
+        internal
+        returns (string memory)
+    {
         return vm.serializeString(jsonKey, key, value);
     }
 
-    function serialize(
-        string memory jsonKey,
-        string memory key,
-        string[] memory value
-    ) internal returns (string memory) {
+    function serialize(string memory jsonKey, string memory key, string[] memory value)
+        internal
+        returns (string memory)
+    {
         return vm.serializeString(jsonKey, key, value);
     }
 

@@ -1,6 +1,6 @@
-import { logger, redis } from "../index";
-import * as path from "path";
-import * as fs from "fs";
+import { logger, redis } from '../index';
+import * as path from 'path';
+import * as fs from 'fs';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -49,103 +49,46 @@ interface CircuitConfig {
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
-const CIRCUITS_DIR =
-  process.env.CIRCUITS_DIR ?? path.join(process.cwd(), "circuits");
-const PROOF_CACHE_TTL = parseInt(process.env.PROOF_CACHE_TTL ?? "3600", 10);
+const CIRCUITS_DIR = process.env.CIRCUITS_DIR ?? path.join(process.cwd(), 'circuits');
+const PROOF_CACHE_TTL = parseInt(process.env.PROOF_CACHE_TTL ?? '3600', 10);
 const MAX_PROOF_GENERATION_TIME_MS = 30_000;
 
 // Supported circuits
 const CIRCUIT_REGISTRY: Record<string, CircuitConfig> = {
   age_verification: {
-    wasmPath: path.join(
-      CIRCUITS_DIR,
-      "age_verification",
-      "age_verification.wasm",
-    ),
-    zkeyPath: path.join(
-      CIRCUITS_DIR,
-      "age_verification",
-      "age_verification_final.zkey",
-    ),
-    vkeyPath: path.join(
-      CIRCUITS_DIR,
-      "age_verification",
-      "verification_key.json",
-    ),
+    wasmPath: path.join(CIRCUITS_DIR, 'age_verification', 'age_verification.wasm'),
+    zkeyPath: path.join(CIRCUITS_DIR, 'age_verification', 'age_verification_final.zkey'),
+    vkeyPath: path.join(CIRCUITS_DIR, 'age_verification', 'verification_key.json'),
     maxInputs: 5,
-    description:
-      "Prove age is above a threshold without revealing exact date of birth",
+    description: 'Prove age is above a threshold without revealing exact date of birth',
   },
   nationality_check: {
-    wasmPath: path.join(
-      CIRCUITS_DIR,
-      "nationality_check",
-      "nationality_check.wasm",
-    ),
-    zkeyPath: path.join(
-      CIRCUITS_DIR,
-      "nationality_check",
-      "nationality_check_final.zkey",
-    ),
-    vkeyPath: path.join(
-      CIRCUITS_DIR,
-      "nationality_check",
-      "verification_key.json",
-    ),
+    wasmPath: path.join(CIRCUITS_DIR, 'nationality_check', 'nationality_check.wasm'),
+    zkeyPath: path.join(CIRCUITS_DIR, 'nationality_check', 'nationality_check_final.zkey'),
+    vkeyPath: path.join(CIRCUITS_DIR, 'nationality_check', 'verification_key.json'),
     maxInputs: 3,
-    description:
-      "Prove nationality membership in a set without revealing exact nationality",
+    description: 'Prove nationality membership in a set without revealing exact nationality',
   },
   income_range: {
-    wasmPath: path.join(CIRCUITS_DIR, "income_range", "income_range.wasm"),
-    zkeyPath: path.join(
-      CIRCUITS_DIR,
-      "income_range",
-      "income_range_final.zkey",
-    ),
-    vkeyPath: path.join(CIRCUITS_DIR, "income_range", "verification_key.json"),
+    wasmPath: path.join(CIRCUITS_DIR, 'income_range', 'income_range.wasm'),
+    zkeyPath: path.join(CIRCUITS_DIR, 'income_range', 'income_range_final.zkey'),
+    vkeyPath: path.join(CIRCUITS_DIR, 'income_range', 'verification_key.json'),
     maxInputs: 4,
-    description: "Prove income falls within a specified range",
+    description: 'Prove income falls within a specified range',
   },
   credential_ownership: {
-    wasmPath: path.join(
-      CIRCUITS_DIR,
-      "credential_ownership",
-      "credential_ownership.wasm",
-    ),
-    zkeyPath: path.join(
-      CIRCUITS_DIR,
-      "credential_ownership",
-      "credential_ownership_final.zkey",
-    ),
-    vkeyPath: path.join(
-      CIRCUITS_DIR,
-      "credential_ownership",
-      "verification_key.json",
-    ),
+    wasmPath: path.join(CIRCUITS_DIR, 'credential_ownership', 'credential_ownership.wasm'),
+    zkeyPath: path.join(CIRCUITS_DIR, 'credential_ownership', 'credential_ownership_final.zkey'),
+    vkeyPath: path.join(CIRCUITS_DIR, 'credential_ownership', 'verification_key.json'),
     maxInputs: 8,
-    description:
-      "Prove ownership of a credential without revealing its contents",
+    description: 'Prove ownership of a credential without revealing its contents',
   },
   selective_disclosure: {
-    wasmPath: path.join(
-      CIRCUITS_DIR,
-      "selective_disclosure",
-      "selective_disclosure.wasm",
-    ),
-    zkeyPath: path.join(
-      CIRCUITS_DIR,
-      "selective_disclosure",
-      "selective_disclosure_final.zkey",
-    ),
-    vkeyPath: path.join(
-      CIRCUITS_DIR,
-      "selective_disclosure",
-      "verification_key.json",
-    ),
+    wasmPath: path.join(CIRCUITS_DIR, 'selective_disclosure', 'selective_disclosure.wasm'),
+    zkeyPath: path.join(CIRCUITS_DIR, 'selective_disclosure', 'selective_disclosure_final.zkey'),
+    vkeyPath: path.join(CIRCUITS_DIR, 'selective_disclosure', 'verification_key.json'),
     maxInputs: 16,
-    description:
-      "Selectively reveal specific fields of a credential while hiding others",
+    description: 'Selectively reveal specific fields of a credential while hiding others',
   },
 };
 
@@ -153,14 +96,14 @@ const CIRCUIT_REGISTRY: Record<string, CircuitConfig> = {
 // ZK Proof Service
 // ---------------------------------------------------------------------------
 export class ZKProofService {
-  private snarkjs: typeof import("snarkjs") | null = null;
+  private snarkjs: typeof import('snarkjs') | null = null;
 
   // -------------------------------------------------------------------------
   // Lazy-load snarkjs (large module)
   // -------------------------------------------------------------------------
-  private async getSnarkJS(): Promise<typeof import("snarkjs")> {
+  private async getSnarkJS(): Promise<typeof import('snarkjs')> {
     if (!this.snarkjs) {
-      this.snarkjs = await import("snarkjs");
+      this.snarkjs = await import('snarkjs');
     }
     return this.snarkjs;
   }
@@ -172,7 +115,7 @@ export class ZKProofService {
     const proofId = crypto.randomUUID();
     const startTime = Date.now();
 
-    logger.info("zk_proof_generation_start", {
+    logger.info('zk_proof_generation_start', {
       proofId,
       circuitName: request.circuitName,
       credentialId: request.credentialId,
@@ -183,7 +126,7 @@ export class ZKProofService {
     if (!circuit) {
       throw new ZKProofError(
         `Unknown circuit: ${request.circuitName}`,
-        "ZK_UNKNOWN_CIRCUIT",
+        'ZK_UNKNOWN_CIRCUIT',
       );
     }
 
@@ -192,7 +135,7 @@ export class ZKProofService {
     if (inputCount > circuit.maxInputs) {
       throw new ZKProofError(
         `Too many inputs: ${inputCount} exceeds max ${circuit.maxInputs}`,
-        "ZK_TOO_MANY_INPUTS",
+        'ZK_TOO_MANY_INPUTS',
       );
     }
 
@@ -214,36 +157,23 @@ export class ZKProofService {
 
       const timeoutPromise = new Promise<never>((_, reject) => {
         setTimeout(
-          () =>
-            reject(
-              new ZKProofError("Proof generation timed out", "ZK_TIMEOUT"),
-            ),
+          () => reject(new ZKProofError('Proof generation timed out', 'ZK_TIMEOUT')),
           MAX_PROOF_GENERATION_TIME_MS,
         );
       });
 
-      const { proof, publicSignals } = await Promise.race([
-        proofPromise,
-        timeoutPromise,
-      ]);
+      const { proof, publicSignals } = await Promise.race([proofPromise, timeoutPromise]);
 
       const generationTimeMs = Date.now() - startTime;
 
       // Load verification key
-      const vkeyContent = fs.readFileSync(circuit.vkeyPath, "utf-8");
+      const vkeyContent = fs.readFileSync(circuit.vkeyPath, 'utf-8');
       const vkey = JSON.parse(vkeyContent);
 
       // Self-verify before returning
-      const selfVerified = await snarkjs.groth16.verify(
-        vkey,
-        publicSignals,
-        proof,
-      );
+      const selfVerified = await snarkjs.groth16.verify(vkey, publicSignals, proof);
       if (!selfVerified) {
-        throw new ZKProofError(
-          "Self-verification of generated proof failed",
-          "ZK_SELF_VERIFY_FAILED",
-        );
+        throw new ZKProofError('Self-verification of generated proof failed', 'ZK_SELF_VERIFY_FAILED');
       }
 
       const result: ZKProofResult = {
@@ -260,11 +190,11 @@ export class ZKProofService {
       await redis.set(
         `zk:proof:${proofId}`,
         JSON.stringify(result),
-        "EX",
+        'EX',
         PROOF_CACHE_TTL,
       );
 
-      logger.info("zk_proof_generation_success", {
+      logger.info('zk_proof_generation_success', {
         proofId,
         circuitName: request.circuitName,
         generationTimeMs,
@@ -275,7 +205,7 @@ export class ZKProofService {
     } catch (err) {
       if (err instanceof ZKProofError) throw err;
 
-      logger.error("zk_proof_generation_failed", {
+      logger.error('zk_proof_generation_failed', {
         proofId,
         circuitName: request.circuitName,
         error: (err as Error).message,
@@ -283,7 +213,7 @@ export class ZKProofService {
 
       throw new ZKProofError(
         `Proof generation failed: ${(err as Error).message}`,
-        "ZK_GENERATION_FAILED",
+        'ZK_GENERATION_FAILED',
       );
     }
   }
@@ -298,21 +228,18 @@ export class ZKProofService {
   ): Promise<VerificationResult> {
     const proofId = crypto.randomUUID();
 
-    logger.info("zk_proof_verification_start", { proofId, circuitName });
+    logger.info('zk_proof_verification_start', { proofId, circuitName });
 
     const circuit = CIRCUIT_REGISTRY[circuitName];
     if (!circuit) {
-      throw new ZKProofError(
-        `Unknown circuit: ${circuitName}`,
-        "ZK_UNKNOWN_CIRCUIT",
-      );
+      throw new ZKProofError(`Unknown circuit: ${circuitName}`, 'ZK_UNKNOWN_CIRCUIT');
     }
 
     try {
       const snarkjs = await this.getSnarkJS();
 
       // Load verification key
-      const vkeyContent = fs.readFileSync(circuit.vkeyPath, "utf-8");
+      const vkeyContent = fs.readFileSync(circuit.vkeyPath, 'utf-8');
       const vkey = JSON.parse(vkeyContent);
 
       // Verify the proof
@@ -326,14 +253,10 @@ export class ZKProofService {
         verifiedAt: new Date(),
       };
 
-      logger.info("zk_proof_verification_complete", {
-        proofId,
-        circuitName,
-        valid,
-      });
+      logger.info('zk_proof_verification_complete', { proofId, circuitName, valid });
       return result;
     } catch (err) {
-      logger.error("zk_proof_verification_failed", {
+      logger.error('zk_proof_verification_failed', {
         proofId,
         circuitName,
         error: (err as Error).message,
@@ -341,7 +264,7 @@ export class ZKProofService {
 
       throw new ZKProofError(
         `Proof verification failed: ${(err as Error).message}`,
-        "ZK_VERIFICATION_FAILED",
+        'ZK_VERIFICATION_FAILED',
       );
     }
   }
@@ -357,11 +280,7 @@ export class ZKProofService {
   // -------------------------------------------------------------------------
   // List available circuits
   // -------------------------------------------------------------------------
-  listCircuits(): Array<{
-    name: string;
-    description: string;
-    maxInputs: number;
-  }> {
+  listCircuits(): Array<{ name: string; description: string; maxInputs: number }> {
     return Object.entries(CIRCUIT_REGISTRY).map(([name, config]) => ({
       name,
       description: config.description,
@@ -386,7 +305,7 @@ export class ZKProofService {
         disclosureMask |= BigInt(1) << BigInt(i);
       }
     }
-    inputs["disclosureMask"] = disclosureMask;
+    inputs['disclosureMask'] = disclosureMask;
 
     // Hash each claim value as a field element
     for (let i = 0; i < allFields.length; i++) {
@@ -395,7 +314,7 @@ export class ZKProofService {
       inputs[`claim_${i}`] = this.valueToFieldElement(value);
     }
 
-    inputs["numFields"] = allFields.length;
+    inputs['numFields'] = allFields.length;
     return inputs;
   }
 
@@ -403,16 +322,12 @@ export class ZKProofService {
   // Internal helpers
   // -------------------------------------------------------------------------
   private verifyCircuitFiles(circuit: CircuitConfig): void {
-    const requiredFiles = [
-      circuit.wasmPath,
-      circuit.zkeyPath,
-      circuit.vkeyPath,
-    ];
+    const requiredFiles = [circuit.wasmPath, circuit.zkeyPath, circuit.vkeyPath];
     for (const filePath of requiredFiles) {
       if (!fs.existsSync(filePath)) {
         throw new ZKProofError(
           `Circuit file not found: ${path.basename(filePath)}`,
-          "ZK_CIRCUIT_FILE_MISSING",
+          'ZK_CIRCUIT_FILE_MISSING',
         );
       }
     }
@@ -423,23 +338,17 @@ export class ZKProofService {
   ): Record<string, string> {
     const sanitized: Record<string, string> = {};
     for (const [key, value] of Object.entries(inputs)) {
-      if (typeof value === "bigint") {
+      if (typeof value === 'bigint') {
         sanitized[key] = value.toString();
-      } else if (typeof value === "number") {
+      } else if (typeof value === 'number') {
         if (!Number.isFinite(value) || !Number.isSafeInteger(value)) {
-          throw new ZKProofError(
-            `Invalid input value for ${key}`,
-            "ZK_INVALID_INPUT",
-          );
+          throw new ZKProofError(`Invalid input value for ${key}`, 'ZK_INVALID_INPUT');
         }
         sanitized[key] = String(value);
       } else {
         // Validate it looks like a numeric string or hex
         if (!/^(0x)?[0-9a-fA-F]+$/.test(value) && !/^\d+$/.test(value)) {
-          throw new ZKProofError(
-            `Invalid input format for ${key}`,
-            "ZK_INVALID_INPUT",
-          );
+          throw new ZKProofError(`Invalid input format for ${key}`, 'ZK_INVALID_INPUT');
         }
         sanitized[key] = value;
       }
@@ -448,19 +357,13 @@ export class ZKProofService {
   }
 
   private valueToFieldElement(value: unknown): bigint {
-    if (typeof value === "number") return BigInt(value);
-    if (typeof value === "bigint") return value;
-    if (typeof value === "string") {
-      const crypto = require("crypto");
-      const hash = crypto.createHash("sha256").update(value).digest("hex");
-      return (
-        BigInt("0x" + hash) %
-        BigInt(
-          "21888242871839275222246405745257275088548364400416034343698204186575808495617",
-        )
-      );
+    if (typeof value === 'number') return BigInt(value);
+    if (typeof value === 'bigint') return value;
+    if (typeof value === 'string') {
+      const hash = crypto.createHash('sha256').update(value).digest('hex');
+      return BigInt('0x' + hash) % BigInt('21888242871839275222246405745257275088548364400416034343698204186575808495617');
     }
-    if (typeof value === "boolean") return value ? BigInt(1) : BigInt(0);
+    if (typeof value === 'boolean') return value ? BigInt(1) : BigInt(0);
     return BigInt(0);
   }
 }
@@ -474,10 +377,11 @@ export class ZKProofError extends Error {
 
   constructor(message: string, code: string, statusCode = 400) {
     super(message);
-    this.name = "ZKProofError";
+    this.name = 'ZKProofError';
     this.code = code;
     this.statusCode = statusCode;
   }
 }
 
 export const zkProofService = new ZKProofService();
+import crypto from 'crypto';

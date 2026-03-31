@@ -47,10 +47,7 @@ contract StdAssertionsTest is StdAssertions {
         vm._expectCheatcodeRevert(
             bytes(
                 string.concat(
-                    "Call return data does not match: ",
-                    vm.toString(returnDataA),
-                    " != ",
-                    vm.toString(returnDataB)
+                    "Call return data does not match: ", vm.toString(returnDataA), " != ", vm.toString(returnDataB)
                 )
             )
         );
@@ -83,10 +80,7 @@ contract StdAssertionsTest is StdAssertions {
         vm._expectCheatcodeRevert(
             bytes(
                 string.concat(
-                    "Call revert data does not match: ",
-                    vm.toString(revertDataA),
-                    " != ",
-                    vm.toString(revertDataB)
+                    "Call revert data does not match: ", vm.toString(revertDataA), " != ", vm.toString(revertDataB)
                 )
             )
         );

@@ -1,4 +1,3 @@
-// @ts-nocheck
 "use client";
 
 import { useState, useCallback, useEffect } from "react";
@@ -73,6 +72,8 @@ export default function VerificationFlow({
 
   const { submitProof, isVerifying } = useVerification();
   const { generateProof, proofStatus } = useProof();
+  const disclosedAttributes = disclosureSelection?.disclosed ?? [];
+  const zkProvedAttributes = disclosureSelection?.zkProved ?? [];
 
   const currentStepIndex = FLOW_STEPS.indexOf(currentStep);
 
@@ -99,7 +100,7 @@ export default function VerificationFlow({
       const verificationResult = await submitProof({
         proof: generatedProof,
         requestId: request.id,
-        disclosedAttributes: disclosureSelection!.disclosed,
+        disclosedAttributes: disclosureSelection?.disclosed ?? [],
       });
       setResult(verificationResult);
       setCurrentStep("result");
@@ -270,24 +271,21 @@ export default function VerificationFlow({
                     Disclosed Attributes
                   </p>
                   <div className="space-y-1.5">
-                    {disclosureSelection?.disclosed.map(
-                      (attr: CredentialAttribute) => (
-                        <div
-                          key={attr.key}
-                          className="flex items-center gap-2 p-2 rounded-lg bg-[var(--surface-secondary)] text-sm"
-                        >
-                          <Eye className="w-3.5 h-3.5 text-status-verified" />
-                          <span className="text-[var(--text-secondary)]">
-                            {attr.key}:
-                          </span>
-                          <span className="font-mono text-[var(--text-primary)]">
-                            {attr.value}
-                          </span>
-                        </div>
-                      ),
-                    )}
-                    {(!disclosureSelection?.disclosed ||
-                      disclosureSelection.disclosed.length === 0) && (
+                    {disclosedAttributes.map((attr: CredentialAttribute) => (
+                      <div
+                        key={attr.key}
+                        className="flex items-center gap-2 p-2 rounded-lg bg-[var(--surface-secondary)] text-sm"
+                      >
+                        <Eye className="w-3.5 h-3.5 text-status-verified" />
+                        <span className="text-[var(--text-secondary)]">
+                          {attr.key}:
+                        </span>
+                        <span className="font-mono text-[var(--text-primary)]">
+                          {attr.value}
+                        </span>
+                      </div>
+                    ))}
+                    {disclosedAttributes.length === 0 && (
                       <p className="text-sm text-[var(--text-tertiary)]">
                         No attributes directly disclosed
                       </p>
@@ -301,22 +299,20 @@ export default function VerificationFlow({
                     ZK-Proved (Hidden)
                   </p>
                   <div className="space-y-1.5">
-                    {disclosureSelection?.zkProved.map(
-                      (attr: CredentialAttribute) => (
-                        <div
-                          key={attr.key}
-                          className="flex items-center gap-2 p-2 rounded-lg bg-[var(--surface-secondary)] text-sm"
-                        >
-                          <EyeOff className="w-3.5 h-3.5 text-brand-500" />
-                          <span className="text-[var(--text-secondary)]">
-                            {attr.key}:
-                          </span>
-                          <span className="font-mono text-[var(--text-tertiary)]">
-                            *****
-                          </span>
-                        </div>
-                      ),
-                    )}
+                    {zkProvedAttributes.map((attr: CredentialAttribute) => (
+                      <div
+                        key={attr.key}
+                        className="flex items-center gap-2 p-2 rounded-lg bg-[var(--surface-secondary)] text-sm"
+                      >
+                        <EyeOff className="w-3.5 h-3.5 text-brand-500" />
+                        <span className="text-[var(--text-secondary)]">
+                          {attr.key}:
+                        </span>
+                        <span className="font-mono text-[var(--text-tertiary)]">
+                          *****
+                        </span>
+                      </div>
+                    ))}
                   </div>
                 </div>
 

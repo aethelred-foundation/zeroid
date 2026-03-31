@@ -1,4 +1,3 @@
-// @ts-nocheck
 "use client";
 
 import { useState } from "react";
@@ -83,25 +82,30 @@ export default function ProposalCard({
     "for" | "against" | "abstain" | null
   >(null);
 
-  const status = statusConfig[proposal.status] ?? statusConfig.pending;
+  const proposalId = String(proposal.id);
+  const proposalStatus = proposal.status ?? "pending";
+  const votesFor = proposal.votesFor ?? Number(proposal.forVotes ?? 0n);
+  const votesAgainst =
+    proposal.votesAgainst ?? Number(proposal.againstVotes ?? 0n);
+  const votesAbstain =
+    proposal.votesAbstain ?? Number(proposal.abstainVotes ?? 0n);
+  const quorum =
+    proposal.quorum ?? Math.max(votesFor + votesAgainst + votesAbstain, 1);
+  const status = statusConfig[proposalStatus] ?? statusConfig.pending;
   const StatusIcon = status.icon;
 
-  const totalVotes =
-    proposal.votesFor + proposal.votesAgainst + proposal.votesAbstain;
-  const forPercentage =
-    totalVotes > 0 ? (proposal.votesFor / totalVotes) * 100 : 0;
+  const totalVotes = votesFor + votesAgainst + votesAbstain;
+  const forPercentage = totalVotes > 0 ? (votesFor / totalVotes) * 100 : 0;
   const againstPercentage =
-    totalVotes > 0 ? (proposal.votesAgainst / totalVotes) * 100 : 0;
+    totalVotes > 0 ? (votesAgainst / totalVotes) * 100 : 0;
   const abstainPercentage =
-    totalVotes > 0 ? (proposal.votesAbstain / totalVotes) * 100 : 0;
+    totalVotes > 0 ? (votesAbstain / totalVotes) * 100 : 0;
   const quorumPercentage =
-    proposal.quorum > 0
-      ? Math.min((totalVotes / proposal.quorum) * 100, 100)
-      : 0;
+    quorum > 0 ? Math.min((totalVotes / quorum) * 100, 100) : 0;
 
   const handleVote = (vote: "for" | "against" | "abstain") => {
     setHasVoted(vote);
-    onVote?.(proposal.id, vote);
+    onVote?.(proposalId, vote);
   };
 
   return (
@@ -117,7 +121,7 @@ export default function ProposalCard({
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 mb-1">
               <span className="text-xs font-mono text-[var(--text-tertiary)]">
-                #{proposal.id.slice(0, 8)}
+                #{proposalId.slice(0, 8)}
               </span>
               <span
                 className={`badge ${status.bgColor} ${status.color} border-0`}
@@ -215,7 +219,7 @@ export default function ProposalCard({
         )}
 
         {/* Vote buttons */}
-        {proposal.status === "active" && !hasVoted && (
+        {proposalStatus === "active" && !hasVoted && (
           <div className="flex items-center gap-2">
             <button
               onClick={() => handleVote("for")}
@@ -256,7 +260,7 @@ export default function ProposalCard({
         {/* View details */}
         {onViewDetails && (
           <button
-            onClick={() => onViewDetails(proposal.id)}
+            onClick={() => onViewDetails(proposalId)}
             className="btn-ghost w-full mt-3 text-sm"
           >
             View Details

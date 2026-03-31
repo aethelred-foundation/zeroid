@@ -93,11 +93,11 @@ library stdToml {
         return keyExists(toml, key) ? readUint(toml, key) : defaultValue;
     }
 
-    function readUintArrayOr(
-        string memory toml,
-        string memory key,
-        uint256[] memory defaultValue
-    ) internal view returns (uint256[] memory) {
+    function readUintArrayOr(string memory toml, string memory key, uint256[] memory defaultValue)
+        internal
+        view
+        returns (uint256[] memory)
+    {
         return keyExists(toml, key) ? readUintArray(toml, key) : defaultValue;
     }
 
@@ -105,59 +105,59 @@ library stdToml {
         return keyExists(toml, key) ? readInt(toml, key) : defaultValue;
     }
 
-    function readIntArrayOr(
-        string memory toml,
-        string memory key,
-        int256[] memory defaultValue
-    ) internal view returns (int256[] memory) {
+    function readIntArrayOr(string memory toml, string memory key, int256[] memory defaultValue)
+        internal
+        view
+        returns (int256[] memory)
+    {
         return keyExists(toml, key) ? readIntArray(toml, key) : defaultValue;
     }
 
-    function readBytes32Or(
-        string memory toml,
-        string memory key,
-        bytes32 defaultValue
-    ) internal view returns (bytes32) {
+    function readBytes32Or(string memory toml, string memory key, bytes32 defaultValue)
+        internal
+        view
+        returns (bytes32)
+    {
         return keyExists(toml, key) ? readBytes32(toml, key) : defaultValue;
     }
 
-    function readBytes32ArrayOr(
-        string memory toml,
-        string memory key,
-        bytes32[] memory defaultValue
-    ) internal view returns (bytes32[] memory) {
+    function readBytes32ArrayOr(string memory toml, string memory key, bytes32[] memory defaultValue)
+        internal
+        view
+        returns (bytes32[] memory)
+    {
         return keyExists(toml, key) ? readBytes32Array(toml, key) : defaultValue;
     }
 
-    function readStringOr(
-        string memory toml,
-        string memory key,
-        string memory defaultValue
-    ) internal view returns (string memory) {
+    function readStringOr(string memory toml, string memory key, string memory defaultValue)
+        internal
+        view
+        returns (string memory)
+    {
         return keyExists(toml, key) ? readString(toml, key) : defaultValue;
     }
 
-    function readStringArrayOr(
-        string memory toml,
-        string memory key,
-        string[] memory defaultValue
-    ) internal view returns (string[] memory) {
+    function readStringArrayOr(string memory toml, string memory key, string[] memory defaultValue)
+        internal
+        view
+        returns (string[] memory)
+    {
         return keyExists(toml, key) ? readStringArray(toml, key) : defaultValue;
     }
 
-    function readAddressOr(
-        string memory toml,
-        string memory key,
-        address defaultValue
-    ) internal view returns (address) {
+    function readAddressOr(string memory toml, string memory key, address defaultValue)
+        internal
+        view
+        returns (address)
+    {
         return keyExists(toml, key) ? readAddress(toml, key) : defaultValue;
     }
 
-    function readAddressArrayOr(
-        string memory toml,
-        string memory key,
-        address[] memory defaultValue
-    ) internal view returns (address[] memory) {
+    function readAddressArrayOr(string memory toml, string memory key, address[] memory defaultValue)
+        internal
+        view
+        returns (address[] memory)
+    {
         return keyExists(toml, key) ? readAddressArray(toml, key) : defaultValue;
     }
 
@@ -165,27 +165,27 @@ library stdToml {
         return keyExists(toml, key) ? readBool(toml, key) : defaultValue;
     }
 
-    function readBoolArrayOr(
-        string memory toml,
-        string memory key,
-        bool[] memory defaultValue
-    ) internal view returns (bool[] memory) {
+    function readBoolArrayOr(string memory toml, string memory key, bool[] memory defaultValue)
+        internal
+        view
+        returns (bool[] memory)
+    {
         return keyExists(toml, key) ? readBoolArray(toml, key) : defaultValue;
     }
 
-    function readBytesOr(
-        string memory toml,
-        string memory key,
-        bytes memory defaultValue
-    ) internal view returns (bytes memory) {
+    function readBytesOr(string memory toml, string memory key, bytes memory defaultValue)
+        internal
+        view
+        returns (bytes memory)
+    {
         return keyExists(toml, key) ? readBytes(toml, key) : defaultValue;
     }
 
-    function readBytesArrayOr(
-        string memory toml,
-        string memory key,
-        bytes[] memory defaultValue
-    ) internal view returns (bytes[] memory) {
+    function readBytesArrayOr(string memory toml, string memory key, bytes[] memory defaultValue)
+        internal
+        view
+        returns (bytes[] memory)
+    {
         return keyExists(toml, key) ? readBytesArray(toml, key) : defaultValue;
     }
 
@@ -197,7 +197,10 @@ library stdToml {
         return vm.serializeBool(jsonKey, key, value);
     }
 
-    function serialize(string memory jsonKey, string memory key, bool[] memory value) internal returns (string memory) {
+    function serialize(string memory jsonKey, string memory key, bool[] memory value)
+        internal
+        returns (string memory)
+    {
         return vm.serializeBool(jsonKey, key, value);
     }
 
@@ -205,11 +208,10 @@ library stdToml {
         return vm.serializeUint(jsonKey, key, value);
     }
 
-    function serialize(
-        string memory jsonKey,
-        string memory key,
-        uint256[] memory value
-    ) internal returns (string memory) {
+    function serialize(string memory jsonKey, string memory key, uint256[] memory value)
+        internal
+        returns (string memory)
+    {
         return vm.serializeUint(jsonKey, key, value);
     }
 
@@ -217,11 +219,10 @@ library stdToml {
         return vm.serializeInt(jsonKey, key, value);
     }
 
-    function serialize(
-        string memory jsonKey,
-        string memory key,
-        int256[] memory value
-    ) internal returns (string memory) {
+    function serialize(string memory jsonKey, string memory key, int256[] memory value)
+        internal
+        returns (string memory)
+    {
         return vm.serializeInt(jsonKey, key, value);
     }
 
@@ -229,11 +230,10 @@ library stdToml {
         return vm.serializeAddress(jsonKey, key, value);
     }
 
-    function serialize(
-        string memory jsonKey,
-        string memory key,
-        address[] memory value
-    ) internal returns (string memory) {
+    function serialize(string memory jsonKey, string memory key, address[] memory value)
+        internal
+        returns (string memory)
+    {
         return vm.serializeAddress(jsonKey, key, value);
     }
 
@@ -241,11 +241,10 @@ library stdToml {
         return vm.serializeBytes32(jsonKey, key, value);
     }
 
-    function serialize(
-        string memory jsonKey,
-        string memory key,
-        bytes32[] memory value
-    ) internal returns (string memory) {
+    function serialize(string memory jsonKey, string memory key, bytes32[] memory value)
+        internal
+        returns (string memory)
+    {
         return vm.serializeBytes32(jsonKey, key, value);
     }
 
@@ -253,23 +252,24 @@ library stdToml {
         return vm.serializeBytes(jsonKey, key, value);
     }
 
-    function serialize(
-        string memory jsonKey,
-        string memory key,
-        bytes[] memory value
-    ) internal returns (string memory) {
+    function serialize(string memory jsonKey, string memory key, bytes[] memory value)
+        internal
+        returns (string memory)
+    {
         return vm.serializeBytes(jsonKey, key, value);
     }
 
-    function serialize(string memory jsonKey, string memory key, string memory value) internal returns (string memory) {
+    function serialize(string memory jsonKey, string memory key, string memory value)
+        internal
+        returns (string memory)
+    {
         return vm.serializeString(jsonKey, key, value);
     }
 
-    function serialize(
-        string memory jsonKey,
-        string memory key,
-        string[] memory value
-    ) internal returns (string memory) {
+    function serialize(string memory jsonKey, string memory key, string[] memory value)
+        internal
+        returns (string memory)
+    {
         return vm.serializeString(jsonKey, key, value);
     }
 

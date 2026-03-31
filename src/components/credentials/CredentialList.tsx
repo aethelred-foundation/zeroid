@@ -1,4 +1,3 @@
-// @ts-nocheck
 "use client";
 
 import { useState, useMemo } from "react";
@@ -17,16 +16,13 @@ import {
 } from "lucide-react";
 import CredentialCard from "./CredentialCard";
 import { useCredentials } from "@/hooks/useCredentials";
-import type {
-  Credential,
-  VerificationStatus,
-  CredentialSchemaType,
-} from "@/types";
+import type { Credential, CredentialSchemaType } from "@/types";
 
 type ViewMode = "grid" | "list";
+type CredentialFilterStatus = "verified" | "pending" | "revoked" | "expired";
 
 const STATUS_FILTERS: {
-  value: VerificationStatus | "all";
+  value: CredentialFilterStatus | "all";
   label: string;
   icon: typeof ShieldCheck;
 }[] = [
@@ -51,9 +47,9 @@ export default function CredentialList() {
   const { credentials, isLoading, error, revokeCredential, verifyCredential } =
     useCredentials();
   const [searchQuery, setSearchQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState<VerificationStatus | "all">(
-    "all",
-  );
+  const [statusFilter, setStatusFilter] = useState<
+    CredentialFilterStatus | "all"
+  >("all");
   const [schemaFilter, setSchemaFilter] = useState<
     CredentialSchemaType | "all"
   >("all");
@@ -68,10 +64,13 @@ export default function CredentialList() {
         return false;
       if (searchQuery) {
         const q = searchQuery.toLowerCase();
+        const name = cred.name ?? cred.schemaName ?? "";
+        const issuer = cred.issuer ?? cred.issuerDid?.uri ?? "";
+        const schemaType = cred.schemaType ?? "";
         return (
-          cred.name.toLowerCase().includes(q) ||
-          cred.issuer.toLowerCase().includes(q) ||
-          cred.schemaType.toLowerCase().includes(q)
+          name.toLowerCase().includes(q) ||
+          issuer.toLowerCase().includes(q) ||
+          schemaType.toLowerCase().includes(q)
         );
       }
       return true;

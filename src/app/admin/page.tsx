@@ -1,4 +1,3 @@
-// @ts-nocheck
 "use client";
 
 import { useState } from "react";
@@ -347,7 +346,7 @@ const categoryColors: Record<string, string> = {
   security: "text-red-400",
   webhooks: "text-identity-chrome",
   team: "text-blue-400",
-  audit: "text-identity-steel",
+  audit: "text-zero-400",
 };
 
 // ============================================================

@@ -1,4 +1,5 @@
 /// Registry types for TEE node management.
+
 use crate::attestation::report::Platform;
 
 /// Status of a TEE node in the registry.

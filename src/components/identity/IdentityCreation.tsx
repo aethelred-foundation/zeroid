@@ -1,4 +1,3 @@
-// @ts-nocheck
 "use client";
 
 import { useState, useCallback } from "react";
@@ -319,7 +318,7 @@ export default function IdentityCreation() {
                 Your biometric data is processed inside a Trusted Execution
                 Environment and never stored raw.
               </p>
-              {scanStatus === "complete" ? (
+              {scanStatus === "success" || scanStatus === "complete" ? (
                 <div className="flex items-center justify-center gap-2 text-status-verified">
                   <CheckCircle2 className="w-5 h-5" />
                   <span className="text-sm font-medium">Scan Complete</span>

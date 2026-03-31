@@ -28,7 +28,7 @@ export function useAttestationStatus(enclaveId: string | undefined) {
     address: TEE_REGISTRY_ADDRESS as Address,
     abi: TEE_REGISTRY_ABI,
     functionName: "attestationStatus",
-    args: enclaveId ? [enclaveId] : undefined,
+    args: enclaveId ? [enclaveId as `0x${string}`] : undefined,
     query: { enabled: !!enclaveId, refetchInterval: 60_000 },
   });
 
