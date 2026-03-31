@@ -3,8 +3,8 @@
   <h1>ZeroID</h1>
   <p><strong>Self-sovereign identity. Zero-knowledge proofs. TEE-verified credentials.</strong></p>
   <p>
-    <a href="https://github.com/aethelred-foundation/zeroid/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/aethelred-foundation/zeroid/ci.yml?branch=main&style=flat-square&label=CI" alt="CI"></a>
-    <a href="https://codecov.io/gh/aethelred-foundation/zeroid"><img src="https://img.shields.io/codecov/c/github/aethelred-foundation/zeroid?style=flat-square&label=coverage" alt="Coverage"></a>
+    <a href="https://github.com/aethelred-foundation/zeroid/actions/workflows/ci.yml"><img src="https://github.com/aethelred-foundation/zeroid/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
+    <a href="#overview"><img src="https://img.shields.io/badge/status-pre--mainnet-f59e0b?style=flat-square" alt="Status"></a>
     <a href="SECURITY.md"><img src="https://img.shields.io/badge/audit-ZK_circuit_%2B_contract_review-informational?style=flat-square" alt="Audit"></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square" alt="License"></a>
   </p>
