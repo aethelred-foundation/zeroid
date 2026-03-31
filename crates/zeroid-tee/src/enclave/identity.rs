@@ -2,7 +2,6 @@
 ///
 /// Models MRENCLAVE (code identity) and MRSIGNER (signer identity) used by
 /// Intel SGX and analogous concepts on other TEE platforms.
-
 use crate::crypto::hash::{keccak256, sha256};
 
 /// Identity of an enclave, analogous to SGX MRENCLAVE + MRSIGNER.

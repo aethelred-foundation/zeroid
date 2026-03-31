@@ -3,7 +3,6 @@
 /// The [`EnclaveContext`] manages the lifecycle of a TEE session: initialising
 /// the enclave, sealing/unsealing data, and executing credential operations
 /// within the trusted boundary.
-
 use crate::attestation::report::{AttestationReport, Platform};
 use crate::crypto::hash::keccak256;
 use crate::enclave::identity::EnclaveIdentity;
@@ -275,18 +274,14 @@ mod tests {
     #[test]
     fn generate_report_when_not_ready_fails() {
         let mut ctx = test_ctx();
-        assert!(ctx
-            .generate_report(b"p", [0; 20], 0, 100)
-            .is_err());
+        assert!(ctx.generate_report(b"p", [0; 20], 0, 100).is_err());
     }
 
     #[test]
     fn execute_closure() {
         let mut ctx = test_ctx();
         ctx.initialise().unwrap();
-        let result = ctx
-            .execute(|id| Ok(id.mr_enclave))
-            .unwrap();
+        let result = ctx.execute(|id| Ok(id.mr_enclave)).unwrap();
         assert_eq!(result, [0xAA; 32]);
     }
 

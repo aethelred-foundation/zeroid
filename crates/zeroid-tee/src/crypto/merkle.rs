@@ -2,7 +2,6 @@
 ///
 /// Leaves are hashed with a `0x00` prefix and internal nodes with a `0x01`
 /// prefix to prevent second-preimage attacks.
-
 use crate::crypto::hash::keccak256;
 use crate::error::{Result, ZeroIdTeeError};
 
@@ -110,11 +109,7 @@ pub fn generate_proof(layers: &[Vec<[u8; 32]>], index: usize) -> Result<MerklePr
 }
 
 /// Verify that `leaf_data` is in the tree with the given `root`.
-pub fn verify_proof(
-    root: &[u8; 32],
-    leaf_data: &[u8],
-    proof: &MerkleProof,
-) -> Result<bool> {
+pub fn verify_proof(root: &[u8; 32], leaf_data: &[u8], proof: &MerkleProof) -> Result<bool> {
     if proof.siblings.len() != proof.path_indices.len() {
         return Err(ZeroIdTeeError::InvalidMerkleProof(
             "siblings and path_indices length mismatch".into(),
