@@ -63,7 +63,10 @@ jobs:
         with:
           files: ./coverage/lcov.info
           flags: frontend
-        continue-on-error: true
+          fail_ci_if_error: false
+          disable_search: true
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
   # ===========================================================================
   # BACKEND TESTS
