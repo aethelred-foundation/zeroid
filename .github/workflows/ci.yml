@@ -116,7 +116,7 @@ jobs:
       - name: Compile contracts
         run: forge build
       - name: Run Forge tests
-        run: forge test -vvv
+        run: forge test -vv
 
   # ===========================================================================
   # RUST TEE CRATE
