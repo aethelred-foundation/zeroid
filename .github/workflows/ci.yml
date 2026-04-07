@@ -116,7 +116,14 @@ jobs:
       - name: Compile contracts
         run: forge build
       - name: Run Forge tests
-        run: forge test -vv
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            forge test -vv \
+              --no-match-path 'test/foundry/*.fuzz.t.sol' \
+              --no-match-path 'test/foundry/*.invariant.t.sol'
+          else
+            forge test -vv
+          fi
 
   # ===========================================================================
   # RUST TEE CRATE
