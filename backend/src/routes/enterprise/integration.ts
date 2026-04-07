@@ -6,6 +6,7 @@ import { apiGateway, CreateAPIKeySchema } from '../../services/enterprise/api-ga
 import { oidcBridge, OIDCClientRegistrationSchema } from '../../services/enterprise/oidc-bridge';
 import { slaMonitor, SLADefinitionSchema } from '../../services/enterprise/sla-monitor';
 import { AuthenticatedRequest } from '../../middleware/auth';
+import { createRateLimiter } from '../../middleware/rateLimit';
 
 // ---------------------------------------------------------------------------
 // Logger
@@ -18,6 +19,12 @@ const logger = createLogger({
 });
 
 const router = Router();
+const enterpriseRouteLimiter = createRateLimiter({
+  windowMs: 60_000,
+  maxRequests: 30,
+  keyPrefix: 'rl:enterprise:router',
+});
+router.use(enterpriseRouteLimiter);
 
 // ---------------------------------------------------------------------------
 // Public OIDC router — MUST NOT sit behind authMiddleware.
@@ -28,6 +35,12 @@ const router = Router();
 // via client_secret / PKCE, not a user JWT).
 // ---------------------------------------------------------------------------
 export const oidcPublicRouter = Router();
+const oidcPublicRouteLimiter = createRateLimiter({
+  windowMs: 60_000,
+  maxRequests: 60,
+  keyPrefix: 'rl:oidc:router',
+});
+oidcPublicRouter.use(oidcPublicRouteLimiter);
 
 // ---------------------------------------------------------------------------
 // Middleware: strip spoofable identity headers at the enterprise edge

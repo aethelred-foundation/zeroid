@@ -3,11 +3,12 @@ import { identityService } from '../services/identity';
 import { governmentAPIService } from '../services/government-api';
 import { authMiddleware, AuthenticatedRequest, optionalAuthMiddleware } from '../middleware/auth';
 import { validate, registerIdentitySchema, didSchema } from '../middleware/validation';
-import { authRateLimiter } from '../middleware/rateLimit';
+import { apiRateLimiter, authRateLimiter } from '../middleware/rateLimit';
 import { logger } from '../index';
 import { z } from 'zod';
 
 const router = Router();
+router.use(apiRateLimiter);
 
 // ---------------------------------------------------------------------------
 // POST /api/v1/identity/register — Register a new identity

@@ -2,11 +2,12 @@ import { Router, Response } from 'express';
 import { credentialService } from '../services/credential';
 import { AuthenticatedRequest } from '../middleware/auth';
 import { validate, issueCredentialSchema, uuidSchema, paginationSchema, credentialTypeSchema } from '../middleware/validation';
-import { credentialIssuanceLimiter } from '../middleware/rateLimit';
+import { apiRateLimiter, credentialIssuanceLimiter } from '../middleware/rateLimit';
 import { logger } from '../index';
 import { z } from 'zod';
 
 const router = Router();
+router.use(apiRateLimiter);
 
 // ---------------------------------------------------------------------------
 // POST /api/v1/credentials — Issue a new credential

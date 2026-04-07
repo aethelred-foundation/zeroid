@@ -1,10 +1,12 @@
 import { Router, Response } from 'express';
 import { AuthenticatedRequest } from '../middleware/auth';
+import { apiRateLimiter } from '../middleware/rateLimit';
 import { validate, auditQuerySchema, uuidSchema } from '../middleware/validation';
 import { prisma, logger } from '../index';
 import { z } from 'zod';
 
 const router = Router();
+router.use(apiRateLimiter);
 
 // ---------------------------------------------------------------------------
 // GET /api/v1/audit — Query audit logs

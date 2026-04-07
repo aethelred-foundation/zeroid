@@ -1063,10 +1063,19 @@ export class TEEAttestationService {
   // -------------------------------------------------------------------------
   private parsePemChain(pemChain: string): string[] {
     const certs: string[] = [];
-    const regex = /-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g;
-    let match: RegExpExecArray | null;
-    while ((match = regex.exec(pemChain)) !== null) {
-      certs.push(match[0]);
+    const beginMarker = '-----BEGIN CERTIFICATE-----';
+    const endMarker = '-----END CERTIFICATE-----';
+    let cursor = 0;
+
+    while (cursor < pemChain.length) {
+      const begin = pemChain.indexOf(beginMarker, cursor);
+      if (begin === -1) break;
+
+      const end = pemChain.indexOf(endMarker, begin);
+      if (end === -1) break;
+
+      certs.push(pemChain.slice(begin, end + endMarker.length));
+      cursor = end + endMarker.length;
     }
     return certs;
   }

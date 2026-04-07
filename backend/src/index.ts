@@ -101,6 +101,24 @@ export const verificationCounter = new Counter({
 // ---------------------------------------------------------------------------
 const app = express();
 
+const publicHealthLimiter = createRateLimiter({
+  windowMs: 60_000,
+  maxRequests: 60,
+  keyPrefix: 'rl:health',
+});
+
+const metricsLimiter = createRateLimiter({
+  windowMs: 60_000,
+  maxRequests: 20,
+  keyPrefix: 'rl:metrics',
+});
+
+const apiRouteLimiter = createRateLimiter({
+  windowMs: 60_000,
+  maxRequests: 120,
+  keyPrefix: 'rl:api-route',
+});
+
 // Security headers
 app.use(helmet({
   contentSecurityPolicy: {
@@ -180,11 +198,11 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 // ---------------------------------------------------------------------------
 // Health & readiness
 // ---------------------------------------------------------------------------
-app.get('/health', (_req: Request, res: Response) => {
+app.get('/health', publicHealthLimiter, (_req: Request, res: Response) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString(), service: 'zeroid-api' });
 });
 
-app.get('/ready', async (_req: Request, res: Response) => {
+app.get('/ready', publicHealthLimiter, async (_req: Request, res: Response) => {
   const checks: Record<string, string> = {};
   try {
     await prisma.$queryRaw`SELECT 1`;
@@ -209,7 +227,7 @@ app.get('/ready', async (_req: Request, res: Response) => {
 });
 
 // Metrics endpoint (unauthenticated — bind to internal port in production)
-app.get('/metrics', async (_req: Request, res: Response) => {
+app.get('/metrics', metricsLimiter, async (_req: Request, res: Response) => {
   res.set('Content-Type', metricsRegistry.contentType);
   res.end(await metricsRegistry.metrics());
 });
@@ -227,11 +245,11 @@ app.use('/api', globalLimiter);
 // ---------------------------------------------------------------------------
 // API routes
 // ---------------------------------------------------------------------------
-app.use('/api/v1/identity', identityRoutes);
-app.use('/api/v1/credentials', authMiddleware, credentialRoutes);
-app.use('/api/v1/verification', authMiddleware, verificationRoutes);
-app.use('/api/v1/governance', authMiddleware, governanceRoutes);
-app.use('/api/v1/audit', authMiddleware, auditRoutes);
+app.use('/api/v1/identity', apiRouteLimiter, identityRoutes);
+app.use('/api/v1/credentials', apiRouteLimiter, authMiddleware, credentialRoutes);
+app.use('/api/v1/verification', apiRouteLimiter, authMiddleware, verificationRoutes);
+app.use('/api/v1/governance', apiRouteLimiter, authMiddleware, governanceRoutes);
+app.use('/api/v1/audit', apiRouteLimiter, authMiddleware, auditRoutes);
 
 // Enterprise routes — mounted behind auth + stricter rate limit
 const enterpriseLimiter = createRateLimiter({
@@ -251,8 +269,8 @@ const oidcPublicLimiter = createRateLimiter({
 app.use('/api/v1/enterprise', oidcPublicLimiter, oidcPublicRouter);
 
 // Auth-gated enterprise routes (registration, authorize, userinfo, webhooks, etc.)
-app.use('/api/v1/enterprise', authMiddleware, enterpriseLimiter, enterpriseIntegrationRoutes);
-app.use('/api/v1/enterprise/compliance', authMiddleware, enterpriseLimiter, enterpriseComplianceRoutes);
+app.use('/api/v1/enterprise', enterpriseLimiter, authMiddleware, enterpriseIntegrationRoutes);
+app.use('/api/v1/enterprise/compliance', enterpriseLimiter, authMiddleware, enterpriseComplianceRoutes);
 
 // ---------------------------------------------------------------------------
 // 404 handler

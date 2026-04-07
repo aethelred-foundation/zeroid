@@ -36,6 +36,7 @@ function computeClaimsHash(claims: Record<string, unknown>): string {
 }
 
 const router = Router();
+router.use(verificationLimiter);
 
 // ---------------------------------------------------------------------------
 // POST /api/v1/verification/zk-proof — Generate a ZK proof for a credential
