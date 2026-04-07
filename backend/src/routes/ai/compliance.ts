@@ -2,6 +2,7 @@ import { Router, Response } from 'express';
 import { z } from 'zod';
 import { logger } from '../../index';
 import { AuthenticatedRequest, authMiddleware } from '../../middleware/auth';
+import { apiRateLimiter } from '../../middleware/rateLimit';
 import { validate } from '../../middleware/validation';
 import {
   complianceCopilotService,
@@ -76,6 +77,7 @@ const router = Router();
 
 // All AI compliance routes require authentication
 router.use(authMiddleware);
+router.use(apiRateLimiter);
 
 // ---------------------------------------------------------------------------
 // POST /ai/compliance/screen

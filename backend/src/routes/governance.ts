@@ -6,6 +6,7 @@ import { prisma, logger } from '../index';
 import { z } from 'zod';
 
 const router = Router();
+router.use(governanceLimiter);
 
 // ---------------------------------------------------------------------------
 // POST /api/v1/governance/schemas — Propose a new credential schema

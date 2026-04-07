@@ -12,6 +12,11 @@ const logger = createLogger({
   transports: [new transports.Console()],
 });
 
+function maskClientId(clientId: string): string {
+  if (clientId.length <= 8) return clientId;
+  return `${clientId.slice(0, 4)}...${clientId.slice(-4)}`;
+}
+
 // ---------------------------------------------------------------------------
 // Zod Schemas
 // ---------------------------------------------------------------------------
@@ -185,7 +190,13 @@ export class APIGateway {
     this.keyHashIndex.set(keyHash, id);
     this.quotaTrackers.set(id, { apiKeyId: id, dailyUsage: new Map(), monthlyUsage: new Map() });
 
-    logger.info('api_key_created', { apiKeyId: id, clientId, name: parsed.name, environment: parsed.environment, scopes: parsed.scopes });
+    logger.info('api_key_created', {
+      apiKeyId: id,
+      clientRef: maskClientId(clientId),
+      name: parsed.name,
+      environment: parsed.environment,
+      scopes: parsed.scopes,
+    });
 
     return { apiKey: rawKey, apiKeyId: id, expiresAt };
   }
@@ -200,7 +211,7 @@ export class APIGateway {
     key.revokedAt = new Date().toISOString();
     key.revokedReason = reason;
 
-    logger.info('api_key_revoked', { apiKeyId, clientId, reason });
+    logger.info('api_key_revoked', { apiKeyId, clientRef: maskClientId(clientId), reason });
   }
 
   listAPIKeys(clientId: string): Array<Omit<APIKey, 'keyHash'>> {

@@ -118,7 +118,9 @@ const DELIVERY_STATUS_CONFIG: Record<
 function generateSecret(): string {
   const chars =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-  return `whsec_${Array.from({ length: 32 }, () => chars[Math.floor(Math.random() * chars.length)]).join("")}`;
+  const bytes = new Uint8Array(32);
+  globalThis.crypto.getRandomValues(bytes);
+  return `whsec_${Array.from(bytes, (value) => chars[value % chars.length]).join("")}`;
 }
 
 const DEFAULT_WEBHOOKS: WebhookConfig[] = [
