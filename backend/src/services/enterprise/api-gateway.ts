@@ -191,7 +191,7 @@ export class APIGateway {
     this.quotaTrackers.set(id, { apiKeyId: id, dailyUsage: new Map(), monthlyUsage: new Map() });
 
     logger.info('api_key_created', {
-      apiKeyId: id,
+      apiKeyRef: maskClientId(id),
       clientRef: maskClientId(clientId),
       name: parsed.name,
       environment: parsed.environment,
@@ -211,7 +211,11 @@ export class APIGateway {
     key.revokedAt = new Date().toISOString();
     key.revokedReason = reason;
 
-    logger.info('api_key_revoked', { apiKeyId, clientRef: maskClientId(clientId), reason });
+    logger.info('api_key_revoked', {
+      apiKeyRef: maskClientId(apiKeyId),
+      clientRef: maskClientId(clientId),
+      reason,
+    });
   }
 
   listAPIKeys(clientId: string): Array<Omit<APIKey, 'keyHash'>> {

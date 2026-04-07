@@ -113,8 +113,8 @@ jobs:
       - run: npm ci --legacy-peer-deps
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
-      - name: Compile contracts (Hardhat)
-        run: npx hardhat compile
+      - name: Compile contracts
+        run: forge build
       - name: Run Forge tests
         run: forge test -vvv
 
