@@ -119,8 +119,7 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             forge test -vv \
-              --no-match-path 'test/foundry/*.fuzz.t.sol' \
-              --no-match-path 'test/foundry/*.invariant.t.sol'
+              --no-match-contract 'AccumulatorRevocation(Fuzz|Invariant)Test'
           else
             forge test -vv
           fi
