@@ -113,10 +113,16 @@ jobs:
       - run: npm ci --legacy-peer-deps
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
-      - name: Compile contracts (Hardhat)
-        run: npx hardhat compile
+      - name: Compile contracts
+        run: forge build
       - name: Run Forge tests
-        run: forge test -vvv
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            forge test -vv \
+              --no-match-contract 'AccumulatorRevocation(Fuzz|Invariant)Test'
+          else
+            forge test -vv
+          fi
 
   # ===========================================================================
   # RUST TEE CRATE
