@@ -2,6 +2,8 @@ const mockAuditLogCreate = jest.fn();
 const mockPolicyDecisionLedgerCreate = jest.fn();
 const mockPolicyDecisionLedgerFindUnique = jest.fn();
 const mockPolicyDecisionLedgerFindMany = jest.fn();
+const mockPolicyDefinitionFindFirst = jest.fn();
+const mockPolicyExceptionFindMany = jest.fn();
 
 const redisStore: Record<string, string> = {};
 
@@ -11,6 +13,12 @@ jest.mock('../src/index', () => ({
       create: mockPolicyDecisionLedgerCreate,
       findUnique: mockPolicyDecisionLedgerFindUnique,
       findMany: mockPolicyDecisionLedgerFindMany,
+    },
+    policyDefinition: {
+      findFirst: mockPolicyDefinitionFindFirst,
+    },
+    policyException: {
+      findMany: mockPolicyExceptionFindMany,
     },
     auditLog: {
       create: mockAuditLogCreate,
@@ -39,6 +47,8 @@ describe('PolicyDecisionReceiptService', () => {
     mockPolicyDecisionLedgerCreate.mockResolvedValue(undefined);
     mockPolicyDecisionLedgerFindUnique.mockResolvedValue(null);
     mockPolicyDecisionLedgerFindMany.mockResolvedValue([]);
+    mockPolicyDefinitionFindFirst.mockResolvedValue(null);
+    mockPolicyExceptionFindMany.mockResolvedValue([]);
   });
 
   afterAll(() => {
@@ -51,7 +61,15 @@ describe('PolicyDecisionReceiptService', () => {
       actorIdentityId: 'actor-1',
       receiptType: 'compliance_evaluation',
       policyName: 'jurisdiction_compliance',
+      policyDefinitionId: 'policy-7',
+      policyReference: 'zeroid://policy/compliance/jurisdiction_compliance@2026.04.1',
+      policyApprovedByIdentityId: 'admin-approver',
+      policyEffectiveFrom: '2026-04-01T00:00:00.000Z',
+      policyGovernanceProfileId: 'enterprise.compliance',
+      policyGovernanceProfileLabel: 'Enterprise / Compliance',
+      policyGovernanceRationale: ['Enterprise high-risk policies require dual-control approval.'],
       subjectEntityId: 'entity-1',
+      policyExceptionIds: ['exception-2', 'exception-1', 'exception-2'],
       jurisdictionCodes: ['AE-ADGM', 'EU-GDPR'],
       decisionSummary: 'AE-ADGM:compliant,EU-GDPR:partial',
       input: { entityId: 'entity-1', operationType: 'onboarding' },
@@ -75,9 +93,27 @@ describe('PolicyDecisionReceiptService', () => {
         organizationId: 'org-1',
         actorIdentityId: 'actor-1',
         receiptType: 'COMPLIANCE_EVALUATION',
-        policyReference: undefined,
+        policyDefinitionId: 'policy-7',
+        policyReference: 'zeroid://policy/compliance/jurisdiction_compliance@2026.04.1',
+        policyApprovedByIdentityId: 'admin-approver',
+        policyEffectiveFrom: new Date('2026-04-01T00:00:00.000Z'),
+        policyGovernanceProfileId: 'enterprise.compliance',
+        policyGovernanceProfileLabel: 'Enterprise / Compliance',
+        policyGovernanceRationale: ['Enterprise high-risk policies require dual-control approval.'],
+        policyExceptionIds: ['exception-1', 'exception-2'],
+        policyExceptionCount: 2,
       }),
     }));
+    expect(receipt.policyDefinitionId).toBe('policy-7');
+    expect(receipt.policyApprovedByIdentityId).toBe('admin-approver');
+    expect(receipt.policyEffectiveFrom).toBe('2026-04-01T00:00:00.000Z');
+    expect(receipt.policyGovernanceProfileId).toBe('enterprise.compliance');
+    expect(receipt.policyGovernanceProfileLabel).toBe('Enterprise / Compliance');
+    expect(receipt.policyGovernanceRationale).toEqual([
+      'Enterprise high-risk policies require dual-control approval.',
+    ]);
+    expect(receipt.policyExceptionIds).toEqual(['exception-1', 'exception-2']);
+    expect(receipt.policyExceptionCount).toBe(2);
 
     mockPolicyDecisionLedgerFindMany.mockResolvedValue([
       {
@@ -144,8 +180,16 @@ describe('PolicyDecisionReceiptService', () => {
       receiptType: 'REGULATORY_REPORT',
       policyName: 'regulatory_reporting',
       policyVersion: 'v1',
+      policyDefinitionId: 'policy-11',
       policyReference: 'zeroid://policy/reporting/regulatory_reporting@2026.04.1',
+      policyApprovedByIdentityId: 'auditor-2',
+      policyEffectiveFrom: new Date('2026-04-10T00:00:00.000Z'),
+      policyGovernanceProfileId: 'enterprise.reporting',
+      policyGovernanceProfileLabel: 'Enterprise / Reporting',
+      policyGovernanceRationale: ['Enterprise reporting policies require dual-control approval.'],
       subjectEntityId: 'entity-2',
+      policyExceptionIds: ['exception-7'],
+      policyExceptionCount: 1,
       jurisdictionCodes: ['AE-ADGM'],
       decisionSummary: 'report_generated:SAR',
       inputDigest: 'input-hash',
@@ -173,7 +217,15 @@ describe('PolicyDecisionReceiptService', () => {
     expect(loaded).toMatchObject({
       receiptId: 'pdr_ledger_1',
       receiptType: 'regulatory_report',
+      policyDefinitionId: 'policy-11',
       policyReference: 'zeroid://policy/reporting/regulatory_reporting@2026.04.1',
+      policyApprovedByIdentityId: 'auditor-2',
+      policyEffectiveFrom: '2026-04-10T00:00:00.000Z',
+      policyGovernanceProfileId: 'enterprise.reporting',
+      policyGovernanceProfileLabel: 'Enterprise / Reporting',
+      policyGovernanceRationale: ['Enterprise reporting policies require dual-control approval.'],
+      policyExceptionIds: ['exception-7'],
+      policyExceptionCount: 1,
       decisionSummary: 'report_generated:SAR',
     });
     expect(redisStore['policy:receipt:pdr_ledger_1']).toBeDefined();
@@ -197,14 +249,63 @@ describe('PolicyDecisionReceiptService', () => {
   });
 
   it('exports a verified receipt bundle', async () => {
+    mockPolicyDefinitionFindFirst.mockResolvedValue({
+      id: 'policy-9',
+      status: 'DEPRECATED',
+      name: 'privacy_impact_assessment',
+      version: '2026.04.1',
+      reference: 'zeroid://policy/privacy/privacy_impact_assessment@2026.04.1',
+      approvedByIdentityId: 'privacy-admin',
+      effectiveFrom: new Date('2026-04-15T00:00:00.000Z'),
+      governanceProfileId: 'enterprise.privacy',
+      governanceProfileLabel: 'Enterprise / Privacy',
+      governanceProfileRationale: ['Enterprise privacy policies require dual-control approval.'],
+      expiresAt: null,
+      deprecatedAt: new Date('2026-06-01T00:00:00.000Z'),
+      deprecatedByIdentityId: 'privacy-auditor',
+      deprecationReason: 'Superseded by 2026.05.0',
+      supersededByPolicyDefinitionId: 'policy-10',
+      revokedAt: null,
+      revokedByIdentityId: null,
+      revocationReason: null,
+    });
+    mockPolicyExceptionFindMany.mockResolvedValue([
+      {
+        id: 'exception-9',
+        status: 'REVOKED',
+        policyName: 'privacy_impact_assessment',
+        policyVersion: '2026.04.1',
+        policyReference: 'zeroid://policy/privacy/privacy_impact_assessment@2026.04.1',
+        governanceProfileId: 'enterprise.privacy',
+        governanceProfileLabel: 'Enterprise / Privacy',
+        governanceProfileRationale: ['Enterprise privacy policies require dual-control approval.'],
+        subjectEntityId: 'entity-7',
+        scope: 'SUBJECT',
+        approvedByIdentityId: 'privacy-admin',
+        effectiveFrom: new Date('2026-04-15T00:00:00.000Z'),
+        expiresAt: null,
+        revokedAt: new Date('2026-06-02T00:00:00.000Z'),
+        revokedByIdentityId: 'privacy-auditor',
+        revocationReason: 'Exception withdrawn after remediation',
+        createdAt: new Date('2026-04-15T00:00:00.000Z'),
+      },
+    ]);
+
     const receipt = await service.createReceipt({
       organizationId: 'org-1',
       actorIdentityId: 'actor-1',
       receiptType: 'privacy_impact_assessment',
       policyName: 'privacy_impact_assessment',
       policyVersion: '2026.04.1',
+      policyDefinitionId: 'policy-9',
       policyReference: 'zeroid://policy/privacy/privacy_impact_assessment@2026.04.1',
+      policyApprovedByIdentityId: 'privacy-admin',
+      policyEffectiveFrom: '2026-04-15T00:00:00.000Z',
+      policyGovernanceProfileId: 'enterprise.privacy',
+      policyGovernanceProfileLabel: 'Enterprise / Privacy',
+      policyGovernanceRationale: ['Enterprise privacy policies require dual-control approval.'],
       subjectEntityId: 'entity-7',
+      policyExceptionIds: ['exception-9'],
       jurisdictionCodes: ['EU-GDPR'],
       decisionSummary: 'pia_risk:medium',
       input: { entityId: 'entity-7' },
@@ -218,8 +319,29 @@ describe('PolicyDecisionReceiptService', () => {
       verified: true,
       receipt: expect.objectContaining({
         receiptId: receipt.receiptId,
+        policyDefinitionId: 'policy-9',
         policyReference: 'zeroid://policy/privacy/privacy_impact_assessment@2026.04.1',
+        policyApprovedByIdentityId: 'privacy-admin',
+        policyEffectiveFrom: '2026-04-15T00:00:00.000Z',
+        policyExceptionIds: ['exception-9'],
+        policyExceptionCount: 1,
       }),
+      lineage: {
+        policy: expect.objectContaining({
+          policyDefinitionId: 'policy-9',
+          status: 'deprecated',
+          supersededByPolicyDefinitionId: 'policy-10',
+          governanceProfileId: 'enterprise.privacy',
+          governanceProfileLabel: 'Enterprise / Privacy',
+        }),
+        exceptions: [
+          expect.objectContaining({
+            exceptionId: 'exception-9',
+            status: 'revoked',
+            revokedByIdentityId: 'privacy-auditor',
+          }),
+        ],
+      },
     });
   });
 });

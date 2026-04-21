@@ -275,6 +275,7 @@ enum PolicyReceiptType {
   REGULATORY_REPORT
   CROSS_BORDER_ASSESSMENT
   PRIVACY_IMPACT_ASSESSMENT
+  BREACH_NOTIFICATION
   SANCTIONS_SCREENING
 }
 
@@ -283,6 +284,7 @@ enum PolicyDefinitionStatus {
   PENDING_REVIEW
   APPROVED
   DEPRECATED
+  REVOKED
 }
 
 enum PolicyExceptionStatus {
@@ -637,8 +639,17 @@ model PolicyDecisionLedger {
   receiptType       PolicyReceiptType
   policyName        String
   policyVersion     String
+  policyDefinitionId String?
   policyReference   String?
+  policyApprovedByIdentityId String?
+  policyEffectiveFrom DateTime?
+  policyExpiresAt   DateTime?
+  policyGovernanceProfileId String?
+  policyGovernanceProfileLabel String?
+  policyGovernanceRationale String[] @default([])
   subjectEntityId   String?
+  policyExceptionIds String[]         @default([])
+  policyExceptionCount Int            @default(0)
   jurisdictionCodes String[]
   decisionSummary   String
   inputDigest       String
@@ -669,12 +680,28 @@ model PolicyDefinition {
   reference         String
   description       String
   status            PolicyDefinitionStatus @default(DRAFT)
+  approvalMode      String                 @default("single_admin")
+  requiredApprovals Int                    @default(1)
+  requiredApprovalRoles String[]           @default([])
+  requiredApprovalClasses String[]         @default([])
+  requiredApprovalJurisdictions String[]   @default([])
+  governanceProfileId String?
+  governanceProfileLabel String?
+  governanceProfileRationale String[]      @default([])
+  approvalTrail     Json?
   definition        Json
   changeSummary     String?
   proposedByIdentityId String
   approvedByIdentityId String?
   effectiveFrom     DateTime?
   expiresAt         DateTime?
+  deprecatedAt      DateTime?
+  deprecatedByIdentityId String?
+  deprecationReason String?
+  supersededByPolicyDefinitionId String?
+  revokedAt         DateTime?
+  revokedByIdentityId String?
+  revocationReason  String?
   createdAt         DateTime               @default(now())
   updatedAt         DateTime               @updatedAt
 
@@ -698,11 +725,23 @@ model PolicyException {
   scope               String
   justification       String
   conditions          Json?
+  approvalMode        String                @default("single_admin")
+  requiredApprovals   Int                   @default(1)
+  requiredApprovalRoles String[]            @default([])
+  requiredApprovalClasses String[]          @default([])
+  requiredApprovalJurisdictions String[]    @default([])
+  governanceProfileId String?
+  governanceProfileLabel String?
+  governanceProfileRationale String[]       @default([])
+  approvalTrail       Json?
   status              PolicyExceptionStatus @default(PENDING_REVIEW)
   requestedByIdentityId String
   approvedByIdentityId String?
   effectiveFrom       DateTime?
   expiresAt           DateTime?
+  revokedAt           DateTime?
+  revokedByIdentityId String?
+  revocationReason    String?
   metadata            Json?
   createdAt           DateTime              @default(now())
   updatedAt           DateTime              @updatedAt

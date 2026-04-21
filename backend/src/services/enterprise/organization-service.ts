@@ -11,6 +11,19 @@ export const ENTERPRISE_ROLES = [
 
 export type EnterpriseRole = typeof ENTERPRISE_ROLES[number];
 
+export const ENTERPRISE_APPROVAL_CLASSES = [
+  'admin',
+  'auditor',
+  'compliance',
+  'legal',
+  'operator',
+  'privacy',
+  'risk',
+  'sovereign_operator',
+] as const;
+
+export type EnterpriseApprovalClass = typeof ENTERPRISE_APPROVAL_CLASSES[number];
+
 export const CreateOrganizationSchema = z.object({
   name: z.string().min(1).max(200),
   domain: z.string().min(1).max(255).optional(),
@@ -39,7 +52,13 @@ export interface EnterpriseContext {
   jurisdictions: string[];
 }
 
+export interface EnterpriseApprovalAuthority extends EnterpriseContext {
+  approvalClasses: EnterpriseApprovalClass[];
+  approvalJurisdictions: string[];
+}
+
 const ALL_ENTERPRISE_ROLES = new Set<EnterpriseRole>(ENTERPRISE_ROLES);
+const ALL_ENTERPRISE_APPROVAL_CLASSES = new Set<EnterpriseApprovalClass>(ENTERPRISE_APPROVAL_CLASSES);
 
 export class EnterpriseOrganizationError extends Error {
   constructor(
@@ -312,6 +331,80 @@ export class EnterpriseOrganizationService {
       plan: membership.organization.plan,
       jurisdictions: membership.organization.jurisdictions,
     };
+  }
+
+  async requireEnterpriseContext(
+    identityId: string,
+    organizationId?: string,
+    requiredRoles: EnterpriseRole[] = ENTERPRISE_ROLES.slice(),
+  ): Promise<EnterpriseContext> {
+    return this.resolveContext(identityId, organizationId, requiredRoles);
+  }
+
+  async getApprovalAuthority(
+    identityId: string,
+    organizationId?: string,
+  ): Promise<EnterpriseApprovalAuthority> {
+    const context = await this.resolveContext(identityId, organizationId, ENTERPRISE_ROLES.slice());
+    return {
+      ...context,
+      approvalClasses: this.deriveApprovalClasses(context.role, context.permissions),
+      approvalJurisdictions: this.deriveApprovalJurisdictions(context.permissions, context.jurisdictions),
+    };
+  }
+
+  private deriveApprovalClasses(
+    role: EnterpriseRole,
+    permissions: string[],
+  ): EnterpriseApprovalClass[] {
+    const classes = new Set<EnterpriseApprovalClass>();
+
+    switch (role) {
+      case 'admin':
+        classes.add('admin');
+        break;
+      case 'auditor':
+        classes.add('auditor');
+        break;
+      case 'compliance_officer':
+        classes.add('compliance');
+        classes.add('risk');
+        break;
+      case 'operator':
+        classes.add('operator');
+        break;
+      default:
+        break;
+    }
+
+    for (const permission of permissions) {
+      if (!permission.startsWith('approval:class:')) {
+        continue;
+      }
+
+      const approvalClass = permission.slice('approval:class:'.length) as EnterpriseApprovalClass;
+      if (ALL_ENTERPRISE_APPROVAL_CLASSES.has(approvalClass)) {
+        classes.add(approvalClass);
+      }
+    }
+
+    return [...classes];
+  }
+
+  private deriveApprovalJurisdictions(
+    permissions: string[],
+    defaultJurisdictions: string[],
+  ): string[] {
+    const explicitJurisdictions = permissions
+      .filter((permission) => permission.startsWith('approval:jurisdiction:'))
+      .map((permission) => permission.slice('approval:jurisdiction:'.length))
+      .filter((jurisdiction) => jurisdiction.length > 0);
+
+    if (explicitJurisdictions.length > 0) {
+      return [...new Set(explicitJurisdictions)];
+    }
+
+    return [...new Set(defaultJurisdictions)];
   }
 }
 

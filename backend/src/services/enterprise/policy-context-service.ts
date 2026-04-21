@@ -1,10 +1,40 @@
 import { prisma } from '../../index';
+import type { EnterpriseApprovalClass, EnterpriseRole } from './organization-service';
 
 export interface PolicyDefinition {
+  id?: string;
   policyName: string;
   version: string;
   reference: string;
   family: 'compliance' | 'reporting' | 'privacy' | 'screening';
+  approvedByIdentityId?: string | null;
+  approvalMode?: string;
+  requiredApprovals?: number;
+  requiredApprovalRoles?: EnterpriseRole[];
+  requiredApprovalClasses?: EnterpriseApprovalClass[];
+  requiredApprovalJurisdictions?: string[];
+  governanceProfileId?: string;
+  governanceProfileLabel?: string;
+  governanceProfileRationale?: string[];
+  approvalTrail?: Array<{
+    identityId: string;
+    role: EnterpriseRole;
+    approvalClasses: EnterpriseApprovalClass[];
+    matchedApprovalClasses: EnterpriseApprovalClass[];
+    matchedApprovalJurisdictions: string[];
+    action: 'approve';
+    decidedAt: string;
+  }>;
+  effectiveFrom?: string;
+  expiresAt?: string;
+  lifecycleStatus?: string;
+  deprecatedAt?: string;
+  deprecatedByIdentityId?: string | null;
+  deprecationReason?: string | null;
+  supersededByPolicyDefinitionId?: string | null;
+  revokedAt?: string;
+  revokedByIdentityId?: string | null;
+  revocationReason?: string | null;
 }
 
 export interface CredentialTrustInput {
@@ -29,8 +59,41 @@ export interface PolicyTrustAnchorSnapshot {
 export interface PolicyExecutionContext {
   policyName: string;
   policyVersion: string;
+  policyDefinitionId?: string;
   policyReference: string;
   policyFamily: PolicyDefinition['family'];
+  policyApprovalContext?: {
+    approvedByIdentityId: string | null;
+    approvalMode?: string;
+    requiredApprovals?: number;
+    requiredApprovalRoles?: EnterpriseRole[];
+    requiredApprovalClasses?: EnterpriseApprovalClass[];
+    requiredApprovalJurisdictions?: string[];
+    governanceProfileId?: string;
+    governanceProfileLabel?: string;
+    governanceProfileRationale?: string[];
+    approvalTrail?: Array<{
+      identityId: string;
+      role: EnterpriseRole;
+      approvalClasses: EnterpriseApprovalClass[];
+      matchedApprovalClasses: EnterpriseApprovalClass[];
+      matchedApprovalJurisdictions: string[];
+      action: 'approve';
+      decidedAt: string;
+    }>;
+    effectiveFrom?: string;
+    expiresAt?: string;
+  };
+  policyLifecycleContext?: {
+    status: string;
+    deprecatedAt?: string;
+    deprecatedByIdentityId?: string | null;
+    deprecationReason?: string | null;
+    supersededByPolicyDefinitionId?: string | null;
+    revokedAt?: string;
+    revokedByIdentityId?: string | null;
+    revocationReason?: string | null;
+  };
   trustContext?: {
     organizationId: string;
     evaluatedIssuerCount: number;
@@ -119,6 +182,12 @@ const POLICY_DEFINITIONS: Record<string, PolicyDefinition> = {
     reference: 'zeroid://policy/privacy/privacy_impact_assessment@2026.04.1',
     family: 'privacy',
   },
+  data_breach_notification: {
+    policyName: 'data_breach_notification',
+    version: '2026.04.1',
+    reference: 'zeroid://policy/privacy/data_breach_notification@2026.04.1',
+    family: 'privacy',
+  },
 };
 
 export class PolicyContextService {
@@ -146,8 +215,37 @@ export class PolicyContextService {
     return {
       policyName: definition.policyName,
       policyVersion: definition.version,
+      policyDefinitionId: definition.id,
       policyReference: definition.reference,
       policyFamily: definition.family,
+      ...(definition.id ? {
+        policyApprovalContext: {
+          approvedByIdentityId: definition.approvedByIdentityId ?? null,
+          ...(definition.approvalMode ? { approvalMode: definition.approvalMode } : {}),
+          ...(definition.requiredApprovals ? { requiredApprovals: definition.requiredApprovals } : {}),
+          ...(definition.requiredApprovalRoles && definition.requiredApprovalRoles.length > 0 ? { requiredApprovalRoles: definition.requiredApprovalRoles } : {}),
+          ...(definition.requiredApprovalClasses && definition.requiredApprovalClasses.length > 0 ? { requiredApprovalClasses: definition.requiredApprovalClasses } : {}),
+          ...(definition.requiredApprovalJurisdictions && definition.requiredApprovalJurisdictions.length > 0 ? { requiredApprovalJurisdictions: definition.requiredApprovalJurisdictions } : {}),
+          ...(definition.governanceProfileId ? { governanceProfileId: definition.governanceProfileId } : {}),
+          ...(definition.governanceProfileLabel ? { governanceProfileLabel: definition.governanceProfileLabel } : {}),
+          ...(definition.governanceProfileRationale && definition.governanceProfileRationale.length > 0 ? { governanceProfileRationale: definition.governanceProfileRationale } : {}),
+          ...(definition.approvalTrail && definition.approvalTrail.length > 0 ? { approvalTrail: definition.approvalTrail } : {}),
+          ...(definition.effectiveFrom ? { effectiveFrom: definition.effectiveFrom } : {}),
+          ...(definition.expiresAt ? { expiresAt: definition.expiresAt } : {}),
+        },
+      } : {}),
+      ...(definition.id ? {
+        policyLifecycleContext: {
+          status: definition.lifecycleStatus ?? 'approved',
+          ...(definition.deprecatedAt ? { deprecatedAt: definition.deprecatedAt } : {}),
+          ...(definition.deprecatedByIdentityId !== undefined ? { deprecatedByIdentityId: definition.deprecatedByIdentityId ?? null } : {}),
+          ...(definition.deprecationReason !== undefined ? { deprecationReason: definition.deprecationReason ?? null } : {}),
+          ...(definition.supersededByPolicyDefinitionId !== undefined ? { supersededByPolicyDefinitionId: definition.supersededByPolicyDefinitionId ?? null } : {}),
+          ...(definition.revokedAt ? { revokedAt: definition.revokedAt } : {}),
+          ...(definition.revokedByIdentityId !== undefined ? { revokedByIdentityId: definition.revokedByIdentityId ?? null } : {}),
+          ...(definition.revocationReason !== undefined ? { revocationReason: definition.revocationReason ?? null } : {}),
+        },
+      } : {}),
       ...(trustContext ? { trustContext } : {}),
       ...(exceptionContext ? { exceptionContext } : {}),
     };
@@ -186,10 +284,31 @@ export class PolicyContextService {
 
       if (record) {
         return {
+          id: record.id,
           policyName: record.name,
           version: record.version,
           reference: record.reference,
           family: this.toPolicyFamily(record.family),
+          approvedByIdentityId: record.approvedByIdentityId ?? null,
+          approvalMode: String(record.approvalMode ?? 'single_admin').toLowerCase(),
+          requiredApprovals: typeof record.requiredApprovals === 'number' ? record.requiredApprovals : undefined,
+          requiredApprovalRoles: this.normalizeRequiredApprovalRoles(record.requiredApprovalRoles),
+          requiredApprovalClasses: this.normalizeRequiredApprovalClasses(record.requiredApprovalClasses),
+          requiredApprovalJurisdictions: this.normalizeRequiredApprovalJurisdictions(record.requiredApprovalJurisdictions),
+          governanceProfileId: record.governanceProfileId ?? undefined,
+          governanceProfileLabel: record.governanceProfileLabel ?? undefined,
+          governanceProfileRationale: this.normalizeGovernanceRationale(record.governanceProfileRationale),
+          approvalTrail: this.normalizeApprovalTrail(record.approvalTrail),
+          effectiveFrom: record.effectiveFrom ? new Date(record.effectiveFrom).toISOString() : undefined,
+          expiresAt: record.expiresAt ? new Date(record.expiresAt).toISOString() : undefined,
+          lifecycleStatus: String(record.status ?? 'APPROVED').toLowerCase(),
+          deprecatedAt: record.deprecatedAt ? new Date(record.deprecatedAt).toISOString() : undefined,
+          deprecatedByIdentityId: record.deprecatedByIdentityId ?? undefined,
+          deprecationReason: record.deprecationReason ?? undefined,
+          supersededByPolicyDefinitionId: record.supersededByPolicyDefinitionId ?? undefined,
+          revokedAt: record.revokedAt ? new Date(record.revokedAt).toISOString() : undefined,
+          revokedByIdentityId: record.revokedByIdentityId ?? undefined,
+          revocationReason: record.revocationReason ?? undefined,
         };
       }
     }
@@ -200,6 +319,67 @@ export class PolicyContextService {
       reference: `zeroid://policy/custom/${policyName}@2026.04.1`,
       family: 'compliance',
     };
+  }
+
+  private normalizeRequiredApprovalRoles(value: unknown): EnterpriseRole[] {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    return value
+      .map((entry) => String(entry))
+      .filter((entry): entry is EnterpriseRole => ['viewer', 'operator', 'admin', 'compliance_officer', 'auditor'].includes(entry));
+  }
+
+  private normalizeRequiredApprovalClasses(value: unknown): EnterpriseApprovalClass[] {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    return value
+      .map((entry) => String(entry))
+      .filter((entry): entry is EnterpriseApprovalClass =>
+        ['admin', 'auditor', 'compliance', 'legal', 'operator', 'privacy', 'risk', 'sovereign_operator'].includes(entry),
+      );
+  }
+
+  private normalizeRequiredApprovalJurisdictions(value: unknown): string[] {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    return value
+      .map((entry) => String(entry))
+      .filter((entry) => entry.length > 0);
+  }
+
+  private normalizeApprovalTrail(value: unknown): Array<{
+    identityId: string;
+    role: EnterpriseRole;
+    approvalClasses: EnterpriseApprovalClass[];
+    matchedApprovalClasses: EnterpriseApprovalClass[];
+    matchedApprovalJurisdictions: string[];
+    action: 'approve';
+    decidedAt: string;
+  }> {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    return value
+      .filter((entry) => entry && typeof entry === 'object')
+      .map((entry: any) => ({
+        identityId: String(entry.identityId),
+        role: ['viewer', 'operator', 'admin', 'compliance_officer', 'auditor'].includes(String(entry.role))
+          ? String(entry.role) as EnterpriseRole
+          : 'admin',
+        approvalClasses: this.normalizeRequiredApprovalClasses(entry.approvalClasses),
+        matchedApprovalClasses: this.normalizeRequiredApprovalClasses(entry.matchedApprovalClasses),
+        matchedApprovalJurisdictions: this.normalizeRequiredApprovalJurisdictions(entry.matchedApprovalJurisdictions),
+        action: 'approve' as const,
+        decidedAt: String(entry.decidedAt),
+      }))
+      .filter((entry) => entry.identityId.length > 0 && entry.decidedAt.length > 0);
   }
 
   private async buildTrustContext(
@@ -403,6 +583,18 @@ export class PolicyContextService {
         expiresAt: record.expiresAt ? new Date(record.expiresAt).toISOString() : undefined,
       })),
     };
+  }
+
+  private normalizeGovernanceRationale(value: unknown): string[] {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    return [...new Set(
+      value
+        .map((entry) => String(entry).trim())
+        .filter((entry) => entry.length > 0),
+    )];
   }
 }
 

@@ -4,6 +4,8 @@ const mockCreatePolicyDraft = jest.fn();
 const mockListPolicies = jest.fn();
 const mockSubmitPolicyForReview = jest.fn();
 const mockApprovePolicy = jest.fn();
+const mockDeprecatePolicy = jest.fn();
+const mockRevokePolicy = jest.fn();
 const mockGetEffectivePolicy = jest.fn();
 
 jest.mock('express', () => {
@@ -98,12 +100,17 @@ jest.mock('../src/services/enterprise/issuer-trust-service', () => ({
 }));
 
 jest.mock('../src/services/enterprise/policy-registry-service', () => ({
+  POLICY_APPROVAL_MODES: ['single_admin', 'separation_of_duties', 'dual_control'],
   CreatePolicyDefinitionSchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
+  DeprecatePolicyDefinitionSchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
+  RevokePolicyDefinitionSchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
   policyRegistryService: {
     createPolicyDraft: mockCreatePolicyDraft,
     listPolicies: mockListPolicies,
     submitPolicyForReview: mockSubmitPolicyForReview,
     approvePolicy: mockApprovePolicy,
+    deprecatePolicy: mockDeprecatePolicy,
+    revokePolicy: mockRevokePolicy,
     getEffectivePolicy: mockGetEffectivePolicy,
   },
 }));
@@ -237,6 +244,56 @@ describe('enterprise policy registry routes', () => {
       createdAt: new Date('2026-04-21T00:00:00.000Z'),
       updatedAt: new Date('2026-04-21T00:00:00.000Z'),
     });
+    mockDeprecatePolicy.mockResolvedValue({
+      id: 'policy-1',
+      organizationId: 'org-1',
+      name: 'jurisdiction_compliance',
+      version: '2026.05.2',
+      family: 'compliance',
+      reference: 'zeroid://policy/org/org-1/jurisdiction_compliance@2026.05.2',
+      description: 'ADGM-first onboarding policy',
+      status: 'deprecated',
+      definition: { riskModel: 'enhanced' },
+      changeSummary: 'Adds ADGM issuer trust requirement',
+      proposedByIdentityId: 'admin-1',
+      approvedByIdentityId: 'admin-1',
+      effectiveFrom: new Date('2026-05-01T00:00:00.000Z'),
+      expiresAt: null,
+      deprecatedAt: new Date('2026-06-10T00:00:00.000Z'),
+      deprecatedByIdentityId: 'admin-1',
+      deprecationReason: 'Superseded by new policy',
+      supersededByPolicyDefinitionId: 'policy-2',
+      revokedAt: null,
+      revokedByIdentityId: null,
+      revocationReason: null,
+      createdAt: new Date('2026-04-21T00:00:00.000Z'),
+      updatedAt: new Date('2026-06-10T00:00:00.000Z'),
+    });
+    mockRevokePolicy.mockResolvedValue({
+      id: 'policy-1',
+      organizationId: 'org-1',
+      name: 'jurisdiction_compliance',
+      version: '2026.05.2',
+      family: 'compliance',
+      reference: 'zeroid://policy/org/org-1/jurisdiction_compliance@2026.05.2',
+      description: 'ADGM-first onboarding policy',
+      status: 'revoked',
+      definition: { riskModel: 'enhanced' },
+      changeSummary: 'Adds ADGM issuer trust requirement',
+      proposedByIdentityId: 'admin-1',
+      approvedByIdentityId: 'admin-1',
+      effectiveFrom: new Date('2026-05-01T00:00:00.000Z'),
+      expiresAt: null,
+      deprecatedAt: new Date('2026-06-10T00:00:00.000Z'),
+      deprecatedByIdentityId: 'admin-1',
+      deprecationReason: 'Superseded by new policy',
+      supersededByPolicyDefinitionId: 'policy-2',
+      revokedAt: new Date('2026-06-15T00:00:00.000Z'),
+      revokedByIdentityId: 'admin-1',
+      revocationReason: 'Regulatory rollback',
+      createdAt: new Date('2026-04-21T00:00:00.000Z'),
+      updatedAt: new Date('2026-06-15T00:00:00.000Z'),
+    });
     mockGetEffectivePolicy.mockResolvedValue({
       id: 'policy-1',
       organizationId: 'org-1',
@@ -252,6 +309,13 @@ describe('enterprise policy registry routes', () => {
       approvedByIdentityId: 'admin-1',
       effectiveFrom: new Date('2026-05-01T00:00:00.000Z'),
       expiresAt: null,
+      deprecatedAt: null,
+      deprecatedByIdentityId: null,
+      deprecationReason: null,
+      supersededByPolicyDefinitionId: null,
+      revokedAt: null,
+      revokedByIdentityId: null,
+      revocationReason: null,
       createdAt: new Date('2026-04-21T00:00:00.000Z'),
       updatedAt: new Date('2026-04-21T00:00:00.000Z'),
     });
@@ -301,5 +365,73 @@ describe('enterprise policy registry routes', () => {
       version: '2026.05.2',
       status: 'approved',
     });
+  });
+
+  it('deprecates and revokes a governed policy lifecycle', async () => {
+    const deprecateResponse = await invokeRoute('POST', '/policies/:policyId/deprecate', {
+      params: { policyId: 'policy-1' },
+      body: {
+        reason: 'Superseded by new policy',
+        supersededByPolicyId: 'policy-2',
+      },
+    });
+    expect(deprecateResponse.statusCode).toBe(200);
+    expect(deprecateResponse.body.data).toMatchObject({ status: 'deprecated' });
+
+    const revokeResponse = await invokeRoute('POST', '/policies/:policyId/revoke', {
+      params: { policyId: 'policy-1' },
+      body: {
+        reason: 'Regulatory rollback',
+      },
+    });
+    expect(revokeResponse.statusCode).toBe(200);
+    expect(revokeResponse.body.data).toMatchObject({ status: 'revoked' });
+  });
+
+  it('returns a pending-review response when policy quorum is not yet met', async () => {
+    mockApprovePolicy.mockResolvedValueOnce({
+      id: 'policy-1',
+      organizationId: 'org-1',
+      name: 'jurisdiction_compliance',
+      version: '2026.05.2',
+      family: 'compliance',
+      reference: 'zeroid://policy/org/org-1/jurisdiction_compliance@2026.05.2',
+      description: 'ADGM-first onboarding policy',
+      status: 'pending_review',
+      approvalMode: 'dual_control',
+      requiredApprovals: 2,
+      approvalCount: 1,
+      approvalTrail: [
+        { identityId: 'admin-1', action: 'approve', decidedAt: '2026-05-01T00:00:00.000Z' },
+      ],
+      definition: { riskModel: 'enhanced' },
+      changeSummary: 'Adds ADGM issuer trust requirement',
+      proposedByIdentityId: 'admin-1',
+      approvedByIdentityId: null,
+      effectiveFrom: null,
+      expiresAt: null,
+      deprecatedAt: null,
+      deprecatedByIdentityId: null,
+      deprecationReason: null,
+      supersededByPolicyDefinitionId: null,
+      revokedAt: null,
+      revokedByIdentityId: null,
+      revocationReason: null,
+      createdAt: new Date('2026-04-21T00:00:00.000Z'),
+      updatedAt: new Date('2026-04-21T00:00:00.000Z'),
+    });
+
+    const response = await invokeRoute('POST', '/policies/:policyId/approve', {
+      params: { policyId: 'policy-1' },
+      body: { effectiveFrom: '2026-05-01T00:00:00.000Z' },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body.data).toMatchObject({
+      status: 'pending_review',
+      requiredApprovals: 2,
+      approvalCount: 1,
+    });
+    expect(response.body.message).toContain('additional approvals required');
   });
 });

@@ -21,11 +21,14 @@ import {
 } from '../../services/enterprise/issuer-trust-service';
 import {
   CreatePolicyDefinitionSchema,
+  DeprecatePolicyDefinitionSchema,
   policyRegistryService,
+  RevokePolicyDefinitionSchema,
 } from '../../services/enterprise/policy-registry-service';
 import {
   CreatePolicyExceptionSchema,
   policyExceptionService,
+  RevokePolicyExceptionSchema,
 } from '../../services/enterprise/policy-exception-service';
 import { prisma } from '../../index';
 
@@ -270,12 +273,37 @@ function serializePolicyDefinition(record: {
   reference: string;
   description: string;
   status: string;
+  approvalMode: string;
+  requiredApprovals: number;
+  requiredApprovalRoles: string[];
+  requiredApprovalClasses: string[];
+  requiredApprovalJurisdictions: string[];
+  governanceProfileId: string | null;
+  governanceProfileLabel: string | null;
+  governanceProfileRationale: string[];
+  approvalCount: number;
+  approvalTrail: Array<{
+    identityId: string;
+    role: string;
+    approvalClasses: string[];
+    matchedApprovalClasses: string[];
+    matchedApprovalJurisdictions: string[];
+    action: string;
+    decidedAt: string;
+  }>;
   definition: Record<string, unknown>;
   changeSummary: string | null;
   proposedByIdentityId: string;
   approvedByIdentityId: string | null;
   effectiveFrom: Date | null;
   expiresAt: Date | null;
+  deprecatedAt: Date | null;
+  deprecatedByIdentityId: string | null;
+  deprecationReason: string | null;
+  supersededByPolicyDefinitionId: string | null;
+  revokedAt: Date | null;
+  revokedByIdentityId: string | null;
+  revocationReason: string | null;
   createdAt: Date;
   updatedAt: Date;
 }): Record<string, unknown> {
@@ -283,6 +311,8 @@ function serializePolicyDefinition(record: {
     ...record,
     effectiveFrom: record.effectiveFrom?.toISOString() ?? null,
     expiresAt: record.expiresAt?.toISOString() ?? null,
+    deprecatedAt: record.deprecatedAt?.toISOString() ?? null,
+    revokedAt: record.revokedAt?.toISOString() ?? null,
     createdAt: record.createdAt.toISOString(),
     updatedAt: record.updatedAt.toISOString(),
   };
@@ -299,11 +329,32 @@ function serializePolicyException(record: {
   scope: string;
   justification: string;
   conditions: Record<string, unknown> | null;
+  approvalMode: string;
+  requiredApprovals: number;
+  requiredApprovalRoles: string[];
+  requiredApprovalClasses: string[];
+  requiredApprovalJurisdictions: string[];
+  governanceProfileId: string | null;
+  governanceProfileLabel: string | null;
+  governanceProfileRationale: string[];
+  approvalCount: number;
+  approvalTrail: Array<{
+    identityId: string;
+    role: string;
+    approvalClasses: string[];
+    matchedApprovalClasses: string[];
+    matchedApprovalJurisdictions: string[];
+    action: string;
+    decidedAt: string;
+  }>;
   status: string;
   requestedByIdentityId: string;
   approvedByIdentityId: string | null;
   effectiveFrom: Date | null;
   expiresAt: Date | null;
+  revokedAt: Date | null;
+  revokedByIdentityId: string | null;
+  revocationReason: string | null;
   metadata: Record<string, unknown> | null;
   createdAt: Date;
   updatedAt: Date;
@@ -312,6 +363,7 @@ function serializePolicyException(record: {
     ...record,
     effectiveFrom: record.effectiveFrom?.toISOString() ?? null,
     expiresAt: record.expiresAt?.toISOString() ?? null,
+    revokedAt: record.revokedAt?.toISOString() ?? null,
     createdAt: record.createdAt.toISOString(),
     updatedAt: record.updatedAt.toISOString(),
   };
@@ -693,11 +745,54 @@ router.post('/policies/:policyId/approve', requireEnterpriseContext(ENTERPRISE_A
 
     const effectiveFrom = typeof req.body?.effectiveFrom === 'string' ? req.body.effectiveFrom : undefined;
     const policy = await policyRegistryService.approvePolicy(req.params.policyId as string, organizationId, actorIdentityId, effectiveFrom);
-    res.status(200).json({ data: serializePolicyDefinition(policy), message: 'Policy approved' });
+    res.status(200).json({
+      data: serializePolicyDefinition(policy),
+      message: policy.status === 'approved'
+        ? 'Policy approved'
+        : 'Policy approval recorded; additional approvals required',
+    });
   } catch (err) {
     const error = err as Error & { statusCode?: number; code?: string };
     logger.error('policy_approve_error', { error: error.message, policyId: req.params.policyId });
     res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'POLICY_APPROVE_ERROR' });
+  }
+});
+
+router.post('/policies/:policyId/deprecate', requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES), validate(DeprecatePolicyDefinitionSchema), async (req: Request, res: Response): Promise<void> => {
+  try {
+    const enterpriseReq = req as EnterpriseAuthenticatedRequest;
+    const organizationId = enterpriseReq.enterpriseContext?.organizationId;
+    const actorIdentityId = enterpriseReq.identity?.id;
+    if (!organizationId || !actorIdentityId) {
+      res.status(401).json({ error: 'Authenticated enterprise admin required', code: 'ENTERPRISE_AUTH_REQUIRED' });
+      return;
+    }
+
+    const policy = await policyRegistryService.deprecatePolicy(req.params.policyId as string, organizationId, actorIdentityId, req.body);
+    res.status(200).json({ data: serializePolicyDefinition(policy), message: 'Policy deprecated' });
+  } catch (err) {
+    const error = err as Error & { statusCode?: number; code?: string };
+    logger.error('policy_deprecate_error', { error: error.message, policyId: req.params.policyId });
+    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'POLICY_DEPRECATE_ERROR' });
+  }
+});
+
+router.post('/policies/:policyId/revoke', requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES), validate(RevokePolicyDefinitionSchema), async (req: Request, res: Response): Promise<void> => {
+  try {
+    const enterpriseReq = req as EnterpriseAuthenticatedRequest;
+    const organizationId = enterpriseReq.enterpriseContext?.organizationId;
+    const actorIdentityId = enterpriseReq.identity?.id;
+    if (!organizationId || !actorIdentityId) {
+      res.status(401).json({ error: 'Authenticated enterprise admin required', code: 'ENTERPRISE_AUTH_REQUIRED' });
+      return;
+    }
+
+    const policy = await policyRegistryService.revokePolicy(req.params.policyId as string, organizationId, actorIdentityId, req.body);
+    res.status(200).json({ data: serializePolicyDefinition(policy), message: 'Policy revoked' });
+  } catch (err) {
+    const error = err as Error & { statusCode?: number; code?: string };
+    logger.error('policy_revoke_error', { error: error.message, policyId: req.params.policyId });
+    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'POLICY_REVOKE_ERROR' });
   }
 });
 
@@ -777,7 +872,12 @@ router.post('/policies/exceptions/:exceptionId/approve', requireEnterpriseContex
 
     const effectiveFrom = typeof req.body?.effectiveFrom === 'string' ? req.body.effectiveFrom : undefined;
     const exception = await policyExceptionService.approveException(req.params.exceptionId as string, organizationId, actorIdentityId, effectiveFrom);
-    res.status(200).json({ data: serializePolicyException(exception), message: 'Policy exception approved' });
+    res.status(200).json({
+      data: serializePolicyException(exception),
+      message: exception.status === 'approved'
+        ? 'Policy exception approved'
+        : 'Policy exception approval recorded; additional approvals required',
+    });
   } catch (err) {
     const error = err as Error & { statusCode?: number; code?: string };
     logger.error('policy_exception_approve_error', { error: error.message, exceptionId: req.params.exceptionId });
@@ -802,6 +902,25 @@ router.post('/policies/exceptions/:exceptionId/reject', requireEnterpriseContext
     const error = err as Error & { statusCode?: number; code?: string };
     logger.error('policy_exception_reject_error', { error: error.message, exceptionId: req.params.exceptionId });
     res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'POLICY_EXCEPTION_REJECT_ERROR' });
+  }
+});
+
+router.post('/policies/exceptions/:exceptionId/revoke', requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES), validate(RevokePolicyExceptionSchema), async (req: Request, res: Response): Promise<void> => {
+  try {
+    const enterpriseReq = req as EnterpriseAuthenticatedRequest;
+    const organizationId = enterpriseReq.enterpriseContext?.organizationId;
+    const actorIdentityId = enterpriseReq.identity?.id;
+    if (!organizationId || !actorIdentityId) {
+      res.status(401).json({ error: 'Authenticated enterprise admin required', code: 'ENTERPRISE_AUTH_REQUIRED' });
+      return;
+    }
+
+    const exception = await policyExceptionService.revokeException(req.params.exceptionId as string, organizationId, actorIdentityId, req.body);
+    res.status(200).json({ data: serializePolicyException(exception), message: 'Policy exception revoked' });
+  } catch (err) {
+    const error = err as Error & { statusCode?: number; code?: string };
+    logger.error('policy_exception_revoke_error', { error: error.message, exceptionId: req.params.exceptionId });
+    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'POLICY_EXCEPTION_REVOKE_ERROR' });
   }
 });
 

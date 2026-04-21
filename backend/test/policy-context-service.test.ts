@@ -98,10 +98,31 @@ describe('PolicyContextService', () => {
 
   it('prefers an approved organization-specific policy definition over the static catalog', async () => {
     mockPolicyDefinitionFindFirst.mockResolvedValue({
+      id: 'policy-42',
       name: 'jurisdiction_compliance',
       version: '2026.05.2',
       reference: 'zeroid://policy/org/org-1/jurisdiction_compliance@2026.05.2',
       family: 'compliance',
+      approvedByIdentityId: 'admin-2',
+      approvalMode: 'DUAL_CONTROL',
+      requiredApprovals: 2,
+      requiredApprovalRoles: ['admin', 'auditor'],
+      approvalTrail: [
+        {
+          identityId: 'admin-2',
+          role: 'admin',
+          action: 'approve',
+          decidedAt: '2026-04-28T00:00:00.000Z',
+        },
+        {
+          identityId: 'auditor-1',
+          role: 'auditor',
+          action: 'approve',
+          decidedAt: '2026-04-29T00:00:00.000Z',
+        },
+      ],
+      effectiveFrom: new Date('2026-05-01T00:00:00.000Z'),
+      expiresAt: new Date('2026-12-31T00:00:00.000Z'),
     });
 
     const context = await policyContextService.resolvePolicyContext('jurisdiction_compliance', 'org-1', {
@@ -111,8 +132,40 @@ describe('PolicyContextService', () => {
     expect(context).toEqual({
       policyName: 'jurisdiction_compliance',
       policyVersion: '2026.05.2',
+      policyDefinitionId: 'policy-42',
       policyReference: 'zeroid://policy/org/org-1/jurisdiction_compliance@2026.05.2',
       policyFamily: 'compliance',
+      policyApprovalContext: {
+        approvedByIdentityId: 'admin-2',
+        approvalMode: 'dual_control',
+        requiredApprovals: 2,
+        requiredApprovalRoles: ['admin', 'auditor'],
+        approvalTrail: [
+          {
+            identityId: 'admin-2',
+            role: 'admin',
+            approvalClasses: [],
+            matchedApprovalClasses: [],
+            matchedApprovalJurisdictions: [],
+            action: 'approve',
+            decidedAt: '2026-04-28T00:00:00.000Z',
+          },
+          {
+            identityId: 'auditor-1',
+            role: 'auditor',
+            approvalClasses: [],
+            matchedApprovalClasses: [],
+            matchedApprovalJurisdictions: [],
+            action: 'approve',
+            decidedAt: '2026-04-29T00:00:00.000Z',
+          },
+        ],
+        effectiveFrom: '2026-05-01T00:00:00.000Z',
+        expiresAt: '2026-12-31T00:00:00.000Z',
+      },
+      policyLifecycleContext: {
+        status: 'approved',
+      },
     });
   });
 

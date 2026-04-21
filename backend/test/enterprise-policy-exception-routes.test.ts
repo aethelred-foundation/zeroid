@@ -4,6 +4,7 @@ const mockCreateExceptionRequest = jest.fn();
 const mockListExceptions = jest.fn();
 const mockApproveException = jest.fn();
 const mockRejectException = jest.fn();
+const mockRevokeException = jest.fn();
 
 jest.mock('express', () => {
   const createRouter = () => {
@@ -97,23 +98,30 @@ jest.mock('../src/services/enterprise/issuer-trust-service', () => ({
 }));
 
 jest.mock('../src/services/enterprise/policy-registry-service', () => ({
+  POLICY_APPROVAL_MODES: ['single_admin', 'separation_of_duties', 'dual_control'],
   CreatePolicyDefinitionSchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
+  DeprecatePolicyDefinitionSchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
+  RevokePolicyDefinitionSchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
   policyRegistryService: {
     createPolicyDraft: jest.fn(),
     listPolicies: jest.fn(),
     submitPolicyForReview: jest.fn(),
     approvePolicy: jest.fn(),
+    deprecatePolicy: jest.fn(),
+    revokePolicy: jest.fn(),
     getEffectivePolicy: jest.fn(),
   },
 }));
 
 jest.mock('../src/services/enterprise/policy-exception-service', () => ({
   CreatePolicyExceptionSchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
+  RevokePolicyExceptionSchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
   policyExceptionService: {
     createExceptionRequest: mockCreateExceptionRequest,
     listExceptions: mockListExceptions,
     approveException: mockApproveException,
     rejectException: mockRejectException,
+    revokeException: mockRevokeException,
   },
 }));
 
@@ -252,6 +260,29 @@ describe('enterprise policy exception routes', () => {
       createdAt: new Date('2026-04-21T00:00:00.000Z'),
       updatedAt: new Date('2026-04-21T00:00:00.000Z'),
     });
+    mockRevokeException.mockResolvedValue({
+      id: 'exception-1',
+      organizationId: 'org-1',
+      policyDefinitionId: 'policy-1',
+      policyName: 'jurisdiction_compliance',
+      policyVersion: '2026.05.2',
+      policyReference: 'zeroid://policy/org/org-1/jurisdiction_compliance@2026.05.2',
+      subjectEntityId: 'entity-1',
+      scope: 'subject',
+      justification: 'Temporary sovereign override for onboarding',
+      conditions: { reviewEveryDays: 30 },
+      status: 'revoked',
+      requestedByIdentityId: 'admin-1',
+      approvedByIdentityId: 'admin-1',
+      effectiveFrom: new Date('2026-05-01T00:00:00.000Z'),
+      expiresAt: new Date('2026-06-01T00:00:00.000Z'),
+      revokedAt: new Date('2026-05-15T00:00:00.000Z'),
+      revokedByIdentityId: 'admin-1',
+      revocationReason: 'Override revoked after treaty withdrawal',
+      metadata: null,
+      createdAt: new Date('2026-04-21T00:00:00.000Z'),
+      updatedAt: new Date('2026-05-15T00:00:00.000Z'),
+    });
   });
 
   it('creates and lists policy exception requests', async () => {
@@ -292,5 +323,57 @@ describe('enterprise policy exception routes', () => {
     });
     expect(rejectResponse.statusCode).toBe(200);
     expect(rejectResponse.body.data).toMatchObject({ status: 'rejected' });
+
+    const revokeResponse = await invokeRoute('POST', '/policies/exceptions/:exceptionId/revoke', {
+      params: { exceptionId: 'exception-1' },
+      body: { reason: 'Override revoked after treaty withdrawal' },
+    });
+    expect(revokeResponse.statusCode).toBe(200);
+    expect(revokeResponse.body.data).toMatchObject({ status: 'revoked' });
+  });
+
+  it('returns a pending-review response when exception quorum is not yet met', async () => {
+    mockApproveException.mockResolvedValueOnce({
+      id: 'exception-1',
+      organizationId: 'org-1',
+      policyDefinitionId: 'policy-1',
+      policyName: 'jurisdiction_compliance',
+      policyVersion: '2026.05.2',
+      policyReference: 'zeroid://policy/org/org-1/jurisdiction_compliance@2026.05.2',
+      subjectEntityId: 'entity-1',
+      scope: 'subject',
+      justification: 'Temporary sovereign override for onboarding',
+      conditions: { reviewEveryDays: 30 },
+      approvalMode: 'dual_control',
+      requiredApprovals: 2,
+      approvalCount: 1,
+      approvalTrail: [
+        { identityId: 'admin-1', action: 'approve', decidedAt: '2026-05-01T00:00:00.000Z' },
+      ],
+      status: 'pending_review',
+      requestedByIdentityId: 'admin-1',
+      approvedByIdentityId: null,
+      effectiveFrom: null,
+      expiresAt: new Date('2026-06-01T00:00:00.000Z'),
+      revokedAt: null,
+      revokedByIdentityId: null,
+      revocationReason: null,
+      metadata: null,
+      createdAt: new Date('2026-04-21T00:00:00.000Z'),
+      updatedAt: new Date('2026-04-21T00:00:00.000Z'),
+    });
+
+    const response = await invokeRoute('POST', '/policies/exceptions/:exceptionId/approve', {
+      params: { exceptionId: 'exception-1' },
+      body: { effectiveFrom: '2026-05-01T00:00:00.000Z' },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body.data).toMatchObject({
+      status: 'pending_review',
+      requiredApprovals: 2,
+      approvalCount: 1,
+    });
+    expect(response.body.message).toContain('additional approvals required');
   });
 });

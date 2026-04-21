@@ -8,7 +8,8 @@ import { dataSovereigntyService, CrossBorderTransferSchema, PIASchema, BreachNot
 import { EnterpriseAuthenticatedRequest, requireEnterpriseContext } from '../../middleware/enterprise';
 import { EnterpriseRole } from '../../services/enterprise/organization-service';
 import { policyDecisionReceiptService, PolicyDecisionReceipt } from '../../services/enterprise/policy-receipt-service';
-import { policyContextService } from '../../services/enterprise/policy-context-service';
+import { policyContextService, PolicyExecutionContext } from '../../services/enterprise/policy-context-service';
+import { policyExecutionService } from '../../services/enterprise/policy-execution-service';
 
 // ---------------------------------------------------------------------------
 // Logger
@@ -60,7 +61,9 @@ function summarizeReceipt(receipt: PolicyDecisionReceipt): Record<string, unknow
     receiptType: receipt.receiptType,
     policyName: receipt.policyName,
     policyVersion: receipt.policyVersion,
+    policyDefinitionId: receipt.policyDefinitionId,
     policyReference: receipt.policyReference,
+    policyExceptionCount: receipt.policyExceptionCount,
     decisionSummary: receipt.decisionSummary,
     integrityHash: receipt.integrityHash,
     createdAt: receipt.createdAt,
@@ -89,9 +92,10 @@ async function createPolicyAnchoredReceipt(
     evidence?: unknown;
     metadata?: Record<string, unknown>;
     credentials?: Array<{ issuerId: string; credentialType: string }>;
+    policyContextOverride?: PolicyExecutionContext;
   },
 ): Promise<PolicyDecisionReceipt> {
-  const policyContext = await policyContextService.resolvePolicyContext(
+  const policyContext = input.policyContextOverride ?? await policyContextService.resolvePolicyContext(
     input.policyName,
     context.organizationId,
     {
@@ -107,8 +111,16 @@ async function createPolicyAnchoredReceipt(
     receiptType: input.receiptType,
     policyName: policyContext.policyName,
     policyVersion: policyContext.policyVersion,
+    policyDefinitionId: policyContext.policyDefinitionId,
     policyReference: policyContext.policyReference,
+    policyApprovedByIdentityId: policyContext.policyApprovalContext?.approvedByIdentityId ?? undefined,
+    policyEffectiveFrom: policyContext.policyApprovalContext?.effectiveFrom,
+    policyExpiresAt: policyContext.policyApprovalContext?.expiresAt,
+    policyGovernanceProfileId: policyContext.policyApprovalContext?.governanceProfileId,
+    policyGovernanceProfileLabel: policyContext.policyApprovalContext?.governanceProfileLabel,
+    policyGovernanceRationale: policyContext.policyApprovalContext?.governanceProfileRationale,
     subjectEntityId: input.subjectEntityId,
+    policyExceptionIds: policyContext.exceptionContext?.exceptions.map((exception) => exception.exceptionId) ?? [],
     jurisdictionCodes: input.jurisdictionCodes ?? [],
     decisionSummary: input.decisionSummary,
     input: input.payload,
@@ -116,6 +128,8 @@ async function createPolicyAnchoredReceipt(
     evidence: input.evidence,
     metadata: {
       policyFamily: policyContext.policyFamily,
+      ...(policyContext.policyApprovalContext ? { policyApprovalContext: policyContext.policyApprovalContext } : {}),
+      ...(policyContext.policyLifecycleContext ? { policyLifecycleContext: policyContext.policyLifecycleContext } : {}),
       ...(policyContext.trustContext ? { trustContext: policyContext.trustContext } : {}),
       ...(policyContext.exceptionContext ? { exceptionContext: policyContext.exceptionContext } : {}),
       ...(input.metadata ?? {}),
@@ -191,7 +205,21 @@ router.post('/screen', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_ROLE
     const context = await requireReceiptContext(req, res);
     if (!context) return;
 
-    const result = await sanctionsScreeningService.screenEntity(req.body);
+    const policyContext = await policyContextService.resolvePolicyContext(
+      'sanctions_screening',
+      context.organizationId,
+      {
+        subjectEntityId: req.body.entityId,
+      },
+    );
+    const baseResult = await sanctionsScreeningService.screenEntity(req.body);
+    const policyExecution = await policyExecutionService.applyScreeningPolicy(
+      context.organizationId,
+      policyContext,
+      req.body,
+      baseResult,
+    );
+    const result = policyExecution.result;
     const receipt = await createPolicyAnchoredReceipt(context, {
       receiptType: 'sanctions_screening',
       policyName: 'sanctions_screening',
@@ -207,10 +235,17 @@ router.post('/screen', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_ROLE
       },
       metadata: {
         route: '/enterprise/compliance/screen',
+        ...(policyExecution.trace ? { policyExecutionTrace: policyExecution.trace } : {}),
       },
+      policyContextOverride: policyContext,
     });
 
-    res.status(200).json({ data: result, receipt: summarizeReceipt(receipt), message: 'Screening completed' });
+    res.status(200).json({
+      data: result,
+      receipt: summarizeReceipt(receipt),
+      ...(policyExecution.trace ? { policyTrace: policyExecution.trace } : {}),
+      message: 'Screening completed',
+    });
   } catch (err) {
     const error = err as Error & { statusCode?: number; code?: string };
     logger.error('screening_error', { error: error.message });
@@ -226,7 +261,18 @@ router.post('/screen/batch', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRIT
     const context = await requireReceiptContext(req, res);
     if (!context) return;
 
-    const result = await sanctionsScreeningService.screenBatch(req.body);
+    const policyContext = await policyContextService.resolvePolicyContext(
+      'batch_sanctions_screening',
+      context.organizationId,
+    );
+    const baseResult = await sanctionsScreeningService.screenBatch(req.body);
+    const policyExecution = await policyExecutionService.applyBatchScreeningPolicy(
+      context.organizationId,
+      policyContext,
+      req.body,
+      baseResult,
+    );
+    const result = policyExecution.result;
     const receipt = await createPolicyAnchoredReceipt(context, {
       receiptType: 'sanctions_screening',
       policyName: 'batch_sanctions_screening',
@@ -240,9 +286,16 @@ router.post('/screen/batch', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRIT
       metadata: {
         route: '/enterprise/compliance/screen/batch',
         clientId: req.body.clientId,
+        ...(policyExecution.trace ? { policyExecutionTrace: policyExecution.trace } : {}),
       },
+      policyContextOverride: policyContext,
     });
-    res.status(200).json({ data: result, receipt: summarizeReceipt(receipt), message: 'Batch screening completed' });
+    res.status(200).json({
+      data: result,
+      receipt: summarizeReceipt(receipt),
+      ...(policyExecution.trace ? { policyTrace: policyExecution.trace } : {}),
+      message: 'Batch screening completed',
+    });
   } catch (err) {
     const error = err as Error & { statusCode?: number; code?: string };
     logger.error('batch_screening_error', { error: error.message });
@@ -305,7 +358,28 @@ router.post('/evaluate', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_RO
     const context = await requireReceiptContext(req, res);
     if (!context) return;
 
-    const results = await jurisdictionEngine.evaluateCompliance(req.body);
+    const credentialInputs = (req.body.credentials ?? []).map((credential: Record<string, unknown>) => ({
+      issuerId: String(credential.issuerId ?? ''),
+      credentialType: String(credential.credentialType ?? ''),
+    }));
+    const policyContext = await policyContextService.resolvePolicyContext(
+      'jurisdiction_compliance',
+      context.organizationId,
+      {
+        jurisdictionCodes: req.body.jurisdictions ?? [],
+        credentials: credentialInputs,
+        subjectEntityId: req.body.entityId,
+      },
+    );
+
+    const baseResults = await jurisdictionEngine.evaluateCompliance(req.body);
+    const policyExecution = await policyExecutionService.applyCompliancePolicy(
+      context.organizationId,
+      policyContext,
+      req.body,
+      baseResults,
+    );
+    const results = policyExecution.results;
     const receipt = await createPolicyAnchoredReceipt(context, {
       receiptType: 'compliance_evaluation',
       policyName: 'jurisdiction_compliance',
@@ -320,16 +394,20 @@ router.post('/evaluate', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_RO
         missingCredentials: result.missingCredentials,
         ruleOutcomes: result.rules.map((rule) => ({ name: rule.name, status: rule.status })),
       })),
-      credentials: (req.body.credentials ?? []).map((credential: Record<string, unknown>) => ({
-        issuerId: String(credential.issuerId ?? ''),
-        credentialType: String(credential.credentialType ?? ''),
-      })),
+      credentials: credentialInputs,
       metadata: {
         route: '/enterprise/compliance/evaluate',
         operationType: req.body.operationType,
+        ...(policyExecution.trace ? { policyExecutionTrace: policyExecution.trace } : {}),
       },
+      policyContextOverride: policyContext,
     });
-    res.status(200).json({ data: results, receipt: summarizeReceipt(receipt), message: 'Compliance evaluation completed' });
+    res.status(200).json({
+      data: results,
+      receipt: summarizeReceipt(receipt),
+      ...(policyExecution.trace ? { policyTrace: policyExecution.trace } : {}),
+      message: 'Compliance evaluation completed',
+    });
   } catch (err) {
     const error = err as Error & { statusCode?: number; code?: string };
     logger.error('compliance_evaluation_error', { error: error.message });
@@ -377,6 +455,13 @@ router.post('/report', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_ROLE
         break;
       case 'DASHBOARD': {
         const dashboard = regulatoryReportingService.getDashboardData();
+        const policyContext = await policyContextService.resolvePolicyContext(
+          'regulatory_dashboard',
+          context.organizationId,
+          {
+            jurisdictionCodes: req.body.jurisdiction ? [req.body.jurisdiction] : [],
+          },
+        );
         const receipt = await createPolicyAnchoredReceipt(context, {
           receiptType: 'regulatory_report',
           policyName: 'regulatory_dashboard',
@@ -388,6 +473,7 @@ router.post('/report', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_ROLE
           metadata: {
             route: '/enterprise/compliance/report',
           },
+          policyContextOverride: policyContext,
         });
         res.status(200).json({ data: dashboard, receipt: summarizeReceipt(receipt) });
         return;
@@ -397,6 +483,24 @@ router.post('/report', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_ROLE
         return;
     }
 
+    const policyContext = await policyContextService.resolvePolicyContext(
+      'regulatory_reporting',
+      context.organizationId,
+      {
+        jurisdictionCodes: [
+          req.body.jurisdiction,
+          req.body.filingInstitution?.jurisdiction,
+        ].filter((value): value is string => typeof value === 'string' && value.length > 0),
+        subjectEntityId: req.body.entityId ?? req.body.subject?.entityId ?? req.body.dataSubject?.entityId,
+      },
+    );
+    const policyExecution = await policyExecutionService.applyReportingPolicy(
+      context.organizationId,
+      policyContext,
+      req.body,
+      report,
+    );
+    report = policyExecution.result;
     const receipt = await createPolicyAnchoredReceipt(context, {
       receiptType: 'regulatory_report',
       policyName: 'regulatory_reporting',
@@ -414,10 +518,17 @@ router.post('/report', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_ROLE
       },
       metadata: {
         route: '/enterprise/compliance/report',
+        ...(policyExecution.trace ? { policyExecutionTrace: policyExecution.trace } : {}),
       },
+      policyContextOverride: policyContext,
     });
 
-    res.status(201).json({ data: report, receipt: summarizeReceipt(receipt), message: `${parsed.data} report generated` });
+    res.status(201).json({
+      data: report,
+      receipt: summarizeReceipt(receipt),
+      ...(policyExecution.trace ? { policyTrace: policyExecution.trace } : {}),
+      message: `${parsed.data} report generated`,
+    });
   } catch (err) {
     const error = err as Error & { statusCode?: number; code?: string };
     logger.error('report_generation_error', { error: error.message });
@@ -503,7 +614,25 @@ router.post('/cross-border', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRIT
     // Compliance cross-border assessment (jurisdiction level)
     const jurisdictionAssessment = CrossBorderAssessmentSchema.safeParse(req.body);
     if (jurisdictionAssessment.success) {
-      const result = jurisdictionEngine.assessCrossBorder(jurisdictionAssessment.data);
+      const policyContext = await policyContextService.resolvePolicyContext(
+        'jurisdiction_cross_border',
+        context.organizationId,
+        {
+          jurisdictionCodes: [
+            jurisdictionAssessment.data.sourceJurisdiction,
+            jurisdictionAssessment.data.targetJurisdiction,
+          ],
+          subjectEntityId: req.body.entityId,
+        },
+      );
+      const baseResult = jurisdictionEngine.assessCrossBorder(jurisdictionAssessment.data);
+      const policyExecution = await policyExecutionService.applyCrossBorderPolicy(
+        context.organizationId,
+        policyContext,
+        jurisdictionAssessment.data,
+        baseResult,
+      );
+      const result = policyExecution.result;
       const receipt = await createPolicyAnchoredReceipt(context, {
         receiptType: 'cross_border_assessment',
         policyName: 'jurisdiction_cross_border',
@@ -522,16 +651,41 @@ router.post('/cross-border', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRIT
         metadata: {
           route: '/enterprise/compliance/cross-border',
           assessmentKind: 'jurisdiction',
+          ...(policyExecution.trace ? { policyExecutionTrace: policyExecution.trace } : {}),
         },
+        policyContextOverride: policyContext,
       });
-      res.status(200).json({ data: result, receipt: summarizeReceipt(receipt), message: 'Cross-border assessment completed' });
+      res.status(200).json({
+        data: result,
+        receipt: summarizeReceipt(receipt),
+        ...(policyExecution.trace ? { policyTrace: policyExecution.trace } : {}),
+        message: 'Cross-border assessment completed',
+      });
       return;
     }
 
     // Data sovereignty cross-border assessment
     const transferAssessment = CrossBorderTransferSchema.safeParse(req.body);
     if (transferAssessment.success) {
-      const result = dataSovereigntyService.assessCrossBorderTransfer(transferAssessment.data);
+      const policyContext = await policyContextService.resolvePolicyContext(
+        'data_sovereignty_cross_border',
+        context.organizationId,
+        {
+          jurisdictionCodes: [
+            transferAssessment.data.sourceJurisdiction,
+            transferAssessment.data.targetJurisdiction,
+          ],
+          subjectEntityId: req.body.dataSubjectId,
+        },
+      );
+      const baseResult = dataSovereigntyService.assessCrossBorderTransfer(transferAssessment.data);
+      const policyExecution = await policyExecutionService.applyCrossBorderPolicy(
+        context.organizationId,
+        policyContext,
+        transferAssessment.data,
+        baseResult,
+      );
+      const result = policyExecution.result;
       const receipt = await createPolicyAnchoredReceipt(context, {
         receiptType: 'cross_border_assessment',
         policyName: 'data_sovereignty_cross_border',
@@ -550,9 +704,16 @@ router.post('/cross-border', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRIT
         metadata: {
           route: '/enterprise/compliance/cross-border',
           assessmentKind: 'data_transfer',
+          ...(policyExecution.trace ? { policyExecutionTrace: policyExecution.trace } : {}),
         },
+        policyContextOverride: policyContext,
       });
-      res.status(200).json({ data: result, receipt: summarizeReceipt(receipt), message: 'Data transfer assessment completed' });
+      res.status(200).json({
+        data: result,
+        receipt: summarizeReceipt(receipt),
+        ...(policyExecution.trace ? { policyTrace: policyExecution.trace } : {}),
+        message: 'Data transfer assessment completed',
+      });
       return;
     }
 
@@ -579,7 +740,23 @@ router.post('/dsar', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_ROLES)
     const { requestType } = req.body;
 
     if (requestType === 'erasure' || req.body.reportType === 'ERASURE') {
-      const report = await regulatoryReportingService.processErasure({ ...req.body, reportType: 'ERASURE' });
+      const policyContext = await policyContextService.resolvePolicyContext(
+        'data_subject_erasure',
+        context.organizationId,
+        {
+          jurisdictionCodes: req.body.jurisdiction ? [req.body.jurisdiction] : [],
+          subjectEntityId: req.body.requestorId,
+        },
+      );
+      const baseReport = await regulatoryReportingService.processErasure({ ...req.body, reportType: 'ERASURE' });
+      const policyExecution = await policyExecutionService.applyPrivacyWorkflowPolicy(
+        context.organizationId,
+        policyContext,
+        'erasure',
+        req.body,
+        baseReport,
+      );
+      const report = policyExecution.result;
       const receipt = await createPolicyAnchoredReceipt(context, {
         receiptType: 'regulatory_report',
         policyName: 'data_subject_erasure',
@@ -594,13 +771,36 @@ router.post('/dsar', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_ROLES)
         },
         metadata: {
           route: '/enterprise/compliance/dsar',
+          ...(policyExecution.trace ? { policyExecutionTrace: policyExecution.trace } : {}),
         },
+        policyContextOverride: policyContext,
       });
-      res.status(200).json({ data: report, receipt: summarizeReceipt(receipt), message: 'Erasure request processed' });
+      res.status(200).json({
+        data: report,
+        receipt: summarizeReceipt(receipt),
+        ...(policyExecution.trace ? { policyTrace: policyExecution.trace } : {}),
+        message: 'Erasure request processed',
+      });
       return;
     }
 
-    const report = await regulatoryReportingService.fulfillDSAR({ ...req.body, reportType: 'DSAR' });
+    const policyContext = await policyContextService.resolvePolicyContext(
+      'data_subject_access',
+      context.organizationId,
+      {
+        jurisdictionCodes: req.body.jurisdiction ? [req.body.jurisdiction] : [],
+        subjectEntityId: req.body.requestorId,
+      },
+    );
+    const baseReport = await regulatoryReportingService.fulfillDSAR({ ...req.body, reportType: 'DSAR' });
+    const policyExecution = await policyExecutionService.applyPrivacyWorkflowPolicy(
+      context.organizationId,
+      policyContext,
+      'dsar',
+      req.body,
+      baseReport,
+    );
+    const report = policyExecution.result;
     const receipt = await createPolicyAnchoredReceipt(context, {
       receiptType: 'regulatory_report',
       policyName: 'data_subject_access',
@@ -615,9 +815,16 @@ router.post('/dsar', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_ROLES)
       },
       metadata: {
         route: '/enterprise/compliance/dsar',
+        ...(policyExecution.trace ? { policyExecutionTrace: policyExecution.trace } : {}),
       },
+      policyContextOverride: policyContext,
     });
-    res.status(200).json({ data: report, receipt: summarizeReceipt(receipt), message: 'DSAR fulfilled' });
+    res.status(200).json({
+      data: report,
+      receipt: summarizeReceipt(receipt),
+      ...(policyExecution.trace ? { policyTrace: policyExecution.trace } : {}),
+      message: 'DSAR fulfilled',
+    });
   } catch (err) {
     const error = err as Error & { statusCode?: number; code?: string };
     logger.error('dsar_error', { error: error.message });
@@ -647,7 +854,23 @@ router.post('/pia', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_ROLES),
     const context = await requireReceiptContext(req, res);
     if (!context) return;
 
-    const result = dataSovereigntyService.conductPIA(req.body);
+    const policyContext = await policyContextService.resolvePolicyContext(
+      'privacy_impact_assessment',
+      context.organizationId,
+      {
+        jurisdictionCodes: req.body.jurisdictions ?? [],
+        subjectEntityId: req.body.dataSubjectId,
+      },
+    );
+    const baseResult = dataSovereigntyService.conductPIA(req.body);
+    const policyExecution = await policyExecutionService.applyPrivacyWorkflowPolicy(
+      context.organizationId,
+      policyContext,
+      'pia',
+      req.body,
+      baseResult,
+    );
+    const result = policyExecution.result;
     const receipt = await createPolicyAnchoredReceipt(context, {
       receiptType: 'privacy_impact_assessment',
       policyName: 'privacy_impact_assessment',
@@ -663,9 +886,16 @@ router.post('/pia', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_ROLES),
       },
       metadata: {
         route: '/enterprise/compliance/pia',
+        ...(policyExecution.trace ? { policyExecutionTrace: policyExecution.trace } : {}),
       },
+      policyContextOverride: policyContext,
     });
-    res.status(200).json({ data: result, receipt: summarizeReceipt(receipt), message: 'Privacy impact assessment completed' });
+    res.status(200).json({
+      data: result,
+      receipt: summarizeReceipt(receipt),
+      ...(policyExecution.trace ? { policyTrace: policyExecution.trace } : {}),
+      message: 'Privacy impact assessment completed',
+    });
   } catch (err) {
     const error = err as Error & { statusCode?: number; code?: string };
     logger.error('pia_error', { error: error.message });
@@ -678,8 +908,50 @@ router.post('/pia', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_ROLES),
 // ---------------------------------------------------------------------------
 router.post('/breach', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_REVIEW_ROLES), validate(BreachNotificationSchema), async (req: Request, res: Response): Promise<void> => {
   try {
-    const timeline = dataSovereigntyService.initiateBreachNotification(req.body);
-    res.status(201).json({ data: timeline, message: 'Breach notification workflow initiated' });
+    const context = await requireReceiptContext(req, res);
+    if (!context) return;
+
+    const policyContext = await policyContextService.resolvePolicyContext(
+      'data_breach_notification',
+      context.organizationId,
+      {
+        jurisdictionCodes: req.body.jurisdictions ?? [],
+      },
+    );
+    const baseTimeline = dataSovereigntyService.initiateBreachNotification(req.body);
+    const policyExecution = await policyExecutionService.applyPrivacyWorkflowPolicy(
+      context.organizationId,
+      policyContext,
+      'breach',
+      req.body,
+      baseTimeline,
+    );
+    const timeline = policyExecution.result;
+    const receipt = await createPolicyAnchoredReceipt(context, {
+      receiptType: 'breach_notification',
+      policyName: 'data_breach_notification',
+      jurisdictionCodes: req.body.jurisdictions ?? [],
+      decisionSummary: `breach_workflow:${req.body.severity}:${timeline.dataSubjectNotificationRequired}`,
+      payload: req.body,
+      result: timeline,
+      evidence: {
+        breachId: timeline.breachId,
+        regulatoryDeadlineCount: timeline.regulatoryDeadlines.length,
+        dataSubjectNotificationRequired: timeline.dataSubjectNotificationRequired,
+        dataSubjectDeadlineHours: timeline.dataSubjectDeadlineHours,
+      },
+      metadata: {
+        route: '/enterprise/compliance/breach',
+        ...(policyExecution.trace ? { policyExecutionTrace: policyExecution.trace } : {}),
+      },
+      policyContextOverride: policyContext,
+    });
+    res.status(201).json({
+      data: timeline,
+      receipt: summarizeReceipt(receipt),
+      ...(policyExecution.trace ? { policyTrace: policyExecution.trace } : {}),
+      message: 'Breach notification workflow initiated',
+    });
   } catch (err) {
     const error = err as Error & { statusCode?: number; code?: string };
     logger.error('breach_error', { error: error.message });
