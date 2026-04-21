@@ -91,6 +91,7 @@ model Identity {
   aiAgents        AIAgent[]
   issuerTrustRecords IssuerTrustRecord[] @relation("trusted_issuer")
   issuerKeyHistory  IssuerKeyHistory[]   @relation("issuer_key_history")
+  policyDecisionReceipts PolicyDecisionLedger[] @relation("policy_receipt_actor")
 
   @@index([did])
   @@index([status])
@@ -267,6 +268,21 @@ enum IssuerKeyStatus {
   ACTIVE
   RETIRED
   REVOKED
+}
+
+enum PolicyReceiptType {
+  COMPLIANCE_EVALUATION
+  REGULATORY_REPORT
+  CROSS_BORDER_ASSESSMENT
+  PRIVACY_IMPACT_ASSESSMENT
+  SANCTIONS_SCREENING
+}
+
+enum PolicyDefinitionStatus {
+  DRAFT
+  PENDING_REVIEW
+  APPROVED
+  DEPRECATED
 }
 
 enum BridgeStatus {
@@ -545,6 +561,8 @@ model Organization {
   webhooks        Webhook[]
   members         OrganizationMember[]
   trustedIssuers  IssuerTrustRecord[]
+  policyDecisionReceipts PolicyDecisionLedger[]
+  policyDefinitions PolicyDefinition[]
 
   @@index([domain])
   @@map("organizations")
@@ -601,6 +619,63 @@ model IssuerKeyHistory {
   @@index([issuerDid, keyVersion])
   @@index([status])
   @@map("issuer_key_history")
+}
+
+model PolicyDecisionLedger {
+  id                String            @id @default(uuid())
+  receiptId         String            @unique
+  organizationId    String
+  actorIdentityId   String
+  receiptType       PolicyReceiptType
+  policyName        String
+  policyVersion     String
+  policyReference   String?
+  subjectEntityId   String?
+  jurisdictionCodes String[]
+  decisionSummary   String
+  inputDigest       String
+  outputDigest      String
+  evidenceDigest    String
+  integrityHash     String
+  integrityToken    String
+  metadata          Json?
+  createdAt         DateTime          @default(now())
+  expiresAt         DateTime
+
+  organization      Organization      @relation(fields: [organizationId], references: [id])
+  actor             Identity          @relation("policy_receipt_actor", fields: [actorIdentityId], references: [id])
+
+  @@index([organizationId, createdAt])
+  @@index([actorIdentityId, createdAt])
+  @@index([receiptType, createdAt])
+  @@index([subjectEntityId])
+  @@map("policy_decision_ledger")
+}
+
+model PolicyDefinition {
+  id                String                 @id @default(uuid())
+  organizationId    String
+  name              String
+  version           String
+  family            String
+  reference         String
+  description       String
+  status            PolicyDefinitionStatus @default(DRAFT)
+  definition        Json
+  changeSummary     String?
+  proposedByIdentityId String
+  approvedByIdentityId String?
+  effectiveFrom     DateTime?
+  expiresAt         DateTime?
+  createdAt         DateTime               @default(now())
+  updatedAt         DateTime               @updatedAt
+
+  organization      Organization           @relation(fields: [organizationId], references: [id])
+
+  @@unique([organizationId, name, version])
+  @@index([organizationId, name, status])
+  @@index([effectiveFrom])
+  @@map("policy_definitions")
 }
 
 model OrganizationMember {

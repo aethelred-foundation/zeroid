@@ -8,6 +8,7 @@ import { dataSovereigntyService, CrossBorderTransferSchema, PIASchema, BreachNot
 import { EnterpriseAuthenticatedRequest, requireEnterpriseContext } from '../../middleware/enterprise';
 import { EnterpriseRole } from '../../services/enterprise/organization-service';
 import { policyDecisionReceiptService, PolicyDecisionReceipt } from '../../services/enterprise/policy-receipt-service';
+import { policyContextService } from '../../services/enterprise/policy-context-service';
 
 // ---------------------------------------------------------------------------
 // Logger
@@ -57,6 +58,9 @@ function summarizeReceipt(receipt: PolicyDecisionReceipt): Record<string, unknow
   return {
     id: receipt.receiptId,
     receiptType: receipt.receiptType,
+    policyName: receipt.policyName,
+    policyVersion: receipt.policyVersion,
+    policyReference: receipt.policyReference,
     decisionSummary: receipt.decisionSummary,
     integrityHash: receipt.integrityHash,
     createdAt: receipt.createdAt,
@@ -70,6 +74,51 @@ async function requireReceiptContext(req: Request, res: Response): Promise<{ org
     return null;
   }
   return context;
+}
+
+async function createPolicyAnchoredReceipt(
+  context: { organizationId: string; actorIdentityId: string },
+  input: {
+    receiptType: PolicyDecisionReceipt['receiptType'];
+    policyName: string;
+    jurisdictionCodes?: string[];
+    subjectEntityId?: string;
+    decisionSummary: string;
+    payload: unknown;
+    result: unknown;
+    evidence?: unknown;
+    metadata?: Record<string, unknown>;
+    credentials?: Array<{ issuerId: string; credentialType: string }>;
+  },
+): Promise<PolicyDecisionReceipt> {
+  const policyContext = await policyContextService.resolvePolicyContext(
+    input.policyName,
+    context.organizationId,
+    {
+      jurisdictionCodes: input.jurisdictionCodes ?? [],
+      credentials: input.credentials,
+    },
+  );
+
+  return policyDecisionReceiptService.createReceipt({
+    organizationId: context.organizationId,
+    actorIdentityId: context.actorIdentityId,
+    receiptType: input.receiptType,
+    policyName: policyContext.policyName,
+    policyVersion: policyContext.policyVersion,
+    policyReference: policyContext.policyReference,
+    subjectEntityId: input.subjectEntityId,
+    jurisdictionCodes: input.jurisdictionCodes ?? [],
+    decisionSummary: input.decisionSummary,
+    input: input.payload,
+    output: input.result,
+    evidence: input.evidence,
+    metadata: {
+      policyFamily: policyContext.policyFamily,
+      ...(policyContext.trustContext ? { trustContext: policyContext.trustContext } : {}),
+      ...(input.metadata ?? {}),
+    },
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -117,6 +166,22 @@ router.get('/receipts/:receiptId/verify', requireEnterpriseContext(ENTERPRISE_CO
 });
 
 // ---------------------------------------------------------------------------
+// GET /enterprise/compliance/receipts/:receiptId/export — Export receipt evidence bundle
+// ---------------------------------------------------------------------------
+router.get('/receipts/:receiptId/export', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_READ_ROLES), async (req: Request, res: Response): Promise<void> => {
+  const context = await requireReceiptContext(req, res);
+  if (!context) return;
+
+  const exported = await policyDecisionReceiptService.exportReceipt(req.params.receiptId as string);
+  if (!exported || exported.receipt.organizationId !== context.organizationId) {
+    res.status(404).json({ error: 'Receipt not found', code: 'COMPLIANCE_RECEIPT_NOT_FOUND' });
+    return;
+  }
+
+  res.status(200).json({ data: exported });
+});
+
+// ---------------------------------------------------------------------------
 // POST /enterprise/compliance/screen — Sanctions screening
 // ---------------------------------------------------------------------------
 router.post('/screen', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_ROLES), validate(ScreeningRequestSchema), async (req: Request, res: Response): Promise<void> => {
@@ -125,17 +190,13 @@ router.post('/screen', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_ROLE
     if (!context) return;
 
     const result = await sanctionsScreeningService.screenEntity(req.body);
-    const receipt = await policyDecisionReceiptService.createReceipt({
-      organizationId: context.organizationId,
-      actorIdentityId: context.actorIdentityId,
+    const receipt = await createPolicyAnchoredReceipt(context, {
       receiptType: 'sanctions_screening',
       policyName: 'sanctions_screening',
-      policyVersion: 'v1',
       subjectEntityId: req.body.entityId,
-      jurisdictionCodes: [],
       decisionSummary: `screening_result:${result.overallRisk}`,
-      input: req.body,
-      output: result,
+      payload: req.body,
+      result,
       evidence: {
         listsScreened: result.listsScreened,
         matchCount: result.matches.length,
@@ -164,16 +225,12 @@ router.post('/screen/batch', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRIT
     if (!context) return;
 
     const result = await sanctionsScreeningService.screenBatch(req.body);
-    const receipt = await policyDecisionReceiptService.createReceipt({
-      organizationId: context.organizationId,
-      actorIdentityId: context.actorIdentityId,
+    const receipt = await createPolicyAnchoredReceipt(context, {
       receiptType: 'sanctions_screening',
       policyName: 'batch_sanctions_screening',
-      policyVersion: 'v1',
-      jurisdictionCodes: [],
       decisionSummary: `batch_screening:${result.totalEntities}:${result.summary.confirmedMatch}:${result.summary.potentialMatch}`,
-      input: req.body,
-      output: result,
+      payload: req.body,
+      result,
       evidence: {
         totalEntities: result.totalEntities,
         summary: result.summary,
@@ -247,22 +304,23 @@ router.post('/evaluate', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_RO
     if (!context) return;
 
     const results = await jurisdictionEngine.evaluateCompliance(req.body);
-    const receipt = await policyDecisionReceiptService.createReceipt({
-      organizationId: context.organizationId,
-      actorIdentityId: context.actorIdentityId,
+    const receipt = await createPolicyAnchoredReceipt(context, {
       receiptType: 'compliance_evaluation',
       policyName: 'jurisdiction_compliance',
-      policyVersion: 'v1',
       subjectEntityId: req.body.entityId,
       jurisdictionCodes: req.body.jurisdictions ?? [],
       decisionSummary: results.map((result) => `${result.jurisdiction}:${result.overallStatus}`).join(','),
-      input: req.body,
-      output: results,
+      payload: req.body,
+      result: results,
       evidence: results.map((result) => ({
         jurisdiction: result.jurisdiction,
         overallStatus: result.overallStatus,
         missingCredentials: result.missingCredentials,
         ruleOutcomes: result.rules.map((rule) => ({ name: rule.name, status: rule.status })),
+      })),
+      credentials: (req.body.credentials ?? []).map((credential: Record<string, unknown>) => ({
+        issuerId: String(credential.issuerId ?? ''),
+        credentialType: String(credential.credentialType ?? ''),
       })),
       metadata: {
         route: '/enterprise/compliance/evaluate',
@@ -317,16 +375,13 @@ router.post('/report', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_ROLE
         break;
       case 'DASHBOARD': {
         const dashboard = regulatoryReportingService.getDashboardData();
-        const receipt = await policyDecisionReceiptService.createReceipt({
-          organizationId: context.organizationId,
-          actorIdentityId: context.actorIdentityId,
+        const receipt = await createPolicyAnchoredReceipt(context, {
           receiptType: 'regulatory_report',
           policyName: 'regulatory_dashboard',
-          policyVersion: 'v1',
           jurisdictionCodes: req.body.jurisdiction ? [req.body.jurisdiction] : [],
           decisionSummary: 'dashboard_generated',
-          input: req.body,
-          output: dashboard,
+          payload: req.body,
+          result: dashboard,
           evidence: { reportType: 'DASHBOARD' },
           metadata: {
             route: '/enterprise/compliance/report',
@@ -340,20 +395,17 @@ router.post('/report', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_ROLE
         return;
     }
 
-    const receipt = await policyDecisionReceiptService.createReceipt({
-      organizationId: context.organizationId,
-      actorIdentityId: context.actorIdentityId,
+    const receipt = await createPolicyAnchoredReceipt(context, {
       receiptType: 'regulatory_report',
       policyName: 'regulatory_reporting',
-      policyVersion: 'v1',
       subjectEntityId: req.body.entityId ?? req.body.subject?.entityId ?? req.body.dataSubject?.entityId,
       jurisdictionCodes: [
         req.body.jurisdiction,
         req.body.filingInstitution?.jurisdiction,
       ].filter((value): value is string => typeof value === 'string' && value.length > 0),
       decisionSummary: `report_generated:${parsed.data}`,
-      input: req.body,
-      output: report,
+      payload: req.body,
+      result: report,
       evidence: {
         reportType: parsed.data,
         reportId: (report as any)?.reportId ?? null,
@@ -380,18 +432,14 @@ router.post('/report/:reportId/submit', requireEnterpriseContext(ENTERPRISE_COMP
     if (!context) return;
 
     const result = await regulatoryReportingService.submitReport(req.params.reportId as string);
-    const receipt = await policyDecisionReceiptService.createReceipt({
-      organizationId: context.organizationId,
-      actorIdentityId: context.actorIdentityId,
+    const receipt = await createPolicyAnchoredReceipt(context, {
       receiptType: 'regulatory_report',
       policyName: 'regulatory_submission',
-      policyVersion: 'v1',
-      jurisdictionCodes: [],
       decisionSummary: `report_submitted:${req.params.reportId}`,
-      input: {
+      payload: {
         reportId: req.params.reportId,
       },
-      output: result,
+      result,
       evidence: {
         reportId: req.params.reportId,
       },
@@ -454,20 +502,17 @@ router.post('/cross-border', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRIT
     const jurisdictionAssessment = CrossBorderAssessmentSchema.safeParse(req.body);
     if (jurisdictionAssessment.success) {
       const result = jurisdictionEngine.assessCrossBorder(jurisdictionAssessment.data);
-      const receipt = await policyDecisionReceiptService.createReceipt({
-        organizationId: context.organizationId,
-        actorIdentityId: context.actorIdentityId,
+      const receipt = await createPolicyAnchoredReceipt(context, {
         receiptType: 'cross_border_assessment',
         policyName: 'jurisdiction_cross_border',
-        policyVersion: 'v1',
         subjectEntityId: req.body.entityId,
         jurisdictionCodes: [
           jurisdictionAssessment.data.sourceJurisdiction,
           jurisdictionAssessment.data.targetJurisdiction,
         ],
         decisionSummary: `transfer_allowed:${result.allowed}`,
-        input: req.body,
-        output: result,
+        payload: req.body,
+        result,
         evidence: {
           restrictions: result.restrictions,
           transferMechanism: result.dataTransferMechanism,
@@ -485,20 +530,17 @@ router.post('/cross-border', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRIT
     const transferAssessment = CrossBorderTransferSchema.safeParse(req.body);
     if (transferAssessment.success) {
       const result = dataSovereigntyService.assessCrossBorderTransfer(transferAssessment.data);
-      const receipt = await policyDecisionReceiptService.createReceipt({
-        organizationId: context.organizationId,
-        actorIdentityId: context.actorIdentityId,
+      const receipt = await createPolicyAnchoredReceipt(context, {
         receiptType: 'cross_border_assessment',
         policyName: 'data_sovereignty_cross_border',
-        policyVersion: 'v1',
         subjectEntityId: req.body.dataSubjectId,
         jurisdictionCodes: [
           transferAssessment.data.sourceJurisdiction,
           transferAssessment.data.targetJurisdiction,
         ],
         decisionSummary: `transfer_allowed:${result.allowed}`,
-        input: req.body,
-        output: result,
+        payload: req.body,
+        result,
         evidence: {
           legalBasis: result.legalBasis,
           riskLevel: result.riskLevel,
@@ -536,17 +578,14 @@ router.post('/dsar', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_ROLES)
 
     if (requestType === 'erasure' || req.body.reportType === 'ERASURE') {
       const report = await regulatoryReportingService.processErasure({ ...req.body, reportType: 'ERASURE' });
-      const receipt = await policyDecisionReceiptService.createReceipt({
-        organizationId: context.organizationId,
-        actorIdentityId: context.actorIdentityId,
+      const receipt = await createPolicyAnchoredReceipt(context, {
         receiptType: 'regulatory_report',
         policyName: 'data_subject_erasure',
-        policyVersion: 'v1',
         subjectEntityId: req.body.requestorId,
         jurisdictionCodes: req.body.jurisdiction ? [req.body.jurisdiction] : [],
         decisionSummary: 'erasure_request_processed',
-        input: req.body,
-        output: report,
+        payload: req.body,
+        result: report,
         evidence: {
           requestType: 'erasure',
           reportId: (report as any).reportId ?? null,
@@ -560,17 +599,14 @@ router.post('/dsar', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_ROLES)
     }
 
     const report = await regulatoryReportingService.fulfillDSAR({ ...req.body, reportType: 'DSAR' });
-    const receipt = await policyDecisionReceiptService.createReceipt({
-      organizationId: context.organizationId,
-      actorIdentityId: context.actorIdentityId,
+    const receipt = await createPolicyAnchoredReceipt(context, {
       receiptType: 'regulatory_report',
       policyName: 'data_subject_access',
-      policyVersion: 'v1',
       subjectEntityId: req.body.requestorId,
       jurisdictionCodes: req.body.jurisdiction ? [req.body.jurisdiction] : [],
       decisionSummary: 'dsar_fulfilled',
-      input: req.body,
-      output: report,
+      payload: req.body,
+      result: report,
       evidence: {
         requestType: requestType ?? 'access',
         reportId: (report as any).reportId ?? null,
@@ -610,17 +646,14 @@ router.post('/pia', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_ROLES),
     if (!context) return;
 
     const result = dataSovereigntyService.conductPIA(req.body);
-    const receipt = await policyDecisionReceiptService.createReceipt({
-      organizationId: context.organizationId,
-      actorIdentityId: context.actorIdentityId,
+    const receipt = await createPolicyAnchoredReceipt(context, {
       receiptType: 'privacy_impact_assessment',
       policyName: 'privacy_impact_assessment',
-      policyVersion: 'v1',
       subjectEntityId: req.body.dataSubjectId,
       jurisdictionCodes: req.body.jurisdictions ?? [],
       decisionSummary: `pia_risk:${result.riskLevel}`,
-      input: req.body,
-      output: result,
+      payload: req.body,
+      result,
       evidence: {
         riskScore: result.riskScore,
         dpiaRequired: result.dpiaRequired,

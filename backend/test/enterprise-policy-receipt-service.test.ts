@@ -1,9 +1,17 @@
 const mockAuditLogCreate = jest.fn();
+const mockPolicyDecisionLedgerCreate = jest.fn();
+const mockPolicyDecisionLedgerFindUnique = jest.fn();
+const mockPolicyDecisionLedgerFindMany = jest.fn();
 
 const redisStore: Record<string, string> = {};
 
 jest.mock('../src/index', () => ({
   prisma: {
+    policyDecisionLedger: {
+      create: mockPolicyDecisionLedgerCreate,
+      findUnique: mockPolicyDecisionLedgerFindUnique,
+      findMany: mockPolicyDecisionLedgerFindMany,
+    },
     auditLog: {
       create: mockAuditLogCreate,
     },
@@ -28,6 +36,9 @@ describe('PolicyDecisionReceiptService', () => {
       delete redisStore[key];
     }
     process.env.POLICY_RECEIPT_SIGNING_SECRET = 'policy-receipt-signing-secret-123';
+    mockPolicyDecisionLedgerCreate.mockResolvedValue(undefined);
+    mockPolicyDecisionLedgerFindUnique.mockResolvedValue(null);
+    mockPolicyDecisionLedgerFindMany.mockResolvedValue([]);
   });
 
   afterAll(() => {
@@ -58,6 +69,27 @@ describe('PolicyDecisionReceiptService', () => {
         resourceType: 'policy_decision_receipt',
       }),
     }));
+    expect(mockPolicyDecisionLedgerCreate).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        receiptId: receipt.receiptId,
+        organizationId: 'org-1',
+        actorIdentityId: 'actor-1',
+        receiptType: 'COMPLIANCE_EVALUATION',
+        policyReference: undefined,
+      }),
+    }));
+
+    mockPolicyDecisionLedgerFindMany.mockResolvedValue([
+      {
+        receiptId: receipt.receiptId,
+        receiptType: 'COMPLIANCE_EVALUATION',
+        policyName: 'jurisdiction_compliance',
+        policyVersion: 'v1',
+        subjectEntityId: 'entity-1',
+        decisionSummary: receipt.decisionSummary,
+        createdAt: new Date(receipt.createdAt),
+      },
+    ]);
 
     const loaded = await service.getReceipt(receipt.receiptId);
     expect(loaded).toEqual(receipt);
@@ -67,6 +99,8 @@ describe('PolicyDecisionReceiptService', () => {
       expect.objectContaining({
         receiptId: receipt.receiptId,
         receiptType: 'compliance_evaluation',
+        policyName: 'jurisdiction_compliance',
+        policyVersion: 'v1',
         subjectEntityId: 'entity-1',
       }),
     ]);
@@ -98,5 +132,94 @@ describe('PolicyDecisionReceiptService', () => {
     const verification = await service.verifyReceipt(receipt.receiptId);
     expect(verification.receipt?.decisionSummary).toBe('screening_result:confirmed_match');
     expect(verification.valid).toBe(false);
+  });
+
+  it('falls back to the durable ledger when the redis cache is cold', async () => {
+    const createdAt = new Date('2026-04-21T00:00:00.000Z');
+    const expiresAt = new Date('2026-07-20T00:00:00.000Z');
+    mockPolicyDecisionLedgerFindUnique.mockResolvedValue({
+      receiptId: 'pdr_ledger_1',
+      organizationId: 'org-1',
+      actorIdentityId: 'actor-1',
+      receiptType: 'REGULATORY_REPORT',
+      policyName: 'regulatory_reporting',
+      policyVersion: 'v1',
+      policyReference: 'zeroid://policy/reporting/regulatory_reporting@2026.04.1',
+      subjectEntityId: 'entity-2',
+      jurisdictionCodes: ['AE-ADGM'],
+      decisionSummary: 'report_generated:SAR',
+      inputDigest: 'input-hash',
+      outputDigest: 'output-hash',
+      evidenceDigest: 'evidence-hash',
+      integrityHash: 'hash',
+      integrityToken: 'token',
+      metadata: { route: '/enterprise/compliance/report' },
+      createdAt,
+      expiresAt,
+    });
+    mockPolicyDecisionLedgerFindMany.mockResolvedValue([
+      {
+        receiptId: 'pdr_ledger_1',
+        receiptType: 'REGULATORY_REPORT',
+        policyName: 'regulatory_reporting',
+        policyVersion: 'v1',
+        subjectEntityId: 'entity-2',
+        decisionSummary: 'report_generated:SAR',
+        createdAt,
+      },
+    ]);
+
+    const loaded = await service.getReceipt('pdr_ledger_1');
+    expect(loaded).toMatchObject({
+      receiptId: 'pdr_ledger_1',
+      receiptType: 'regulatory_report',
+      policyReference: 'zeroid://policy/reporting/regulatory_reporting@2026.04.1',
+      decisionSummary: 'report_generated:SAR',
+    });
+    expect(redisStore['policy:receipt:pdr_ledger_1']).toBeDefined();
+
+    const list = await service.listReceipts('org-1', 10);
+    expect(list).toEqual([
+      {
+        receiptId: 'pdr_ledger_1',
+        receiptType: 'regulatory_report',
+        policyName: 'regulatory_reporting',
+        policyVersion: 'v1',
+        subjectEntityId: 'entity-2',
+        decisionSummary: 'report_generated:SAR',
+        createdAt: '2026-04-21T00:00:00.000Z',
+      },
+    ]);
+    expect(mockPolicyDecisionLedgerFindMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { organizationId: 'org-1' },
+      take: 10,
+    }));
+  });
+
+  it('exports a verified receipt bundle', async () => {
+    const receipt = await service.createReceipt({
+      organizationId: 'org-1',
+      actorIdentityId: 'actor-1',
+      receiptType: 'privacy_impact_assessment',
+      policyName: 'privacy_impact_assessment',
+      policyVersion: '2026.04.1',
+      policyReference: 'zeroid://policy/privacy/privacy_impact_assessment@2026.04.1',
+      subjectEntityId: 'entity-7',
+      jurisdictionCodes: ['EU-GDPR'],
+      decisionSummary: 'pia_risk:medium',
+      input: { entityId: 'entity-7' },
+      output: { riskLevel: 'medium' },
+      evidence: { riskScore: 58 },
+    });
+
+    const exported = await service.exportReceipt(receipt.receiptId);
+    expect(exported).toMatchObject({
+      formatVersion: 'zeroid.policy_receipt_export.v1',
+      verified: true,
+      receipt: expect.objectContaining({
+        receiptId: receipt.receiptId,
+        policyReference: 'zeroid://policy/privacy/privacy_impact_assessment@2026.04.1',
+      }),
+    });
   });
 });

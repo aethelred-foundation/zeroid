@@ -7,7 +7,9 @@ const mockEvaluateCompliance = jest.fn();
 const mockListReceipts = jest.fn();
 const mockGetReceipt = jest.fn();
 const mockVerifyReceipt = jest.fn();
+const mockExportReceipt = jest.fn();
 const mockCreateReceipt = jest.fn();
+const mockResolvePolicyContext = jest.fn();
 
 jest.mock('express', () => {
   const router = {
@@ -110,6 +112,13 @@ jest.mock('../src/services/enterprise/policy-receipt-service', () => ({
     listReceipts: mockListReceipts,
     getReceipt: mockGetReceipt,
     verifyReceipt: mockVerifyReceipt,
+    exportReceipt: mockExportReceipt,
+  },
+}));
+
+jest.mock('../src/services/enterprise/policy-context-service', () => ({
+  policyContextService: {
+    resolvePolicyContext: mockResolvePolicyContext,
   },
 }));
 
@@ -200,13 +209,41 @@ describe('enterprise compliance receipt routes', () => {
   beforeEach(() => {
     jest.clearAllMocks();
 
+    mockResolvePolicyContext.mockImplementation(async (policyName: string) => ({
+      policyName,
+      policyVersion: '2026.04.1',
+      policyReference: `zeroid://policy/mock/${policyName}@2026.04.1`,
+      policyFamily: 'compliance',
+      trustContext: {
+        organizationId: 'org-1',
+        evaluatedIssuerCount: 1,
+        accreditedIssuerCount: 1,
+        enforced: true,
+        anchors: [
+          {
+            issuerIdentityId: 'issuer-1',
+            issuerDid: 'did:aethelred:issuer:1',
+            issuerDisplayName: 'Issuer One',
+            trustRecordId: 'trust-1',
+            status: 'accredited',
+            accreditationScope: 'sovereign',
+            assuranceLevel: 'qualified',
+            accepted: true,
+            evaluatedCredentialTypes: ['kyc_enhanced'],
+            matchedJurisdictions: ['AE-ADGM'],
+          },
+        ],
+      },
+    }));
+
     mockCreateReceipt.mockImplementation(async (input: Record<string, unknown>) => ({
       receiptId: 'pdr_1',
       organizationId: 'org-1',
       actorIdentityId: 'actor-1',
       receiptType: input.receiptType ?? 'compliance_evaluation',
       policyName: input.policyName ?? 'jurisdiction_compliance',
-      policyVersion: 'v1',
+      policyVersion: input.policyVersion ?? '2026.04.1',
+      policyReference: input.policyReference ?? 'zeroid://policy/mock/default@2026.04.1',
       jurisdictionCodes: (input.jurisdictionCodes as string[] | undefined) ?? ['AE-ADGM'],
       decisionSummary: input.decisionSummary ?? 'AE-ADGM:compliant',
       inputDigest: 'input',
@@ -231,7 +268,8 @@ describe('enterprise compliance receipt routes', () => {
       actorIdentityId: 'actor-1',
       receiptType: 'compliance_evaluation',
       policyName: 'jurisdiction_compliance',
-      policyVersion: 'v1',
+      policyVersion: '2026.04.1',
+      policyReference: 'zeroid://policy/mock/jurisdiction_compliance@2026.04.1',
       jurisdictionCodes: ['AE-ADGM'],
       decisionSummary: 'AE-ADGM:compliant',
       inputDigest: 'input',
@@ -244,6 +282,15 @@ describe('enterprise compliance receipt routes', () => {
     });
     mockVerifyReceipt.mockResolvedValue({
       valid: true,
+      receipt: {
+        receiptId: 'pdr_1',
+        organizationId: 'org-1',
+      },
+    });
+    mockExportReceipt.mockResolvedValue({
+      formatVersion: 'zeroid.policy_receipt_export.v1',
+      exportedAt: '2026-04-21T01:00:00.000Z',
+      verified: true,
       receipt: {
         receiptId: 'pdr_1',
         organizationId: 'org-1',
@@ -275,14 +322,25 @@ describe('enterprise compliance receipt routes', () => {
     expect(response.body.receipt).toMatchObject({
       id: 'pdr_1',
       receiptType: 'compliance_evaluation',
+      policyVersion: '2026.04.1',
+      policyReference: 'zeroid://policy/mock/jurisdiction_compliance@2026.04.1',
       integrityHash: 'hash',
     });
     expect(mockCreateReceipt).toHaveBeenCalledWith(expect.objectContaining({
       organizationId: 'org-1',
       actorIdentityId: 'actor-1',
       receiptType: 'compliance_evaluation',
+      policyVersion: '2026.04.1',
+      policyReference: 'zeroid://policy/mock/jurisdiction_compliance@2026.04.1',
       subjectEntityId: 'entity-1',
       jurisdictionCodes: ['AE-ADGM'],
+      metadata: expect.objectContaining({
+        policyFamily: 'compliance',
+        trustContext: expect.objectContaining({
+          enforced: true,
+          accreditedIssuerCount: 1,
+        }),
+      }),
     }));
   });
 
@@ -313,6 +371,7 @@ describe('enterprise compliance receipt routes', () => {
     expect(response.body.receipt).toMatchObject({
       id: 'pdr_1',
       receiptType: 'sanctions_screening',
+      policyVersion: '2026.04.1',
     });
     expect(mockCreateReceipt).toHaveBeenCalledWith(expect.objectContaining({
       receiptType: 'sanctions_screening',
@@ -340,5 +399,21 @@ describe('enterprise compliance receipt routes', () => {
     expect(verifyResponse.statusCode).toBe(200);
     expect(verifyResponse.body.data).toMatchObject({ valid: true });
     expect(mockVerifyReceipt).toHaveBeenCalledWith('pdr_1');
+  });
+
+  it('exports an organization-scoped receipt evidence bundle', async () => {
+    const exportResponse = await invokeRoute('GET', '/receipts/:receiptId/export', {
+      params: { receiptId: 'pdr_1' },
+    });
+
+    expect(exportResponse.statusCode).toBe(200);
+    expect(exportResponse.body.data).toMatchObject({
+      formatVersion: 'zeroid.policy_receipt_export.v1',
+      verified: true,
+      receipt: {
+        receiptId: 'pdr_1',
+      },
+    });
+    expect(mockExportReceipt).toHaveBeenCalledWith('pdr_1');
   });
 });

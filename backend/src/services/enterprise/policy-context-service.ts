@@ -1,0 +1,331 @@
+import { prisma } from '../../index';
+
+export interface PolicyDefinition {
+  policyName: string;
+  version: string;
+  reference: string;
+  family: 'compliance' | 'reporting' | 'privacy' | 'screening';
+}
+
+export interface CredentialTrustInput {
+  issuerId: string;
+  credentialType: string;
+}
+
+export interface PolicyTrustAnchorSnapshot {
+  issuerIdentityId: string;
+  issuerDid: string;
+  issuerDisplayName: string | null;
+  trustRecordId?: string;
+  status: string;
+  accreditationScope?: string;
+  assuranceLevel?: string;
+  accepted: boolean;
+  evaluatedCredentialTypes: string[];
+  matchedJurisdictions: string[];
+  expiresAt?: string;
+}
+
+export interface PolicyExecutionContext {
+  policyName: string;
+  policyVersion: string;
+  policyReference: string;
+  policyFamily: PolicyDefinition['family'];
+  trustContext?: {
+    organizationId: string;
+    evaluatedIssuerCount: number;
+    accreditedIssuerCount: number;
+    enforced: boolean;
+    anchors: PolicyTrustAnchorSnapshot[];
+  };
+}
+
+const POLICY_DEFINITIONS: Record<string, PolicyDefinition> = {
+  sanctions_screening: {
+    policyName: 'sanctions_screening',
+    version: '2026.04.1',
+    reference: 'zeroid://policy/screening/sanctions_screening@2026.04.1',
+    family: 'screening',
+  },
+  batch_sanctions_screening: {
+    policyName: 'batch_sanctions_screening',
+    version: '2026.04.1',
+    reference: 'zeroid://policy/screening/batch_sanctions_screening@2026.04.1',
+    family: 'screening',
+  },
+  jurisdiction_compliance: {
+    policyName: 'jurisdiction_compliance',
+    version: '2026.04.1',
+    reference: 'zeroid://policy/compliance/jurisdiction_compliance@2026.04.1',
+    family: 'compliance',
+  },
+  regulatory_dashboard: {
+    policyName: 'regulatory_dashboard',
+    version: '2026.04.1',
+    reference: 'zeroid://policy/reporting/regulatory_dashboard@2026.04.1',
+    family: 'reporting',
+  },
+  regulatory_reporting: {
+    policyName: 'regulatory_reporting',
+    version: '2026.04.1',
+    reference: 'zeroid://policy/reporting/regulatory_reporting@2026.04.1',
+    family: 'reporting',
+  },
+  regulatory_submission: {
+    policyName: 'regulatory_submission',
+    version: '2026.04.1',
+    reference: 'zeroid://policy/reporting/regulatory_submission@2026.04.1',
+    family: 'reporting',
+  },
+  jurisdiction_cross_border: {
+    policyName: 'jurisdiction_cross_border',
+    version: '2026.04.1',
+    reference: 'zeroid://policy/compliance/jurisdiction_cross_border@2026.04.1',
+    family: 'compliance',
+  },
+  data_sovereignty_cross_border: {
+    policyName: 'data_sovereignty_cross_border',
+    version: '2026.04.1',
+    reference: 'zeroid://policy/privacy/data_sovereignty_cross_border@2026.04.1',
+    family: 'privacy',
+  },
+  data_subject_erasure: {
+    policyName: 'data_subject_erasure',
+    version: '2026.04.1',
+    reference: 'zeroid://policy/privacy/data_subject_erasure@2026.04.1',
+    family: 'privacy',
+  },
+  data_subject_access: {
+    policyName: 'data_subject_access',
+    version: '2026.04.1',
+    reference: 'zeroid://policy/privacy/data_subject_access@2026.04.1',
+    family: 'privacy',
+  },
+  privacy_impact_assessment: {
+    policyName: 'privacy_impact_assessment',
+    version: '2026.04.1',
+    reference: 'zeroid://policy/privacy/privacy_impact_assessment@2026.04.1',
+    family: 'privacy',
+  },
+};
+
+export class PolicyContextService {
+  async resolvePolicyContext(
+    policyName: string,
+    organizationId: string,
+    options: {
+      jurisdictionCodes?: string[];
+      credentials?: CredentialTrustInput[];
+    } = {},
+  ): Promise<PolicyExecutionContext> {
+    const definition = await this.getPolicyDefinition(policyName, organizationId);
+    const trustContext = await this.buildTrustContext(
+      organizationId,
+      options.credentials ?? [],
+      options.jurisdictionCodes ?? [],
+    );
+
+    return {
+      policyName: definition.policyName,
+      policyVersion: definition.version,
+      policyReference: definition.reference,
+      policyFamily: definition.family,
+      ...(trustContext ? { trustContext } : {}),
+    };
+  }
+
+  private async getPolicyDefinition(
+    policyName: string,
+    organizationId: string,
+  ): Promise<PolicyDefinition> {
+    const policyModel = (prisma as any).policyDefinition;
+    if (policyModel?.findFirst) {
+      const now = new Date();
+      const record = await policyModel.findFirst({
+        where: {
+          organizationId,
+          name: policyName,
+          status: 'APPROVED',
+          OR: [
+            { effectiveFrom: null },
+            { effectiveFrom: { lte: now } },
+          ],
+          AND: [
+            {
+              OR: [
+                { expiresAt: null },
+                { expiresAt: { gt: now } },
+              ],
+            },
+          ],
+        },
+        orderBy: [
+          { effectiveFrom: 'desc' },
+          { updatedAt: 'desc' },
+        ],
+      });
+
+      if (record) {
+        return {
+          policyName: record.name,
+          version: record.version,
+          reference: record.reference,
+          family: this.toPolicyFamily(record.family),
+        };
+      }
+    }
+
+    return POLICY_DEFINITIONS[policyName] ?? {
+      policyName,
+      version: '2026.04.1',
+      reference: `zeroid://policy/custom/${policyName}@2026.04.1`,
+      family: 'compliance',
+    };
+  }
+
+  private async buildTrustContext(
+    organizationId: string,
+    credentials: CredentialTrustInput[],
+    jurisdictionCodes: string[],
+  ): Promise<PolicyExecutionContext['trustContext'] | undefined> {
+    const normalized = this.normalizeCredentialInputs(credentials);
+    if (normalized.length === 0) {
+      return undefined;
+    }
+
+    const trustModel = (prisma as any).issuerTrustRecord;
+    if (!trustModel?.findMany) {
+      return {
+        organizationId,
+        evaluatedIssuerCount: normalized.length,
+        accreditedIssuerCount: 0,
+        enforced: false,
+        anchors: normalized.map((entry) => ({
+          issuerIdentityId: entry.issuerId,
+          issuerDid: '',
+          issuerDisplayName: null,
+          status: 'untracked',
+          accepted: true,
+          evaluatedCredentialTypes: entry.credentialTypes,
+          matchedJurisdictions: [],
+        })),
+      };
+    }
+
+    const records = await trustModel.findMany({
+      where: {
+        organizationId,
+        issuerIdentityId: {
+          in: normalized.map((entry) => entry.issuerId),
+        },
+      },
+      include: {
+        issuer: {
+          select: {
+            displayName: true,
+          },
+        },
+      },
+      orderBy: {
+        updatedAt: 'desc',
+      },
+    });
+
+    const now = new Date();
+    const anchors = normalized.map((entry) => {
+      const issuerRecords = records.filter((record: any) => record.issuerIdentityId === entry.issuerId);
+      const activeRecord = issuerRecords.find((record: any) => (
+        record.status === 'ACCREDITED' &&
+        (!record.expiresAt || new Date(record.expiresAt) > now)
+      ));
+
+      if (!activeRecord) {
+        return {
+          issuerIdentityId: entry.issuerId,
+          issuerDid: issuerRecords[0]?.issuerDid ?? '',
+          issuerDisplayName: issuerRecords[0]?.issuer?.displayName ?? null,
+          status: issuerRecords[0] ? String(issuerRecords[0].status).toLowerCase() : 'untracked',
+          accepted: issuerRecords.length === 0,
+          evaluatedCredentialTypes: entry.credentialTypes,
+          matchedJurisdictions: [],
+        };
+      }
+
+      const matchedJurisdictions = this.intersectJurisdictions(
+        jurisdictionCodes,
+        activeRecord.allowedJurisdictions ?? [],
+      );
+      const credentialTypeAllowed = entry.credentialTypes.some((credentialType) =>
+        Array.isArray(activeRecord.allowedCredentialTypes)
+          && activeRecord.allowedCredentialTypes.includes(credentialType),
+      );
+      const jurisdictionAllowed = matchedJurisdictions.length > 0
+        || !Array.isArray(activeRecord.allowedJurisdictions)
+        || activeRecord.allowedJurisdictions.length === 0
+        || jurisdictionCodes.length === 0;
+
+      return {
+        issuerIdentityId: entry.issuerId,
+        issuerDid: activeRecord.issuerDid,
+        issuerDisplayName: activeRecord.issuer?.displayName ?? null,
+        trustRecordId: activeRecord.id,
+        status: String(activeRecord.status).toLowerCase(),
+        accreditationScope: String(activeRecord.accreditationScope ?? 'ENTERPRISE').toLowerCase(),
+        assuranceLevel: String(activeRecord.assuranceLevel ?? 'STANDARD').toLowerCase(),
+        accepted: credentialTypeAllowed && jurisdictionAllowed,
+        evaluatedCredentialTypes: entry.credentialTypes,
+        matchedJurisdictions,
+        expiresAt: activeRecord.expiresAt ? new Date(activeRecord.expiresAt).toISOString() : undefined,
+      };
+    });
+
+    return {
+      organizationId,
+      evaluatedIssuerCount: anchors.length,
+      accreditedIssuerCount: anchors.filter((anchor) => Boolean(anchor.trustRecordId)).length,
+      enforced: records.length > 0,
+      anchors,
+    };
+  }
+
+  private normalizeCredentialInputs(credentials: CredentialTrustInput[]): Array<{
+    issuerId: string;
+    credentialTypes: string[];
+  }> {
+    const merged = new Map<string, Set<string>>();
+    for (const credential of credentials) {
+      if (!credential.issuerId) continue;
+      const entry = merged.get(credential.issuerId) ?? new Set<string>();
+      if (credential.credentialType) {
+        entry.add(credential.credentialType);
+      }
+      merged.set(credential.issuerId, entry);
+    }
+
+    return Array.from(merged.entries()).map(([issuerId, credentialTypes]) => ({
+      issuerId,
+      credentialTypes: Array.from(credentialTypes),
+    }));
+  }
+
+  private intersectJurisdictions(
+    requestedJurisdictions: string[],
+    allowedJurisdictions: string[],
+  ): string[] {
+    if (requestedJurisdictions.length === 0 || allowedJurisdictions.length === 0) {
+      return [];
+    }
+
+    const allowed = new Set(allowedJurisdictions);
+    return requestedJurisdictions.filter((jurisdiction) => allowed.has(jurisdiction));
+  }
+
+  private toPolicyFamily(value: string): PolicyDefinition['family'] {
+    if (['compliance', 'reporting', 'privacy', 'screening'].includes(value)) {
+      return value as PolicyDefinition['family'];
+    }
+    return 'compliance';
+  }
+}
+
+export const policyContextService = new PolicyContextService();

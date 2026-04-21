@@ -19,6 +19,10 @@ import {
   RecordIssuerKeySchema,
   RegisterIssuerTrustSchema,
 } from '../../services/enterprise/issuer-trust-service';
+import {
+  CreatePolicyDefinitionSchema,
+  policyRegistryService,
+} from '../../services/enterprise/policy-registry-service';
 import { prisma } from '../../index';
 
 // ---------------------------------------------------------------------------
@@ -250,6 +254,33 @@ function serializeIssuerKeyHistory(record: {
     validFrom: record.validFrom.toISOString(),
     validUntil: record.validUntil?.toISOString() ?? null,
     createdAt: record.createdAt.toISOString(),
+  };
+}
+
+function serializePolicyDefinition(record: {
+  id: string;
+  organizationId: string;
+  name: string;
+  version: string;
+  family: string;
+  reference: string;
+  description: string;
+  status: string;
+  definition: Record<string, unknown>;
+  changeSummary: string | null;
+  proposedByIdentityId: string;
+  approvedByIdentityId: string | null;
+  effectiveFrom: Date | null;
+  expiresAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+}): Record<string, unknown> {
+  return {
+    ...record,
+    effectiveFrom: record.effectiveFrom?.toISOString() ?? null,
+    expiresAt: record.expiresAt?.toISOString() ?? null,
+    createdAt: record.createdAt.toISOString(),
+    updatedAt: record.updatedAt.toISOString(),
   };
 }
 
@@ -554,6 +585,111 @@ router.post('/oauth2/token', async (req: Request, res: Response): Promise<void> 
 // ==========================================================================
 // ISSUER TRUST REGISTRY ROUTES
 // ==========================================================================
+
+router.post('/policies', requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES), validate(CreatePolicyDefinitionSchema), async (req: Request, res: Response): Promise<void> => {
+  try {
+    const enterpriseReq = req as EnterpriseAuthenticatedRequest;
+    const organizationId = enterpriseReq.enterpriseContext?.organizationId;
+    const actorIdentityId = enterpriseReq.identity?.id;
+    if (!organizationId || !actorIdentityId) {
+      res.status(401).json({ error: 'Authenticated enterprise admin required', code: 'ENTERPRISE_AUTH_REQUIRED' });
+      return;
+    }
+
+    const policy = await policyRegistryService.createPolicyDraft(organizationId, actorIdentityId, req.body);
+    res.status(201).json({
+      data: serializePolicyDefinition(policy),
+      message: 'Policy definition created as draft',
+    });
+  } catch (err) {
+    const error = err as Error & { statusCode?: number; code?: string };
+    logger.error('policy_create_error', { error: error.message });
+    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'POLICY_CREATE_ERROR' });
+  }
+});
+
+router.get('/policies', requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES), async (req: Request, res: Response): Promise<void> => {
+  try {
+    const enterpriseReq = req as EnterpriseAuthenticatedRequest;
+    const organizationId = enterpriseReq.enterpriseContext?.organizationId;
+    if (!organizationId) {
+      res.status(401).json({ error: 'Authenticated enterprise context required', code: 'ENTERPRISE_AUTH_REQUIRED' });
+      return;
+    }
+
+    const policies = await policyRegistryService.listPolicies(organizationId, {
+      name: typeof req.query.name === 'string' ? req.query.name : undefined,
+      status: typeof req.query.status === 'string' ? req.query.status as any : undefined,
+    });
+    res.status(200).json({ data: policies.map(serializePolicyDefinition) });
+  } catch (err) {
+    const error = err as Error & { statusCode?: number; code?: string };
+    logger.error('policy_list_error', { error: error.message });
+    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'POLICY_LIST_ERROR' });
+  }
+});
+
+router.post('/policies/:policyId/submit', requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES), async (req: Request, res: Response): Promise<void> => {
+  try {
+    const enterpriseReq = req as EnterpriseAuthenticatedRequest;
+    const organizationId = enterpriseReq.enterpriseContext?.organizationId;
+    const actorIdentityId = enterpriseReq.identity?.id;
+    if (!organizationId || !actorIdentityId) {
+      res.status(401).json({ error: 'Authenticated enterprise admin required', code: 'ENTERPRISE_AUTH_REQUIRED' });
+      return;
+    }
+
+    const policy = await policyRegistryService.submitPolicyForReview(req.params.policyId as string, organizationId, actorIdentityId);
+    res.status(200).json({ data: serializePolicyDefinition(policy), message: 'Policy submitted for review' });
+  } catch (err) {
+    const error = err as Error & { statusCode?: number; code?: string };
+    logger.error('policy_submit_error', { error: error.message, policyId: req.params.policyId });
+    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'POLICY_SUBMIT_ERROR' });
+  }
+});
+
+router.post('/policies/:policyId/approve', requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES), async (req: Request, res: Response): Promise<void> => {
+  try {
+    const enterpriseReq = req as EnterpriseAuthenticatedRequest;
+    const organizationId = enterpriseReq.enterpriseContext?.organizationId;
+    const actorIdentityId = enterpriseReq.identity?.id;
+    if (!organizationId || !actorIdentityId) {
+      res.status(401).json({ error: 'Authenticated enterprise admin required', code: 'ENTERPRISE_AUTH_REQUIRED' });
+      return;
+    }
+
+    const effectiveFrom = typeof req.body?.effectiveFrom === 'string' ? req.body.effectiveFrom : undefined;
+    const policy = await policyRegistryService.approvePolicy(req.params.policyId as string, organizationId, actorIdentityId, effectiveFrom);
+    res.status(200).json({ data: serializePolicyDefinition(policy), message: 'Policy approved' });
+  } catch (err) {
+    const error = err as Error & { statusCode?: number; code?: string };
+    logger.error('policy_approve_error', { error: error.message, policyId: req.params.policyId });
+    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'POLICY_APPROVE_ERROR' });
+  }
+});
+
+router.get('/policies/:policyName/effective', requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES), async (req: Request, res: Response): Promise<void> => {
+  try {
+    const enterpriseReq = req as EnterpriseAuthenticatedRequest;
+    const organizationId = enterpriseReq.enterpriseContext?.organizationId;
+    if (!organizationId) {
+      res.status(401).json({ error: 'Authenticated enterprise context required', code: 'ENTERPRISE_AUTH_REQUIRED' });
+      return;
+    }
+
+    const policy = await policyRegistryService.getEffectivePolicy(organizationId, req.params.policyName as string);
+    if (!policy) {
+      res.status(404).json({ error: 'Effective policy not found', code: 'POLICY_NOT_FOUND' });
+      return;
+    }
+
+    res.status(200).json({ data: serializePolicyDefinition(policy) });
+  } catch (err) {
+    const error = err as Error & { statusCode?: number; code?: string };
+    logger.error('policy_effective_error', { error: error.message, policyName: req.params.policyName });
+    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'POLICY_EFFECTIVE_ERROR' });
+  }
+});
 
 router.post('/trust/issuers', requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES), validate(RegisterIssuerTrustSchema), async (req: Request, res: Response): Promise<void> => {
   try {

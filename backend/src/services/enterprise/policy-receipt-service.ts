@@ -18,6 +18,7 @@ export interface PolicyDecisionReceipt {
   receiptType: PolicyReceiptType;
   policyName: string;
   policyVersion: string;
+  policyReference?: string;
   subjectEntityId?: string;
   jurisdictionCodes: string[];
   decisionSummary: string;
@@ -37,6 +38,7 @@ export interface CreatePolicyDecisionReceiptInput {
   receiptType: PolicyReceiptType;
   policyName: string;
   policyVersion?: string;
+  policyReference?: string;
   subjectEntityId?: string;
   jurisdictionCodes?: string[];
   decisionSummary: string;
@@ -49,9 +51,18 @@ export interface CreatePolicyDecisionReceiptInput {
 export interface PolicyDecisionReceiptListItem {
   receiptId: string;
   receiptType: PolicyReceiptType;
+  policyName: string;
+  policyVersion: string;
   subjectEntityId?: string;
   decisionSummary: string;
   createdAt: string;
+}
+
+export interface PolicyDecisionReceiptExport {
+  formatVersion: 'zeroid.policy_receipt_export.v1';
+  exportedAt: string;
+  verified: boolean;
+  receipt: PolicyDecisionReceipt;
 }
 
 export class PolicyDecisionReceiptError extends Error {
@@ -82,6 +93,7 @@ export class PolicyDecisionReceiptService {
       receiptType: input.receiptType,
       policyName: input.policyName,
       policyVersion: input.policyVersion ?? 'v1',
+      policyReference: input.policyReference ?? null,
       subjectEntityId: input.subjectEntityId ?? null,
       jurisdictionCodes: input.jurisdictionCodes ?? [],
       decisionSummary: input.decisionSummary,
@@ -100,6 +112,7 @@ export class PolicyDecisionReceiptService {
       receiptType: input.receiptType,
       policyName: input.policyName,
       policyVersion: input.policyVersion ?? 'v1',
+      policyReference: input.policyReference,
       subjectEntityId: input.subjectEntityId,
       jurisdictionCodes: input.jurisdictionCodes ?? [],
       decisionSummary: input.decisionSummary,
@@ -113,10 +126,13 @@ export class PolicyDecisionReceiptService {
       expiresAt: expiresAt.toISOString(),
     };
 
+    await this.persistLedgerReceipt(receipt);
     await redis.set(this.receiptKey(receiptId), JSON.stringify(receipt), 'EX', RECEIPT_TTL_SECONDS);
     await this.updateOrganizationIndex(input.organizationId, {
       receiptId,
       receiptType: input.receiptType,
+      policyName: input.policyName,
+      policyVersion: receipt.policyVersion,
       subjectEntityId: input.subjectEntityId,
       decisionSummary: input.decisionSummary,
       createdAt: receipt.createdAt,
@@ -133,6 +149,7 @@ export class PolicyDecisionReceiptService {
           receiptType: input.receiptType,
           policyName: input.policyName,
           policyVersion: receipt.policyVersion,
+          policyReference: input.policyReference ?? null,
           subjectEntityId: input.subjectEntityId ?? null,
           jurisdictionCodes: input.jurisdictionCodes ?? [],
           decisionSummary: input.decisionSummary,
@@ -145,24 +162,62 @@ export class PolicyDecisionReceiptService {
 
   async getReceipt(receiptId: string): Promise<PolicyDecisionReceipt | null> {
     const raw = await redis.get(this.receiptKey(receiptId));
-    if (!raw) {
+    if (raw) {
+      return JSON.parse(raw) as PolicyDecisionReceipt;
+    }
+
+    const ledgerModel = this.getLedgerModel();
+    if (!ledgerModel) {
       return null;
     }
-    return JSON.parse(raw) as PolicyDecisionReceipt;
+
+    const record = await ledgerModel.findUnique({
+      where: { receiptId },
+    });
+    if (!record) {
+      return null;
+    }
+
+    const receipt = this.formatLedgerReceipt(record);
+    await redis.set(this.receiptKey(receiptId), JSON.stringify(receipt), 'EX', RECEIPT_TTL_SECONDS);
+    return receipt;
   }
 
   async listReceipts(
     organizationId: string,
     limit = 25,
   ): Promise<PolicyDecisionReceiptListItem[]> {
-    const raw = await redis.get(this.organizationIndexKey(organizationId));
-    if (!raw) {
-      return [];
+    const boundedLimit = Math.min(RECEIPT_INDEX_LIMIT, Math.max(1, limit));
+    const ledgerModel = this.getLedgerModel();
+    if (ledgerModel) {
+      const records = await ledgerModel.findMany({
+        where: { organizationId },
+        orderBy: { createdAt: 'desc' },
+        take: boundedLimit,
+        select: {
+          receiptId: true,
+          receiptType: true,
+          policyName: true,
+          policyVersion: true,
+          subjectEntityId: true,
+          decisionSummary: true,
+          createdAt: true,
+        },
+      });
+
+      return records.map((record: any) => ({
+        receiptId: record.receiptId,
+        receiptType: this.fromLedgerReceiptType(record.receiptType),
+        policyName: record.policyName,
+        policyVersion: record.policyVersion,
+        subjectEntityId: record.subjectEntityId ?? undefined,
+        decisionSummary: record.decisionSummary,
+        createdAt: record.createdAt.toISOString(),
+      }));
     }
 
-    const items = JSON.parse(raw) as PolicyDecisionReceiptListItem[];
-    const boundedLimit = Math.min(RECEIPT_INDEX_LIMIT, Math.max(1, limit));
-    return items.slice(0, boundedLimit);
+    const cached = await this.readOrganizationIndex(organizationId);
+    return cached.slice(0, boundedLimit);
   }
 
   async verifyReceipt(receiptId: string): Promise<{ valid: boolean; receipt: PolicyDecisionReceipt | null }> {
@@ -178,6 +233,7 @@ export class PolicyDecisionReceiptService {
       receiptType: receipt.receiptType,
       policyName: receipt.policyName,
       policyVersion: receipt.policyVersion,
+      policyReference: receipt.policyReference ?? null,
       subjectEntityId: receipt.subjectEntityId ?? null,
       jurisdictionCodes: receipt.jurisdictionCodes,
       decisionSummary: receipt.decisionSummary,
@@ -196,13 +252,67 @@ export class PolicyDecisionReceiptService {
     };
   }
 
+  async exportReceipt(receiptId: string): Promise<PolicyDecisionReceiptExport | null> {
+    const verification = await this.verifyReceipt(receiptId);
+    if (!verification.receipt) {
+      return null;
+    }
+
+    return {
+      formatVersion: 'zeroid.policy_receipt_export.v1',
+      exportedAt: new Date().toISOString(),
+      verified: verification.valid,
+      receipt: verification.receipt,
+    };
+  }
+
   private async updateOrganizationIndex(
     organizationId: string,
     item: PolicyDecisionReceiptListItem,
   ): Promise<void> {
-    const existing = await this.listReceipts(organizationId, RECEIPT_INDEX_LIMIT);
+    const existing = await this.readOrganizationIndex(organizationId);
     const next = [item, ...existing].slice(0, RECEIPT_INDEX_LIMIT);
     await redis.set(this.organizationIndexKey(organizationId), JSON.stringify(next), 'EX', RECEIPT_TTL_SECONDS);
+  }
+
+  private async readOrganizationIndex(
+    organizationId: string,
+  ): Promise<PolicyDecisionReceiptListItem[]> {
+    const raw = await redis.get(this.organizationIndexKey(organizationId));
+    if (!raw) {
+      return [];
+    }
+    return JSON.parse(raw) as PolicyDecisionReceiptListItem[];
+  }
+
+  private async persistLedgerReceipt(receipt: PolicyDecisionReceipt): Promise<void> {
+    const ledgerModel = this.getLedgerModel();
+    if (!ledgerModel) {
+      return;
+    }
+
+    await ledgerModel.create({
+      data: {
+        receiptId: receipt.receiptId,
+        organizationId: receipt.organizationId,
+        actorIdentityId: receipt.actorIdentityId,
+        receiptType: this.toLedgerReceiptType(receipt.receiptType),
+        policyName: receipt.policyName,
+        policyVersion: receipt.policyVersion,
+        policyReference: receipt.policyReference,
+        subjectEntityId: receipt.subjectEntityId,
+        jurisdictionCodes: receipt.jurisdictionCodes,
+        decisionSummary: receipt.decisionSummary,
+        inputDigest: receipt.inputDigest,
+        outputDigest: receipt.outputDigest,
+        evidenceDigest: receipt.evidenceDigest,
+        integrityHash: receipt.integrityHash,
+        integrityToken: receipt.integrityToken,
+        metadata: receipt.metadata,
+        createdAt: new Date(receipt.createdAt),
+        expiresAt: new Date(receipt.expiresAt),
+      },
+    });
   }
 
   private receiptKey(receiptId: string): string {
@@ -211,6 +321,18 @@ export class PolicyDecisionReceiptService {
 
   private organizationIndexKey(organizationId: string): string {
     return `policy:receipt:index:${organizationId}`;
+  }
+
+  private getLedgerModel(): any {
+    return (prisma as any).policyDecisionLedger;
+  }
+
+  private toLedgerReceiptType(receiptType: PolicyReceiptType): string {
+    return receiptType.toUpperCase();
+  }
+
+  private fromLedgerReceiptType(receiptType: string): PolicyReceiptType {
+    return receiptType.toLowerCase() as PolicyReceiptType;
   }
 
   private signIntegrityHash(integrityHash: string): string {
@@ -261,6 +383,29 @@ export class PolicyDecisionReceiptService {
     const obj = value as Record<string, unknown>;
     const keys = Object.keys(obj).sort();
     return '{' + keys.map((key) => `${JSON.stringify(key)}:${this.canonicalize(obj[key])}`).join(',') + '}';
+  }
+
+  private formatLedgerReceipt(record: any): PolicyDecisionReceipt {
+    return {
+      receiptId: record.receiptId,
+      organizationId: record.organizationId,
+      actorIdentityId: record.actorIdentityId,
+      receiptType: this.fromLedgerReceiptType(record.receiptType),
+      policyName: record.policyName,
+      policyVersion: record.policyVersion,
+      policyReference: record.policyReference ?? undefined,
+      subjectEntityId: record.subjectEntityId ?? undefined,
+      jurisdictionCodes: record.jurisdictionCodes,
+      decisionSummary: record.decisionSummary,
+      inputDigest: record.inputDigest,
+      outputDigest: record.outputDigest,
+      evidenceDigest: record.evidenceDigest,
+      integrityHash: record.integrityHash,
+      integrityToken: record.integrityToken,
+      metadata: record.metadata ?? undefined,
+      createdAt: record.createdAt.toISOString(),
+      expiresAt: record.expiresAt.toISOString(),
+    };
   }
 }
 
