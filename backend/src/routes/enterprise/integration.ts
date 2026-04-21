@@ -23,6 +23,10 @@ import {
   CreatePolicyDefinitionSchema,
   policyRegistryService,
 } from '../../services/enterprise/policy-registry-service';
+import {
+  CreatePolicyExceptionSchema,
+  policyExceptionService,
+} from '../../services/enterprise/policy-exception-service';
 import { prisma } from '../../index';
 
 // ---------------------------------------------------------------------------
@@ -272,6 +276,35 @@ function serializePolicyDefinition(record: {
   approvedByIdentityId: string | null;
   effectiveFrom: Date | null;
   expiresAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+}): Record<string, unknown> {
+  return {
+    ...record,
+    effectiveFrom: record.effectiveFrom?.toISOString() ?? null,
+    expiresAt: record.expiresAt?.toISOString() ?? null,
+    createdAt: record.createdAt.toISOString(),
+    updatedAt: record.updatedAt.toISOString(),
+  };
+}
+
+function serializePolicyException(record: {
+  id: string;
+  organizationId: string;
+  policyDefinitionId: string | null;
+  policyName: string;
+  policyVersion: string;
+  policyReference: string;
+  subjectEntityId: string | null;
+  scope: string;
+  justification: string;
+  conditions: Record<string, unknown> | null;
+  status: string;
+  requestedByIdentityId: string;
+  approvedByIdentityId: string | null;
+  effectiveFrom: Date | null;
+  expiresAt: Date | null;
+  metadata: Record<string, unknown> | null;
   createdAt: Date;
   updatedAt: Date;
 }): Record<string, unknown> {
@@ -688,6 +721,87 @@ router.get('/policies/:policyName/effective', requireEnterpriseContext(ENTERPRIS
     const error = err as Error & { statusCode?: number; code?: string };
     logger.error('policy_effective_error', { error: error.message, policyName: req.params.policyName });
     res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'POLICY_EFFECTIVE_ERROR' });
+  }
+});
+
+router.post('/policies/exceptions', requireEnterpriseContext(['admin', 'compliance_officer']), validate(CreatePolicyExceptionSchema), async (req: Request, res: Response): Promise<void> => {
+  try {
+    const enterpriseReq = req as EnterpriseAuthenticatedRequest;
+    const organizationId = enterpriseReq.enterpriseContext?.organizationId;
+    const actorIdentityId = enterpriseReq.identity?.id;
+    if (!organizationId || !actorIdentityId) {
+      res.status(401).json({ error: 'Authenticated enterprise policy reviewer required', code: 'ENTERPRISE_AUTH_REQUIRED' });
+      return;
+    }
+
+    const exception = await policyExceptionService.createExceptionRequest(organizationId, actorIdentityId, req.body);
+    res.status(201).json({ data: serializePolicyException(exception), message: 'Policy exception request created' });
+  } catch (err) {
+    const error = err as Error & { statusCode?: number; code?: string };
+    logger.error('policy_exception_create_error', { error: error.message });
+    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'POLICY_EXCEPTION_CREATE_ERROR' });
+  }
+});
+
+router.get('/policies/exceptions', requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES), async (req: Request, res: Response): Promise<void> => {
+  try {
+    const enterpriseReq = req as EnterpriseAuthenticatedRequest;
+    const organizationId = enterpriseReq.enterpriseContext?.organizationId;
+    if (!organizationId) {
+      res.status(401).json({ error: 'Authenticated enterprise context required', code: 'ENTERPRISE_AUTH_REQUIRED' });
+      return;
+    }
+
+    const exceptions = await policyExceptionService.listExceptions(organizationId, {
+      policyName: typeof req.query.policyName === 'string' ? req.query.policyName : undefined,
+      status: typeof req.query.status === 'string' ? req.query.status as any : undefined,
+      subjectEntityId: typeof req.query.subjectEntityId === 'string' ? req.query.subjectEntityId : undefined,
+    });
+    res.status(200).json({ data: exceptions.map(serializePolicyException) });
+  } catch (err) {
+    const error = err as Error & { statusCode?: number; code?: string };
+    logger.error('policy_exception_list_error', { error: error.message });
+    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'POLICY_EXCEPTION_LIST_ERROR' });
+  }
+});
+
+router.post('/policies/exceptions/:exceptionId/approve', requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES), async (req: Request, res: Response): Promise<void> => {
+  try {
+    const enterpriseReq = req as EnterpriseAuthenticatedRequest;
+    const organizationId = enterpriseReq.enterpriseContext?.organizationId;
+    const actorIdentityId = enterpriseReq.identity?.id;
+    if (!organizationId || !actorIdentityId) {
+      res.status(401).json({ error: 'Authenticated enterprise admin required', code: 'ENTERPRISE_AUTH_REQUIRED' });
+      return;
+    }
+
+    const effectiveFrom = typeof req.body?.effectiveFrom === 'string' ? req.body.effectiveFrom : undefined;
+    const exception = await policyExceptionService.approveException(req.params.exceptionId as string, organizationId, actorIdentityId, effectiveFrom);
+    res.status(200).json({ data: serializePolicyException(exception), message: 'Policy exception approved' });
+  } catch (err) {
+    const error = err as Error & { statusCode?: number; code?: string };
+    logger.error('policy_exception_approve_error', { error: error.message, exceptionId: req.params.exceptionId });
+    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'POLICY_EXCEPTION_APPROVE_ERROR' });
+  }
+});
+
+router.post('/policies/exceptions/:exceptionId/reject', requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES), async (req: Request, res: Response): Promise<void> => {
+  try {
+    const enterpriseReq = req as EnterpriseAuthenticatedRequest;
+    const organizationId = enterpriseReq.enterpriseContext?.organizationId;
+    const actorIdentityId = enterpriseReq.identity?.id;
+    if (!organizationId || !actorIdentityId) {
+      res.status(401).json({ error: 'Authenticated enterprise admin required', code: 'ENTERPRISE_AUTH_REQUIRED' });
+      return;
+    }
+
+    const reason = typeof req.body?.reason === 'string' ? req.body.reason : undefined;
+    const exception = await policyExceptionService.rejectException(req.params.exceptionId as string, organizationId, actorIdentityId, reason);
+    res.status(200).json({ data: serializePolicyException(exception), message: 'Policy exception rejected' });
+  } catch (err) {
+    const error = err as Error & { statusCode?: number; code?: string };
+    logger.error('policy_exception_reject_error', { error: error.message, exceptionId: req.params.exceptionId });
+    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'POLICY_EXCEPTION_REJECT_ERROR' });
   }
 });
 

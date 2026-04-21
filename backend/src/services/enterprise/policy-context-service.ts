@@ -38,6 +38,18 @@ export interface PolicyExecutionContext {
     enforced: boolean;
     anchors: PolicyTrustAnchorSnapshot[];
   };
+  exceptionContext?: {
+    active: boolean;
+    count: number;
+    exceptions: Array<{
+      exceptionId: string;
+      scope: string;
+      subjectEntityId: string | null;
+      policyVersion: string;
+      justification: string;
+      expiresAt?: string;
+    }>;
+  };
 }
 
 const POLICY_DEFINITIONS: Record<string, PolicyDefinition> = {
@@ -116,6 +128,7 @@ export class PolicyContextService {
     options: {
       jurisdictionCodes?: string[];
       credentials?: CredentialTrustInput[];
+      subjectEntityId?: string;
     } = {},
   ): Promise<PolicyExecutionContext> {
     const definition = await this.getPolicyDefinition(policyName, organizationId);
@@ -124,6 +137,11 @@ export class PolicyContextService {
       options.credentials ?? [],
       options.jurisdictionCodes ?? [],
     );
+    const exceptionContext = await this.buildExceptionContext(
+      organizationId,
+      definition.policyName,
+      options.subjectEntityId,
+    );
 
     return {
       policyName: definition.policyName,
@@ -131,6 +149,7 @@ export class PolicyContextService {
       policyReference: definition.reference,
       policyFamily: definition.family,
       ...(trustContext ? { trustContext } : {}),
+      ...(exceptionContext ? { exceptionContext } : {}),
     };
   }
 
@@ -325,6 +344,65 @@ export class PolicyContextService {
       return value as PolicyDefinition['family'];
     }
     return 'compliance';
+  }
+
+  private async buildExceptionContext(
+    organizationId: string,
+    policyName: string,
+    subjectEntityId?: string,
+  ): Promise<PolicyExecutionContext['exceptionContext'] | undefined> {
+    const exceptionModel = (prisma as any).policyException;
+    if (!exceptionModel?.findMany) {
+      return undefined;
+    }
+
+    const now = new Date();
+    const records = await exceptionModel.findMany({
+      where: {
+        organizationId,
+        policyName,
+        status: 'APPROVED',
+        ...(subjectEntityId ? {
+          OR: [
+            { subjectEntityId },
+            { subjectEntityId: null },
+          ],
+        } : {}),
+        OR: [
+          { effectiveFrom: null },
+          { effectiveFrom: { lte: now } },
+        ],
+        AND: [
+          {
+            OR: [
+              { expiresAt: null },
+              { expiresAt: { gt: now } },
+            ],
+          },
+        ],
+      },
+      orderBy: [
+        { effectiveFrom: 'desc' },
+        { createdAt: 'desc' },
+      ],
+    });
+
+    if (!records.length) {
+      return undefined;
+    }
+
+    return {
+      active: true,
+      count: records.length,
+      exceptions: records.map((record: any) => ({
+        exceptionId: record.id,
+        scope: String(record.scope ?? 'SUBJECT').toLowerCase(),
+        subjectEntityId: record.subjectEntityId ?? null,
+        policyVersion: record.policyVersion,
+        justification: record.justification,
+        expiresAt: record.expiresAt ? new Date(record.expiresAt).toISOString() : undefined,
+      })),
+    };
   }
 }
 

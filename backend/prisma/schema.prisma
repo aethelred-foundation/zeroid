@@ -285,6 +285,13 @@ enum PolicyDefinitionStatus {
   DEPRECATED
 }
 
+enum PolicyExceptionStatus {
+  PENDING_REVIEW
+  APPROVED
+  REJECTED
+  REVOKED
+}
+
 enum BridgeStatus {
   INITIATED
   SOURCE_CONFIRMED
@@ -563,6 +570,7 @@ model Organization {
   trustedIssuers  IssuerTrustRecord[]
   policyDecisionReceipts PolicyDecisionLedger[]
   policyDefinitions PolicyDefinition[]
+  policyExceptions PolicyException[]
 
   @@index([domain])
   @@map("organizations")
@@ -671,11 +679,41 @@ model PolicyDefinition {
   updatedAt         DateTime               @updatedAt
 
   organization      Organization           @relation(fields: [organizationId], references: [id])
+  exceptions        PolicyException[]
 
   @@unique([organizationId, name, version])
   @@index([organizationId, name, status])
   @@index([effectiveFrom])
   @@map("policy_definitions")
+}
+
+model PolicyException {
+  id                  String                @id @default(uuid())
+  organizationId      String
+  policyDefinitionId  String?
+  policyName          String
+  policyVersion       String
+  policyReference     String
+  subjectEntityId     String?
+  scope               String
+  justification       String
+  conditions          Json?
+  status              PolicyExceptionStatus @default(PENDING_REVIEW)
+  requestedByIdentityId String
+  approvedByIdentityId String?
+  effectiveFrom       DateTime?
+  expiresAt           DateTime?
+  metadata            Json?
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime              @updatedAt
+
+  organization        Organization          @relation(fields: [organizationId], references: [id])
+  policyDefinition    PolicyDefinition?     @relation(fields: [policyDefinitionId], references: [id])
+
+  @@index([organizationId, policyName, status])
+  @@index([subjectEntityId, status])
+  @@index([effectiveFrom, expiresAt])
+  @@map("policy_exceptions")
 }
 
 model OrganizationMember {

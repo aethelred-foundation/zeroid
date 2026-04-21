@@ -234,6 +234,19 @@ describe('enterprise compliance receipt routes', () => {
           },
         ],
       },
+      exceptionContext: {
+        active: true,
+        count: 1,
+        exceptions: [
+          {
+            exceptionId: 'exception-1',
+            scope: 'subject',
+            subjectEntityId: 'entity-1',
+            policyVersion: '2026.04.1',
+            justification: 'Temporary sovereign override for cross-border onboarding',
+          },
+        ],
+      },
     }));
 
     mockCreateReceipt.mockImplementation(async (input: Record<string, unknown>) => ({
@@ -339,6 +352,10 @@ describe('enterprise compliance receipt routes', () => {
         trustContext: expect.objectContaining({
           enforced: true,
           accreditedIssuerCount: 1,
+        }),
+        exceptionContext: expect.objectContaining({
+          active: true,
+          count: 1,
         }),
       }),
     }));

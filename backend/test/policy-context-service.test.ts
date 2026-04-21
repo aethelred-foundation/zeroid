@@ -1,10 +1,14 @@
 const mockIssuerTrustFindMany = jest.fn();
 const mockPolicyDefinitionFindFirst = jest.fn();
+const mockPolicyExceptionFindMany = jest.fn();
 
 jest.mock('../src/index', () => ({
   prisma: {
     policyDefinition: {
       findFirst: mockPolicyDefinitionFindFirst,
+    },
+    policyException: {
+      findMany: mockPolicyExceptionFindMany,
     },
     issuerTrustRecord: {
       findMany: mockIssuerTrustFindMany,
@@ -18,6 +22,7 @@ describe('PolicyContextService', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockPolicyDefinitionFindFirst.mockResolvedValue(null);
+    mockPolicyExceptionFindMany.mockResolvedValue([]);
     mockIssuerTrustFindMany.mockResolvedValue([]);
   });
 
@@ -108,6 +113,38 @@ describe('PolicyContextService', () => {
       policyVersion: '2026.05.2',
       policyReference: 'zeroid://policy/org/org-1/jurisdiction_compliance@2026.05.2',
       policyFamily: 'compliance',
+    });
+  });
+
+  it('includes active approved policy exceptions in the execution context', async () => {
+    mockPolicyExceptionFindMany.mockResolvedValue([
+      {
+        id: 'exception-1',
+        scope: 'SUBJECT',
+        subjectEntityId: 'entity-1',
+        policyVersion: '2026.04.1',
+        justification: 'Temporary sovereign override for cross-border onboarding',
+        expiresAt: new Date('2026-06-01T00:00:00.000Z'),
+      },
+    ]);
+
+    const context = await policyContextService.resolvePolicyContext('jurisdiction_compliance', 'org-1', {
+      subjectEntityId: 'entity-1',
+    });
+
+    expect(context.exceptionContext).toEqual({
+      active: true,
+      count: 1,
+      exceptions: [
+        {
+          exceptionId: 'exception-1',
+          scope: 'subject',
+          subjectEntityId: 'entity-1',
+          policyVersion: '2026.04.1',
+          justification: 'Temporary sovereign override for cross-border onboarding',
+          expiresAt: '2026-06-01T00:00:00.000Z',
+        },
+      ],
     });
   });
 });

@@ -97,6 +97,7 @@ async function createPolicyAnchoredReceipt(
     {
       jurisdictionCodes: input.jurisdictionCodes ?? [],
       credentials: input.credentials,
+      subjectEntityId: input.subjectEntityId,
     },
   );
 
@@ -116,6 +117,7 @@ async function createPolicyAnchoredReceipt(
     metadata: {
       policyFamily: policyContext.policyFamily,
       ...(policyContext.trustContext ? { trustContext: policyContext.trustContext } : {}),
+      ...(policyContext.exceptionContext ? { exceptionContext: policyContext.exceptionContext } : {}),
       ...(input.metadata ?? {}),
     },
   });
