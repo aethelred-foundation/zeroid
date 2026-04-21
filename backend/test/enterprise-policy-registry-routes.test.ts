@@ -352,6 +352,29 @@ describe('enterprise policy registry routes', () => {
     }));
   });
 
+  it('returns governance compatibility failures from policy draft creation', async () => {
+    mockCreatePolicyDraft.mockRejectedValueOnce({
+      message: 'Cross-border governance requires definition fields like transferRules, transferMechanisms, dataLocalization, or jurisdictionMatrix.',
+      code: 'POLICY_GOVERNANCE_DEFINITION_INVALID',
+      statusCode: 400,
+    });
+
+    const response = await invokeRoute('POST', '/policies', {
+      body: {
+        name: 'jurisdiction_cross_border',
+        version: '2026.05.2',
+        family: 'compliance',
+        description: 'Cross-border policy with incomplete operating constraints',
+        definition: { reviewCadence: 'daily' },
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.body).toMatchObject({
+      code: 'POLICY_GOVERNANCE_DEFINITION_INVALID',
+    });
+  });
+
   it('submits, approves, and fetches the effective policy version', async () => {
     const submitResponse = await invokeRoute('POST', '/policies/:policyId/submit', {
       params: { policyId: 'policy-1' },

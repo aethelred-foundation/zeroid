@@ -319,6 +319,28 @@ describe('enterprise policy exception routes', () => {
     }));
   });
 
+  it('returns governance compatibility failures from exception creation', async () => {
+    mockCreateExceptionRequest.mockRejectedValueOnce({
+      message: 'Policy exception governance must match the active governing policy regime.',
+      code: 'POLICY_EXCEPTION_GOVERNANCE_MISMATCH',
+      statusCode: 409,
+    });
+
+    const response = await invokeRoute('POST', '/policies/exceptions', {
+      body: {
+        policyName: 'data_subject_access',
+        subjectEntityId: 'entity-1',
+        scope: 'subject',
+        justification: 'Temporary override for a regulator-observed subject access workflow',
+      },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.body).toMatchObject({
+      code: 'POLICY_EXCEPTION_GOVERNANCE_MISMATCH',
+    });
+  });
+
   it('approves and rejects exception requests', async () => {
     const approveResponse = await invokeRoute('POST', '/policies/exceptions/:exceptionId/approve', {
       params: { exceptionId: 'exception-1' },

@@ -172,6 +172,33 @@ describe('PolicyExceptionService', () => {
     expect(exception.requiredApprovalClasses).toEqual(expect.arrayContaining(['privacy', 'legal']));
   });
 
+  it('rejects exception requests when the active policy pack does not match the derived exception regime', async () => {
+    mockGetEffectivePolicy.mockResolvedValueOnce({
+      id: 'policy-sovereign-1',
+      organizationId: 'org-1',
+      name: 'data_subject_access',
+      version: '2026.05.2',
+      family: 'privacy',
+      reference: 'zeroid://policy/org/org-1/data_subject_access@2026.05.2',
+      governancePackId: 'sovereign-core',
+      governancePackVersion: '2026.04',
+    });
+
+    await expect(
+      policyExceptionService.createExceptionRequest('org-1', 'admin-1', {
+        policyName: 'data_subject_access',
+        subjectEntityId: 'entity-1',
+        scope: 'subject',
+        justification: 'Temporary override for a regulator-observed subject access workflow',
+        conditions: { reviewEveryDays: 14 },
+      }),
+    ).rejects.toMatchObject<Partial<PolicyExceptionError>>({
+      code: 'POLICY_EXCEPTION_GOVERNANCE_MISMATCH',
+      statusCode: 409,
+    });
+    expect(mockPolicyExceptionCreate).not.toHaveBeenCalled();
+  });
+
   it('approves and rejects exception lifecycle transitions', async () => {
     mockPolicyExceptionFindFirst
       .mockResolvedValueOnce({
@@ -347,6 +374,54 @@ describe('PolicyExceptionService', () => {
     expect(revoked.status).toBe('revoked');
     expect(revoked.revokedByIdentityId).toBe('admin-3');
     expect(revoked.revokedAt?.toISOString()).toBe('2026-05-15T00:00:00.000Z');
+  });
+
+  it('rejects exception approval when the active governing policy has changed', async () => {
+    mockPolicyExceptionFindFirst.mockResolvedValue({
+      id: 'exception-stale',
+      organizationId: 'org-1',
+      policyDefinitionId: 'policy-1',
+      policyName: 'jurisdiction_compliance',
+      policyVersion: '2026.05.2',
+      policyReference: 'zeroid://policy/org/org-1/jurisdiction_compliance@2026.05.2',
+      governancePackId: 'baseline-core',
+      governancePackVersion: '2026.04',
+      governanceProfileId: 'enterprise.compliance',
+      subjectEntityId: 'entity-1',
+      scope: 'SUBJECT',
+      justification: 'Temporary sovereign override for onboarding',
+      conditions: { reviewEveryDays: 30 },
+      status: 'PENDING_REVIEW',
+      requestedByIdentityId: 'admin-1',
+      approvedByIdentityId: null,
+      effectiveFrom: null,
+      expiresAt: new Date('2026-06-01T00:00:00.000Z'),
+      revokedAt: null,
+      revokedByIdentityId: null,
+      revocationReason: null,
+      metadata: null,
+      approvalTrail: [],
+      createdAt: new Date('2026-04-21T00:00:00.000Z'),
+      updatedAt: new Date('2026-04-21T00:00:00.000Z'),
+    });
+    mockGetEffectivePolicy.mockResolvedValueOnce({
+      id: 'policy-2',
+      organizationId: 'org-1',
+      name: 'jurisdiction_compliance',
+      version: '2026.05.3',
+      family: 'compliance',
+      reference: 'zeroid://policy/org/org-1/jurisdiction_compliance@2026.05.3',
+      governancePackId: 'cross-border-regulated',
+      governancePackVersion: '2026.04',
+    });
+
+    await expect(
+      policyExceptionService.approveException('exception-stale', 'org-1', 'admin-2'),
+    ).rejects.toMatchObject<Partial<PolicyExceptionError>>({
+      code: 'POLICY_EXCEPTION_POLICY_STALE',
+      statusCode: 409,
+    });
+    expect(mockPolicyExceptionUpdate).not.toHaveBeenCalled();
   });
 
   it('enforces separation of duties and dual-control exception approval governance', async () => {

@@ -139,7 +139,7 @@ describe('PolicyRegistryService', () => {
       version: '2026.05.2',
       family: 'privacy',
       description: 'Enterprise privacy governance for subject access workflows',
-      definition: { workflow: 'dsar' },
+      definition: { dsarWorkflow: 'four-eyes-review', privacyRights: ['access', 'erasure'] },
       changeSummary: 'Introduces auditable DSAR approvals',
     });
 
@@ -169,13 +169,13 @@ describe('PolicyRegistryService', () => {
       organizationName: 'Org One',
       role: 'admin',
       permissions: [],
-      plan: 'starter',
-      jurisdictions: ['AE-ADGM'],
+      plan: 'enterprise',
+      jurisdictions: ['AE-GOV'],
       governanceSettings: {
         defaultPack: { packId: 'sovereign-core', version: '2026.04' },
       },
       approvalClasses: ['admin'],
-      approvalJurisdictions: ['AE-ADGM'],
+      approvalJurisdictions: ['AE-GOV'],
     });
 
     const policy = await policyRegistryService.createPolicyDraft('org-1', 'admin-1', {
@@ -183,7 +183,11 @@ describe('PolicyRegistryService', () => {
       version: '2026.05.2',
       family: 'reporting',
       description: 'Pinned sovereign governance pack for reporting',
-      definition: { reportType: 'SAR' },
+      definition: {
+        reportType: 'SAR',
+        sovereignBoundaries: ['AE-GOV'],
+        regulatorAuthority: 'uae-federal-regulator',
+      },
       changeSummary: 'Pins sovereign operating mode',
     });
 
@@ -192,6 +196,97 @@ describe('PolicyRegistryService', () => {
     expect(policy.governanceProfileRationale).toEqual(
       expect.arrayContaining(['Tenant governance pack sovereign-core@2026.04 was selected.']),
     );
+  });
+
+  it('rejects policy drafts that do not satisfy the active governance pack requirements', async () => {
+    mockGetApprovalAuthority.mockResolvedValueOnce({
+      organizationId: 'org-1',
+      organizationName: 'Org One',
+      role: 'admin',
+      permissions: [],
+      plan: 'growth',
+      jurisdictions: ['AE-ADGM', 'EU-GDPR'],
+      governanceSettings: {
+        defaultPack: { packId: 'cross-border-regulated', version: '2026.04' },
+      },
+      approvalClasses: ['admin'],
+      approvalJurisdictions: ['AE-ADGM', 'EU-GDPR'],
+    });
+
+    await expect(
+      policyRegistryService.createPolicyDraft('org-1', 'admin-1', {
+        name: 'jurisdiction_cross_border',
+        version: '2026.05.2',
+        family: 'compliance',
+        description: 'Cross-border policy with incomplete operating constraints',
+        definition: { reviewCadence: 'daily' },
+        changeSummary: 'Introduces cross-border onboarding governance',
+      }),
+    ).rejects.toMatchObject<Partial<PolicyRegistryError>>({
+      code: 'POLICY_GOVERNANCE_DEFINITION_INVALID',
+      statusCode: 400,
+    });
+    expect(mockPolicyDefinitionCreate).not.toHaveBeenCalled();
+  });
+
+  it('rejects approval when the tenant governance regime has changed since the draft was created', async () => {
+    mockPolicyDefinitionFindFirst.mockResolvedValue({
+      id: 'policy-stale',
+      organizationId: 'org-1',
+      name: 'regulatory_reporting',
+      version: '2026.05.2',
+      family: 'reporting',
+      reference: 'zeroid://policy/org/org-1/regulatory_reporting@2026.05.2',
+      description: 'Reporting policy created under an older governance baseline',
+      status: 'PENDING_REVIEW',
+      approvalMode: 'SINGLE_ADMIN',
+      requiredApprovals: 1,
+      requiredApprovalRoles: [],
+      requiredApprovalClasses: [],
+      requiredApprovalJurisdictions: [],
+      governancePackId: 'baseline-core',
+      governancePackVersion: '2026.04',
+      governancePackLabel: 'Baseline Core Governance Pack',
+      definition: { reportType: 'SAR', reportSchema: 'sar-v2' },
+      changeSummary: 'Adds reporting controls',
+      proposedByIdentityId: 'admin-1',
+      approvedByIdentityId: null,
+      effectiveFrom: null,
+      expiresAt: null,
+      deprecatedAt: null,
+      deprecatedByIdentityId: null,
+      deprecationReason: null,
+      supersededByPolicyDefinitionId: null,
+      revokedAt: null,
+      revokedByIdentityId: null,
+      revocationReason: null,
+      approvalTrail: [],
+      createdAt: new Date('2026-04-21T00:00:00.000Z'),
+      updatedAt: new Date('2026-04-21T00:00:00.000Z'),
+    });
+    mockGetApprovalAuthority.mockResolvedValueOnce({
+      organizationId: 'org-1',
+      organizationName: 'Org One',
+      role: 'admin',
+      permissions: [],
+      plan: 'growth',
+      jurisdictions: ['AE-ADGM'],
+      governanceSettings: {
+        familyPacks: {
+          reporting: { packId: 'enterprise-reporting', version: '2026.04' },
+        },
+      },
+      approvalClasses: ['admin'],
+      approvalJurisdictions: ['AE-ADGM'],
+    });
+
+    await expect(
+      policyRegistryService.approvePolicy('policy-stale', 'org-1', 'admin-2'),
+    ).rejects.toMatchObject<Partial<PolicyRegistryError>>({
+      code: 'POLICY_GOVERNANCE_STALE',
+      statusCode: 409,
+    });
+    expect(mockPolicyDefinitionUpdate).not.toHaveBeenCalled();
   });
 
   it('submits and approves a draft policy lifecycle', async () => {

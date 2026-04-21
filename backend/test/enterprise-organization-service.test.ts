@@ -49,6 +49,8 @@ describe('EnterpriseOrganizationService', () => {
     });
     mockOrganizationFindUnique.mockResolvedValue({
       id: 'org-1',
+      plan: 'enterprise',
+      jurisdictions: ['AE-GOV', 'EU'],
       settings: {},
     });
     mockOrganizationUpdate.mockResolvedValue({
@@ -131,6 +133,7 @@ describe('EnterpriseOrganizationService', () => {
     await enterpriseOrganizationService.createOrganization('identity-1', {
       name: 'ZeroID Sovereign Lab',
       plan: 'enterprise',
+      jurisdictions: ['AE-GOV'],
       settings: {
         governance: {
           defaultPack: { packId: 'sovereign-core' },
@@ -276,6 +279,8 @@ describe('EnterpriseOrganizationService', () => {
     mockOrganizationFindUnique
       .mockResolvedValueOnce({
         id: 'org-1',
+        plan: 'enterprise',
+        jurisdictions: ['AE-GOV', 'EU'],
         settings: {
           governance: {
             defaultPack: { packId: 'baseline-core', version: '2026.04' },
@@ -284,6 +289,8 @@ describe('EnterpriseOrganizationService', () => {
       })
       .mockResolvedValueOnce({
         id: 'org-1',
+        plan: 'enterprise',
+        jurisdictions: ['AE-GOV', 'EU'],
         settings: {
           governance: {
             defaultPack: { packId: 'baseline-core', version: '2026.04' },
@@ -347,6 +354,18 @@ describe('EnterpriseOrganizationService', () => {
     await expect(
       enterpriseOrganizationService.updateGovernanceSettings('org-1', 'identity-1', {
         defaultPack: { packId: 'unknown-pack', version: '2026.04' },
+      }),
+    ).rejects.toMatchObject<Partial<EnterpriseOrganizationError>>({
+      code: 'ENTERPRISE_GOVERNANCE_PACK_INVALID',
+      statusCode: 400,
+    });
+    expect(mockOrganizationUpdate).not.toHaveBeenCalled();
+  });
+
+  it('rejects incompatible default governance packs during governance updates', async () => {
+    await expect(
+      enterpriseOrganizationService.updateGovernanceSettings('org-1', 'identity-1', {
+        defaultPack: { packId: 'enterprise-reporting', version: '2026.04' },
       }),
     ).rejects.toMatchObject<Partial<EnterpriseOrganizationError>>({
       code: 'ENTERPRISE_GOVERNANCE_PACK_INVALID',

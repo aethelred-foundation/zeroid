@@ -7,6 +7,7 @@ import type {
 
 export type GovernedPolicyFamily = 'compliance' | 'reporting' | 'privacy' | 'screening';
 export type GovernedApprovalMode = 'single_admin' | 'separation_of_duties' | 'dual_control';
+type EnterprisePlanTier = 'starter' | 'growth' | 'enterprise';
 
 export interface PolicyGovernanceInput {
   organizationPlan: string;
@@ -39,19 +40,72 @@ interface GovernancePackDefinition {
   id: string;
   version: string;
   label: string;
+  minimumPlan: EnterprisePlanTier;
+  supportsDefaultSelection: boolean;
+  supportedFamilies?: GovernedPolicyFamily[];
+  requiresMultiJurisdiction?: boolean;
+  requiresSovereignJurisdiction?: boolean;
 }
 
 export interface GovernancePackDescriptor extends GovernancePackDefinition {
   profileHints: string[];
 }
 
+export interface GovernancePackCompatibilityIssue {
+  scope: 'defaultPack' | 'familyPack';
+  packId: string;
+  reason: string;
+  family?: GovernedPolicyFamily;
+}
+
 const GOVERNANCE_PACKS = {
-  baseline: { id: 'baseline-core', version: '2026.04', label: 'Baseline Core Governance Pack' },
-  enterprisePrivacy: { id: 'enterprise-privacy', version: '2026.04', label: 'Enterprise Privacy Governance Pack' },
-  enterpriseScreening: { id: 'enterprise-screening', version: '2026.04', label: 'Enterprise Screening Governance Pack' },
-  enterpriseReporting: { id: 'enterprise-reporting', version: '2026.04', label: 'Enterprise Reporting Governance Pack' },
-  crossBorder: { id: 'cross-border-regulated', version: '2026.04', label: 'Cross-Border Regulated Governance Pack' },
-  sovereign: { id: 'sovereign-core', version: '2026.04', label: 'Sovereign Core Governance Pack' },
+  baseline: {
+    id: 'baseline-core',
+    version: '2026.04',
+    label: 'Baseline Core Governance Pack',
+    minimumPlan: 'starter',
+    supportsDefaultSelection: true,
+  },
+  enterprisePrivacy: {
+    id: 'enterprise-privacy',
+    version: '2026.04',
+    label: 'Enterprise Privacy Governance Pack',
+    minimumPlan: 'growth',
+    supportsDefaultSelection: false,
+    supportedFamilies: ['privacy'],
+  },
+  enterpriseScreening: {
+    id: 'enterprise-screening',
+    version: '2026.04',
+    label: 'Enterprise Screening Governance Pack',
+    minimumPlan: 'growth',
+    supportsDefaultSelection: false,
+    supportedFamilies: ['screening'],
+  },
+  enterpriseReporting: {
+    id: 'enterprise-reporting',
+    version: '2026.04',
+    label: 'Enterprise Reporting Governance Pack',
+    minimumPlan: 'growth',
+    supportsDefaultSelection: false,
+    supportedFamilies: ['reporting'],
+  },
+  crossBorder: {
+    id: 'cross-border-regulated',
+    version: '2026.04',
+    label: 'Cross-Border Regulated Governance Pack',
+    minimumPlan: 'growth',
+    supportsDefaultSelection: true,
+    requiresMultiJurisdiction: true,
+  },
+  sovereign: {
+    id: 'sovereign-core',
+    version: '2026.04',
+    label: 'Sovereign Core Governance Pack',
+    minimumPlan: 'enterprise',
+    supportsDefaultSelection: true,
+    requiresSovereignJurisdiction: true,
+  },
 } as const satisfies Record<string, GovernancePackDefinition>;
 
 const ENTERPRISE_ROLES = [
@@ -101,6 +155,82 @@ export class PolicyGovernanceService {
         profileHints: ['sovereign'],
       },
     ];
+  }
+
+  validateGovernanceSettings(input: {
+    organizationPlan: string;
+    organizationJurisdictions: string[];
+    settings: OrganizationGovernanceSettings;
+  }): GovernancePackCompatibilityIssue[] {
+    const plan = this.normalizePlan(input.organizationPlan);
+    const jurisdictions = this.normalizeJurisdictions(input.organizationJurisdictions);
+    const issues: GovernancePackCompatibilityIssue[] = [];
+
+    const validateSelection = (
+      selection: { packId: string; version?: string } | undefined,
+      scope: 'defaultPack' | 'familyPack',
+      family?: GovernedPolicyFamily,
+    ) => {
+      if (!selection?.packId) {
+        return;
+      }
+
+      const pack = Object.values(GOVERNANCE_PACKS).find((entry) => entry.id === selection.packId);
+      if (!pack) {
+        return;
+      }
+
+      if (scope === 'defaultPack' && !pack.supportsDefaultSelection) {
+        issues.push({
+          scope,
+          packId: pack.id,
+          reason: `${pack.label} can only be pinned at the family level, not as an organization default.`,
+        });
+      }
+
+      if (family && pack.supportedFamilies && !pack.supportedFamilies.includes(family)) {
+        issues.push({
+          scope,
+          packId: pack.id,
+          family,
+          reason: `${pack.label} is not compatible with the ${family} governance family.`,
+        });
+      }
+
+      if (this.planRank(plan) < this.planRank(pack.minimumPlan)) {
+        issues.push({
+          scope,
+          packId: pack.id,
+          ...(family ? { family } : {}),
+          reason: `${pack.label} requires at least the ${pack.minimumPlan} plan.`,
+        });
+      }
+
+      if (pack.requiresMultiJurisdiction && jurisdictions.length < 2) {
+        issues.push({
+          scope,
+          packId: pack.id,
+          ...(family ? { family } : {}),
+          reason: `${pack.label} requires at least two organization jurisdictions.`,
+        });
+      }
+
+      if (pack.requiresSovereignJurisdiction && !this.hasSovereignJurisdiction(jurisdictions)) {
+        issues.push({
+          scope,
+          packId: pack.id,
+          ...(family ? { family } : {}),
+          reason: `${pack.label} requires a sovereign-scoped jurisdiction like GOV, STATE, or NATIONAL.`,
+        });
+      }
+    };
+
+    validateSelection(input.settings.defaultPack, 'defaultPack');
+    for (const [family, selection] of Object.entries(input.settings.familyPacks ?? {})) {
+      validateSelection(selection, 'familyPack', family as GovernedPolicyFamily);
+    }
+
+    return issues;
   }
 
   applyGovernanceBaseline(input: PolicyGovernanceInput): PolicyGovernanceProfile {
@@ -418,6 +548,29 @@ export class PolicyGovernanceService {
       return normalized;
     }
     return 'single_admin';
+  }
+
+  private normalizePlan(value: unknown): EnterprisePlanTier {
+    const normalized = String(value ?? 'starter').toLowerCase();
+    if (normalized === 'growth' || normalized === 'enterprise') {
+      return normalized;
+    }
+    return 'starter';
+  }
+
+  private planRank(plan: EnterprisePlanTier): number {
+    switch (plan) {
+      case 'enterprise':
+        return 3;
+      case 'growth':
+        return 2;
+      default:
+        return 1;
+    }
+  }
+
+  private hasSovereignJurisdiction(jurisdictions: string[]): boolean {
+    return jurisdictions.some((jurisdiction) => /(gov|state|national|sovereign)/i.test(jurisdiction));
   }
 
   private normalizeRequiredApprovals(value: unknown): number {

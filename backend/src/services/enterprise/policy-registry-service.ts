@@ -150,6 +150,11 @@ export class PolicyRegistryService {
       requiredApprovalClasses: parsed.requiredApprovalClasses,
       requiredApprovalJurisdictions: parsed.requiredApprovalJurisdictions,
     });
+    this.assertDefinitionCompatibleWithGovernancePack(
+      parsed.family,
+      governanceProfile.governancePackId,
+      parsed.definition,
+    );
     const approvalConfig = this.normalizeApprovalConfiguration(
       governanceProfile.approvalMode,
       governanceProfile.requiredApprovals,
@@ -256,6 +261,7 @@ export class PolicyRegistryService {
   ): Promise<PolicyDefinitionSummary> {
     const model = this.getPolicyModel();
     const record = await this.getPolicy(policyId, organizationId);
+    const actorAuthority = await enterpriseOrganizationService.getApprovalAuthority(actorIdentityId, organizationId);
 
     if (record.status !== 'DRAFT') {
       throw new PolicyRegistryError(
@@ -264,6 +270,8 @@ export class PolicyRegistryService {
         409,
       );
     }
+
+    this.assertDraftMatchesTenantGovernance(record, actorAuthority);
 
     const updated = await model.update({
       where: { id: policyId },
@@ -309,6 +317,8 @@ export class PolicyRegistryService {
         409,
       );
     }
+
+    this.assertDraftMatchesTenantGovernance(record, actorAuthority);
 
     const approvalMode = this.normalizeApprovalMode(record.approvalMode);
     const requiredApprovalRoles = this.normalizeRequiredApprovalRoles(record.requiredApprovalRoles);
@@ -663,6 +673,135 @@ export class PolicyRegistryService {
     return `zeroid://policy/org/${organizationId}/${name}@${version}`;
   }
 
+  private assertDraftMatchesTenantGovernance(
+    record: any,
+    actorAuthority: Awaited<ReturnType<typeof enterpriseOrganizationService.getApprovalAuthority>>,
+  ): void {
+    const hasRecordedGovernance = Boolean(
+      record.governancePackId
+      || record.governancePackVersion
+      || record.governanceProfileId,
+    );
+    if (!hasRecordedGovernance) {
+      return;
+    }
+
+    const expectedGovernance = policyGovernanceService.applyGovernanceBaseline({
+      organizationPlan: actorAuthority.plan,
+      organizationJurisdictions: actorAuthority.jurisdictions,
+      organizationGovernanceSettings: actorAuthority.governanceSettings,
+      policyName: record.name,
+      family: String(record.family ?? 'compliance').toLowerCase() as CreatePolicyDefinitionInput['family'],
+      approvalMode: this.normalizeApprovalMode(record.approvalMode),
+      requiredApprovals: typeof record.requiredApprovals === 'number' ? record.requiredApprovals : undefined,
+      requiredApprovalRoles: this.normalizeRequiredApprovalRoles(record.requiredApprovalRoles),
+      requiredApprovalClasses: this.normalizeRequiredApprovalClasses(record.requiredApprovalClasses),
+      requiredApprovalJurisdictions: this.normalizeRequiredApprovalJurisdictions(record.requiredApprovalJurisdictions),
+    });
+
+    const expectedConfig = this.normalizeApprovalConfiguration(
+      expectedGovernance.approvalMode,
+      expectedGovernance.requiredApprovals,
+      expectedGovernance.requiredApprovalRoles,
+      expectedGovernance.requiredApprovalClasses,
+      expectedGovernance.requiredApprovalJurisdictions,
+    );
+
+    this.assertDefinitionCompatibleWithGovernancePack(
+      String(record.family ?? 'compliance').toLowerCase() as CreatePolicyDefinitionInput['family'],
+      expectedGovernance.governancePackId,
+      (record.definition ?? {}) as Record<string, unknown>,
+    );
+
+    const governanceChanged =
+      (record.governancePackId ?? null) !== expectedGovernance.governancePackId
+      || (record.governancePackVersion ?? null) !== expectedGovernance.governancePackVersion
+      || this.normalizeApprovalMode(record.approvalMode) !== expectedConfig.approvalMode
+      || this.normalizeRequiredApprovals(
+        record.requiredApprovals,
+        this.normalizeApprovalMode(record.approvalMode),
+        this.normalizeRequiredApprovalRoles(record.requiredApprovalRoles),
+        this.normalizeRequiredApprovalClasses(record.requiredApprovalClasses),
+        this.normalizeRequiredApprovalJurisdictions(record.requiredApprovalJurisdictions),
+      ) !== expectedConfig.requiredApprovals
+      || !this.sameSet(
+        this.normalizeRequiredApprovalRoles(record.requiredApprovalRoles),
+        expectedConfig.requiredApprovalRoles,
+      )
+      || !this.sameSet(
+        this.normalizeRequiredApprovalClasses(record.requiredApprovalClasses),
+        expectedConfig.requiredApprovalClasses,
+      )
+      || !this.sameSet(
+        this.normalizeRequiredApprovalJurisdictions(record.requiredApprovalJurisdictions),
+        expectedConfig.requiredApprovalJurisdictions,
+      );
+
+    if (governanceChanged) {
+      throw new PolicyRegistryError(
+        'Policy draft no longer matches the active tenant governance regime. Refresh the draft under current governance before review or approval.',
+        'POLICY_GOVERNANCE_STALE',
+        409,
+      );
+    }
+  }
+
+  private assertDefinitionCompatibleWithGovernancePack(
+    family: CreatePolicyDefinitionInput['family'],
+    governancePackId: string,
+    definition: Record<string, unknown>,
+  ): void {
+    const definitionKeys = new Set(Object.keys(definition ?? {}));
+    const hasAnyKey = (keys: string[]) => keys.some((key) => definitionKeys.has(key));
+
+    const validationRules: Partial<Record<string, { families?: CreatePolicyDefinitionInput['family'][]; requiredKeys: string[]; message: string }>> = {
+      'enterprise-privacy': {
+        families: ['privacy'],
+        requiredKeys: ['privacyRights', 'retentionPolicy', 'lawfulBasis', 'dataCategories', 'dsarWorkflow', 'reviewCadence'],
+        message: 'Enterprise privacy governance requires definition fields like privacyRights, retentionPolicy, lawfulBasis, or dsarWorkflow.',
+      },
+      'enterprise-screening': {
+        families: ['screening'],
+        requiredKeys: ['screeningRules', 'watchlists', 'escalationPolicy', 'matchThreshold', 'falsePositiveWorkflow'],
+        message: 'Enterprise screening governance requires definition fields like screeningRules, watchlists, escalationPolicy, or matchThreshold.',
+      },
+      'enterprise-reporting': {
+        families: ['reporting'],
+        requiredKeys: ['reportType', 'reportingChannels', 'filingRules', 'reportSchema', 'submissionCadence'],
+        message: 'Enterprise reporting governance requires definition fields like reportType, reportSchema, filingRules, or submissionCadence.',
+      },
+      'cross-border-regulated': {
+        requiredKeys: ['transferRules', 'transferMechanisms', 'dataLocalization', 'jurisdictionMatrix', 'recipientControls'],
+        message: 'Cross-border governance requires definition fields like transferRules, transferMechanisms, dataLocalization, or jurisdictionMatrix.',
+      },
+      'sovereign-core': {
+        requiredKeys: ['sovereignBoundaries', 'nationalHosting', 'issuerTrustRequirements', 'sovereignApprovalChain', 'regulatorAuthority'],
+        message: 'Sovereign governance requires definition fields like sovereignBoundaries, nationalHosting, issuerTrustRequirements, or regulatorAuthority.',
+      },
+    };
+
+    const rule = validationRules[governancePackId];
+    if (!rule) {
+      return;
+    }
+
+    if (rule.families && !rule.families.includes(family)) {
+      throw new PolicyRegistryError(
+        `${governancePackId} is not compatible with ${family} policies.`,
+        'POLICY_GOVERNANCE_DEFINITION_INVALID',
+        400,
+      );
+    }
+
+    if (!hasAnyKey(rule.requiredKeys)) {
+      throw new PolicyRegistryError(
+        rule.message,
+        'POLICY_GOVERNANCE_DEFINITION_INVALID',
+        400,
+      );
+    }
+  }
+
   private formatPolicy(record: any): PolicyDefinitionSummary {
     const approvalMode = this.normalizeApprovalMode(record.approvalMode);
     const approvalTrail = this.normalizeApprovalTrail(record.approvalTrail);
@@ -744,6 +883,12 @@ export class PolicyRegistryService {
       requiredApprovalClasses: normalizedClasses,
       requiredApprovalJurisdictions: normalizedJurisdictions,
     };
+  }
+
+  private sameSet(values: string[], expected: string[]): boolean {
+    const left = [...new Set(values)].sort();
+    const right = [...new Set(expected)].sort();
+    return left.length === right.length && left.every((value, index) => value === right[index]);
   }
 
   private normalizeApprovalMode(value: unknown): PolicyApprovalMode {

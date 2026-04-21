@@ -159,6 +159,8 @@ export class EnterpriseOrganizationService {
       this.normalizeGovernanceSettings(
         (parsed.settings as Record<string, unknown> | undefined)?.governance,
       ),
+      parsed.plan,
+      parsed.jurisdictions,
     );
 
     const organization = await prisma.organization.create({
@@ -332,7 +334,7 @@ export class EnterpriseOrganizationService {
   async getGovernanceSettings(organizationId: string): Promise<OrganizationGovernanceSettings> {
     const organization = await prisma.organization.findUnique({
       where: { id: organizationId },
-      select: { id: true, settings: true },
+      select: { id: true, plan: true, jurisdictions: true, settings: true },
     });
 
     if (!organization) {
@@ -373,7 +375,7 @@ export class EnterpriseOrganizationService {
         ...(currentGovernance.familyPacks ?? {}),
         ...(parsed.familyPacks ?? {}),
       },
-    }));
+    }), organization.plan, organization.jurisdictions);
     const nextGovernance = {
       ...hydratedGovernance,
       lastUpdatedAt: changedAt,
@@ -630,6 +632,8 @@ export class EnterpriseOrganizationService {
 
   private enforceGovernanceSelections(
     settings: OrganizationGovernanceSettings,
+    organizationPlan: string,
+    organizationJurisdictions: string[],
   ): OrganizationGovernanceSettings {
     const availablePacks = new Map(
       policyGovernanceService.listGovernancePacks().map((pack) => [pack.id, pack]),
@@ -675,7 +679,7 @@ export class EnterpriseOrganizationService {
       return acc;
     }, {});
 
-    return {
+    const normalizedSettings: OrganizationGovernanceSettings = {
       ...(defaultPack ? { defaultPack } : {}),
       ...(Object.keys(familyPacks).length > 0 ? { familyPacks } : {}),
       ...(settings.lastUpdatedAt ? { lastUpdatedAt: settings.lastUpdatedAt } : {}),
@@ -684,6 +688,21 @@ export class EnterpriseOrganizationService {
         ? { changeHistory: settings.changeHistory }
         : {}),
     };
+
+    const compatibilityIssues = policyGovernanceService.validateGovernanceSettings({
+      organizationPlan,
+      organizationJurisdictions,
+      settings: normalizedSettings,
+    });
+    if (compatibilityIssues.length > 0) {
+      throw new EnterpriseOrganizationError(
+        compatibilityIssues[0]?.reason ?? 'Organization governance settings are not compatible with this tenant.',
+        'ENTERPRISE_GOVERNANCE_PACK_INVALID',
+        400,
+      );
+    }
+
+    return normalizedSettings;
   }
 
   private asSettingsRecord(settings: unknown): Record<string, unknown> {

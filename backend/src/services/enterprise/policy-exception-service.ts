@@ -125,6 +125,7 @@ export class PolicyExceptionService {
       requiredApprovalClasses: parsed.requiredApprovalClasses,
       requiredApprovalJurisdictions: parsed.requiredApprovalJurisdictions,
     });
+    this.assertExceptionMatchesPolicyGovernance(policy, governanceProfile);
     const approvalConfig = this.normalizeApprovalConfiguration(
       governanceProfile.approvalMode,
       governanceProfile.requiredApprovals,
@@ -217,6 +218,7 @@ export class PolicyExceptionService {
   ): Promise<PolicyExceptionSummary> {
     const model = this.getExceptionModel();
     const record = await this.getException(exceptionId, organizationId);
+    const activePolicy = await policyRegistryService.getEffectivePolicy(organizationId, record.policyName);
     const actorAuthority = await enterpriseOrganizationService.getApprovalAuthority(actorIdentityId, organizationId);
     const actorRole = actorAuthority.role;
 
@@ -227,6 +229,8 @@ export class PolicyExceptionService {
         409,
       );
     }
+
+    this.assertExceptionApprovalStillMatchesPolicy(record, activePolicy);
 
     const approvalMode = this.normalizeApprovalMode(record.approvalMode);
     const requiredApprovalRoles = this.normalizeRequiredApprovalRoles(record.requiredApprovalRoles);
@@ -612,6 +616,53 @@ export class PolicyExceptionService {
       createdAt: record.createdAt,
       updatedAt: record.updatedAt,
     };
+  }
+
+  private assertExceptionMatchesPolicyGovernance(
+    policy: { governancePackId?: string | null; governancePackVersion?: string | null; name?: string; version?: string },
+    governanceProfile: { governancePackId: string; governancePackVersion: string },
+  ): void {
+    if (!policy.governancePackId) {
+      return;
+    }
+
+    if (
+      policy.governancePackId !== governanceProfile.governancePackId
+      || (policy.governancePackVersion ?? null) !== governanceProfile.governancePackVersion
+    ) {
+      throw new PolicyExceptionError(
+        'Policy exception governance must match the active governing policy regime.',
+        'POLICY_EXCEPTION_GOVERNANCE_MISMATCH',
+        409,
+      );
+    }
+  }
+
+  private assertExceptionApprovalStillMatchesPolicy(
+    record: any,
+    activePolicy: Awaited<ReturnType<typeof policyRegistryService.getEffectivePolicy>>,
+  ): void {
+    const hasRecordedGovernance = Boolean(
+      record.governancePackId
+      || record.governancePackVersion
+      || record.governanceProfileId,
+    );
+    if (!hasRecordedGovernance) {
+      return;
+    }
+
+    if (
+      !activePolicy
+      || activePolicy.id !== record.policyDefinitionId
+      || (activePolicy.governancePackId ?? null) !== (record.governancePackId ?? null)
+      || (activePolicy.governancePackVersion ?? null) !== (record.governancePackVersion ?? null)
+    ) {
+      throw new PolicyExceptionError(
+        'Policy exception no longer matches the active governing policy regime. Refresh the exception request before approval.',
+        'POLICY_EXCEPTION_POLICY_STALE',
+        409,
+      );
+    }
   }
 
   private normalizeApprovalConfiguration(

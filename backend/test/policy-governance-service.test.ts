@@ -89,4 +89,42 @@ describe('PolicyGovernanceService', () => {
       expect.arrayContaining(['Tenant governance pack enterprise-reporting@2026.04 was selected.']),
     );
   });
+
+  it('rejects incompatible organization default pack selections', () => {
+    expect(
+      policyGovernanceService.validateGovernanceSettings({
+        organizationPlan: 'starter',
+        organizationJurisdictions: ['AE-ADGM'],
+        settings: {
+          defaultPack: { packId: 'enterprise-reporting', version: '2026.04' },
+        },
+      }),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          scope: 'defaultPack',
+          packId: 'enterprise-reporting',
+        }),
+      ]),
+    );
+  });
+
+  it('rejects sovereign packs for tenants without sovereign jurisdiction context', () => {
+    expect(
+      policyGovernanceService.validateGovernanceSettings({
+        organizationPlan: 'enterprise',
+        organizationJurisdictions: ['AE-ADGM', 'EU-GDPR'],
+        settings: {
+          defaultPack: { packId: 'sovereign-core', version: '2026.04' },
+        },
+      }),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          packId: 'sovereign-core',
+          reason: expect.stringContaining('requires a sovereign-scoped jurisdiction'),
+        }),
+      ]),
+    );
+  });
 });
