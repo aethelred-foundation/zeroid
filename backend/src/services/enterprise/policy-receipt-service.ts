@@ -24,6 +24,9 @@ export interface PolicyDecisionReceipt {
   policyApprovedByIdentityId?: string;
   policyEffectiveFrom?: string;
   policyExpiresAt?: string;
+  policyGovernancePackId?: string;
+  policyGovernancePackVersion?: string;
+  policyGovernancePackLabel?: string;
   policyGovernanceProfileId?: string;
   policyGovernanceProfileLabel?: string;
   policyGovernanceRationale?: string[];
@@ -53,6 +56,9 @@ export interface CreatePolicyDecisionReceiptInput {
   policyApprovedByIdentityId?: string;
   policyEffectiveFrom?: string;
   policyExpiresAt?: string;
+  policyGovernancePackId?: string;
+  policyGovernancePackVersion?: string;
+  policyGovernancePackLabel?: string;
   policyGovernanceProfileId?: string;
   policyGovernanceProfileLabel?: string;
   policyGovernanceRationale?: string[];
@@ -76,6 +82,33 @@ export interface PolicyDecisionReceiptListItem {
   createdAt: string;
 }
 
+interface GovernancePackSelectionSnapshot {
+  packId: string;
+  version?: string;
+}
+
+interface GovernanceChangeSnapshot {
+  changedAt: string;
+  changedByIdentityId: string;
+  changeReason?: string;
+  defaultPack?: GovernancePackSelectionSnapshot;
+  familyPacks?: Record<string, GovernancePackSelectionSnapshot>;
+}
+
+interface OrganizationGovernanceSnapshot {
+  defaultPack?: GovernancePackSelectionSnapshot;
+  familyPacks?: Record<string, GovernancePackSelectionSnapshot>;
+  lastUpdatedAt?: string;
+  lastUpdatedByIdentityId?: string;
+  activePack?: {
+    id: string;
+    version?: string;
+    label?: string;
+    policyFamily?: string;
+  };
+  changeHistory?: GovernanceChangeSnapshot[];
+}
+
 export interface PolicyDecisionReceiptExport {
   formatVersion: 'zeroid.policy_receipt_export.v1';
   exportedAt: string;
@@ -91,6 +124,9 @@ export interface PolicyDecisionReceiptExport {
       approvedByIdentityId?: string | null;
       effectiveFrom?: string;
       expiresAt?: string;
+      governancePackId?: string | null;
+      governancePackVersion?: string | null;
+      governancePackLabel?: string | null;
       governanceProfileId?: string | null;
       governanceProfileLabel?: string | null;
       governanceProfileRationale?: string[];
@@ -120,6 +156,9 @@ export interface PolicyDecisionReceiptExport {
       revokedByIdentityId?: string | null;
       revocationReason?: string | null;
     }>;
+  };
+  operatingRegime?: {
+    organizationGovernance?: OrganizationGovernanceSnapshot;
   };
 }
 
@@ -157,6 +196,9 @@ export class PolicyDecisionReceiptService {
       policyApprovedByIdentityId: input.policyApprovedByIdentityId ?? null,
       policyEffectiveFrom: input.policyEffectiveFrom ?? null,
       policyExpiresAt: input.policyExpiresAt ?? null,
+      policyGovernancePackId: input.policyGovernancePackId ?? null,
+      policyGovernancePackVersion: input.policyGovernancePackVersion ?? null,
+      policyGovernancePackLabel: input.policyGovernancePackLabel ?? null,
       policyGovernanceProfileId: input.policyGovernanceProfileId ?? null,
       policyGovernanceProfileLabel: input.policyGovernanceProfileLabel ?? null,
       policyGovernanceRationale: this.normalizeGovernanceRationale(input.policyGovernanceRationale),
@@ -185,6 +227,9 @@ export class PolicyDecisionReceiptService {
       policyApprovedByIdentityId: input.policyApprovedByIdentityId,
       policyEffectiveFrom: input.policyEffectiveFrom,
       policyExpiresAt: input.policyExpiresAt,
+      policyGovernancePackId: input.policyGovernancePackId,
+      policyGovernancePackVersion: input.policyGovernancePackVersion,
+      policyGovernancePackLabel: input.policyGovernancePackLabel,
       policyGovernanceProfileId: input.policyGovernanceProfileId,
       policyGovernanceProfileLabel: input.policyGovernanceProfileLabel,
       ...(input.policyGovernanceRationale && input.policyGovernanceRationale.length > 0
@@ -233,6 +278,9 @@ export class PolicyDecisionReceiptService {
           policyApprovedByIdentityId: input.policyApprovedByIdentityId ?? null,
           policyEffectiveFrom: input.policyEffectiveFrom ?? null,
           policyExpiresAt: input.policyExpiresAt ?? null,
+          policyGovernancePackId: input.policyGovernancePackId ?? null,
+          policyGovernancePackVersion: input.policyGovernancePackVersion ?? null,
+          policyGovernancePackLabel: input.policyGovernancePackLabel ?? null,
           policyGovernanceProfileId: input.policyGovernanceProfileId ?? null,
           policyGovernanceProfileLabel: input.policyGovernanceProfileLabel ?? null,
           policyGovernanceRationale: this.normalizeGovernanceRationale(input.policyGovernanceRationale),
@@ -326,6 +374,9 @@ export class PolicyDecisionReceiptService {
       policyApprovedByIdentityId: receipt.policyApprovedByIdentityId ?? null,
       policyEffectiveFrom: receipt.policyEffectiveFrom ?? null,
       policyExpiresAt: receipt.policyExpiresAt ?? null,
+      policyGovernancePackId: receipt.policyGovernancePackId ?? null,
+      policyGovernancePackVersion: receipt.policyGovernancePackVersion ?? null,
+      policyGovernancePackLabel: receipt.policyGovernancePackLabel ?? null,
       policyGovernanceProfileId: receipt.policyGovernanceProfileId ?? null,
       policyGovernanceProfileLabel: receipt.policyGovernanceProfileLabel ?? null,
       policyGovernanceRationale: this.normalizeGovernanceRationale(receipt.policyGovernanceRationale),
@@ -356,6 +407,7 @@ export class PolicyDecisionReceiptService {
     }
 
     const lineage = await this.buildLineageSnapshot(verification.receipt);
+    const operatingRegime = this.buildOperatingRegimeSnapshot(verification.receipt);
 
     return {
       formatVersion: 'zeroid.policy_receipt_export.v1',
@@ -363,6 +415,7 @@ export class PolicyDecisionReceiptService {
       verified: verification.valid,
       receipt: verification.receipt,
       ...(lineage ? { lineage } : {}),
+      ...(operatingRegime ? { operatingRegime } : {}),
     };
   }
 
@@ -404,6 +457,9 @@ export class PolicyDecisionReceiptService {
         policyApprovedByIdentityId: receipt.policyApprovedByIdentityId,
         policyEffectiveFrom: receipt.policyEffectiveFrom ? new Date(receipt.policyEffectiveFrom) : null,
         policyExpiresAt: receipt.policyExpiresAt ? new Date(receipt.policyExpiresAt) : null,
+        policyGovernancePackId: receipt.policyGovernancePackId,
+        policyGovernancePackVersion: receipt.policyGovernancePackVersion,
+        policyGovernancePackLabel: receipt.policyGovernancePackLabel,
         policyGovernanceProfileId: receipt.policyGovernanceProfileId,
         policyGovernanceProfileLabel: receipt.policyGovernanceProfileLabel,
         policyGovernanceRationale: this.normalizeGovernanceRationale(receipt.policyGovernanceRationale),
@@ -544,6 +600,9 @@ export class PolicyDecisionReceiptService {
           ...(policy.approvedByIdentityId !== undefined ? { approvedByIdentityId: policy.approvedByIdentityId ?? null } : {}),
           ...(policy.effectiveFrom ? { effectiveFrom: policy.effectiveFrom.toISOString() } : {}),
           ...(policy.expiresAt ? { expiresAt: policy.expiresAt.toISOString() } : {}),
+          ...(policy.governancePackId !== undefined ? { governancePackId: policy.governancePackId ?? null } : {}),
+          ...(policy.governancePackVersion !== undefined ? { governancePackVersion: policy.governancePackVersion ?? null } : {}),
+          ...(policy.governancePackLabel !== undefined ? { governancePackLabel: policy.governancePackLabel ?? null } : {}),
           ...(policy.governanceProfileId !== undefined ? { governanceProfileId: policy.governanceProfileId ?? null } : {}),
           ...(policy.governanceProfileLabel !== undefined ? { governanceProfileLabel: policy.governanceProfileLabel ?? null } : {}),
           ...(Array.isArray(policy.governanceProfileRationale) && policy.governanceProfileRationale.length > 0
@@ -581,6 +640,45 @@ export class PolicyDecisionReceiptService {
     };
   }
 
+  private buildOperatingRegimeSnapshot(
+    receipt: PolicyDecisionReceipt,
+  ): PolicyDecisionReceiptExport['operatingRegime'] | undefined {
+    const metadata = this.asRecord(receipt.metadata);
+    const governanceContext = this.asRecord(metadata.organizationGovernanceContext);
+    if (Object.keys(governanceContext).length === 0) {
+      return undefined;
+    }
+
+    const snapshot: OrganizationGovernanceSnapshot = {
+      ...(this.normalizePackSelection(governanceContext.defaultPack)
+        ? { defaultPack: this.normalizePackSelection(governanceContext.defaultPack) }
+        : {}),
+      ...(this.normalizeFamilyPackSelections(governanceContext.familyPacks)
+        ? { familyPacks: this.normalizeFamilyPackSelections(governanceContext.familyPacks) }
+        : {}),
+      ...(typeof governanceContext.lastUpdatedAt === 'string' && governanceContext.lastUpdatedAt.length > 0
+        ? { lastUpdatedAt: governanceContext.lastUpdatedAt }
+        : {}),
+      ...(typeof governanceContext.lastUpdatedByIdentityId === 'string' && governanceContext.lastUpdatedByIdentityId.length > 0
+        ? { lastUpdatedByIdentityId: governanceContext.lastUpdatedByIdentityId }
+        : {}),
+      ...(this.normalizeActivePack(governanceContext.activePack)
+        ? { activePack: this.normalizeActivePack(governanceContext.activePack) }
+        : {}),
+      ...(this.normalizeGovernanceChangeHistory(governanceContext.changeHistory).length > 0
+        ? { changeHistory: this.normalizeGovernanceChangeHistory(governanceContext.changeHistory) }
+        : {}),
+    };
+
+    if (Object.keys(snapshot).length === 0) {
+      return undefined;
+    }
+
+    return {
+      organizationGovernance: snapshot,
+    };
+  }
+
   private normalizeReceipt(receipt: PolicyDecisionReceipt): PolicyDecisionReceipt {
     const policyExceptionIds = this.normalizePolicyExceptionIds(receipt.policyExceptionIds);
     return {
@@ -590,6 +688,9 @@ export class PolicyDecisionReceiptService {
       ...(receipt.policyApprovedByIdentityId ? { policyApprovedByIdentityId: receipt.policyApprovedByIdentityId } : {}),
       ...(receipt.policyEffectiveFrom ? { policyEffectiveFrom: receipt.policyEffectiveFrom } : {}),
       ...(receipt.policyExpiresAt ? { policyExpiresAt: receipt.policyExpiresAt } : {}),
+      ...(receipt.policyGovernancePackId ? { policyGovernancePackId: receipt.policyGovernancePackId } : {}),
+      ...(receipt.policyGovernancePackVersion ? { policyGovernancePackVersion: receipt.policyGovernancePackVersion } : {}),
+      ...(receipt.policyGovernancePackLabel ? { policyGovernancePackLabel: receipt.policyGovernancePackLabel } : {}),
       ...(receipt.policyGovernanceProfileId ? { policyGovernanceProfileId: receipt.policyGovernanceProfileId } : {}),
       ...(receipt.policyGovernanceProfileLabel ? { policyGovernanceProfileLabel: receipt.policyGovernanceProfileLabel } : {}),
       ...(receipt.policyGovernanceRationale && receipt.policyGovernanceRationale.length > 0
@@ -615,6 +716,9 @@ export class PolicyDecisionReceiptService {
       policyApprovedByIdentityId: record.policyApprovedByIdentityId ?? undefined,
       policyEffectiveFrom: record.policyEffectiveFrom ? record.policyEffectiveFrom.toISOString() : undefined,
       policyExpiresAt: record.policyExpiresAt ? record.policyExpiresAt.toISOString() : undefined,
+      policyGovernancePackId: record.policyGovernancePackId ?? undefined,
+      policyGovernancePackVersion: record.policyGovernancePackVersion ?? undefined,
+      policyGovernancePackLabel: record.policyGovernancePackLabel ?? undefined,
       policyGovernanceProfileId: record.policyGovernanceProfileId ?? undefined,
       policyGovernanceProfileLabel: record.policyGovernanceProfileLabel ?? undefined,
       ...(Array.isArray(record.policyGovernanceRationale) && record.policyGovernanceRationale.length > 0
@@ -648,6 +752,89 @@ export class PolicyDecisionReceiptService {
         .map((entry) => String(entry).trim())
         .filter((entry) => entry.length > 0),
     )];
+  }
+
+  private normalizePackSelection(value: unknown): GovernancePackSelectionSnapshot | undefined {
+    const record = this.asRecord(value);
+    if (typeof record.packId !== 'string' || record.packId.length === 0) {
+      return undefined;
+    }
+
+    return {
+      packId: record.packId,
+      ...(typeof record.version === 'string' && record.version.length > 0
+        ? { version: record.version }
+        : {}),
+    };
+  }
+
+  private normalizeFamilyPackSelections(
+    value: unknown,
+  ): Record<string, GovernancePackSelectionSnapshot> | undefined {
+    const record = this.asRecord(value);
+    const normalized = Object.entries(record).reduce<Record<string, GovernancePackSelectionSnapshot>>((acc, [key, selection]) => {
+      const parsed = this.normalizePackSelection(selection);
+      if (parsed) {
+        acc[key] = parsed;
+      }
+      return acc;
+    }, {});
+
+    return Object.keys(normalized).length > 0 ? normalized : undefined;
+  }
+
+  private normalizeActivePack(
+    value: unknown,
+  ): OrganizationGovernanceSnapshot['activePack'] | undefined {
+    const record = this.asRecord(value);
+    if (typeof record.id !== 'string' || record.id.length === 0) {
+      return undefined;
+    }
+
+    return {
+      id: record.id,
+      ...(typeof record.version === 'string' && record.version.length > 0
+        ? { version: record.version }
+        : {}),
+      ...(typeof record.label === 'string' && record.label.length > 0
+        ? { label: record.label }
+        : {}),
+      ...(typeof record.policyFamily === 'string' && record.policyFamily.length > 0
+        ? { policyFamily: record.policyFamily }
+        : {}),
+    };
+  }
+
+  private normalizeGovernanceChangeHistory(value: unknown): GovernanceChangeSnapshot[] {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    return value
+      .map((entry) => this.asRecord(entry))
+      .map((entry) => ({
+        changedAt: typeof entry.changedAt === 'string' ? entry.changedAt : '',
+        changedByIdentityId: typeof entry.changedByIdentityId === 'string' ? entry.changedByIdentityId : '',
+        ...(typeof entry.changeReason === 'string' && entry.changeReason.length > 0
+          ? { changeReason: entry.changeReason }
+          : {}),
+        ...(this.normalizePackSelection(entry.defaultPack)
+          ? { defaultPack: this.normalizePackSelection(entry.defaultPack) }
+          : {}),
+        ...(this.normalizeFamilyPackSelections(entry.familyPacks)
+          ? { familyPacks: this.normalizeFamilyPackSelections(entry.familyPacks) }
+          : {}),
+      }))
+      .filter((entry) => entry.changedAt.length > 0 && entry.changedByIdentityId.length > 0)
+      .slice(-5);
+  }
+
+  private asRecord(value: unknown): Record<string, unknown> {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return {};
+    }
+
+    return value as Record<string, unknown>;
   }
 }
 

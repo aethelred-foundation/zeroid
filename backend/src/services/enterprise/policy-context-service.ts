@@ -13,6 +13,9 @@ export interface PolicyDefinition {
   requiredApprovalRoles?: EnterpriseRole[];
   requiredApprovalClasses?: EnterpriseApprovalClass[];
   requiredApprovalJurisdictions?: string[];
+  governancePackId?: string;
+  governancePackVersion?: string;
+  governancePackLabel?: string;
   governanceProfileId?: string;
   governanceProfileLabel?: string;
   governanceProfileRationale?: string[];
@@ -69,6 +72,9 @@ export interface PolicyExecutionContext {
     requiredApprovalRoles?: EnterpriseRole[];
     requiredApprovalClasses?: EnterpriseApprovalClass[];
     requiredApprovalJurisdictions?: string[];
+    governancePackId?: string;
+    governancePackVersion?: string;
+    governancePackLabel?: string;
     governanceProfileId?: string;
     governanceProfileLabel?: string;
     governanceProfileRationale?: string[];
@@ -226,6 +232,9 @@ export class PolicyContextService {
           ...(definition.requiredApprovalRoles && definition.requiredApprovalRoles.length > 0 ? { requiredApprovalRoles: definition.requiredApprovalRoles } : {}),
           ...(definition.requiredApprovalClasses && definition.requiredApprovalClasses.length > 0 ? { requiredApprovalClasses: definition.requiredApprovalClasses } : {}),
           ...(definition.requiredApprovalJurisdictions && definition.requiredApprovalJurisdictions.length > 0 ? { requiredApprovalJurisdictions: definition.requiredApprovalJurisdictions } : {}),
+          ...(definition.governancePackId ? { governancePackId: definition.governancePackId } : {}),
+          ...(definition.governancePackVersion ? { governancePackVersion: definition.governancePackVersion } : {}),
+          ...(definition.governancePackLabel ? { governancePackLabel: definition.governancePackLabel } : {}),
           ...(definition.governanceProfileId ? { governanceProfileId: definition.governanceProfileId } : {}),
           ...(definition.governanceProfileLabel ? { governanceProfileLabel: definition.governanceProfileLabel } : {}),
           ...(definition.governanceProfileRationale && definition.governanceProfileRationale.length > 0 ? { governanceProfileRationale: definition.governanceProfileRationale } : {}),
@@ -295,6 +304,9 @@ export class PolicyContextService {
           requiredApprovalRoles: this.normalizeRequiredApprovalRoles(record.requiredApprovalRoles),
           requiredApprovalClasses: this.normalizeRequiredApprovalClasses(record.requiredApprovalClasses),
           requiredApprovalJurisdictions: this.normalizeRequiredApprovalJurisdictions(record.requiredApprovalJurisdictions),
+          governancePackId: record.governancePackId ?? undefined,
+          governancePackVersion: record.governancePackVersion ?? undefined,
+          governancePackLabel: record.governancePackLabel ?? undefined,
           governanceProfileId: record.governanceProfileId ?? undefined,
           governanceProfileLabel: record.governanceProfileLabel ?? undefined,
           governanceProfileRationale: this.normalizeGovernanceRationale(record.governanceProfileRationale),

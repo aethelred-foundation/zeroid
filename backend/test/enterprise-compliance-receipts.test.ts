@@ -66,6 +66,30 @@ jest.mock('../src/middleware/enterprise', () => ({
       organizationId: 'org-1',
       membershipId: 'membership-1',
       role: 'compliance_officer',
+      governanceSettings: {
+        defaultPack: { packId: 'sovereign-core', version: '2026.04' },
+        familyPacks: {
+          compliance: { packId: 'cross-border-regulated', version: '2026.04' },
+        },
+        lastUpdatedAt: '2026-04-20T00:00:00.000Z',
+        lastUpdatedByIdentityId: 'admin-1',
+        changeHistory: [
+          {
+            changedAt: '2026-04-19T00:00:00.000Z',
+            changedByIdentityId: 'admin-1',
+            changeReason: 'Adopt sovereign baseline for enterprise rollout',
+            defaultPack: { packId: 'sovereign-core', version: '2026.04' },
+          },
+          {
+            changedAt: '2026-04-20T00:00:00.000Z',
+            changedByIdentityId: 'privacy-officer-1',
+            changeReason: 'Elevate compliance family to cross-border regulated pack',
+            familyPacks: {
+              compliance: { packId: 'cross-border-regulated', version: '2026.04' },
+            },
+          },
+        ],
+      },
     };
     next();
   },
@@ -262,6 +286,9 @@ describe('enterprise compliance receipt routes', () => {
       policyApprovalContext: {
         approvedByIdentityId: 'admin-approver',
         effectiveFrom: '2026-04-01T00:00:00.000Z',
+        governancePackId: 'baseline-core',
+        governancePackVersion: '2026.04',
+        governancePackLabel: 'Baseline Core Governance Pack',
         governanceProfileId: 'enterprise.compliance',
         governanceProfileLabel: 'Enterprise / Compliance',
         governanceProfileRationale: ['Enterprise high-risk policies require dual-control approval.'],
@@ -316,6 +343,9 @@ describe('enterprise compliance receipt routes', () => {
       policyApprovedByIdentityId: input.policyApprovedByIdentityId,
       policyEffectiveFrom: input.policyEffectiveFrom,
       policyExpiresAt: input.policyExpiresAt,
+      policyGovernancePackId: input.policyGovernancePackId,
+      policyGovernancePackVersion: input.policyGovernancePackVersion,
+      policyGovernancePackLabel: input.policyGovernancePackLabel,
       policyGovernanceProfileId: input.policyGovernanceProfileId,
       policyGovernanceProfileLabel: input.policyGovernanceProfileLabel,
       policyGovernanceRationale: input.policyGovernanceRationale,
@@ -648,6 +678,9 @@ describe('enterprise compliance receipt routes', () => {
       policyReference: 'zeroid://policy/mock/jurisdiction_compliance@2026.04.1',
       policyApprovedByIdentityId: 'admin-approver',
       policyEffectiveFrom: '2026-04-01T00:00:00.000Z',
+      policyGovernancePackId: 'baseline-core',
+      policyGovernancePackVersion: '2026.04',
+      policyGovernancePackLabel: 'Baseline Core Governance Pack',
       policyGovernanceProfileId: 'enterprise.compliance',
       policyGovernanceProfileLabel: 'Enterprise / Compliance',
       policyGovernanceRationale: ['Enterprise high-risk policies require dual-control approval.'],
@@ -656,8 +689,31 @@ describe('enterprise compliance receipt routes', () => {
       jurisdictionCodes: ['AE-ADGM'],
       metadata: expect.objectContaining({
         policyFamily: 'compliance',
+        organizationGovernanceContext: expect.objectContaining({
+          defaultPack: { packId: 'sovereign-core', version: '2026.04' },
+          familyPacks: {
+            compliance: { packId: 'cross-border-regulated', version: '2026.04' },
+          },
+          lastUpdatedAt: '2026-04-20T00:00:00.000Z',
+          lastUpdatedByIdentityId: 'admin-1',
+          activePack: {
+            id: 'baseline-core',
+            version: '2026.04',
+            label: 'Baseline Core Governance Pack',
+            policyFamily: 'compliance',
+          },
+          changeHistory: expect.arrayContaining([
+            expect.objectContaining({
+              changedByIdentityId: 'admin-1',
+              defaultPack: { packId: 'sovereign-core', version: '2026.04' },
+            }),
+          ]),
+        }),
         policyApprovalContext: expect.objectContaining({
           approvedByIdentityId: 'admin-approver',
+          governancePackId: 'baseline-core',
+          governancePackVersion: '2026.04',
+          governancePackLabel: 'Baseline Core Governance Pack',
           governanceProfileId: 'enterprise.compliance',
           governanceProfileLabel: 'Enterprise / Compliance',
         }),

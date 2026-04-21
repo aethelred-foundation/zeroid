@@ -16,6 +16,8 @@ describe('PolicyGovernanceService', () => {
     expect(governance.requiredApprovalClasses).toEqual(
       expect.arrayContaining(['privacy', 'legal']),
     );
+    expect(governance.governancePackId).toBe('enterprise-privacy');
+    expect(governance.governancePackVersion).toBe('2026.04');
     expect(governance.governanceProfileId).toContain('privacy');
   });
 
@@ -37,6 +39,7 @@ describe('PolicyGovernanceService', () => {
       expect.arrayContaining(['risk', 'legal', 'privacy']),
     );
     expect(governance.requiredApprovalJurisdictions).toEqual(['EU-GDPR', 'AE-ADGM']);
+    expect(governance.governancePackId).toBe('cross-border-regulated');
   });
 
   it('preserves stronger caller-supplied governance while adding required sovereign lanes', () => {
@@ -61,5 +64,29 @@ describe('PolicyGovernanceService', () => {
       expect.arrayContaining(['risk', 'compliance', 'sovereign_operator']),
     );
     expect(governance.requiredApprovalJurisdictions).toEqual(['AE-GOV', 'EU-GDPR']);
+    expect(governance.governancePackId).toBe('sovereign-core');
+    expect(governance.governancePackLabel).toContain('Sovereign');
+  });
+
+  it('uses tenant-selected governance packs when an organization pins one', () => {
+    const governance = policyGovernanceService.applyGovernanceBaseline({
+      organizationPlan: 'starter',
+      organizationJurisdictions: ['AE-ADGM'],
+      organizationGovernanceSettings: {
+        defaultPack: { packId: 'sovereign-core', version: '2026.04' },
+        familyPacks: {
+          reporting: { packId: 'enterprise-reporting', version: '2026.04' },
+        },
+      },
+      policyName: 'regulatory_reporting',
+      family: 'reporting',
+      approvalMode: 'single_admin',
+    });
+
+    expect(governance.governancePackId).toBe('enterprise-reporting');
+    expect(governance.governancePackVersion).toBe('2026.04');
+    expect(governance.governanceRationale).toEqual(
+      expect.arrayContaining(['Tenant governance pack enterprise-reporting@2026.04 was selected.']),
+    );
   });
 });

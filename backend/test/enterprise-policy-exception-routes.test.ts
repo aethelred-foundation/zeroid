@@ -88,7 +88,17 @@ jest.mock('../src/services/enterprise/sla-monitor', () => ({
 jest.mock('../src/services/enterprise/organization-service', () => ({
   CreateOrganizationSchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
   AddOrganizationMemberSchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
-  enterpriseOrganizationService: {},
+  UpdateOrganizationGovernanceSchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
+  enterpriseOrganizationService: {
+    getGovernanceSettings: jest.fn(),
+    updateGovernanceSettings: jest.fn(),
+  },
+}));
+
+jest.mock('../src/services/enterprise/policy-governance-service', () => ({
+  policyGovernanceService: {
+    listGovernancePacks: jest.fn(() => []),
+  },
 }));
 
 jest.mock('../src/services/enterprise/issuer-trust-service', () => ({

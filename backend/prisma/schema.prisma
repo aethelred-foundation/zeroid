@@ -646,6 +646,9 @@ model PolicyDecisionLedger {
   policyExpiresAt   DateTime?
   policyGovernanceProfileId String?
   policyGovernanceProfileLabel String?
+  policyGovernancePackId String?
+  policyGovernancePackVersion String?
+  policyGovernancePackLabel String?
   policyGovernanceRationale String[] @default([])
   subjectEntityId   String?
   policyExceptionIds String[]         @default([])
@@ -687,6 +690,9 @@ model PolicyDefinition {
   requiredApprovalJurisdictions String[]   @default([])
   governanceProfileId String?
   governanceProfileLabel String?
+  governancePackId String?
+  governancePackVersion String?
+  governancePackLabel String?
   governanceProfileRationale String[]      @default([])
   approvalTrail     Json?
   definition        Json
@@ -732,6 +738,9 @@ model PolicyException {
   requiredApprovalJurisdictions String[]    @default([])
   governanceProfileId String?
   governanceProfileLabel String?
+  governancePackId String?
+  governancePackVersion String?
+  governancePackLabel String?
   governanceProfileRationale String[]       @default([])
   approvalTrail       Json?
   status              PolicyExceptionStatus @default(PENDING_REVIEW)

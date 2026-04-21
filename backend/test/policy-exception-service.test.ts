@@ -48,6 +48,7 @@ describe('PolicyExceptionService', () => {
       permissions: [],
       plan: 'enterprise',
       jurisdictions: ['AE-ADGM'],
+      governanceSettings: {},
       approvalClasses: String(identityId).startsWith('auditor')
         ? ['auditor']
         : String(identityId).startsWith('compliance')

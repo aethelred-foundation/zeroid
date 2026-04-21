@@ -13,7 +13,9 @@ import {
   CreateOrganizationSchema,
   enterpriseOrganizationService,
   EnterpriseRole,
+  UpdateOrganizationGovernanceSchema,
 } from '../../services/enterprise/organization-service';
+import { policyGovernanceService } from '../../services/enterprise/policy-governance-service';
 import {
   issuerTrustRegistryService,
   RecordIssuerKeySchema,
@@ -280,6 +282,9 @@ function serializePolicyDefinition(record: {
   requiredApprovalJurisdictions: string[];
   governanceProfileId: string | null;
   governanceProfileLabel: string | null;
+  governancePackId: string | null;
+  governancePackVersion: string | null;
+  governancePackLabel: string | null;
   governanceProfileRationale: string[];
   approvalCount: number;
   approvalTrail: Array<{
@@ -336,6 +341,9 @@ function serializePolicyException(record: {
   requiredApprovalJurisdictions: string[];
   governanceProfileId: string | null;
   governanceProfileLabel: string | null;
+  governancePackId: string | null;
+  governancePackVersion: string | null;
+  governancePackLabel: string | null;
   governanceProfileRationale: string[];
   approvalCount: number;
   approvalTrail: Array<{
@@ -445,6 +453,56 @@ router.get(
       logger.error('organization_member_list_error', { error: error.message, organizationId: req.params.id });
       res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'ENTERPRISE_MEMBER_LIST_ERROR' });
     }
+  },
+);
+
+router.get(
+  '/organizations/:id/governance',
+  requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES, (req) => req.params.id as string),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const governance = await enterpriseOrganizationService.getGovernanceSettings(req.params.id as string);
+      res.status(200).json({ data: governance });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('organization_governance_get_error', { error: error.message, organizationId: req.params.id });
+      res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'ENTERPRISE_GOVERNANCE_GET_ERROR' });
+    }
+  },
+);
+
+router.patch(
+  '/organizations/:id/governance',
+  requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES, (req) => req.params.id as string),
+  validate(UpdateOrganizationGovernanceSchema),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const authReq = req as EnterpriseAuthenticatedRequest;
+      const identityId = authReq.identity?.id;
+      if (!identityId) {
+        res.status(401).json({ error: 'Authenticated identity required', code: 'ENTERPRISE_AUTH_REQUIRED' });
+        return;
+      }
+
+      const governance = await enterpriseOrganizationService.updateGovernanceSettings(
+        req.params.id as string,
+        identityId,
+        req.body,
+      );
+      res.status(200).json({ data: governance, message: 'Organization governance updated' });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('organization_governance_update_error', { error: error.message, organizationId: req.params.id });
+      res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'ENTERPRISE_GOVERNANCE_UPDATE_ERROR' });
+    }
+  },
+);
+
+router.get(
+  '/organizations/:id/governance/packs',
+  requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES, (req) => req.params.id as string),
+  async (_req: Request, res: Response): Promise<void> => {
+    res.status(200).json({ data: policyGovernanceService.listGovernancePacks() });
   },
 );
 

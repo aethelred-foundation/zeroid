@@ -6,7 +6,7 @@ import { sanctionsScreeningService, ScreeningRequestSchema, BatchScreeningReques
 import { regulatoryReportingService, ReportTypeSchema, ExportFormatSchema } from '../../services/compliance/regulatory-reporting';
 import { dataSovereigntyService, CrossBorderTransferSchema, PIASchema, BreachNotificationSchema, ConsentRecordSchema } from '../../services/compliance/data-sovereignty';
 import { EnterpriseAuthenticatedRequest, requireEnterpriseContext } from '../../middleware/enterprise';
-import { EnterpriseRole } from '../../services/enterprise/organization-service';
+import { EnterpriseRole, OrganizationGovernanceSettings } from '../../services/enterprise/organization-service';
 import { policyDecisionReceiptService, PolicyDecisionReceipt } from '../../services/enterprise/policy-receipt-service';
 import { policyContextService, PolicyExecutionContext } from '../../services/enterprise/policy-context-service';
 import { policyExecutionService } from '../../services/enterprise/policy-execution-service';
@@ -45,14 +45,24 @@ function validate<T>(schema: z.ZodSchema<T>) {
   };
 }
 
-function getEnterpriseReceiptContext(req: Request): { organizationId: string; actorIdentityId: string } | null {
+function getEnterpriseReceiptContext(
+  req: Request,
+): {
+  organizationId: string;
+  actorIdentityId: string;
+  governanceSettings?: OrganizationGovernanceSettings;
+} | null {
   const enterpriseReq = req as EnterpriseAuthenticatedRequest;
   const organizationId = enterpriseReq.enterpriseContext?.organizationId;
   const actorIdentityId = enterpriseReq.identity?.id;
   if (!organizationId || !actorIdentityId) {
     return null;
   }
-  return { organizationId, actorIdentityId };
+  return {
+    organizationId,
+    actorIdentityId,
+    governanceSettings: enterpriseReq.enterpriseContext?.governanceSettings,
+  };
 }
 
 function summarizeReceipt(receipt: PolicyDecisionReceipt): Record<string, unknown> {
@@ -80,7 +90,11 @@ async function requireReceiptContext(req: Request, res: Response): Promise<{ org
 }
 
 async function createPolicyAnchoredReceipt(
-  context: { organizationId: string; actorIdentityId: string },
+  context: {
+    organizationId: string;
+    actorIdentityId: string;
+    governanceSettings?: OrganizationGovernanceSettings;
+  },
   input: {
     receiptType: PolicyDecisionReceipt['receiptType'];
     policyName: string;
@@ -116,6 +130,9 @@ async function createPolicyAnchoredReceipt(
     policyApprovedByIdentityId: policyContext.policyApprovalContext?.approvedByIdentityId ?? undefined,
     policyEffectiveFrom: policyContext.policyApprovalContext?.effectiveFrom,
     policyExpiresAt: policyContext.policyApprovalContext?.expiresAt,
+    policyGovernancePackId: policyContext.policyApprovalContext?.governancePackId,
+    policyGovernancePackVersion: policyContext.policyApprovalContext?.governancePackVersion,
+    policyGovernancePackLabel: policyContext.policyApprovalContext?.governancePackLabel,
     policyGovernanceProfileId: policyContext.policyApprovalContext?.governanceProfileId,
     policyGovernanceProfileLabel: policyContext.policyApprovalContext?.governanceProfileLabel,
     policyGovernanceRationale: policyContext.policyApprovalContext?.governanceProfileRationale,
@@ -130,6 +147,35 @@ async function createPolicyAnchoredReceipt(
       policyFamily: policyContext.policyFamily,
       ...(policyContext.policyApprovalContext ? { policyApprovalContext: policyContext.policyApprovalContext } : {}),
       ...(policyContext.policyLifecycleContext ? { policyLifecycleContext: policyContext.policyLifecycleContext } : {}),
+      ...(context.governanceSettings ? {
+        organizationGovernanceContext: {
+          ...(context.governanceSettings.defaultPack
+            ? { defaultPack: context.governanceSettings.defaultPack }
+            : {}),
+          ...(context.governanceSettings.familyPacks
+            ? { familyPacks: context.governanceSettings.familyPacks }
+            : {}),
+          ...(context.governanceSettings.lastUpdatedAt
+            ? { lastUpdatedAt: context.governanceSettings.lastUpdatedAt }
+            : {}),
+          ...(context.governanceSettings.lastUpdatedByIdentityId
+            ? { lastUpdatedByIdentityId: context.governanceSettings.lastUpdatedByIdentityId }
+            : {}),
+          ...(context.governanceSettings.changeHistory && context.governanceSettings.changeHistory.length > 0
+            ? { changeHistory: context.governanceSettings.changeHistory.slice(-5) }
+            : {}),
+          ...(policyContext.policyApprovalContext?.governancePackId
+            ? {
+              activePack: {
+                id: policyContext.policyApprovalContext.governancePackId,
+                version: policyContext.policyApprovalContext.governancePackVersion,
+                label: policyContext.policyApprovalContext.governancePackLabel,
+                policyFamily: policyContext.policyFamily,
+              },
+            }
+            : {}),
+        },
+      } : {}),
       ...(policyContext.trustContext ? { trustContext: policyContext.trustContext } : {}),
       ...(policyContext.exceptionContext ? { exceptionContext: policyContext.exceptionContext } : {}),
       ...(input.metadata ?? {}),

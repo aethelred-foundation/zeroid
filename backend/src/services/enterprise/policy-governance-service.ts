@@ -1,4 +1,9 @@
-import type { EnterpriseApprovalClass, EnterpriseRole } from './organization-service';
+import type {
+  EnterpriseApprovalClass,
+  EnterpriseGovernanceFamily,
+  EnterpriseRole,
+  OrganizationGovernanceSettings,
+} from './organization-service';
 
 export type GovernedPolicyFamily = 'compliance' | 'reporting' | 'privacy' | 'screening';
 export type GovernedApprovalMode = 'single_admin' | 'separation_of_duties' | 'dual_control';
@@ -6,6 +11,7 @@ export type GovernedApprovalMode = 'single_admin' | 'separation_of_duties' | 'du
 export interface PolicyGovernanceInput {
   organizationPlan: string;
   organizationJurisdictions: string[];
+  organizationGovernanceSettings?: OrganizationGovernanceSettings;
   policyName: string;
   family: GovernedPolicyFamily;
   approvalMode: GovernedApprovalMode;
@@ -21,10 +27,32 @@ export interface PolicyGovernanceProfile {
   requiredApprovalRoles: EnterpriseRole[];
   requiredApprovalClasses: EnterpriseApprovalClass[];
   requiredApprovalJurisdictions: string[];
+  governancePackId: string;
+  governancePackVersion: string;
+  governancePackLabel: string;
   governanceProfileId: string;
   governanceProfileLabel: string;
   governanceRationale: string[];
 }
+
+interface GovernancePackDefinition {
+  id: string;
+  version: string;
+  label: string;
+}
+
+export interface GovernancePackDescriptor extends GovernancePackDefinition {
+  profileHints: string[];
+}
+
+const GOVERNANCE_PACKS = {
+  baseline: { id: 'baseline-core', version: '2026.04', label: 'Baseline Core Governance Pack' },
+  enterprisePrivacy: { id: 'enterprise-privacy', version: '2026.04', label: 'Enterprise Privacy Governance Pack' },
+  enterpriseScreening: { id: 'enterprise-screening', version: '2026.04', label: 'Enterprise Screening Governance Pack' },
+  enterpriseReporting: { id: 'enterprise-reporting', version: '2026.04', label: 'Enterprise Reporting Governance Pack' },
+  crossBorder: { id: 'cross-border-regulated', version: '2026.04', label: 'Cross-Border Regulated Governance Pack' },
+  sovereign: { id: 'sovereign-core', version: '2026.04', label: 'Sovereign Core Governance Pack' },
+} as const satisfies Record<string, GovernancePackDefinition>;
 
 const ENTERPRISE_ROLES = [
   'viewer',
@@ -46,6 +74,35 @@ const ENTERPRISE_APPROVAL_CLASSES = [
 ] as const satisfies readonly EnterpriseApprovalClass[];
 
 export class PolicyGovernanceService {
+  listGovernancePacks(): GovernancePackDescriptor[] {
+    return [
+      {
+        ...GOVERNANCE_PACKS.baseline,
+        profileHints: ['default'],
+      },
+      {
+        ...GOVERNANCE_PACKS.enterprisePrivacy,
+        profileHints: ['privacy', 'regulated-privacy', 'enterprise'],
+      },
+      {
+        ...GOVERNANCE_PACKS.enterpriseScreening,
+        profileHints: ['screening', 'enterprise'],
+      },
+      {
+        ...GOVERNANCE_PACKS.enterpriseReporting,
+        profileHints: ['reporting', 'enterprise'],
+      },
+      {
+        ...GOVERNANCE_PACKS.crossBorder,
+        profileHints: ['cross-border', 'cross-border-compliance', 'growth', 'enterprise'],
+      },
+      {
+        ...GOVERNANCE_PACKS.sovereign,
+        profileHints: ['sovereign'],
+      },
+    ];
+  }
+
   applyGovernanceBaseline(input: PolicyGovernanceInput): PolicyGovernanceProfile {
     const plan = String(input.organizationPlan ?? 'starter').toLowerCase();
     const policyName = String(input.policyName ?? '').toLowerCase();
@@ -251,6 +308,19 @@ export class PolicyGovernanceService {
       );
     }
 
+    const governancePack = this.resolveGovernancePack(
+      input.family,
+      input.organizationGovernanceSettings,
+      {
+      family: input.family,
+      isEnterprise,
+      isCrossBorder,
+      isBreach,
+      requiresSovereignLane,
+      },
+      rationale,
+    );
+
     const governanceProfileId =
       profileSegments.size > 0 ? [...profileSegments].join('.') : 'default';
     const governanceProfileLabel =
@@ -267,10 +337,75 @@ export class PolicyGovernanceService {
       requiredApprovalRoles: [...requiredApprovalRoles],
       requiredApprovalClasses: [...requiredApprovalClasses],
       requiredApprovalJurisdictions: [...requiredApprovalJurisdictions],
+      governancePackId: governancePack.id,
+      governancePackVersion: governancePack.version,
+      governancePackLabel: governancePack.label,
       governanceProfileId,
       governanceProfileLabel,
       governanceRationale: [...rationale],
     };
+  }
+
+  private resolveGovernancePack(
+    family: GovernedPolicyFamily,
+    governanceSettings: OrganizationGovernanceSettings | undefined,
+    input: {
+      family: GovernedPolicyFamily;
+      isEnterprise: boolean;
+      isCrossBorder: boolean;
+      isBreach: boolean;
+      requiresSovereignLane: boolean;
+    },
+    rationale: Set<string>,
+  ): GovernancePackDefinition {
+    const requestedPack = this.resolveRequestedPack(family, governanceSettings, rationale);
+    if (requestedPack) {
+      return requestedPack;
+    }
+
+    if (input.requiresSovereignLane) {
+      return GOVERNANCE_PACKS.sovereign;
+    }
+    if (input.isCrossBorder || (input.family === 'compliance' && input.isBreach)) {
+      return GOVERNANCE_PACKS.crossBorder;
+    }
+    if (input.isEnterprise && input.family === 'privacy') {
+      return GOVERNANCE_PACKS.enterprisePrivacy;
+    }
+    if (input.isEnterprise && input.family === 'screening') {
+      return GOVERNANCE_PACKS.enterpriseScreening;
+    }
+    if (input.isEnterprise && input.family === 'reporting') {
+      return GOVERNANCE_PACKS.enterpriseReporting;
+    }
+    return GOVERNANCE_PACKS.baseline;
+  }
+
+  private resolveRequestedPack(
+    family: EnterpriseGovernanceFamily,
+    governanceSettings: OrganizationGovernanceSettings | undefined,
+    rationale: Set<string>,
+  ): GovernancePackDefinition | null {
+    const requested = governanceSettings?.familyPacks?.[family] ?? governanceSettings?.defaultPack;
+    if (!requested?.packId) {
+      return null;
+    }
+
+    const matchedPack = Object.values(GOVERNANCE_PACKS).find((pack) => pack.id === requested.packId);
+    if (!matchedPack) {
+      rationale.add(`Requested governance pack ${requested.packId} is not available; using platform defaults.`);
+      return null;
+    }
+
+    if (requested.version && requested.version !== matchedPack.version) {
+      rationale.add(
+        `Requested governance pack ${requested.packId}@${requested.version} is unavailable; active pack version ${matchedPack.version} was applied.`,
+      );
+      return matchedPack;
+    }
+
+    rationale.add(`Tenant governance pack ${matchedPack.id}@${matchedPack.version} was selected.`);
+    return matchedPack;
   }
 
   private normalizeApprovalMode(value: unknown): GovernedApprovalMode {

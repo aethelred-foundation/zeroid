@@ -1,13 +1,18 @@
 const mockOrganizationCreate = jest.fn();
+const mockOrganizationFindUnique = jest.fn();
+const mockOrganizationUpdate = jest.fn();
 const mockOrganizationMemberCreate = jest.fn();
 const mockOrganizationMemberFindMany = jest.fn();
 const mockOrganizationMemberUpsert = jest.fn();
 const mockIdentityFindUnique = jest.fn();
+const mockAuditLogCreate = jest.fn();
 
 jest.mock('../src/index', () => ({
   prisma: {
     organization: {
       create: mockOrganizationCreate,
+      findUnique: mockOrganizationFindUnique,
+      update: mockOrganizationUpdate,
     },
     organizationMember: {
       create: mockOrganizationMemberCreate,
@@ -16,6 +21,9 @@ jest.mock('../src/index', () => ({
     },
     identity: {
       findUnique: mockIdentityFindUnique,
+    },
+    auditLog: {
+      create: mockAuditLogCreate,
     },
   },
 }));
@@ -35,8 +43,36 @@ describe('EnterpriseOrganizationService', () => {
       domain: 'zeroid.example',
       plan: 'enterprise',
       jurisdictions: ['UAE', 'EU'],
+      settings: {},
       billingEmail: 'ops@zeroid.example',
       createdAt: new Date('2026-04-21T00:00:00.000Z'),
+    });
+    mockOrganizationFindUnique.mockResolvedValue({
+      id: 'org-1',
+      settings: {},
+    });
+    mockOrganizationUpdate.mockResolvedValue({
+      settings: {
+        governance: {
+          defaultPack: { packId: 'sovereign-core', version: '2026.04' },
+          familyPacks: {
+            privacy: { packId: 'enterprise-privacy', version: '2026.04' },
+          },
+          lastUpdatedAt: '2026-04-21T00:00:00.000Z',
+          lastUpdatedByIdentityId: 'identity-1',
+          changeHistory: [
+            {
+              changedAt: '2026-04-21T00:00:00.000Z',
+              changedByIdentityId: 'identity-1',
+              changeReason: 'Move privacy workflows onto sovereign governance baseline',
+              defaultPack: { packId: 'sovereign-core', version: '2026.04' },
+              familyPacks: {
+                privacy: { packId: 'enterprise-privacy', version: '2026.04' },
+              },
+            },
+          ],
+        },
+      },
     });
 
     mockOrganizationMemberCreate.mockResolvedValue({
@@ -88,6 +124,35 @@ describe('EnterpriseOrganizationService', () => {
     }));
     expect(result.organization.id).toBe('org-1');
     expect(result.membership.role).toBe('admin');
+    expect(result.organization.governanceSettings).toEqual({});
+  });
+
+  it('pins governance pack versions when organization governance settings omit them', async () => {
+    await enterpriseOrganizationService.createOrganization('identity-1', {
+      name: 'ZeroID Sovereign Lab',
+      plan: 'enterprise',
+      settings: {
+        governance: {
+          defaultPack: { packId: 'sovereign-core' },
+          familyPacks: {
+            privacy: { packId: 'enterprise-privacy' },
+          },
+        },
+      },
+    });
+
+    expect(mockOrganizationCreate).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        settings: expect.objectContaining({
+          governance: {
+            defaultPack: { packId: 'sovereign-core', version: '2026.04' },
+            familyPacks: {
+              privacy: { packId: 'enterprise-privacy', version: '2026.04' },
+            },
+          },
+        }),
+      }),
+    }));
   });
 
   it('auto-selects the only organization membership when resolving context', async () => {
@@ -104,6 +169,7 @@ describe('EnterpriseOrganizationService', () => {
           name: 'ZeroID Sovereign Lab',
           plan: 'enterprise',
           jurisdictions: ['UAE'],
+          settings: {},
         },
       },
     ]);
@@ -127,6 +193,7 @@ describe('EnterpriseOrganizationService', () => {
           name: 'ZeroID Sovereign Lab',
           plan: 'enterprise',
           jurisdictions: ['UAE'],
+          settings: {},
         },
       },
       {
@@ -141,6 +208,7 @@ describe('EnterpriseOrganizationService', () => {
           name: 'ZeroID Audit Office',
           plan: 'growth',
           jurisdictions: ['EU'],
+          settings: {},
         },
       },
     ]);
@@ -167,6 +235,7 @@ describe('EnterpriseOrganizationService', () => {
           name: 'ZeroID Sovereign Lab',
           plan: 'enterprise',
           jurisdictions: ['UAE'],
+          settings: {},
         },
       },
     ]);
@@ -201,5 +270,88 @@ describe('EnterpriseOrganizationService', () => {
       }),
     }));
     expect(result.role).toBe('operator');
+  });
+
+  it('reads and updates organization governance settings', async () => {
+    mockOrganizationFindUnique
+      .mockResolvedValueOnce({
+        id: 'org-1',
+        settings: {
+          governance: {
+            defaultPack: { packId: 'baseline-core', version: '2026.04' },
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        id: 'org-1',
+        settings: {
+          governance: {
+            defaultPack: { packId: 'baseline-core', version: '2026.04' },
+          },
+        },
+      });
+
+    const current = await enterpriseOrganizationService.getGovernanceSettings('org-1');
+    expect(current).toEqual({
+      defaultPack: { packId: 'baseline-core', version: '2026.04' },
+    });
+
+    const updated = await enterpriseOrganizationService.updateGovernanceSettings(
+      'org-1',
+      'identity-1',
+      {
+        defaultPack: { packId: 'sovereign-core', version: '2026.04' },
+        familyPacks: {
+          privacy: { packId: 'enterprise-privacy', version: '2026.04' },
+        },
+        changeReason: 'Move privacy workflows onto sovereign governance baseline',
+      },
+    );
+
+    expect(mockOrganizationUpdate).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'org-1' },
+      data: expect.objectContaining({
+        settings: expect.objectContaining({
+          governance: expect.objectContaining({
+            defaultPack: { packId: 'sovereign-core', version: '2026.04' },
+            familyPacks: {
+              privacy: { packId: 'enterprise-privacy', version: '2026.04' },
+            },
+          }),
+        }),
+      }),
+    }));
+    expect(updated).toEqual({
+      defaultPack: { packId: 'sovereign-core', version: '2026.04' },
+      familyPacks: {
+        privacy: { packId: 'enterprise-privacy', version: '2026.04' },
+      },
+      lastUpdatedAt: '2026-04-21T00:00:00.000Z',
+      lastUpdatedByIdentityId: 'identity-1',
+      changeHistory: [
+        {
+          changedAt: '2026-04-21T00:00:00.000Z',
+          changedByIdentityId: 'identity-1',
+          changeReason: 'Move privacy workflows onto sovereign governance baseline',
+          defaultPack: { packId: 'sovereign-core', version: '2026.04' },
+          familyPacks: {
+            privacy: { packId: 'enterprise-privacy', version: '2026.04' },
+          },
+        },
+      ],
+    });
+    expect(mockAuditLogCreate).toHaveBeenCalled();
+  });
+
+  it('rejects unknown governance packs during governance updates', async () => {
+    await expect(
+      enterpriseOrganizationService.updateGovernanceSettings('org-1', 'identity-1', {
+        defaultPack: { packId: 'unknown-pack', version: '2026.04' },
+      }),
+    ).rejects.toMatchObject<Partial<EnterpriseOrganizationError>>({
+      code: 'ENTERPRISE_GOVERNANCE_PACK_INVALID',
+      statusCode: 400,
+    });
+    expect(mockOrganizationUpdate).not.toHaveBeenCalled();
   });
 });

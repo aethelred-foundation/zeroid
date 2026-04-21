@@ -41,6 +41,7 @@ describe('PolicyRegistryService', () => {
       permissions: [],
       plan: 'enterprise',
       jurisdictions: ['AE-ADGM'],
+      governanceSettings: {},
       approvalClasses: String(identityId).startsWith('auditor')
         ? ['auditor']
         : String(identityId).startsWith('compliance')
@@ -156,7 +157,41 @@ describe('PolicyRegistryService', () => {
     expect(policy.governanceProfileId).toContain('privacy');
     expect(policy.governanceProfileId).toContain('enterprise');
     expect(policy.governanceProfileLabel).toContain('Privacy');
+    expect(policy.governancePackId).toBe('enterprise-privacy');
+    expect(policy.governancePackVersion).toBe('2026.04');
+    expect(policy.governancePackLabel).toContain('Enterprise Privacy');
     expect(policy.governanceProfileRationale.length).toBeGreaterThan(0);
+  });
+
+  it('respects tenant-selected governance packs during policy creation', async () => {
+    mockGetApprovalAuthority.mockResolvedValueOnce({
+      organizationId: 'org-1',
+      organizationName: 'Org One',
+      role: 'admin',
+      permissions: [],
+      plan: 'starter',
+      jurisdictions: ['AE-ADGM'],
+      governanceSettings: {
+        defaultPack: { packId: 'sovereign-core', version: '2026.04' },
+      },
+      approvalClasses: ['admin'],
+      approvalJurisdictions: ['AE-ADGM'],
+    });
+
+    const policy = await policyRegistryService.createPolicyDraft('org-1', 'admin-1', {
+      name: 'regulatory_reporting',
+      version: '2026.05.2',
+      family: 'reporting',
+      description: 'Pinned sovereign governance pack for reporting',
+      definition: { reportType: 'SAR' },
+      changeSummary: 'Pins sovereign operating mode',
+    });
+
+    expect(policy.governancePackId).toBe('sovereign-core');
+    expect(policy.governancePackVersion).toBe('2026.04');
+    expect(policy.governanceProfileRationale).toEqual(
+      expect.arrayContaining(['Tenant governance pack sovereign-core@2026.04 was selected.']),
+    );
   });
 
   it('submits and approves a draft policy lifecycle', async () => {

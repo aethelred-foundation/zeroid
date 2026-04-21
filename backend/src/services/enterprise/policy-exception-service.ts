@@ -62,6 +62,9 @@ export interface PolicyExceptionSummary {
   requiredApprovalJurisdictions: string[];
   governanceProfileId: string | null;
   governanceProfileLabel: string | null;
+  governancePackId: string | null;
+  governancePackVersion: string | null;
+  governancePackLabel: string | null;
   governanceProfileRationale: string[];
   approvalCount: number;
   approvalTrail: PolicyApprovalTrailEntry[];
@@ -113,6 +116,7 @@ export class PolicyExceptionService {
     const governanceProfile = policyGovernanceService.applyGovernanceBaseline({
       organizationPlan: governanceContext.plan,
       organizationJurisdictions: governanceContext.jurisdictions,
+      organizationGovernanceSettings: governanceContext.governanceSettings,
       policyName: parsed.policyName,
       family: (policy.family ?? 'compliance') as 'compliance' | 'reporting' | 'privacy' | 'screening',
       approvalMode: parsed.approvalMode,
@@ -146,6 +150,9 @@ export class PolicyExceptionService {
         requiredApprovalJurisdictions: approvalConfig.requiredApprovalJurisdictions,
         governanceProfileId: governanceProfile.governanceProfileId,
         governanceProfileLabel: governanceProfile.governanceProfileLabel,
+        governancePackId: governanceProfile.governancePackId,
+        governancePackVersion: governanceProfile.governancePackVersion,
+        governancePackLabel: governanceProfile.governancePackLabel,
         governanceProfileRationale: governanceProfile.governanceRationale,
         approvalTrail: [],
         status: 'PENDING_REVIEW',
@@ -587,6 +594,9 @@ export class PolicyExceptionService {
       requiredApprovalJurisdictions,
       governanceProfileId: record.governanceProfileId ?? null,
       governanceProfileLabel: record.governanceProfileLabel ?? null,
+      governancePackId: record.governancePackId ?? null,
+      governancePackVersion: record.governancePackVersion ?? null,
+      governancePackLabel: record.governancePackLabel ?? null,
       governanceProfileRationale: this.normalizeGovernanceRationale(record.governanceProfileRationale),
       approvalCount: approvalTrail.length,
       approvalTrail,

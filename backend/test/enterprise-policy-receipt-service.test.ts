@@ -65,6 +65,9 @@ describe('PolicyDecisionReceiptService', () => {
       policyReference: 'zeroid://policy/compliance/jurisdiction_compliance@2026.04.1',
       policyApprovedByIdentityId: 'admin-approver',
       policyEffectiveFrom: '2026-04-01T00:00:00.000Z',
+      policyGovernancePackId: 'baseline-core',
+      policyGovernancePackVersion: '2026.04',
+      policyGovernancePackLabel: 'Baseline Core Governance Pack',
       policyGovernanceProfileId: 'enterprise.compliance',
       policyGovernanceProfileLabel: 'Enterprise / Compliance',
       policyGovernanceRationale: ['Enterprise high-risk policies require dual-control approval.'],
@@ -75,7 +78,31 @@ describe('PolicyDecisionReceiptService', () => {
       input: { entityId: 'entity-1', operationType: 'onboarding' },
       output: [{ jurisdiction: 'AE-ADGM', overallStatus: 'compliant' }],
       evidence: [{ jurisdiction: 'AE-ADGM', missingCredentials: [] }],
-      metadata: { route: '/enterprise/compliance/evaluate' },
+      metadata: {
+        route: '/enterprise/compliance/evaluate',
+        organizationGovernanceContext: {
+          defaultPack: { packId: 'sovereign-core', version: '2026.04' },
+          familyPacks: {
+            compliance: { packId: 'cross-border-regulated', version: '2026.04' },
+          },
+          lastUpdatedAt: '2026-04-20T00:00:00.000Z',
+          lastUpdatedByIdentityId: 'admin-1',
+          activePack: {
+            id: 'baseline-core',
+            version: '2026.04',
+            label: 'Baseline Core Governance Pack',
+            policyFamily: 'compliance',
+          },
+          changeHistory: [
+            {
+              changedAt: '2026-04-19T00:00:00.000Z',
+              changedByIdentityId: 'admin-1',
+              changeReason: 'Adopt sovereign baseline for enterprise rollout',
+              defaultPack: { packId: 'sovereign-core', version: '2026.04' },
+            },
+          ],
+        },
+      },
     });
 
     expect(receipt.receiptId).toMatch(/^pdr_/);
@@ -97,6 +124,9 @@ describe('PolicyDecisionReceiptService', () => {
         policyReference: 'zeroid://policy/compliance/jurisdiction_compliance@2026.04.1',
         policyApprovedByIdentityId: 'admin-approver',
         policyEffectiveFrom: new Date('2026-04-01T00:00:00.000Z'),
+        policyGovernancePackId: 'baseline-core',
+        policyGovernancePackVersion: '2026.04',
+        policyGovernancePackLabel: 'Baseline Core Governance Pack',
         policyGovernanceProfileId: 'enterprise.compliance',
         policyGovernanceProfileLabel: 'Enterprise / Compliance',
         policyGovernanceRationale: ['Enterprise high-risk policies require dual-control approval.'],
@@ -107,6 +137,9 @@ describe('PolicyDecisionReceiptService', () => {
     expect(receipt.policyDefinitionId).toBe('policy-7');
     expect(receipt.policyApprovedByIdentityId).toBe('admin-approver');
     expect(receipt.policyEffectiveFrom).toBe('2026-04-01T00:00:00.000Z');
+    expect(receipt.policyGovernancePackId).toBe('baseline-core');
+    expect(receipt.policyGovernancePackVersion).toBe('2026.04');
+    expect(receipt.policyGovernancePackLabel).toBe('Baseline Core Governance Pack');
     expect(receipt.policyGovernanceProfileId).toBe('enterprise.compliance');
     expect(receipt.policyGovernanceProfileLabel).toBe('Enterprise / Compliance');
     expect(receipt.policyGovernanceRationale).toEqual([
@@ -184,6 +217,9 @@ describe('PolicyDecisionReceiptService', () => {
       policyReference: 'zeroid://policy/reporting/regulatory_reporting@2026.04.1',
       policyApprovedByIdentityId: 'auditor-2',
       policyEffectiveFrom: new Date('2026-04-10T00:00:00.000Z'),
+      policyGovernancePackId: 'enterprise-reporting',
+      policyGovernancePackVersion: '2026.04',
+      policyGovernancePackLabel: 'Enterprise Reporting Governance Pack',
       policyGovernanceProfileId: 'enterprise.reporting',
       policyGovernanceProfileLabel: 'Enterprise / Reporting',
       policyGovernanceRationale: ['Enterprise reporting policies require dual-control approval.'],
@@ -221,6 +257,9 @@ describe('PolicyDecisionReceiptService', () => {
       policyReference: 'zeroid://policy/reporting/regulatory_reporting@2026.04.1',
       policyApprovedByIdentityId: 'auditor-2',
       policyEffectiveFrom: '2026-04-10T00:00:00.000Z',
+      policyGovernancePackId: 'enterprise-reporting',
+      policyGovernancePackVersion: '2026.04',
+      policyGovernancePackLabel: 'Enterprise Reporting Governance Pack',
       policyGovernanceProfileId: 'enterprise.reporting',
       policyGovernanceProfileLabel: 'Enterprise / Reporting',
       policyGovernanceRationale: ['Enterprise reporting policies require dual-control approval.'],
@@ -257,6 +296,9 @@ describe('PolicyDecisionReceiptService', () => {
       reference: 'zeroid://policy/privacy/privacy_impact_assessment@2026.04.1',
       approvedByIdentityId: 'privacy-admin',
       effectiveFrom: new Date('2026-04-15T00:00:00.000Z'),
+      governancePackId: 'enterprise-privacy',
+      governancePackVersion: '2026.04',
+      governancePackLabel: 'Enterprise Privacy Governance Pack',
       governanceProfileId: 'enterprise.privacy',
       governanceProfileLabel: 'Enterprise / Privacy',
       governanceProfileRationale: ['Enterprise privacy policies require dual-control approval.'],
@@ -276,6 +318,9 @@ describe('PolicyDecisionReceiptService', () => {
         policyName: 'privacy_impact_assessment',
         policyVersion: '2026.04.1',
         policyReference: 'zeroid://policy/privacy/privacy_impact_assessment@2026.04.1',
+        governancePackId: 'enterprise-privacy',
+        governancePackVersion: '2026.04',
+        governancePackLabel: 'Enterprise Privacy Governance Pack',
         governanceProfileId: 'enterprise.privacy',
         governanceProfileLabel: 'Enterprise / Privacy',
         governanceProfileRationale: ['Enterprise privacy policies require dual-control approval.'],
@@ -301,6 +346,9 @@ describe('PolicyDecisionReceiptService', () => {
       policyReference: 'zeroid://policy/privacy/privacy_impact_assessment@2026.04.1',
       policyApprovedByIdentityId: 'privacy-admin',
       policyEffectiveFrom: '2026-04-15T00:00:00.000Z',
+      policyGovernancePackId: 'enterprise-privacy',
+      policyGovernancePackVersion: '2026.04',
+      policyGovernancePackLabel: 'Enterprise Privacy Governance Pack',
       policyGovernanceProfileId: 'enterprise.privacy',
       policyGovernanceProfileLabel: 'Enterprise / Privacy',
       policyGovernanceRationale: ['Enterprise privacy policies require dual-control approval.'],
@@ -311,6 +359,32 @@ describe('PolicyDecisionReceiptService', () => {
       input: { entityId: 'entity-7' },
       output: { riskLevel: 'medium' },
       evidence: { riskScore: 58 },
+      metadata: {
+        organizationGovernanceContext: {
+          defaultPack: { packId: 'sovereign-core', version: '2026.04' },
+          familyPacks: {
+            privacy: { packId: 'enterprise-privacy', version: '2026.04' },
+          },
+          lastUpdatedAt: '2026-04-18T00:00:00.000Z',
+          lastUpdatedByIdentityId: 'privacy-admin',
+          activePack: {
+            id: 'enterprise-privacy',
+            version: '2026.04',
+            label: 'Enterprise Privacy Governance Pack',
+            policyFamily: 'privacy',
+          },
+          changeHistory: [
+            {
+              changedAt: '2026-04-18T00:00:00.000Z',
+              changedByIdentityId: 'privacy-admin',
+              changeReason: 'Enable privacy governance pack',
+              familyPacks: {
+                privacy: { packId: 'enterprise-privacy', version: '2026.04' },
+              },
+            },
+          ],
+        },
+      },
     });
 
     const exported = await service.exportReceipt(receipt.receiptId);
@@ -331,6 +405,9 @@ describe('PolicyDecisionReceiptService', () => {
           policyDefinitionId: 'policy-9',
           status: 'deprecated',
           supersededByPolicyDefinitionId: 'policy-10',
+          governancePackId: 'enterprise-privacy',
+          governancePackVersion: '2026.04',
+          governancePackLabel: 'Enterprise Privacy Governance Pack',
           governanceProfileId: 'enterprise.privacy',
           governanceProfileLabel: 'Enterprise / Privacy',
         }),
@@ -341,6 +418,28 @@ describe('PolicyDecisionReceiptService', () => {
             revokedByIdentityId: 'privacy-auditor',
           }),
         ],
+      },
+      operatingRegime: {
+        organizationGovernance: {
+          defaultPack: { packId: 'sovereign-core', version: '2026.04' },
+          familyPacks: {
+            privacy: { packId: 'enterprise-privacy', version: '2026.04' },
+          },
+          lastUpdatedAt: '2026-04-18T00:00:00.000Z',
+          lastUpdatedByIdentityId: 'privacy-admin',
+          activePack: {
+            id: 'enterprise-privacy',
+            version: '2026.04',
+            label: 'Enterprise Privacy Governance Pack',
+            policyFamily: 'privacy',
+          },
+          changeHistory: [
+            expect.objectContaining({
+              changedByIdentityId: 'privacy-admin',
+              changeReason: 'Enable privacy governance pack',
+            }),
+          ],
+        },
       },
     });
   });

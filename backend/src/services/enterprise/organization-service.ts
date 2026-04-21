@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { prisma } from '../../index';
+import { policyGovernanceService } from './policy-governance-service';
 
 export const ENTERPRISE_ROLES = [
   'viewer',
@@ -24,6 +25,65 @@ export const ENTERPRISE_APPROVAL_CLASSES = [
 
 export type EnterpriseApprovalClass = typeof ENTERPRISE_APPROVAL_CLASSES[number];
 
+export const ENTERPRISE_GOVERNANCE_FAMILIES = [
+  'compliance',
+  'reporting',
+  'privacy',
+  'screening',
+] as const;
+
+export type EnterpriseGovernanceFamily = typeof ENTERPRISE_GOVERNANCE_FAMILIES[number];
+
+const GovernancePackSelectionSchema = z.object({
+  packId: z.string().min(1).max(120),
+  version: z.string().min(1).max(32).optional(),
+});
+
+const GovernanceChangeRecordSchema = z.object({
+  changedAt: z.string().datetime(),
+  changedByIdentityId: z.string().min(1),
+  changeReason: z.string().min(1).max(240).optional(),
+  defaultPack: GovernancePackSelectionSchema.optional(),
+  familyPacks: z.object({
+    compliance: GovernancePackSelectionSchema.optional(),
+    reporting: GovernancePackSelectionSchema.optional(),
+    privacy: GovernancePackSelectionSchema.optional(),
+    screening: GovernancePackSelectionSchema.optional(),
+  }).partial().optional(),
+});
+
+export const UpdateOrganizationGovernanceSchema = z.object({
+  defaultPack: GovernancePackSelectionSchema.optional(),
+  familyPacks: z.object({
+    compliance: GovernancePackSelectionSchema.optional(),
+    reporting: GovernancePackSelectionSchema.optional(),
+    privacy: GovernancePackSelectionSchema.optional(),
+    screening: GovernancePackSelectionSchema.optional(),
+  }).partial().optional(),
+  changeReason: z.string().min(1).max(240).optional(),
+});
+
+export interface GovernancePackSelection {
+  packId: string;
+  version?: string;
+}
+
+export interface GovernanceChangeRecord {
+  changedAt: string;
+  changedByIdentityId: string;
+  changeReason?: string;
+  defaultPack?: GovernancePackSelection;
+  familyPacks?: Partial<Record<EnterpriseGovernanceFamily, GovernancePackSelection>>;
+}
+
+export interface OrganizationGovernanceSettings {
+  defaultPack?: GovernancePackSelection;
+  familyPacks?: Partial<Record<EnterpriseGovernanceFamily, GovernancePackSelection>>;
+  lastUpdatedAt?: string;
+  lastUpdatedByIdentityId?: string;
+  changeHistory?: GovernanceChangeRecord[];
+}
+
 export const CreateOrganizationSchema = z.object({
   name: z.string().min(1).max(200),
   domain: z.string().min(1).max(255).optional(),
@@ -42,6 +102,7 @@ export const AddOrganizationMemberSchema = z.object({
 });
 
 export type AddOrganizationMemberInput = z.infer<typeof AddOrganizationMemberSchema>;
+export type UpdateOrganizationGovernanceInput = z.infer<typeof UpdateOrganizationGovernanceSchema>;
 
 export interface EnterpriseContext {
   organizationId: string;
@@ -50,6 +111,7 @@ export interface EnterpriseContext {
   permissions: string[];
   plan: string;
   jurisdictions: string[];
+  governanceSettings: OrganizationGovernanceSettings;
 }
 
 export interface EnterpriseApprovalAuthority extends EnterpriseContext {
@@ -76,15 +138,16 @@ export class EnterpriseOrganizationService {
     ownerIdentityId: string,
     input: CreateOrganizationInput,
   ): Promise<{
-    organization: {
-      id: string;
-      name: string;
-      domain: string | null;
-      plan: string;
-      jurisdictions: string[];
-      billingEmail: string | null;
-      createdAt: Date;
-    };
+      organization: {
+        id: string;
+        name: string;
+        domain: string | null;
+        plan: string;
+        jurisdictions: string[];
+        governanceSettings: OrganizationGovernanceSettings;
+        billingEmail: string | null;
+        createdAt: Date;
+      };
     membership: {
       role: EnterpriseRole;
       permissions: string[];
@@ -92,6 +155,11 @@ export class EnterpriseOrganizationService {
     };
   }> {
     const parsed = CreateOrganizationSchema.parse(input);
+    const governanceSettings = this.enforceGovernanceSelections(
+      this.normalizeGovernanceSettings(
+        (parsed.settings as Record<string, unknown> | undefined)?.governance,
+      ),
+    );
 
     const organization = await prisma.organization.create({
       data: {
@@ -99,7 +167,10 @@ export class EnterpriseOrganizationService {
         domain: parsed.domain,
         plan: parsed.plan,
         jurisdictions: parsed.jurisdictions,
-        settings: parsed.settings,
+        settings: {
+          ...(parsed.settings ?? {}),
+          governance: governanceSettings,
+        },
         billingEmail: parsed.billingEmail,
       },
     });
@@ -121,6 +192,7 @@ export class EnterpriseOrganizationService {
         domain: organization.domain,
         plan: organization.plan,
         jurisdictions: organization.jurisdictions,
+        governanceSettings: this.extractGovernanceSettings(organization.settings),
         billingEmail: organization.billingEmail,
         createdAt: organization.createdAt,
       },
@@ -138,6 +210,7 @@ export class EnterpriseOrganizationService {
     domain: string | null;
     plan: string;
     jurisdictions: string[];
+    governanceSettings: OrganizationGovernanceSettings;
     role: EnterpriseRole;
     permissions: string[];
     joinedAt: Date | null;
@@ -152,6 +225,7 @@ export class EnterpriseOrganizationService {
             domain: true,
             plan: true,
             jurisdictions: true,
+            settings: true,
           },
         },
       },
@@ -166,6 +240,7 @@ export class EnterpriseOrganizationService {
       domain: membership.organization.domain,
       plan: membership.organization.plan,
       jurisdictions: membership.organization.jurisdictions,
+      governanceSettings: this.extractGovernanceSettings(membership.organization.settings),
       role: membership.role as EnterpriseRole,
       permissions: membership.permissions,
       joinedAt: membership.joinedAt,
@@ -254,6 +329,106 @@ export class EnterpriseOrganizationService {
     }));
   }
 
+  async getGovernanceSettings(organizationId: string): Promise<OrganizationGovernanceSettings> {
+    const organization = await prisma.organization.findUnique({
+      where: { id: organizationId },
+      select: { id: true, settings: true },
+    });
+
+    if (!organization) {
+      throw new EnterpriseOrganizationError(
+        'Organization not found',
+        'ENTERPRISE_ORGANIZATION_NOT_FOUND',
+        404,
+      );
+    }
+
+    return this.extractGovernanceSettings(organization.settings);
+  }
+
+  async updateGovernanceSettings(
+    organizationId: string,
+    actorIdentityId: string,
+    input: UpdateOrganizationGovernanceInput,
+  ): Promise<OrganizationGovernanceSettings> {
+    const parsed = UpdateOrganizationGovernanceSchema.parse(input);
+    const organization = await prisma.organization.findUnique({
+      where: { id: organizationId },
+      select: { id: true, settings: true },
+    });
+
+    if (!organization) {
+      throw new EnterpriseOrganizationError(
+        'Organization not found',
+        'ENTERPRISE_ORGANIZATION_NOT_FOUND',
+        404,
+      );
+    }
+
+    const currentGovernance = this.extractGovernanceSettings(organization.settings);
+    const changedAt = new Date().toISOString();
+    const hydratedGovernance = this.enforceGovernanceSelections(this.normalizeGovernanceSettings({
+      defaultPack: parsed.defaultPack ?? currentGovernance.defaultPack,
+      familyPacks: {
+        ...(currentGovernance.familyPacks ?? {}),
+        ...(parsed.familyPacks ?? {}),
+      },
+    }));
+    const nextGovernance = {
+      ...hydratedGovernance,
+      lastUpdatedAt: changedAt,
+      lastUpdatedByIdentityId: actorIdentityId,
+      changeHistory: this.nextGovernanceHistory(currentGovernance.changeHistory, {
+        changedAt,
+        changedByIdentityId: actorIdentityId,
+        ...(parsed.changeReason ? { changeReason: parsed.changeReason } : {}),
+        ...(parsed.defaultPack && hydratedGovernance.defaultPack
+          ? { defaultPack: hydratedGovernance.defaultPack }
+          : {}),
+        ...(parsed.familyPacks && Object.keys(parsed.familyPacks).length > 0
+          ? {
+            familyPacks: Object.entries(parsed.familyPacks).reduce<Partial<Record<EnterpriseGovernanceFamily, GovernancePackSelection>>>((acc, [family]) => {
+              const normalizedFamily = family as EnterpriseGovernanceFamily;
+              const selection = hydratedGovernance.familyPacks?.[normalizedFamily];
+              if (selection) {
+                acc[normalizedFamily] = selection;
+              }
+              return acc;
+            }, {}),
+          }
+          : {}),
+      }),
+    };
+    const currentSettings = this.asSettingsRecord(organization.settings);
+    const updated = await prisma.organization.update({
+      where: { id: organizationId },
+      data: {
+        settings: {
+          ...currentSettings,
+          governance: nextGovernance,
+        },
+      },
+      select: {
+        settings: true,
+      },
+    });
+
+    await prisma.auditLog.create({
+      data: {
+        identityId: actorIdentityId,
+        action: 'IDENTITY_UPDATED',
+        resourceType: 'organization_governance',
+        resourceId: organizationId,
+        details: {
+          organizationId,
+          governance: nextGovernance,
+        },
+      },
+    });
+
+    return this.extractGovernanceSettings(updated.settings);
+  }
+
   async resolveContext(
     identityId: string,
     requestedOrganizationId?: string,
@@ -268,6 +443,7 @@ export class EnterpriseOrganizationService {
             name: true,
             plan: true,
             jurisdictions: true,
+            settings: true,
           },
         },
       },
@@ -330,6 +506,7 @@ export class EnterpriseOrganizationService {
       permissions: membership.permissions,
       plan: membership.organization.plan,
       jurisdictions: membership.organization.jurisdictions,
+      governanceSettings: this.extractGovernanceSettings(membership.organization.settings),
     };
   }
 
@@ -405,6 +582,115 @@ export class EnterpriseOrganizationService {
     }
 
     return [...new Set(defaultJurisdictions)];
+  }
+
+  private extractGovernanceSettings(settings: unknown): OrganizationGovernanceSettings {
+    return this.normalizeGovernanceSettings(this.asSettingsRecord(settings).governance);
+  }
+
+  private normalizeGovernanceSettings(value: unknown): OrganizationGovernanceSettings {
+    const record = this.asSettingsRecord(value);
+    const result = UpdateOrganizationGovernanceSchema.safeParse(record ?? {});
+    const history = this.normalizeGovernanceHistory(record.changeHistory);
+
+    if (result.success) {
+      const { changeReason: _changeReason, ...normalized } = result.data;
+      return {
+        ...normalized,
+        ...(typeof record.lastUpdatedAt === 'string' && record.lastUpdatedAt.length > 0
+          ? { lastUpdatedAt: record.lastUpdatedAt }
+          : {}),
+        ...(typeof record.lastUpdatedByIdentityId === 'string' && record.lastUpdatedByIdentityId.length > 0
+          ? { lastUpdatedByIdentityId: record.lastUpdatedByIdentityId }
+          : {}),
+        ...(history.length > 0 ? { changeHistory: history } : {}),
+      };
+    }
+    return {};
+  }
+
+  private normalizeGovernanceHistory(value: unknown): GovernanceChangeRecord[] {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    return value
+      .map((entry) => GovernanceChangeRecordSchema.safeParse(entry))
+      .filter((entry) => entry.success)
+      .map((entry) => entry.data)
+      .slice(-20);
+  }
+
+  private nextGovernanceHistory(
+    existing: GovernanceChangeRecord[] | undefined,
+    next: GovernanceChangeRecord,
+  ): GovernanceChangeRecord[] {
+    return [...(existing ?? []), next].slice(-20);
+  }
+
+  private enforceGovernanceSelections(
+    settings: OrganizationGovernanceSettings,
+  ): OrganizationGovernanceSettings {
+    const availablePacks = new Map(
+      policyGovernanceService.listGovernancePacks().map((pack) => [pack.id, pack]),
+    );
+
+    const hydrateSelection = (
+      selection: GovernancePackSelection | undefined,
+    ): GovernancePackSelection | undefined => {
+      if (!selection) {
+        return undefined;
+      }
+
+      const matchedPack = availablePacks.get(selection.packId);
+      if (!matchedPack) {
+        throw new EnterpriseOrganizationError(
+          `Unknown governance pack: ${selection.packId}`,
+          'ENTERPRISE_GOVERNANCE_PACK_INVALID',
+          400,
+        );
+      }
+
+      if (selection.version && selection.version !== matchedPack.version) {
+        throw new EnterpriseOrganizationError(
+          `Unsupported governance pack version for ${selection.packId}: ${selection.version}`,
+          'ENTERPRISE_GOVERNANCE_PACK_INVALID',
+          400,
+        );
+      }
+
+      return {
+        packId: matchedPack.id,
+        version: matchedPack.version,
+      };
+    };
+
+    const defaultPack = hydrateSelection(settings.defaultPack);
+    const familyPacks = Object.entries(settings.familyPacks ?? {}).reduce<Partial<Record<EnterpriseGovernanceFamily, GovernancePackSelection>>>((acc, [family, selection]) => {
+      const normalizedFamily = family as EnterpriseGovernanceFamily;
+      const hydrated = hydrateSelection(selection);
+      if (hydrated) {
+        acc[normalizedFamily] = hydrated;
+      }
+      return acc;
+    }, {});
+
+    return {
+      ...(defaultPack ? { defaultPack } : {}),
+      ...(Object.keys(familyPacks).length > 0 ? { familyPacks } : {}),
+      ...(settings.lastUpdatedAt ? { lastUpdatedAt: settings.lastUpdatedAt } : {}),
+      ...(settings.lastUpdatedByIdentityId ? { lastUpdatedByIdentityId: settings.lastUpdatedByIdentityId } : {}),
+      ...(settings.changeHistory && settings.changeHistory.length > 0
+        ? { changeHistory: settings.changeHistory }
+        : {}),
+    };
+  }
+
+  private asSettingsRecord(settings: unknown): Record<string, unknown> {
+    if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {
+      return {};
+    }
+    return settings as Record<string, unknown>;
   }
 }
 
