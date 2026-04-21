@@ -254,6 +254,14 @@ export class PolicyRegistryService {
     return records.map((record: any) => this.formatPolicy(record));
   }
 
+  async getPolicyById(
+    policyId: string,
+    organizationId: string,
+  ): Promise<PolicyDefinitionSummary> {
+    const record = await this.getPolicy(policyId, organizationId);
+    return this.formatPolicy(record);
+  }
+
   async submitPolicyForReview(
     policyId: string,
     organizationId: string,
@@ -751,55 +759,24 @@ export class PolicyRegistryService {
     governancePackId: string,
     definition: Record<string, unknown>,
   ): void {
-    const definitionKeys = new Set(Object.keys(definition ?? {}));
-    const hasAnyKey = (keys: string[]) => keys.some((key) => definitionKeys.has(key));
-
-    const validationRules: Partial<Record<string, { families?: CreatePolicyDefinitionInput['family'][]; requiredKeys: string[]; message: string }>> = {
-      'enterprise-privacy': {
-        families: ['privacy'],
-        requiredKeys: ['privacyRights', 'retentionPolicy', 'lawfulBasis', 'dataCategories', 'dsarWorkflow', 'reviewCadence'],
-        message: 'Enterprise privacy governance requires definition fields like privacyRights, retentionPolicy, lawfulBasis, or dsarWorkflow.',
-      },
-      'enterprise-screening': {
-        families: ['screening'],
-        requiredKeys: ['screeningRules', 'watchlists', 'escalationPolicy', 'matchThreshold', 'falsePositiveWorkflow'],
-        message: 'Enterprise screening governance requires definition fields like screeningRules, watchlists, escalationPolicy, or matchThreshold.',
-      },
-      'enterprise-reporting': {
-        families: ['reporting'],
-        requiredKeys: ['reportType', 'reportingChannels', 'filingRules', 'reportSchema', 'submissionCadence'],
-        message: 'Enterprise reporting governance requires definition fields like reportType, reportSchema, filingRules, or submissionCadence.',
-      },
-      'cross-border-regulated': {
-        requiredKeys: ['transferRules', 'transferMechanisms', 'dataLocalization', 'jurisdictionMatrix', 'recipientControls'],
-        message: 'Cross-border governance requires definition fields like transferRules, transferMechanisms, dataLocalization, or jurisdictionMatrix.',
-      },
-      'sovereign-core': {
-        requiredKeys: ['sovereignBoundaries', 'nationalHosting', 'issuerTrustRequirements', 'sovereignApprovalChain', 'regulatorAuthority'],
-        message: 'Sovereign governance requires definition fields like sovereignBoundaries, nationalHosting, issuerTrustRequirements, or regulatorAuthority.',
-      },
-    };
-
-    const rule = validationRules[governancePackId];
-    if (!rule) {
+    const issue = policyGovernanceService.validatePolicyDefinitionCompatibility(family, governancePackId, definition);
+    if (!issue) {
       return;
     }
 
-    if (rule.families && !rule.families.includes(family)) {
+    if (issue.reason.includes('is not compatible with')) {
       throw new PolicyRegistryError(
-        `${governancePackId} is not compatible with ${family} policies.`,
+        issue.reason,
         'POLICY_GOVERNANCE_DEFINITION_INVALID',
         400,
       );
     }
 
-    if (!hasAnyKey(rule.requiredKeys)) {
-      throw new PolicyRegistryError(
-        rule.message,
-        'POLICY_GOVERNANCE_DEFINITION_INVALID',
-        400,
-      );
-    }
+    throw new PolicyRegistryError(
+      issue.reason,
+      'POLICY_GOVERNANCE_DEFINITION_INVALID',
+      400,
+    );
   }
 
   private formatPolicy(record: any): PolicyDefinitionSummary {

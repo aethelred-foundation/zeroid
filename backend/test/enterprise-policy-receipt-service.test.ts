@@ -4,6 +4,8 @@ const mockPolicyDecisionLedgerFindUnique = jest.fn();
 const mockPolicyDecisionLedgerFindMany = jest.fn();
 const mockPolicyDefinitionFindFirst = jest.fn();
 const mockPolicyExceptionFindMany = jest.fn();
+const mockIssuerTrustFindMany = jest.fn();
+const mockIssuerKeyHistoryFindMany = jest.fn();
 
 const redisStore: Record<string, string> = {};
 
@@ -19,6 +21,12 @@ jest.mock('../src/index', () => ({
     },
     policyException: {
       findMany: mockPolicyExceptionFindMany,
+    },
+    issuerTrustRecord: {
+      findMany: mockIssuerTrustFindMany,
+    },
+    issuerKeyHistory: {
+      findMany: mockIssuerKeyHistoryFindMany,
     },
     auditLog: {
       create: mockAuditLogCreate,
@@ -49,6 +57,8 @@ describe('PolicyDecisionReceiptService', () => {
     mockPolicyDecisionLedgerFindMany.mockResolvedValue([]);
     mockPolicyDefinitionFindFirst.mockResolvedValue(null);
     mockPolicyExceptionFindMany.mockResolvedValue([]);
+    mockIssuerTrustFindMany.mockResolvedValue([]);
+    mockIssuerKeyHistoryFindMany.mockResolvedValue([]);
   });
 
   afterAll(() => {
@@ -335,6 +345,59 @@ describe('PolicyDecisionReceiptService', () => {
         createdAt: new Date('2026-04-15T00:00:00.000Z'),
       },
     ]);
+    mockIssuerTrustFindMany.mockResolvedValue([
+      {
+        id: 'trust-privacy-1',
+        organizationId: 'org-1',
+        issuerIdentityId: 'issuer-privacy-1',
+        issuerDid: 'did:aethelred:issuer:privacy-registry',
+        status: 'ACCREDITED',
+        accreditationScope: 'SOVEREIGN',
+        assuranceLevel: 'QUALIFIED',
+        allowedCredentialTypes: ['privacy_assessment', 'data_processing'],
+        allowedJurisdictions: ['EU-GDPR'],
+        proposedByIdentityId: 'privacy-admin',
+        accreditedByIdentityId: 'privacy-auditor',
+        suspensionReason: null,
+        metadata: { trustFramework: 'GDPR' },
+        accreditedAt: new Date('2026-04-16T00:00:00.000Z'),
+        expiresAt: new Date('2027-04-16T00:00:00.000Z'),
+        updatedAt: new Date('2026-04-20T00:00:00.000Z'),
+        issuer: {
+          displayName: 'EU Privacy Registry',
+        },
+      },
+    ]);
+    mockIssuerKeyHistoryFindMany.mockResolvedValue([
+      {
+        id: 'keyhist-2',
+        issuerIdentityId: 'issuer-privacy-1',
+        issuerDid: 'did:aethelred:issuer:privacy-registry',
+        keyVersion: '2',
+        keyAlgorithm: 'ES256',
+        verificationMethod: 'did:aethelred:issuer:privacy-registry#assertion-key-2',
+        status: 'ACTIVE',
+        validFrom: new Date('2026-04-18T00:00:00.000Z'),
+        validUntil: null,
+        rotatedByIdentityId: 'privacy-admin',
+        metadata: { provider: 'aws-kms' },
+        createdAt: new Date('2026-04-18T00:00:00.000Z'),
+      },
+      {
+        id: 'keyhist-1',
+        issuerIdentityId: 'issuer-privacy-1',
+        issuerDid: 'did:aethelred:issuer:privacy-registry',
+        keyVersion: '1',
+        keyAlgorithm: 'ES256',
+        verificationMethod: 'did:aethelred:issuer:privacy-registry#assertion-key-1',
+        status: 'RETIRED',
+        validFrom: new Date('2026-03-01T00:00:00.000Z'),
+        validUntil: new Date('2026-04-18T00:00:00.000Z'),
+        rotatedByIdentityId: 'privacy-admin',
+        metadata: { provider: 'aws-kms' },
+        createdAt: new Date('2026-03-01T00:00:00.000Z'),
+      },
+    ]);
 
     const receipt = await service.createReceipt({
       organizationId: 'org-1',
@@ -384,6 +447,48 @@ describe('PolicyDecisionReceiptService', () => {
             },
           ],
         },
+        policyExecutionTrace: {
+          policyDefinitionId: 'policy-9',
+          policyName: 'privacy_impact_assessment',
+          policyVersion: '2026.04.1',
+          directives: [
+            'supervisory_consultation_risk_levels',
+            'processor_dpa_requirement',
+            'cross_border_pia_review_gate',
+          ],
+          governanceOverlay: {
+            packId: 'enterprise-privacy',
+            packVersion: '2026.04',
+            packLabel: 'Enterprise Privacy Governance Pack',
+            directives: [
+              'privacy_request_review_gate',
+              'supervisory_consultation_risk_levels',
+              'breach_subject_notification_gate',
+            ],
+            appliedDirectives: ['supervisory_consultation_risk_levels'],
+          },
+        },
+        trustContext: {
+          organizationId: 'org-1',
+          evaluatedIssuerCount: 1,
+          accreditedIssuerCount: 1,
+          enforced: true,
+          anchors: [
+            {
+              issuerIdentityId: 'issuer-privacy-1',
+              issuerDid: 'did:aethelred:issuer:privacy-registry',
+              issuerDisplayName: 'EU Privacy Registry',
+              trustRecordId: 'trust-privacy-1',
+              status: 'accredited',
+              accreditationScope: 'sovereign',
+              assuranceLevel: 'qualified',
+              accepted: true,
+              evaluatedCredentialTypes: ['privacy_assessment'],
+              matchedJurisdictions: ['EU-GDPR'],
+              expiresAt: '2027-04-16T00:00:00.000Z',
+            },
+          ],
+        },
       },
     });
 
@@ -418,6 +523,40 @@ describe('PolicyDecisionReceiptService', () => {
             revokedByIdentityId: 'privacy-auditor',
           }),
         ],
+        trustAnchors: [
+          expect.objectContaining({
+            issuerIdentityId: 'issuer-privacy-1',
+            issuerDid: 'did:aethelred:issuer:privacy-registry',
+            accepted: true,
+            evaluatedCredentialTypes: ['privacy_assessment'],
+            matchedJurisdictions: ['EU-GDPR'],
+            trustRegime: expect.objectContaining({
+              status: 'accredited',
+              accreditationScope: 'sovereign',
+              assuranceLevel: 'qualified',
+            }),
+            trustRecord: expect.objectContaining({
+              trustRecordId: 'trust-privacy-1',
+              allowedCredentialTypes: ['privacy_assessment', 'data_processing'],
+              allowedJurisdictions: ['EU-GDPR'],
+            }),
+            keyLineage: expect.objectContaining({
+              current: expect.objectContaining({
+                keyHistoryId: 'keyhist-2',
+                keyVersion: '2',
+                status: 'active',
+              }),
+              history: [
+                expect.objectContaining({
+                  keyHistoryId: 'keyhist-2',
+                }),
+                expect.objectContaining({
+                  keyHistoryId: 'keyhist-1',
+                }),
+              ],
+            }),
+          }),
+        ],
       },
       operatingRegime: {
         organizationGovernance: {
@@ -439,6 +578,17 @@ describe('PolicyDecisionReceiptService', () => {
               changeReason: 'Enable privacy governance pack',
             }),
           ],
+        },
+        runtimeOverlay: {
+          packId: 'enterprise-privacy',
+          packVersion: '2026.04',
+          packLabel: 'Enterprise Privacy Governance Pack',
+          directives: [
+            'privacy_request_review_gate',
+            'supervisory_consultation_risk_levels',
+            'breach_subject_notification_gate',
+          ],
+          appliedDirectives: ['supervisory_consultation_risk_levels'],
         },
       },
     });

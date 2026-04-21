@@ -137,7 +137,10 @@ describe('Credential trust enforcement', () => {
       {
         id: 'trust-1',
         status: 'ACCREDITED',
+        accreditationScope: 'ENTERPRISE',
+        assuranceLevel: 'ADVANCED',
         allowedCredentialTypes: ['kyc_enhanced', 'proof_of_residency'],
+        allowedJurisdictions: ['UAE', 'EU'],
         expiresAt: null,
         updatedAt: new Date('2026-04-21T00:00:00.000Z'),
       },
@@ -145,6 +148,18 @@ describe('Credential trust enforcement', () => {
 
     const credential = await service.issueCredential(baseRequest);
     expect(credential.id).toBe('cred-1');
+    expect(mockAuditLogCreate).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        details: expect.objectContaining({
+          issuerTrustPolicy: expect.objectContaining({
+            trustRecordId: 'trust-1',
+            accreditationScope: 'enterprise',
+            assuranceLevel: 'advanced',
+            matchedJurisdictions: ['UAE'],
+          }),
+        }),
+      }),
+    }));
   });
 
   it('rejects issuance when trust governance exists but does not accredit the credential type', async () => {
@@ -169,5 +184,65 @@ describe('Credential trust enforcement', () => {
       code: 'CRED_ISSUER_NOT_ACCREDITED_FOR_TYPE',
       statusCode: 403,
     });
+  });
+
+  it('rejects issuance when the credential jurisdiction is outside the accredited trust scope', async () => {
+    mockIssuerTrustFindMany.mockResolvedValue([
+      {
+        id: 'trust-1',
+        status: 'ACCREDITED',
+        accreditationScope: 'SOVEREIGN',
+        assuranceLevel: 'QUALIFIED',
+        allowedCredentialTypes: ['kyc_enhanced'],
+        allowedJurisdictions: ['EU-GDPR'],
+        expiresAt: null,
+        updatedAt: new Date('2026-04-21T00:00:00.000Z'),
+      },
+    ]);
+
+    await expect(service.issueCredential(baseRequest)).rejects.toMatchObject<Partial<CredentialError>>({
+      code: 'CRED_ISSUER_NOT_ACCREDITED_FOR_JURISDICTION',
+      statusCode: 403,
+    });
+  });
+
+  it('prefers the strongest active accreditation when multiple trust anchors match', async () => {
+    mockIssuerTrustFindMany.mockResolvedValue([
+      {
+        id: 'trust-1',
+        status: 'ACCREDITED',
+        accreditationScope: 'ENTERPRISE',
+        assuranceLevel: 'ADVANCED',
+        allowedCredentialTypes: ['kyc_enhanced'],
+        allowedJurisdictions: ['UAE'],
+        expiresAt: null,
+        updatedAt: new Date('2026-04-20T00:00:00.000Z'),
+      },
+      {
+        id: 'trust-2',
+        status: 'ACCREDITED',
+        accreditationScope: 'SOVEREIGN',
+        assuranceLevel: 'SOVEREIGN',
+        allowedCredentialTypes: ['kyc_enhanced'],
+        allowedJurisdictions: ['UAE', 'EU-GDPR'],
+        expiresAt: null,
+        updatedAt: new Date('2026-04-21T00:00:00.000Z'),
+      },
+    ]);
+
+    await service.issueCredential(baseRequest);
+
+    expect(mockAuditLogCreate).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        details: expect.objectContaining({
+          issuerTrustPolicy: expect.objectContaining({
+            trustRecordId: 'trust-2',
+            accreditationScope: 'sovereign',
+            assuranceLevel: 'sovereign',
+            matchedJurisdictions: ['UAE'],
+          }),
+        }),
+      }),
+    }));
   });
 });

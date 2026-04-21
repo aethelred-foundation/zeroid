@@ -109,6 +109,77 @@ interface OrganizationGovernanceSnapshot {
   changeHistory?: GovernanceChangeSnapshot[];
 }
 
+interface RuntimeGovernanceOverlaySnapshot {
+  packId: string;
+  packVersion?: string;
+  packLabel?: string;
+  directives: string[];
+  appliedDirectives?: string[];
+}
+
+interface ReceiptTrustAnchorSnapshot {
+  issuerIdentityId: string;
+  issuerDid: string;
+  issuerDisplayName?: string | null;
+  trustRecordId?: string;
+  status: string;
+  accreditationScope?: string;
+  assuranceLevel?: string;
+  accepted: boolean;
+  evaluatedCredentialTypes: string[];
+  matchedJurisdictions: string[];
+  expiresAt?: string;
+}
+
+interface TrustAnchorLineageTrustRecord {
+  trustRecordId: string;
+  status: string;
+  accreditationScope?: string;
+  assuranceLevel?: string;
+  allowedCredentialTypes: string[];
+  allowedJurisdictions: string[];
+  proposedByIdentityId?: string | null;
+  accreditedByIdentityId?: string | null;
+  suspensionReason?: string | null;
+  metadata?: Record<string, unknown> | null;
+  accreditedAt?: string;
+  expiresAt?: string;
+  updatedAt?: string;
+}
+
+interface TrustAnchorKeyHistorySnapshot {
+  keyHistoryId: string;
+  keyVersion: string;
+  keyAlgorithm: string;
+  verificationMethod: string;
+  status: string;
+  validFrom: string;
+  validUntil?: string | null;
+  rotatedByIdentityId?: string | null;
+  metadata?: Record<string, unknown> | null;
+  createdAt: string;
+}
+
+interface TrustAnchorLineageSnapshot {
+  issuerIdentityId: string;
+  issuerDid: string;
+  issuerDisplayName?: string | null;
+  accepted: boolean;
+  evaluatedCredentialTypes: string[];
+  matchedJurisdictions: string[];
+  trustRegime: {
+    status: string;
+    accreditationScope?: string;
+    assuranceLevel?: string;
+    expiresAt?: string;
+  };
+  trustRecord?: TrustAnchorLineageTrustRecord;
+  keyLineage?: {
+    current?: TrustAnchorKeyHistorySnapshot;
+    history: TrustAnchorKeyHistorySnapshot[];
+  };
+}
+
 export interface PolicyDecisionReceiptExport {
   formatVersion: 'zeroid.policy_receipt_export.v1';
   exportedAt: string;
@@ -156,9 +227,11 @@ export interface PolicyDecisionReceiptExport {
       revokedByIdentityId?: string | null;
       revocationReason?: string | null;
     }>;
+    trustAnchors: TrustAnchorLineageSnapshot[];
   };
   operatingRegime?: {
     organizationGovernance?: OrganizationGovernanceSnapshot;
+    runtimeOverlay?: RuntimeGovernanceOverlaySnapshot;
   };
 }
 
@@ -585,7 +658,9 @@ export class PolicyDecisionReceiptService {
       })
       : [];
 
-    if (!policy && (!exceptions || exceptions.length === 0)) {
+    const trustAnchors = await this.buildTrustAnchorLineage(receipt);
+
+    if (!policy && (!exceptions || exceptions.length === 0) && trustAnchors.length === 0) {
       return undefined;
     }
 
@@ -637,7 +712,110 @@ export class PolicyDecisionReceiptService {
         ...(exception.revokedByIdentityId !== undefined ? { revokedByIdentityId: exception.revokedByIdentityId ?? null } : {}),
         ...(exception.revocationReason !== undefined ? { revocationReason: exception.revocationReason ?? null } : {}),
       })),
+      trustAnchors,
     };
+  }
+
+  private async buildTrustAnchorLineage(
+    receipt: PolicyDecisionReceipt,
+  ): Promise<TrustAnchorLineageSnapshot[]> {
+    const metadata = this.asRecord(receipt.metadata);
+    const trustContext = this.asRecord(metadata.trustContext);
+    const anchors = this.normalizeTrustAnchors(trustContext.anchors);
+    if (anchors.length === 0) {
+      return [];
+    }
+
+    const trustModel = (prisma as any).issuerTrustRecord;
+    const keyHistoryModel = (prisma as any).issuerKeyHistory;
+    const issuerIdentityIds = [...new Set(anchors.map((anchor) => anchor.issuerIdentityId))];
+    const trustRecordIds = [
+      ...new Set(
+        anchors
+          .map((anchor) => anchor.trustRecordId)
+          .filter((trustRecordId): trustRecordId is string => typeof trustRecordId === 'string' && trustRecordId.length > 0),
+      ),
+    ];
+
+    const trustRecords = trustModel?.findMany
+      ? await trustModel.findMany({
+        where: {
+          organizationId: receipt.organizationId,
+          issuerIdentityId: {
+            in: issuerIdentityIds,
+          },
+        },
+        include: {
+          issuer: {
+            select: {
+              displayName: true,
+            },
+          },
+        },
+        orderBy: {
+          updatedAt: 'desc',
+        },
+      })
+      : [];
+
+    const keyHistory = keyHistoryModel?.findMany
+      ? await keyHistoryModel.findMany({
+        where: {
+          issuerIdentityId: {
+            in: issuerIdentityIds,
+          },
+        },
+        orderBy: [
+          { validFrom: 'desc' },
+          { createdAt: 'desc' },
+        ],
+      })
+      : [];
+
+    return anchors.map((anchor) => {
+      const trustRecord = trustRecordIds.length > 0 && anchor.trustRecordId
+        ? trustRecords.find((record: any) => record.id === anchor.trustRecordId)
+        : trustRecords.find((record: any) => record.issuerIdentityId === anchor.issuerIdentityId);
+      const issuerKeyHistory = keyHistory.filter((record: any) => record.issuerIdentityId === anchor.issuerIdentityId);
+      const currentKey = issuerKeyHistory.find((record: any) => String(record.status ?? '').toUpperCase() === 'ACTIVE')
+        ?? issuerKeyHistory[0];
+
+      return {
+        issuerIdentityId: anchor.issuerIdentityId,
+        issuerDid: anchor.issuerDid,
+        ...(anchor.issuerDisplayName !== undefined ? { issuerDisplayName: anchor.issuerDisplayName } : {}),
+        accepted: anchor.accepted,
+        evaluatedCredentialTypes: anchor.evaluatedCredentialTypes,
+        matchedJurisdictions: anchor.matchedJurisdictions,
+        trustRegime: {
+          status: trustRecord ? String(trustRecord.status ?? anchor.status).toLowerCase() : anchor.status,
+          ...(trustRecord?.accreditationScope !== undefined
+            ? { accreditationScope: String(trustRecord.accreditationScope).toLowerCase() }
+            : anchor.accreditationScope
+              ? { accreditationScope: anchor.accreditationScope }
+              : {}),
+          ...(trustRecord?.assuranceLevel !== undefined
+            ? { assuranceLevel: String(trustRecord.assuranceLevel).toLowerCase() }
+            : anchor.assuranceLevel
+              ? { assuranceLevel: anchor.assuranceLevel }
+              : {}),
+          ...(trustRecord?.expiresAt
+            ? { expiresAt: new Date(trustRecord.expiresAt).toISOString() }
+            : anchor.expiresAt
+              ? { expiresAt: anchor.expiresAt }
+              : {}),
+        },
+        ...(trustRecord ? {
+          trustRecord: this.serializeTrustAnchorTrustRecord(trustRecord),
+        } : {}),
+        ...(issuerKeyHistory.length > 0 ? {
+          keyLineage: {
+            ...(currentKey ? { current: this.serializeTrustAnchorKeyHistory(currentKey) } : {}),
+            history: issuerKeyHistory.map((record: any) => this.serializeTrustAnchorKeyHistory(record)),
+          },
+        } : {}),
+      };
+    });
   }
 
   private buildOperatingRegimeSnapshot(
@@ -645,7 +823,9 @@ export class PolicyDecisionReceiptService {
   ): PolicyDecisionReceiptExport['operatingRegime'] | undefined {
     const metadata = this.asRecord(receipt.metadata);
     const governanceContext = this.asRecord(metadata.organizationGovernanceContext);
-    if (Object.keys(governanceContext).length === 0) {
+    const policyExecutionTrace = this.asRecord(metadata.policyExecutionTrace);
+    const governanceOverlay = this.asRecord(policyExecutionTrace.governanceOverlay);
+    if (Object.keys(governanceContext).length === 0 && Object.keys(governanceOverlay).length === 0) {
       return undefined;
     }
 
@@ -669,13 +849,15 @@ export class PolicyDecisionReceiptService {
         ? { changeHistory: this.normalizeGovernanceChangeHistory(governanceContext.changeHistory) }
         : {}),
     };
+    const runtimeOverlay = this.normalizeRuntimeGovernanceOverlay(governanceOverlay);
 
-    if (Object.keys(snapshot).length === 0) {
+    if (Object.keys(snapshot).length === 0 && !runtimeOverlay) {
       return undefined;
     }
 
     return {
-      organizationGovernance: snapshot,
+      ...(Object.keys(snapshot).length > 0 ? { organizationGovernance: snapshot } : {}),
+      ...(runtimeOverlay ? { runtimeOverlay } : {}),
     };
   }
 
@@ -827,6 +1009,109 @@ export class PolicyDecisionReceiptService {
       }))
       .filter((entry) => entry.changedAt.length > 0 && entry.changedByIdentityId.length > 0)
       .slice(-5);
+  }
+
+  private normalizeRuntimeGovernanceOverlay(value: unknown): RuntimeGovernanceOverlaySnapshot | undefined {
+    const record = this.asRecord(value);
+    if (typeof record.packId !== 'string' || record.packId.length === 0) {
+      return undefined;
+    }
+
+    const directives = this.normalizeStringArray(record.directives);
+    if (directives.length === 0) {
+      return undefined;
+    }
+
+    const appliedDirectives = this.normalizeStringArray(record.appliedDirectives);
+    return {
+      packId: record.packId,
+      ...(typeof record.packVersion === 'string' && record.packVersion.length > 0
+        ? { packVersion: record.packVersion }
+        : {}),
+      ...(typeof record.packLabel === 'string' && record.packLabel.length > 0
+        ? { packLabel: record.packLabel }
+        : {}),
+      directives,
+      ...(appliedDirectives.length > 0 ? { appliedDirectives } : {}),
+    };
+  }
+
+  private normalizeTrustAnchors(value: unknown): ReceiptTrustAnchorSnapshot[] {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    return value
+      .map((entry) => this.asRecord(entry))
+      .map((entry) => ({
+        issuerIdentityId: typeof entry.issuerIdentityId === 'string' ? entry.issuerIdentityId : '',
+        issuerDid: typeof entry.issuerDid === 'string' ? entry.issuerDid : '',
+        ...(entry.issuerDisplayName === null || typeof entry.issuerDisplayName === 'string'
+          ? { issuerDisplayName: entry.issuerDisplayName as string | null }
+          : {}),
+        ...(typeof entry.trustRecordId === 'string' && entry.trustRecordId.length > 0
+          ? { trustRecordId: entry.trustRecordId }
+          : {}),
+        status: typeof entry.status === 'string' ? entry.status : 'untracked',
+        ...(typeof entry.accreditationScope === 'string' && entry.accreditationScope.length > 0
+          ? { accreditationScope: entry.accreditationScope }
+          : {}),
+        ...(typeof entry.assuranceLevel === 'string' && entry.assuranceLevel.length > 0
+          ? { assuranceLevel: entry.assuranceLevel }
+          : {}),
+        accepted: Boolean(entry.accepted),
+        evaluatedCredentialTypes: this.normalizeStringArray(entry.evaluatedCredentialTypes),
+        matchedJurisdictions: this.normalizeStringArray(entry.matchedJurisdictions),
+        ...(typeof entry.expiresAt === 'string' && entry.expiresAt.length > 0
+          ? { expiresAt: entry.expiresAt }
+          : {}),
+      }))
+      .filter((entry) => entry.issuerIdentityId.length > 0);
+  }
+
+  private serializeTrustAnchorTrustRecord(record: any): TrustAnchorLineageTrustRecord {
+    return {
+      trustRecordId: String(record.id),
+      status: String(record.status ?? 'UNKNOWN').toLowerCase(),
+      ...(record.accreditationScope !== undefined
+        ? { accreditationScope: String(record.accreditationScope).toLowerCase() }
+        : {}),
+      ...(record.assuranceLevel !== undefined
+        ? { assuranceLevel: String(record.assuranceLevel).toLowerCase() }
+        : {}),
+      allowedCredentialTypes: this.normalizeStringArray(record.allowedCredentialTypes),
+      allowedJurisdictions: this.normalizeStringArray(record.allowedJurisdictions),
+      ...(record.proposedByIdentityId !== undefined ? { proposedByIdentityId: record.proposedByIdentityId ?? null } : {}),
+      ...(record.accreditedByIdentityId !== undefined ? { accreditedByIdentityId: record.accreditedByIdentityId ?? null } : {}),
+      ...(record.suspensionReason !== undefined ? { suspensionReason: record.suspensionReason ?? null } : {}),
+      ...(record.metadata !== undefined && record.metadata !== null ? { metadata: this.asRecord(record.metadata) } : {}),
+      ...(record.accreditedAt ? { accreditedAt: new Date(record.accreditedAt).toISOString() } : {}),
+      ...(record.expiresAt ? { expiresAt: new Date(record.expiresAt).toISOString() } : {}),
+      ...(record.updatedAt ? { updatedAt: new Date(record.updatedAt).toISOString() } : {}),
+    };
+  }
+
+  private serializeTrustAnchorKeyHistory(record: any): TrustAnchorKeyHistorySnapshot {
+    return {
+      keyHistoryId: String(record.id),
+      keyVersion: String(record.keyVersion),
+      keyAlgorithm: String(record.keyAlgorithm),
+      verificationMethod: String(record.verificationMethod),
+      status: String(record.status ?? 'UNKNOWN').toLowerCase(),
+      validFrom: new Date(record.validFrom).toISOString(),
+      ...(record.validUntil ? { validUntil: new Date(record.validUntil).toISOString() } : {}),
+      ...(record.rotatedByIdentityId !== undefined ? { rotatedByIdentityId: record.rotatedByIdentityId ?? null } : {}),
+      ...(record.metadata !== undefined && record.metadata !== null ? { metadata: this.asRecord(record.metadata) } : {}),
+      createdAt: new Date(record.createdAt).toISOString(),
+    };
+  }
+
+  private normalizeStringArray(value: unknown): string[] {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    return value.filter((entry): entry is string => typeof entry === 'string' && entry.length > 0);
   }
 
   private asRecord(value: unknown): Record<string, unknown> {

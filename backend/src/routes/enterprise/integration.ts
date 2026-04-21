@@ -266,6 +266,113 @@ function serializeIssuerKeyHistory(record: {
   };
 }
 
+function buildIssuerTrustGovernanceEvidence(record: {
+  id: string;
+  organizationId: string;
+  issuerIdentityId: string;
+  issuerDid: string;
+  issuerDisplayName: string | null;
+  status: string;
+  accreditationScope: string;
+  assuranceLevel: string;
+  allowedCredentialTypes: string[];
+  allowedJurisdictions: string[];
+  proposedByIdentityId: string;
+  accreditedByIdentityId: string | null;
+  suspensionReason: string | null;
+  metadata: Record<string, unknown> | null;
+  accreditedAt: Date | null;
+  expiresAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+}): Record<string, unknown> {
+  return {
+    formatVersion: 'zeroid.governance_evidence.v1',
+    exportedAt: new Date().toISOString(),
+    artifactType: 'issuer_trust_record',
+    artifact: serializeIssuerTrustRecord(record),
+    issuer: {
+      identityId: record.issuerIdentityId,
+      did: record.issuerDid,
+      displayName: record.issuerDisplayName,
+    },
+    trustRegime: {
+      status: record.status,
+      accreditationScope: record.accreditationScope,
+      assuranceLevel: record.assuranceLevel,
+      allowedCredentialTypes: record.allowedCredentialTypes,
+      allowedJurisdictions: record.allowedJurisdictions,
+    },
+    provenance: {
+      proposedByIdentityId: record.proposedByIdentityId,
+      accreditedByIdentityId: record.accreditedByIdentityId,
+      createdAt: record.createdAt.toISOString(),
+      updatedAt: record.updatedAt.toISOString(),
+      accreditedAt: record.accreditedAt?.toISOString() ?? null,
+    },
+    lifecycle: {
+      status: record.status,
+      expiresAt: record.expiresAt?.toISOString() ?? null,
+      suspensionReason: record.suspensionReason,
+    },
+  };
+}
+
+function buildIssuerKeyHistoryEvidence(
+  record: {
+    id: string;
+    issuerIdentityId: string;
+    issuerDid: string;
+    keyVersion: string;
+    keyAlgorithm: string;
+    verificationMethod: string;
+    status: string;
+    validFrom: Date;
+    validUntil: Date | null;
+    rotatedByIdentityId: string | null;
+    metadata: Record<string, unknown> | null;
+    createdAt: Date;
+  },
+  history: Array<{
+    id: string;
+    issuerIdentityId: string;
+    issuerDid: string;
+    keyVersion: string;
+    keyAlgorithm: string;
+    verificationMethod: string;
+    status: string;
+    validFrom: Date;
+    validUntil: Date | null;
+    rotatedByIdentityId: string | null;
+    metadata: Record<string, unknown> | null;
+    createdAt: Date;
+  }>,
+): Record<string, unknown> {
+  return {
+    formatVersion: 'zeroid.governance_evidence.v1',
+    exportedAt: new Date().toISOString(),
+    artifactType: 'issuer_key_history',
+    artifact: serializeIssuerKeyHistory(record),
+    issuer: {
+      identityId: record.issuerIdentityId,
+      did: record.issuerDid,
+    },
+    keyLineage: {
+      current: serializeIssuerKeyHistory(record),
+      history: history.map(serializeIssuerKeyHistory),
+    },
+    rotationProvenance: {
+      rotatedByIdentityId: record.rotatedByIdentityId,
+      createdAt: record.createdAt.toISOString(),
+    },
+    lifecycle: {
+      status: record.status,
+      validFrom: record.validFrom.toISOString(),
+      validUntil: record.validUntil?.toISOString() ?? null,
+    },
+  };
+}
+
 function serializePolicyDefinition(record: {
   id: string;
   organizationId: string;
@@ -323,6 +430,141 @@ function serializePolicyDefinition(record: {
   };
 }
 
+function buildApprovalQuorumSnapshot(record: {
+  approvalCount: number;
+  requiredApprovals: number;
+  requiredApprovalRoles: string[];
+  requiredApprovalClasses: string[];
+  requiredApprovalJurisdictions: string[];
+  approvalTrail: Array<{
+    role: string;
+    matchedApprovalClasses: string[];
+    matchedApprovalJurisdictions: string[];
+  }>;
+}): {
+  currentApprovals: number;
+  requiredApprovals: number;
+  satisfied: boolean;
+  rolesSatisfied: string[];
+  classesSatisfied: string[];
+  jurisdictionsSatisfied: string[];
+} {
+  const rolesSatisfied = Array.from(new Set(record.approvalTrail.map((entry) => entry.role))).sort();
+  const classesSatisfied = Array.from(
+    new Set(record.approvalTrail.flatMap((entry) => entry.matchedApprovalClasses)),
+  ).sort();
+  const jurisdictionsSatisfied = Array.from(
+    new Set(record.approvalTrail.flatMap((entry) => entry.matchedApprovalJurisdictions)),
+  ).sort();
+  const requiredRoles = [...new Set(record.requiredApprovalRoles)].sort();
+  const requiredClasses = [...new Set(record.requiredApprovalClasses)].sort();
+  const requiredJurisdictions = [...new Set(record.requiredApprovalJurisdictions)].sort();
+
+  return {
+    currentApprovals: record.approvalCount,
+    requiredApprovals: record.requiredApprovals,
+    satisfied:
+      record.approvalCount >= record.requiredApprovals
+      && requiredRoles.every((role) => rolesSatisfied.includes(role))
+      && requiredClasses.every((approvalClass) => classesSatisfied.includes(approvalClass))
+      && requiredJurisdictions.every((jurisdiction) => jurisdictionsSatisfied.includes(jurisdiction)),
+    rolesSatisfied,
+    classesSatisfied,
+    jurisdictionsSatisfied,
+  };
+}
+
+function buildPolicyGovernanceEvidence(record: {
+  id: string;
+  organizationId: string;
+  name: string;
+  version: string;
+  family: string;
+  reference: string;
+  status: string;
+  approvalMode: string;
+  requiredApprovals: number;
+  requiredApprovalRoles: string[];
+  requiredApprovalClasses: string[];
+  requiredApprovalJurisdictions: string[];
+  governanceProfileId: string | null;
+  governanceProfileLabel: string | null;
+  governancePackId: string | null;
+  governancePackVersion: string | null;
+  governancePackLabel: string | null;
+  governanceProfileRationale: string[];
+  approvalCount: number;
+  approvalTrail: Array<{
+    identityId: string;
+    role: string;
+    approvalClasses: string[];
+    matchedApprovalClasses: string[];
+    matchedApprovalJurisdictions: string[];
+    action: string;
+    decidedAt: string;
+  }>;
+  proposedByIdentityId: string;
+  approvedByIdentityId: string | null;
+  effectiveFrom: Date | null;
+  expiresAt: Date | null;
+  deprecatedAt: Date | null;
+  deprecatedByIdentityId: string | null;
+  deprecationReason: string | null;
+  supersededByPolicyDefinitionId: string | null;
+  revokedAt: Date | null;
+  revokedByIdentityId: string | null;
+  revocationReason: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+  definition: Record<string, unknown>;
+  changeSummary: string | null;
+  description: string;
+}): Record<string, unknown> {
+  return {
+    formatVersion: 'zeroid.governance_evidence.v1',
+    exportedAt: new Date().toISOString(),
+    artifactType: 'policy_definition',
+    artifact: serializePolicyDefinition(record),
+    governanceRegime: {
+      family: record.family,
+      pack: {
+        id: record.governancePackId,
+        version: record.governancePackVersion,
+        label: record.governancePackLabel,
+      },
+      profile: {
+        id: record.governanceProfileId,
+        label: record.governanceProfileLabel,
+        rationale: record.governanceProfileRationale,
+      },
+      approvalMode: record.approvalMode,
+      requiredApprovals: record.requiredApprovals,
+      requiredApprovalRoles: record.requiredApprovalRoles,
+      requiredApprovalClasses: record.requiredApprovalClasses,
+      requiredApprovalJurisdictions: record.requiredApprovalJurisdictions,
+    },
+    approvalProvenance: {
+      proposedByIdentityId: record.proposedByIdentityId,
+      approvedByIdentityId: record.approvedByIdentityId,
+      approvalCount: record.approvalCount,
+      approvalTrail: record.approvalTrail,
+      quorum: buildApprovalQuorumSnapshot(record),
+    },
+    lifecycle: {
+      status: record.status,
+      effectiveFrom: record.effectiveFrom?.toISOString() ?? null,
+      expiresAt: record.expiresAt?.toISOString() ?? null,
+      deprecatedAt: record.deprecatedAt?.toISOString() ?? null,
+      deprecatedByIdentityId: record.deprecatedByIdentityId,
+      deprecationReason: record.deprecationReason,
+      supersededByPolicyDefinitionId: record.supersededByPolicyDefinitionId,
+      revokedAt: record.revokedAt?.toISOString() ?? null,
+      revokedByIdentityId: record.revokedByIdentityId,
+      revocationReason: record.revocationReason,
+    },
+  };
+}
+
 function serializePolicyException(record: {
   id: string;
   organizationId: string;
@@ -374,6 +616,96 @@ function serializePolicyException(record: {
     revokedAt: record.revokedAt?.toISOString() ?? null,
     createdAt: record.createdAt.toISOString(),
     updatedAt: record.updatedAt.toISOString(),
+  };
+}
+
+function buildPolicyExceptionGovernanceEvidence(record: {
+  id: string;
+  organizationId: string;
+  policyDefinitionId: string | null;
+  policyName: string;
+  policyVersion: string;
+  policyReference: string;
+  subjectEntityId: string | null;
+  scope: string;
+  justification: string;
+  conditions: Record<string, unknown> | null;
+  approvalMode: string;
+  requiredApprovals: number;
+  requiredApprovalRoles: string[];
+  requiredApprovalClasses: string[];
+  requiredApprovalJurisdictions: string[];
+  governanceProfileId: string | null;
+  governanceProfileLabel: string | null;
+  governancePackId: string | null;
+  governancePackVersion: string | null;
+  governancePackLabel: string | null;
+  governanceProfileRationale: string[];
+  approvalCount: number;
+  approvalTrail: Array<{
+    identityId: string;
+    role: string;
+    approvalClasses: string[];
+    matchedApprovalClasses: string[];
+    matchedApprovalJurisdictions: string[];
+    action: string;
+    decidedAt: string;
+  }>;
+  status: string;
+  requestedByIdentityId: string;
+  approvedByIdentityId: string | null;
+  effectiveFrom: Date | null;
+  expiresAt: Date | null;
+  revokedAt: Date | null;
+  revokedByIdentityId: string | null;
+  revocationReason: string | null;
+  metadata: Record<string, unknown> | null;
+  createdAt: Date;
+  updatedAt: Date;
+}): Record<string, unknown> {
+  return {
+    formatVersion: 'zeroid.governance_evidence.v1',
+    exportedAt: new Date().toISOString(),
+    artifactType: 'policy_exception',
+    artifact: serializePolicyException(record),
+    governingPolicy: {
+      policyDefinitionId: record.policyDefinitionId,
+      policyName: record.policyName,
+      policyVersion: record.policyVersion,
+      policyReference: record.policyReference,
+    },
+    governanceRegime: {
+      pack: {
+        id: record.governancePackId,
+        version: record.governancePackVersion,
+        label: record.governancePackLabel,
+      },
+      profile: {
+        id: record.governanceProfileId,
+        label: record.governanceProfileLabel,
+        rationale: record.governanceProfileRationale,
+      },
+      approvalMode: record.approvalMode,
+      requiredApprovals: record.requiredApprovals,
+      requiredApprovalRoles: record.requiredApprovalRoles,
+      requiredApprovalClasses: record.requiredApprovalClasses,
+      requiredApprovalJurisdictions: record.requiredApprovalJurisdictions,
+    },
+    approvalProvenance: {
+      requestedByIdentityId: record.requestedByIdentityId,
+      approvedByIdentityId: record.approvedByIdentityId,
+      approvalCount: record.approvalCount,
+      approvalTrail: record.approvalTrail,
+      quorum: buildApprovalQuorumSnapshot(record),
+    },
+    lifecycle: {
+      status: record.status,
+      effectiveFrom: record.effectiveFrom?.toISOString() ?? null,
+      expiresAt: record.expiresAt?.toISOString() ?? null,
+      revokedAt: record.revokedAt?.toISOString() ?? null,
+      revokedByIdentityId: record.revokedByIdentityId,
+      revocationReason: record.revocationReason,
+    },
   };
 }
 
@@ -772,6 +1104,24 @@ router.get('/policies', requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES), async 
   }
 });
 
+router.get('/policies/:policyId/evidence', requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES), async (req: Request, res: Response): Promise<void> => {
+  try {
+    const enterpriseReq = req as EnterpriseAuthenticatedRequest;
+    const organizationId = enterpriseReq.enterpriseContext?.organizationId;
+    if (!organizationId) {
+      res.status(401).json({ error: 'Authenticated enterprise context required', code: 'ENTERPRISE_AUTH_REQUIRED' });
+      return;
+    }
+
+    const policy = await policyRegistryService.getPolicyById(req.params.policyId as string, organizationId);
+    res.status(200).json({ data: buildPolicyGovernanceEvidence(policy) });
+  } catch (err) {
+    const error = err as Error & { statusCode?: number; code?: string };
+    logger.error('policy_evidence_error', { error: error.message, policyId: req.params.policyId });
+    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'POLICY_EVIDENCE_ERROR' });
+  }
+});
+
 router.post('/policies/:policyId/submit', requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES), async (req: Request, res: Response): Promise<void> => {
   try {
     const enterpriseReq = req as EnterpriseAuthenticatedRequest;
@@ -918,6 +1268,24 @@ router.get('/policies/exceptions', requireEnterpriseContext(ENTERPRISE_AUDIT_ROL
   }
 });
 
+router.get('/policies/exceptions/:exceptionId/evidence', requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES), async (req: Request, res: Response): Promise<void> => {
+  try {
+    const enterpriseReq = req as EnterpriseAuthenticatedRequest;
+    const organizationId = enterpriseReq.enterpriseContext?.organizationId;
+    if (!organizationId) {
+      res.status(401).json({ error: 'Authenticated enterprise context required', code: 'ENTERPRISE_AUTH_REQUIRED' });
+      return;
+    }
+
+    const exception = await policyExceptionService.getExceptionById(req.params.exceptionId as string, organizationId);
+    res.status(200).json({ data: buildPolicyExceptionGovernanceEvidence(exception) });
+  } catch (err) {
+    const error = err as Error & { statusCode?: number; code?: string };
+    logger.error('policy_exception_evidence_error', { error: error.message, exceptionId: req.params.exceptionId });
+    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'POLICY_EXCEPTION_EVIDENCE_ERROR' });
+  }
+});
+
 router.post('/policies/exceptions/:exceptionId/approve', requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES), async (req: Request, res: Response): Promise<void> => {
   try {
     const enterpriseReq = req as EnterpriseAuthenticatedRequest;
@@ -1023,6 +1391,24 @@ router.get('/trust/issuers', requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES), a
   }
 });
 
+router.get('/trust/issuers/:trustId/evidence', requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES), async (req: Request, res: Response): Promise<void> => {
+  try {
+    const enterpriseReq = req as EnterpriseAuthenticatedRequest;
+    const organizationId = enterpriseReq.enterpriseContext?.organizationId;
+    if (!organizationId) {
+      res.status(401).json({ error: 'Authenticated enterprise context required', code: 'ENTERPRISE_AUTH_REQUIRED' });
+      return;
+    }
+
+    const record = await issuerTrustRegistryService.getIssuerTrustRecordById(req.params.trustId as string, organizationId);
+    res.status(200).json({ data: buildIssuerTrustGovernanceEvidence(record) });
+  } catch (err) {
+    const error = err as Error & { statusCode?: number; code?: string };
+    logger.error('issuer_trust_evidence_error', { error: error.message, trustId: req.params.trustId });
+    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'ISSUER_TRUST_EVIDENCE_ERROR' });
+  }
+});
+
 router.post('/trust/issuers/:trustId/approve', requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES), async (req: Request, res: Response): Promise<void> => {
   try {
     const enterpriseReq = req as EnterpriseAuthenticatedRequest;
@@ -1084,12 +1470,46 @@ router.post('/trust/issuers/:issuerIdentityId/keys', requireEnterpriseContext(EN
 
 router.get('/trust/issuers/:issuerIdentityId/keys', requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES), async (req: Request, res: Response): Promise<void> => {
   try {
-    const records = await issuerTrustRegistryService.listIssuerKeyHistory(req.params.issuerIdentityId as string);
+    const enterpriseReq = req as EnterpriseAuthenticatedRequest;
+    const organizationId = enterpriseReq.enterpriseContext?.organizationId;
+    if (!organizationId) {
+      res.status(401).json({ error: 'Authenticated enterprise context required', code: 'ENTERPRISE_AUTH_REQUIRED' });
+      return;
+    }
+
+    const records = await issuerTrustRegistryService.listIssuerKeyHistory(organizationId, req.params.issuerIdentityId as string);
     res.status(200).json({ data: records.map(serializeIssuerKeyHistory) });
   } catch (err) {
     const error = err as Error & { statusCode?: number; code?: string };
     logger.error('issuer_key_list_error', { error: error.message, issuerIdentityId: req.params.issuerIdentityId });
     res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'ISSUER_KEY_LIST_ERROR' });
+  }
+});
+
+router.get('/trust/issuers/:issuerIdentityId/keys/:keyHistoryId/evidence', requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES), async (req: Request, res: Response): Promise<void> => {
+  try {
+    const enterpriseReq = req as EnterpriseAuthenticatedRequest;
+    const organizationId = enterpriseReq.enterpriseContext?.organizationId;
+    if (!organizationId) {
+      res.status(401).json({ error: 'Authenticated enterprise context required', code: 'ENTERPRISE_AUTH_REQUIRED' });
+      return;
+    }
+
+    const issuerIdentityId = req.params.issuerIdentityId as string;
+    const keyHistoryId = req.params.keyHistoryId as string;
+    const [record, history] = await Promise.all([
+      issuerTrustRegistryService.getIssuerKeyHistoryRecord(organizationId, issuerIdentityId, keyHistoryId),
+      issuerTrustRegistryService.listIssuerKeyHistory(organizationId, issuerIdentityId),
+    ]);
+    res.status(200).json({ data: buildIssuerKeyHistoryEvidence(record, history) });
+  } catch (err) {
+    const error = err as Error & { statusCode?: number; code?: string };
+    logger.error('issuer_key_evidence_error', {
+      error: error.message,
+      issuerIdentityId: req.params.issuerIdentityId,
+      keyHistoryId: req.params.keyHistoryId,
+    });
+    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'ISSUER_KEY_EVIDENCE_ERROR' });
   }
 });
 

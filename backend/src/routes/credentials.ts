@@ -9,6 +9,19 @@ import { z } from 'zod';
 const router = Router();
 router.use(apiRateLimiter);
 
+function sanitizeCredentialEvidenceExport(exported: Awaited<ReturnType<typeof credentialService.exportCredentialEvidence>>) {
+  return {
+    ...exported,
+    credential: {
+      id: exported.credential.id,
+      credentialType: exported.credential.credentialType,
+      status: exported.credential.status,
+      issuedAt: exported.credential.issuedAt,
+      expiresAt: exported.credential.expiresAt,
+    },
+  };
+}
+
 // ---------------------------------------------------------------------------
 // POST /api/v1/credentials — Issue a new credential
 // ---------------------------------------------------------------------------
@@ -194,6 +207,29 @@ router.post(
             },
           }),
         },
+      });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code });
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// GET /api/v1/credentials/:id/evidence — Export credential trust evidence
+// ---------------------------------------------------------------------------
+router.get(
+  '/:id/evidence',
+  validate({ params: z.object({ id: uuidSchema }) }),
+  async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    try {
+      const identity = req.identity!;
+      const exported = await credentialService.exportCredentialEvidence(req.params.id as string);
+      const isAuthorized = exported.credential.issuerId === identity.id ||
+        exported.credential.subjectId === identity.id;
+
+      res.json({
+        data: isAuthorized ? exported : sanitizeCredentialEvidenceExport(exported),
       });
     } catch (err) {
       const error = err as Error & { statusCode?: number; code?: string };

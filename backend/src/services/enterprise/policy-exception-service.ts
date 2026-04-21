@@ -210,6 +210,14 @@ export class PolicyExceptionService {
     return records.map((record: any) => this.formatException(record));
   }
 
+  async getExceptionById(
+    exceptionId: string,
+    organizationId: string,
+  ): Promise<PolicyExceptionSummary> {
+    const record = await this.getException(exceptionId, organizationId);
+    return this.formatException(record);
+  }
+
   async approveException(
     exceptionId: string,
     organizationId: string,

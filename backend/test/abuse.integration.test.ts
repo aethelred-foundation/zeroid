@@ -181,6 +181,14 @@ jest.mock('../src/services/credential', () => ({
     queryCredentials: jest.fn(async () => ({ credentials: [], total: 0 })),
     revokeCredential: jest.fn(async () => ({})),
     verifyCredential: jest.fn(async () => ({ valid: true, checks: [], credential: {} })),
+    exportCredentialEvidence: jest.fn(async () => ({
+      formatVersion: 'zeroid.credential_evidence_export.v1',
+      exportedAt: new Date().toISOString(),
+      credential: {},
+      verification: { valid: true, checks: {} },
+      issuer: { identityId: 'issuer-1' },
+      subject: { identityId: 'subject-1' },
+    })),
   },
 }));
 

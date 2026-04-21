@@ -58,6 +58,42 @@ export interface GovernancePackCompatibilityIssue {
   family?: GovernedPolicyFamily;
 }
 
+export interface PolicyDefinitionCompatibilityIssue {
+  packId: string;
+  reason: string;
+  family?: GovernedPolicyFamily;
+}
+
+const POLICY_DEFINITION_COMPATIBILITY_RULES: Partial<Record<string, {
+  families?: GovernedPolicyFamily[];
+  requiredKeys: string[];
+  message: string;
+}>> = {
+  'enterprise-privacy': {
+    families: ['privacy'],
+    requiredKeys: ['privacyRights', 'retentionPolicy', 'lawfulBasis', 'dataCategories', 'dsarWorkflow', 'reviewCadence'],
+    message: 'Enterprise privacy governance requires definition fields like privacyRights, retentionPolicy, lawfulBasis, or dsarWorkflow.',
+  },
+  'enterprise-screening': {
+    families: ['screening'],
+    requiredKeys: ['screeningRules', 'watchlists', 'escalationPolicy', 'matchThreshold', 'falsePositiveWorkflow'],
+    message: 'Enterprise screening governance requires definition fields like screeningRules, watchlists, escalationPolicy, or matchThreshold.',
+  },
+  'enterprise-reporting': {
+    families: ['reporting'],
+    requiredKeys: ['reportType', 'reportingChannels', 'filingRules', 'reportSchema', 'submissionCadence'],
+    message: 'Enterprise reporting governance requires definition fields like reportType, reportSchema, filingRules, or submissionCadence.',
+  },
+  'cross-border-regulated': {
+    requiredKeys: ['transferRules', 'transferMechanisms', 'dataLocalization', 'jurisdictionMatrix', 'recipientControls'],
+    message: 'Cross-border governance requires definition fields like transferRules, transferMechanisms, dataLocalization, or jurisdictionMatrix.',
+  },
+  'sovereign-core': {
+    requiredKeys: ['sovereignBoundaries', 'nationalHosting', 'issuerTrustRequirements', 'sovereignApprovalChain', 'regulatorAuthority'],
+    message: 'Sovereign governance requires definition fields like sovereignBoundaries, nationalHosting, issuerTrustRequirements, or regulatorAuthority.',
+  },
+};
+
 const GOVERNANCE_PACKS = {
   baseline: {
     id: 'baseline-core',
@@ -231,6 +267,41 @@ export class PolicyGovernanceService {
     }
 
     return issues;
+  }
+
+  validatePolicyDefinitionCompatibility(
+    family: GovernedPolicyFamily,
+    governancePackId: string | undefined,
+    definition: Record<string, unknown>,
+  ): PolicyDefinitionCompatibilityIssue | null {
+    if (!governancePackId) {
+      return null;
+    }
+
+    const rule = POLICY_DEFINITION_COMPATIBILITY_RULES[governancePackId];
+    if (!rule) {
+      return null;
+    }
+
+    if (rule.families && !rule.families.includes(family)) {
+      return {
+        packId: governancePackId,
+        family,
+        reason: `${governancePackId} is not compatible with ${family} policies.`,
+      };
+    }
+
+    const definitionKeys = new Set(Object.keys(definition ?? {}));
+    const hasAnyKey = rule.requiredKeys.some((key) => definitionKeys.has(key));
+    if (hasAnyKey) {
+      return null;
+    }
+
+    return {
+      packId: governancePackId,
+      family,
+      reason: rule.message,
+    };
   }
 
   applyGovernanceBaseline(input: PolicyGovernanceInput): PolicyGovernanceProfile {

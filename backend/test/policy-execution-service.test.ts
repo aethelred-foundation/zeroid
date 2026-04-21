@@ -399,6 +399,76 @@ describe('PolicyExecutionService', () => {
     });
   });
 
+  it('applies governance-pack reporting defaults even without explicit execution directives', async () => {
+    mockPolicyDefinitionFindFirst.mockResolvedValue({
+      id: 'policy-reporting-pack-1',
+      name: 'regulatory_reporting',
+      version: '2026.07.0',
+      definition: {
+        reportType: 'SAR',
+      },
+    });
+
+    const outcome = await policyExecutionService.applyReportingPolicy(
+      'org-1',
+      {
+        policyName: 'regulatory_reporting',
+        policyVersion: '2026.07.0',
+        policyDefinitionId: 'policy-reporting-pack-1',
+        policyReference: 'zeroid://policy/org/org-1/regulatory_reporting@2026.07.0',
+        policyFamily: 'reporting',
+        policyApprovalContext: {
+          approvedByIdentityId: 'admin-1',
+          governancePackId: 'enterprise-reporting',
+          governancePackVersion: '2026.04',
+          governancePackLabel: 'Enterprise Reporting Governance Pack',
+        },
+      },
+      {
+        reportType: 'SAR',
+        priority: 'normal',
+        filingInstitution: {
+          name: 'Aethelred Bank',
+        },
+      },
+      {
+        reportId: 'report-pack-1',
+        reportType: 'SAR',
+        version: 1,
+        status: 'draft',
+        filingJurisdiction: 'AE-ADGM',
+        generatedAt: '2026-04-21T00:00:00.000Z',
+        submittedAt: null,
+        expiresAt: '2026-05-21T00:00:00.000Z',
+        content: {},
+        amendments: [],
+        filingReference: null,
+        exportFormats: ['json'],
+      },
+    );
+
+    expect(outcome.result).toMatchObject({
+      status: 'pending_review',
+      policyDecision: 'review_required',
+    });
+    expect(outcome.result.policyAlerts).toEqual(
+      expect.arrayContaining([
+        'Policy requires pending review for SAR reports',
+      ]),
+    );
+    expect(outcome.trace).toMatchObject({
+      policyDefinitionId: 'policy-reporting-pack-1',
+      directives: expect.arrayContaining(['pending_review_report_types']),
+      governanceOverlay: {
+        packId: 'enterprise-reporting',
+        packVersion: '2026.04',
+        packLabel: 'Enterprise Reporting Governance Pack',
+        directives: ['pending_review_report_types'],
+        appliedDirectives: ['pending_review_report_types'],
+      },
+    });
+  });
+
   it('applies privacy policy directives to DSAR and erasure workflows', async () => {
     mockPolicyDefinitionFindFirst.mockResolvedValue({
       id: 'policy-privacy-1',
@@ -634,6 +704,246 @@ describe('PolicyExecutionService', () => {
         'breach_subject_notification_gate',
         'accelerated_breach_deadlines',
       ]),
+    });
+  });
+
+  it('applies cross-border governance-pack defaults at runtime', async () => {
+    mockPolicyDefinitionFindFirst.mockResolvedValue({
+      id: 'policy-transfer-pack-1',
+      name: 'data_sovereignty_cross_border',
+      version: '2026.07.0',
+      definition: {
+        transferRules: {
+          default: 'regulated',
+        },
+      },
+    });
+
+    const outcome = await policyExecutionService.applyCrossBorderPolicy(
+      'org-1',
+      {
+        policyName: 'data_sovereignty_cross_border',
+        policyVersion: '2026.07.0',
+        policyDefinitionId: 'policy-transfer-pack-1',
+        policyReference: 'zeroid://policy/org/org-1/data_sovereignty_cross_border@2026.07.0',
+        policyFamily: 'privacy',
+        policyApprovalContext: {
+          approvedByIdentityId: 'admin-1',
+          governancePackId: 'cross-border-regulated',
+          governancePackVersion: '2026.04',
+          governancePackLabel: 'Cross-Border Regulated Governance Pack',
+        },
+      },
+      {
+        sourceJurisdiction: 'AE-ADGM',
+        targetJurisdiction: 'EU-GDPR',
+        dataCategories: ['identity_data'],
+        dataSubjectId: 'subject-1',
+        purpose: 'remote_onboarding',
+        legalBasis: 'binding_corporate_rules',
+        recipientInfo: {
+          organizationName: 'Verifier GmbH',
+        },
+      },
+      {
+        transferId: 'transfer-pack-1',
+        allowed: true,
+        legalBasis: 'binding_corporate_rules',
+        requiredSafeguards: ['encryption_at_rest'],
+        riskLevel: 'high',
+        conditions: [],
+        regulatoryNotifications: [],
+        expiresAt: '2026-12-31T00:00:00.000Z',
+      },
+    );
+
+    expect(outcome.result).toMatchObject({
+      allowed: true,
+      policyDecision: 'review_required',
+    });
+    expect(outcome.result.requiredSafeguards).toEqual(
+      expect.arrayContaining(['encryption_at_rest', 'customer_managed_keys']),
+    );
+    expect(outcome.result.policyAlerts).toEqual(
+      expect.arrayContaining([
+        'Policy requires manual review for high risk transfer assessments',
+        'Policy requires additional safeguards: customer_managed_keys',
+      ]),
+    );
+    expect(outcome.trace).toMatchObject({
+      policyDefinitionId: 'policy-transfer-pack-1',
+      directives: expect.arrayContaining(['required_safeguards', 'risk_review_levels']),
+      governanceOverlay: {
+        packId: 'cross-border-regulated',
+        packVersion: '2026.04',
+        packLabel: 'Cross-Border Regulated Governance Pack',
+        directives: ['required_safeguards', 'risk_review_levels'],
+        appliedDirectives: ['required_safeguards', 'risk_review_levels'],
+      },
+    });
+  });
+
+  it('applies sovereign privacy governance-pack defaults at runtime', async () => {
+    mockPolicyDefinitionFindFirst.mockResolvedValue({
+      id: 'policy-privacy-pack-1',
+      name: 'privacy_impact_assessment',
+      version: '2026.07.0',
+      definition: {
+        sovereignBoundaries: {
+          residency: 'AE-GOV',
+        },
+      },
+    });
+
+    const outcome = await policyExecutionService.applyPrivacyWorkflowPolicy(
+      'org-1',
+      {
+        policyName: 'privacy_impact_assessment',
+        policyVersion: '2026.07.0',
+        policyDefinitionId: 'policy-privacy-pack-1',
+        policyReference: 'zeroid://policy/org/org-1/privacy_impact_assessment@2026.07.0',
+        policyFamily: 'privacy',
+        policyApprovalContext: {
+          approvedByIdentityId: 'admin-1',
+          governancePackId: 'sovereign-core',
+          governancePackVersion: '2026.04',
+          governancePackLabel: 'Sovereign Core Governance Pack',
+        },
+      },
+      'pia',
+      {
+        projectName: 'ZeroID Sovereign Access',
+        description: 'Cross-border identity verification workflow',
+        dataCategories: ['biometric'],
+        processingPurposes: ['identity_verification'],
+        dataSubjectCategories: ['general_public'],
+        jurisdictions: ['AE-GOV'],
+        thirdPartyProcessors: [
+          {
+            name: 'Processor One',
+            role: 'processor',
+            jurisdiction: 'EU-GDPR',
+            dpaInPlace: false,
+          },
+        ],
+        automaticDecisionMaking: true,
+        crossBorderTransfer: true,
+      },
+      {
+        assessmentId: 'pia-pack-1',
+        riskScore: 45,
+        riskLevel: 'medium',
+        findings: [],
+        dpaRequired: true,
+        dpiaRequired: true,
+        supervisoryConsultationRequired: false,
+        recommendations: [],
+        completedAt: '2026-04-21T00:00:00.000Z',
+      },
+    );
+
+    expect(outcome.result).toMatchObject({
+      supervisoryConsultationRequired: true,
+      policyDecision: 'review_required',
+    });
+    expect(outcome.result.policyAlerts).toEqual(
+      expect.arrayContaining([
+        'Policy requires supervisory consultation for medium risk PIAs',
+        'Policy requires signed DPAs for all third-party processors',
+        'Policy requires review for PIAs involving cross-border transfers',
+      ]),
+    );
+    expect(outcome.trace).toMatchObject({
+      policyDefinitionId: 'policy-privacy-pack-1',
+      directives: expect.arrayContaining([
+        'supervisory_consultation_risk_levels',
+        'processor_dpa_requirement',
+        'cross_border_pia_review_gate',
+      ]),
+      governanceOverlay: {
+        packId: 'sovereign-core',
+        packVersion: '2026.04',
+        packLabel: 'Sovereign Core Governance Pack',
+        directives: expect.arrayContaining([
+          'privacy_request_review_gate',
+          'supervisory_consultation_risk_levels',
+          'processor_dpa_requirement',
+          'cross_border_pia_review_gate',
+          'breach_subject_notification_gate',
+          'accelerated_breach_deadlines',
+        ]),
+        appliedDirectives: [
+          'supervisory_consultation_risk_levels',
+          'processor_dpa_requirement',
+          'cross_border_pia_review_gate',
+        ],
+      },
+    });
+  });
+
+  it('fails closed when a governed policy definition is incompatible with its governance pack', async () => {
+    mockPolicyDefinitionFindFirst.mockResolvedValue({
+      id: 'policy-reporting-guard-1',
+      name: 'regulatory_reporting',
+      version: '2026.07.0',
+      definition: {},
+    });
+
+    const outcome = await policyExecutionService.applyReportingPolicy(
+      'org-1',
+      {
+        policyName: 'regulatory_reporting',
+        policyVersion: '2026.07.0',
+        policyDefinitionId: 'policy-reporting-guard-1',
+        policyReference: 'zeroid://policy/org/org-1/regulatory_reporting@2026.07.0',
+        policyFamily: 'reporting',
+        policyApprovalContext: {
+          approvedByIdentityId: 'admin-1',
+          governancePackId: 'enterprise-reporting',
+          governancePackVersion: '2026.04',
+          governancePackLabel: 'Enterprise Reporting Governance Pack',
+        },
+      },
+      {
+        reportType: 'SAR',
+        priority: 'normal',
+      },
+      {
+        reportId: 'report-guard-1',
+        reportType: 'SAR',
+        version: 1,
+        status: 'draft',
+        filingJurisdiction: 'AE-ADGM',
+        generatedAt: '2026-04-21T00:00:00.000Z',
+        submittedAt: null,
+        expiresAt: '2026-05-21T00:00:00.000Z',
+        content: {},
+        amendments: [],
+        filingReference: null,
+        exportFormats: ['json'],
+      },
+    );
+
+    expect(outcome.result).toMatchObject({
+      status: 'pending_review',
+      policyDecision: 'blocked',
+    });
+    expect(outcome.result.policyAlerts).toEqual([
+      'Enterprise reporting governance requires definition fields like reportType, reportSchema, filingRules, or submissionCadence.',
+    ]);
+    expect(outcome.trace).toMatchObject({
+      policyDefinitionId: 'policy-reporting-guard-1',
+      directives: ['governance_pack_runtime_guard'],
+      runtimeGuard: {
+        code: 'governance_pack_definition_invalid',
+        packId: 'enterprise-reporting',
+      },
+      reportingAdjustments: [
+        {
+          reportType: 'SAR',
+          changes: ['runtime_guard:enterprise-reporting'],
+        },
+      ],
     });
   });
 });

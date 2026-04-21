@@ -566,6 +566,84 @@ export interface CredentialResponse {
   expiresAt: Date | null;
 }
 
+export interface CredentialVerificationResult {
+  valid: boolean;
+  credential: CredentialResponse;
+  checks: Record<string, boolean>;
+}
+
+export interface CredentialEvidenceExport {
+  formatVersion: 'zeroid.credential_evidence_export.v1';
+  exportedAt: string;
+  credential: CredentialResponse;
+  verification: {
+    valid: boolean;
+    checks: Record<string, boolean>;
+  };
+  issuer: {
+    identityId: string;
+    did?: string;
+    status?: string;
+    keyVersion?: string;
+    keyAlgorithm?: string;
+    verificationMethod?: string | null;
+  };
+  subject: {
+    identityId: string;
+    did?: string;
+    status?: string;
+  };
+  trustLineage?: {
+    enforced: boolean;
+    selectedTrustRecordId?: string;
+    accreditationScope?: string;
+    assuranceLevel?: string;
+    evaluatedJurisdictions: string[];
+    matchedJurisdictions: string[];
+    trustRecord?: {
+      trustRecordId: string;
+      status: string;
+      accreditationScope?: string;
+      assuranceLevel?: string;
+      allowedCredentialTypes: string[];
+      allowedJurisdictions: string[];
+      proposedByIdentityId?: string | null;
+      accreditedByIdentityId?: string | null;
+      suspensionReason?: string | null;
+      metadata?: Record<string, unknown> | null;
+      accreditedAt?: string;
+      expiresAt?: string;
+      updatedAt?: string;
+    };
+    keyLineage?: {
+      current?: {
+        keyHistoryId: string;
+        keyVersion: string;
+        keyAlgorithm: string;
+        verificationMethod: string;
+        status: string;
+        validFrom: string;
+        validUntil?: string | null;
+        rotatedByIdentityId?: string | null;
+        metadata?: Record<string, unknown> | null;
+        createdAt: string;
+      };
+      history: Array<{
+        keyHistoryId: string;
+        keyVersion: string;
+        keyAlgorithm: string;
+        verificationMethod: string;
+        status: string;
+        validFrom: string;
+        validUntil?: string | null;
+        rotatedByIdentityId?: string | null;
+        metadata?: Record<string, unknown> | null;
+        createdAt: string;
+      }>;
+    };
+  };
+}
+
 export interface CredentialQuery {
   subjectId?: string;
   issuerId?: string;
@@ -613,8 +691,20 @@ export class CredentialService {
       throw new CredentialError('Subject identity is not active', 'CRED_SUBJECT_INACTIVE');
     }
 
-    const trustPolicy = await this.resolveIssuerTrustPolicy(request.issuerId, request.credentialType);
+    const evaluatedJurisdictions = this.extractCredentialJurisdictions(request.claims);
+    const trustPolicy = await this.resolveIssuerTrustPolicy(
+      request.issuerId,
+      request.credentialType,
+      evaluatedJurisdictions,
+    );
     if (trustPolicy.enforced && !trustPolicy.accredited) {
+      if (trustPolicy.denialReason === 'jurisdiction_not_accredited') {
+        throw new CredentialError(
+          'Issuer is not accredited to issue this credential in the requested jurisdiction',
+          'CRED_ISSUER_NOT_ACCREDITED_FOR_JURISDICTION',
+          403,
+        );
+      }
       throw new CredentialError(
         'Issuer is not accredited to issue this credential type',
         'CRED_ISSUER_NOT_ACCREDITED_FOR_TYPE',
@@ -692,6 +782,15 @@ export class CredentialService {
           subjectDid: request.subjectDid,
           schemaId: request.schemaId,
           keyVersion: this.signer.getKeyVersion(),
+          issuerTrustPolicy: {
+            enforced: trustPolicy.enforced,
+            accredited: trustPolicy.accredited,
+            trustRecordId: trustPolicy.trustRecordId ?? null,
+            accreditationScope: trustPolicy.accreditationScope ?? null,
+            assuranceLevel: trustPolicy.assuranceLevel ?? null,
+            evaluatedJurisdictions: trustPolicy.evaluatedJurisdictions,
+            matchedJurisdictions: trustPolicy.matchedJurisdictions,
+          },
         },
       },
     });
@@ -709,6 +808,8 @@ export class CredentialService {
       keyVersion: this.signer.getKeyVersion(),
       trustPolicyEnforced: trustPolicy.enforced,
       issuerTrustRecordId: trustPolicy.trustRecordId ?? null,
+      issuerTrustAssuranceLevel: trustPolicy.assuranceLevel ?? null,
+      issuerTrustMatchedJurisdictions: trustPolicy.matchedJurisdictions,
     });
 
     return this.formatCredential(credential);
@@ -717,10 +818,25 @@ export class CredentialService {
   private async resolveIssuerTrustPolicy(
     issuerId: string,
     credentialType: string,
-  ): Promise<{ enforced: boolean; accredited: boolean; trustRecordId?: string }> {
+    evaluatedJurisdictions: string[] = [],
+  ): Promise<{
+    enforced: boolean;
+    accredited: boolean;
+    trustRecordId?: string;
+    accreditationScope?: string;
+    assuranceLevel?: string;
+    matchedJurisdictions: string[];
+    evaluatedJurisdictions: string[];
+    denialReason?: 'credential_type_not_accredited' | 'jurisdiction_not_accredited';
+  }> {
     const issuerTrustModel = (prisma as any).issuerTrustRecord;
     if (!issuerTrustModel?.findMany) {
-      return { enforced: false, accredited: true };
+      return {
+        enforced: false,
+        accredited: true,
+        matchedJurisdictions: [],
+        evaluatedJurisdictions,
+      };
     }
 
     const records = await issuerTrustModel.findMany({
@@ -733,25 +849,29 @@ export class CredentialService {
     });
 
     if (!Array.isArray(records) || records.length === 0) {
-      return { enforced: false, accredited: true };
+      return {
+        enforced: false,
+        accredited: true,
+        matchedJurisdictions: [],
+        evaluatedJurisdictions,
+      };
     }
 
-    const now = new Date();
-    const activeAccreditations = records.filter((record: any) => (
-      record.status === 'ACCREDITED' &&
-      (!record.expiresAt || new Date(record.expiresAt) > now)
-    ));
-
-    const matchingAccreditation = activeAccreditations.find((record: any) =>
-      Array.isArray(record.allowedCredentialTypes) &&
-      record.allowedCredentialTypes.includes(credentialType),
-    );
+    const {
+      activeAccreditations,
+      typedAccreditations,
+      selectedAccreditation: matchingAccreditation,
+    } = this.selectIssuerTrustAccreditation(records, credentialType, evaluatedJurisdictions);
 
     if (matchingAccreditation) {
       return {
         enforced: true,
         accredited: true,
-        trustRecordId: matchingAccreditation.id,
+        trustRecordId: matchingAccreditation.record.id,
+        accreditationScope: String(matchingAccreditation.record.accreditationScope ?? 'ENTERPRISE').toLowerCase(),
+        assuranceLevel: String(matchingAccreditation.record.assuranceLevel ?? 'STANDARD').toLowerCase(),
+        matchedJurisdictions: matchingAccreditation.matchedJurisdictions,
+        evaluatedJurisdictions,
       };
     }
 
@@ -759,9 +879,140 @@ export class CredentialService {
       issuerId,
       credentialType,
       activeAccreditationCount: activeAccreditations.length,
+      evaluatedJurisdictions,
+      denialReason: typedAccreditations.length > 0
+        ? 'jurisdiction_not_accredited'
+        : 'credential_type_not_accredited',
     });
 
-    return { enforced: true, accredited: false };
+    return {
+      enforced: true,
+      accredited: false,
+      matchedJurisdictions: [],
+      evaluatedJurisdictions,
+      denialReason: typedAccreditations.length > 0
+        ? 'jurisdiction_not_accredited'
+        : 'credential_type_not_accredited',
+    };
+  }
+
+  private extractCredentialJurisdictions(claims: Record<string, unknown>): string[] {
+    const candidates: unknown[] = [
+      claims.jurisdiction,
+      claims.jurisdictions,
+      claims.country,
+      claims.countryCode,
+      claims.countries,
+      claims.residencyJurisdiction,
+      claims.residencyCountry,
+    ];
+
+    return [...new Set(
+      candidates.flatMap((value) => this.normalizeJurisdictionValues(value)),
+    )];
+  }
+
+  private normalizeJurisdictionValues(value: unknown): string[] {
+    if (typeof value === 'string') {
+      const normalized = value.trim().toUpperCase();
+      return normalized.length > 0 ? [normalized] : [];
+    }
+
+    if (Array.isArray(value)) {
+      return value.flatMap((entry) => this.normalizeJurisdictionValues(entry));
+    }
+
+    if (value && typeof value === 'object') {
+      const record = value as Record<string, unknown>;
+      return [
+        ...this.normalizeJurisdictionValues(record.code),
+        ...this.normalizeJurisdictionValues(record.jurisdiction),
+        ...this.normalizeJurisdictionValues(record.countryCode),
+      ];
+    }
+
+    return [];
+  }
+
+  private intersectJurisdictions(requestedJurisdictions: string[], allowedJurisdictions: string[]): string[] {
+    if (requestedJurisdictions.length === 0 || allowedJurisdictions.length === 0) {
+      return [];
+    }
+
+    const allowed = new Set(allowedJurisdictions.map((value) => String(value).trim().toUpperCase()));
+    return [...new Set(
+      requestedJurisdictions
+        .map((value) => String(value).trim().toUpperCase())
+        .filter((value) => allowed.has(value)),
+    )];
+  }
+
+  private rankAssuranceLevel(level: unknown): number {
+    switch (String(level ?? '').toUpperCase()) {
+      case 'SOVEREIGN':
+        return 3;
+      case 'QUALIFIED':
+        return 2;
+      case 'ADVANCED':
+        return 1;
+      default:
+        return 0;
+    }
+  }
+
+  private selectIssuerTrustAccreditation(
+    records: any[],
+    credentialType: string,
+    evaluatedJurisdictions: string[],
+  ): {
+    activeAccreditations: any[];
+    typedAccreditations: any[];
+    selectedAccreditation?: {
+      record: any;
+      matchedJurisdictions: string[];
+    };
+  } {
+    const now = new Date();
+    const activeAccreditations = Array.isArray(records)
+      ? records.filter((record: any) => (
+        record.status === 'ACCREDITED' &&
+        (!record.expiresAt || new Date(record.expiresAt) > now)
+      ))
+      : [];
+
+    const typedAccreditations = activeAccreditations.filter((record: any) =>
+      Array.isArray(record.allowedCredentialTypes) &&
+      record.allowedCredentialTypes.includes(credentialType),
+    );
+
+    const selectedAccreditation = typedAccreditations
+      .map((record: any) => ({
+        record,
+        matchedJurisdictions: this.intersectJurisdictions(
+          evaluatedJurisdictions,
+          Array.isArray(record.allowedJurisdictions) ? record.allowedJurisdictions : [],
+        ),
+      }))
+      .filter(({ record, matchedJurisdictions }) => (
+        matchedJurisdictions.length > 0
+        || !Array.isArray(record.allowedJurisdictions)
+        || record.allowedJurisdictions.length === 0
+        || evaluatedJurisdictions.length === 0
+      ))
+      .sort((left, right) => {
+        const assuranceDelta = this.rankAssuranceLevel(right.record.assuranceLevel)
+          - this.rankAssuranceLevel(left.record.assuranceLevel);
+        if (assuranceDelta !== 0) {
+          return assuranceDelta;
+        }
+        return new Date(right.record.updatedAt ?? 0).getTime() - new Date(left.record.updatedAt ?? 0).getTime();
+      })[0];
+
+    return {
+      activeAccreditations,
+      typedAccreditations,
+      ...(selectedAccreditation ? { selectedAccreditation } : {}),
+    };
   }
 
   // -------------------------------------------------------------------------
@@ -894,11 +1145,7 @@ export class CredentialService {
   // -------------------------------------------------------------------------
   // Verify a credential (check validity, signature, revocation)
   // -------------------------------------------------------------------------
-  async verifyCredential(credentialId: string): Promise<{
-    valid: boolean;
-    credential: CredentialResponse;
-    checks: Record<string, boolean>;
-  }> {
+  async verifyCredential(credentialId: string): Promise<CredentialVerificationResult> {
     const credential = await prisma.credential.findUnique({
       where: { id: credentialId },
     });
@@ -907,40 +1154,7 @@ export class CredentialService {
       throw new CredentialError('Credential not found', 'CRED_NOT_FOUND', 404);
     }
 
-    const checks: Record<string, boolean> = {};
-
-    // 1. Status check
-    checks.statusActive = credential.status === 'ACTIVE';
-
-    // 2. Expiry check
-    checks.notExpired = !credential.expiresAt || credential.expiresAt > new Date();
-
-    // 3. Claims integrity check
-    const currentHash = await this.hashClaims(credential.claims as Record<string, unknown>);
-    checks.integrityValid = currentHash === credential.claimsHash;
-
-    // 4. Proof/signature verification
-    checks.signatureValid = await this.verifyProofSignature(
-      currentHash,
-      credential.issuerId,
-      credential.proof as Record<string, unknown>,
-    );
-
-    // 5. Issuer active check
-    const issuer = await prisma.identity.findUnique({ where: { id: credential.issuerId } });
-    checks.issuerActive = issuer?.status === 'ACTIVE';
-
-    // 6. Subject active check
-    const subject = await prisma.identity.findUnique({ where: { id: credential.subjectId } });
-    checks.subjectActive = subject?.status === 'ACTIVE';
-
-    // 7. Revocation registry check
-    const revocation = await prisma.revocationRegistry.findUnique({
-      where: { credentialId },
-    });
-    checks.notRevoked = revocation === null;
-
-    const valid = Object.values(checks).every(Boolean);
+    const verification = await this.evaluateCredentialVerification(credential);
 
     // Audit log
     await prisma.auditLog.create({
@@ -948,14 +1162,73 @@ export class CredentialService {
         action: 'CREDENTIAL_VERIFIED',
         resourceType: 'credential',
         resourceId: credentialId,
-        details: { valid, checks },
+        details: { valid: verification.valid, checks: verification.checks },
       },
     });
 
+    return verification;
+  }
+
+  async exportCredentialEvidence(credentialId: string): Promise<CredentialEvidenceExport> {
+    const credential = await prisma.credential.findUnique({
+      where: { id: credentialId },
+    });
+
+    if (!credential) {
+      throw new CredentialError('Credential not found', 'CRED_NOT_FOUND', 404);
+    }
+
+    const verification = await this.evaluateCredentialVerification(credential);
+    const issuer = await prisma.identity.findUnique({
+      where: { id: credential.issuerId },
+      select: {
+        id: true,
+        did: true,
+        status: true,
+        keyVersion: true,
+        keyAlgorithm: true,
+        verificationMethod: true,
+      },
+    });
+    const subject = await prisma.identity.findUnique({
+      where: { id: credential.subjectId },
+      select: {
+        id: true,
+        did: true,
+        status: true,
+      },
+    });
+
+    const trustLineage = await this.buildCredentialTrustLineage({
+      issuerId: credential.issuerId,
+      credentialType: credential.credentialType,
+      claims: credential.claims as Record<string, unknown>,
+    });
+
     return {
-      valid,
-      credential: this.formatCredential(credential),
-      checks,
+      formatVersion: 'zeroid.credential_evidence_export.v1',
+      exportedAt: new Date().toISOString(),
+      credential: verification.credential,
+      verification: {
+        valid: verification.valid,
+        checks: verification.checks,
+      },
+      issuer: {
+        identityId: credential.issuerId,
+        ...(issuer?.did ? { did: issuer.did } : {}),
+        ...(issuer?.status ? { status: issuer.status } : {}),
+        ...(issuer?.keyVersion ? { keyVersion: issuer.keyVersion } : {}),
+        ...(issuer?.keyAlgorithm ? { keyAlgorithm: issuer.keyAlgorithm } : {}),
+        ...(issuer?.verificationMethod !== undefined
+          ? { verificationMethod: issuer.verificationMethod ?? null }
+          : {}),
+      },
+      subject: {
+        identityId: credential.subjectId,
+        ...(subject?.did ? { did: subject.did } : {}),
+        ...(subject?.status ? { status: subject.status } : {}),
+      },
+      ...(trustLineage ? { trustLineage } : {}),
     };
   }
 
@@ -1025,6 +1298,162 @@ export class CredentialService {
       status: credential.status,
       issuedAt: credential.issuedAt,
       expiresAt: credential.expiresAt,
+    };
+  }
+
+  private async evaluateCredentialVerification(credential: {
+    id: string;
+    credentialType: string;
+    issuerId: string;
+    subjectId: string;
+    claims: unknown;
+    claimsHash: string;
+    proof: unknown;
+    status: string;
+    issuedAt: Date;
+    expiresAt: Date | null;
+  }): Promise<CredentialVerificationResult> {
+    const checks: Record<string, boolean> = {};
+
+    checks.statusActive = credential.status === 'ACTIVE';
+    checks.notExpired = !credential.expiresAt || credential.expiresAt > new Date();
+
+    const currentHash = await this.hashClaims(credential.claims as Record<string, unknown>);
+    checks.integrityValid = currentHash === credential.claimsHash;
+
+    checks.signatureValid = await this.verifyProofSignature(
+      currentHash,
+      credential.issuerId,
+      credential.proof as Record<string, unknown>,
+    );
+
+    const issuer = await prisma.identity.findUnique({ where: { id: credential.issuerId } });
+    checks.issuerActive = issuer?.status === 'ACTIVE';
+
+    const subject = await prisma.identity.findUnique({ where: { id: credential.subjectId } });
+    checks.subjectActive = subject?.status === 'ACTIVE';
+
+    const revocation = await prisma.revocationRegistry.findUnique({
+      where: { credentialId: credential.id },
+    });
+    checks.notRevoked = revocation === null;
+
+    return {
+      valid: Object.values(checks).every(Boolean),
+      credential: this.formatCredential(credential),
+      checks,
+    };
+  }
+
+  private async buildCredentialTrustLineage(credential: {
+    issuerId: string;
+    credentialType: string;
+    claims: Record<string, unknown>;
+  }): Promise<CredentialEvidenceExport['trustLineage'] | undefined> {
+    const issuerTrustModel = (prisma as any).issuerTrustRecord;
+    const issuerKeyHistoryModel = (prisma as any).issuerKeyHistory;
+    if (!issuerTrustModel?.findMany && !issuerKeyHistoryModel?.findMany) {
+      return undefined;
+    }
+
+    const evaluatedJurisdictions = this.extractCredentialJurisdictions(credential.claims);
+    const records = issuerTrustModel?.findMany
+      ? await issuerTrustModel.findMany({
+        where: {
+          issuerIdentityId: credential.issuerId,
+        },
+        orderBy: {
+          updatedAt: 'desc',
+        },
+      })
+      : [];
+
+    const { selectedAccreditation } = this.selectIssuerTrustAccreditation(
+      records,
+      credential.credentialType,
+      evaluatedJurisdictions,
+    );
+
+    const keyHistory = issuerKeyHistoryModel?.findMany
+      ? await issuerKeyHistoryModel.findMany({
+        where: {
+          issuerIdentityId: credential.issuerId,
+        },
+        orderBy: [
+          { validFrom: 'desc' },
+          { createdAt: 'desc' },
+        ],
+      })
+      : [];
+
+    const currentKey = keyHistory.find((record: any) => String(record.status ?? '').toUpperCase() === 'ACTIVE')
+      ?? keyHistory[0];
+
+    if ((!Array.isArray(records) || records.length === 0) && keyHistory.length === 0) {
+      return undefined;
+    }
+
+    return {
+      enforced: Array.isArray(records) && records.length > 0,
+      ...(selectedAccreditation?.record?.id ? { selectedTrustRecordId: selectedAccreditation.record.id } : {}),
+      ...(selectedAccreditation?.record?.accreditationScope !== undefined
+        ? { accreditationScope: String(selectedAccreditation.record.accreditationScope).toLowerCase() }
+        : {}),
+      ...(selectedAccreditation?.record?.assuranceLevel !== undefined
+        ? { assuranceLevel: String(selectedAccreditation.record.assuranceLevel).toLowerCase() }
+        : {}),
+      evaluatedJurisdictions,
+      matchedJurisdictions: selectedAccreditation?.matchedJurisdictions ?? [],
+      ...(selectedAccreditation?.record ? {
+        trustRecord: this.serializeCredentialTrustRecord(selectedAccreditation.record),
+      } : {}),
+      ...(keyHistory.length > 0 ? {
+        keyLineage: {
+          ...(currentKey ? { current: this.serializeCredentialKeyHistoryRecord(currentKey) } : {}),
+          history: keyHistory.map((record: any) => this.serializeCredentialKeyHistoryRecord(record)),
+        },
+      } : {}),
+    };
+  }
+
+  private serializeCredentialTrustRecord(
+    record: any,
+  ): NonNullable<CredentialEvidenceExport['trustLineage']>['trustRecord'] {
+    return {
+      trustRecordId: String(record.id),
+      status: String(record.status ?? 'UNKNOWN').toLowerCase(),
+      ...(record.accreditationScope !== undefined
+        ? { accreditationScope: String(record.accreditationScope).toLowerCase() }
+        : {}),
+      ...(record.assuranceLevel !== undefined
+        ? { assuranceLevel: String(record.assuranceLevel).toLowerCase() }
+        : {}),
+      allowedCredentialTypes: Array.isArray(record.allowedCredentialTypes) ? record.allowedCredentialTypes : [],
+      allowedJurisdictions: Array.isArray(record.allowedJurisdictions) ? record.allowedJurisdictions : [],
+      ...(record.proposedByIdentityId !== undefined ? { proposedByIdentityId: record.proposedByIdentityId ?? null } : {}),
+      ...(record.accreditedByIdentityId !== undefined ? { accreditedByIdentityId: record.accreditedByIdentityId ?? null } : {}),
+      ...(record.suspensionReason !== undefined ? { suspensionReason: record.suspensionReason ?? null } : {}),
+      ...(record.metadata !== undefined && record.metadata !== null ? { metadata: record.metadata as Record<string, unknown> } : {}),
+      ...(record.accreditedAt ? { accreditedAt: new Date(record.accreditedAt).toISOString() } : {}),
+      ...(record.expiresAt ? { expiresAt: new Date(record.expiresAt).toISOString() } : {}),
+      ...(record.updatedAt ? { updatedAt: new Date(record.updatedAt).toISOString() } : {}),
+    };
+  }
+
+  private serializeCredentialKeyHistoryRecord(
+    record: any,
+  ): NonNullable<NonNullable<CredentialEvidenceExport['trustLineage']>['keyLineage']>['history'][number] {
+    return {
+      keyHistoryId: String(record.id),
+      keyVersion: String(record.keyVersion),
+      keyAlgorithm: String(record.keyAlgorithm),
+      verificationMethod: String(record.verificationMethod),
+      status: String(record.status ?? 'UNKNOWN').toLowerCase(),
+      validFrom: new Date(record.validFrom).toISOString(),
+      ...(record.validUntil ? { validUntil: new Date(record.validUntil).toISOString() } : {}),
+      ...(record.rotatedByIdentityId !== undefined ? { rotatedByIdentityId: record.rotatedByIdentityId ?? null } : {}),
+      ...(record.metadata !== undefined && record.metadata !== null ? { metadata: record.metadata as Record<string, unknown> } : {}),
+      createdAt: new Date(record.createdAt).toISOString(),
     };
   }
 

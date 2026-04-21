@@ -629,6 +629,13 @@ describe('enterprise compliance receipt routes', () => {
         policyName: 'jurisdiction_compliance',
         policyVersion: '2026.04.1',
         directives: ['additional_required_credentials'],
+        governanceOverlay: {
+          packId: 'baseline-core',
+          packVersion: '2026.04',
+          packLabel: 'Baseline Core Governance Pack',
+          directives: ['additional_required_credentials', 'force_pending_review_on_warnings'],
+          appliedDirectives: ['additional_required_credentials'],
+        },
         jurisdictionAdjustments: [
           {
             jurisdiction: 'AE-ADGM',
@@ -668,6 +675,10 @@ describe('enterprise compliance receipt routes', () => {
     expect(response.body.policyTrace).toMatchObject({
       policyDefinitionId: 'policy-7',
       directives: ['additional_required_credentials'],
+      governanceOverlay: expect.objectContaining({
+        packId: 'baseline-core',
+        appliedDirectives: ['additional_required_credentials'],
+      }),
     });
     expect(mockCreateReceipt).toHaveBeenCalledWith(expect.objectContaining({
       organizationId: 'org-1',
@@ -722,6 +733,10 @@ describe('enterprise compliance receipt routes', () => {
         }),
         policyExecutionTrace: expect.objectContaining({
           policyDefinitionId: 'policy-7',
+          governanceOverlay: expect.objectContaining({
+            packId: 'baseline-core',
+            appliedDirectives: ['additional_required_credentials'],
+          }),
         }),
         trustContext: expect.objectContaining({
           enforced: true,
@@ -1128,6 +1143,20 @@ describe('enterprise compliance receipt routes', () => {
         policyName: 'data_breach_notification',
         policyVersion: '2026.04.1',
         directives: ['breach_subject_notification_gate', 'accelerated_breach_deadlines'],
+        governanceOverlay: {
+          packId: 'sovereign-core',
+          packVersion: '2026.04',
+          packLabel: 'Sovereign Core Governance Pack',
+          directives: [
+            'privacy_request_review_gate',
+            'supervisory_consultation_risk_levels',
+            'processor_dpa_requirement',
+            'cross_border_pia_review_gate',
+            'breach_subject_notification_gate',
+            'accelerated_breach_deadlines',
+          ],
+          appliedDirectives: ['breach_subject_notification_gate', 'accelerated_breach_deadlines'],
+        },
         privacyAdjustments: [
           {
             operation: 'breach',
@@ -1161,6 +1190,10 @@ describe('enterprise compliance receipt routes', () => {
     expect(response.body.policyTrace).toMatchObject({
       policyDefinitionId: 'policy-7',
       directives: ['breach_subject_notification_gate', 'accelerated_breach_deadlines'],
+      governanceOverlay: expect.objectContaining({
+        packId: 'sovereign-core',
+        appliedDirectives: ['breach_subject_notification_gate', 'accelerated_breach_deadlines'],
+      }),
     });
     expect(mockCreateReceipt).toHaveBeenCalledWith(expect.objectContaining({
       receiptType: 'breach_notification',
@@ -1168,6 +1201,10 @@ describe('enterprise compliance receipt routes', () => {
       metadata: expect.objectContaining({
         policyExecutionTrace: expect.objectContaining({
           policyDefinitionId: 'policy-7',
+          governanceOverlay: expect.objectContaining({
+            packId: 'sovereign-core',
+            appliedDirectives: ['breach_subject_notification_gate', 'accelerated_breach_deadlines'],
+          }),
         }),
       }),
     }));

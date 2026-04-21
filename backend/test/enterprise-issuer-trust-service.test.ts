@@ -7,6 +7,7 @@ const mockIssuerTrustFindMany = jest.fn();
 const mockIssuerTrustUpdate = jest.fn();
 const mockIssuerKeyHistoryUpdateMany = jest.fn();
 const mockIssuerKeyHistoryCreate = jest.fn();
+const mockIssuerKeyHistoryFindFirst = jest.fn();
 const mockIssuerKeyHistoryFindMany = jest.fn();
 const mockAuditLogCreate = jest.fn();
 
@@ -26,6 +27,7 @@ jest.mock('../src/index', () => ({
     issuerKeyHistory: {
       updateMany: mockIssuerKeyHistoryUpdateMany,
       create: mockIssuerKeyHistoryCreate,
+      findFirst: mockIssuerKeyHistoryFindFirst,
       findMany: mockIssuerKeyHistoryFindMany,
     },
     auditLog: {
@@ -152,6 +154,20 @@ describe('IssuerTrustRegistryService', () => {
         createdAt: new Date('2026-04-21T00:00:00.000Z'),
       },
     ]);
+    mockIssuerKeyHistoryFindFirst.mockResolvedValue({
+      id: 'hist-1',
+      issuerIdentityId: 'issuer-1',
+      issuerDid: 'did:aethelred:issuer:alpha',
+      keyVersion: '2',
+      keyAlgorithm: 'ES256',
+      verificationMethod: 'did:aethelred:issuer:alpha#assertion-key-2',
+      status: 'ACTIVE',
+      rotatedByIdentityId: 'admin-2',
+      metadata: { hsm: 'aws-kms' },
+      validFrom: new Date('2026-04-21T00:00:00.000Z'),
+      validUntil: null,
+      createdAt: new Date('2026-04-21T00:00:00.000Z'),
+    });
   });
 
   it('registers an issuer trust record in pending review', async () => {
@@ -184,6 +200,38 @@ describe('IssuerTrustRegistryService', () => {
     }));
     expect(records).toHaveLength(1);
     expect(records[0].status).toBe('accredited');
+  });
+
+  it('loads a specific issuer trust record for evidence export', async () => {
+    mockIssuerTrustFindFirst.mockResolvedValueOnce({
+      id: 'trust-1',
+      organizationId: 'org-1',
+      issuerIdentityId: 'issuer-1',
+      issuerDid: 'did:aethelred:issuer:alpha',
+      status: 'ACCREDITED',
+      accreditationScope: 'SOVEREIGN',
+      assuranceLevel: 'QUALIFIED',
+      allowedCredentialTypes: ['kyc_enhanced'],
+      allowedJurisdictions: ['UAE'],
+      proposedByIdentityId: 'admin-1',
+      accreditedByIdentityId: 'admin-2',
+      suspensionReason: null,
+      metadata: null,
+      accreditedAt: new Date('2026-04-22T00:00:00.000Z'),
+      expiresAt: null,
+      createdAt: new Date('2026-04-21T00:00:00.000Z'),
+      updatedAt: new Date('2026-04-22T00:00:00.000Z'),
+      issuer: {
+        displayName: 'Alpha Registry Authority',
+      },
+    });
+
+    const record = await issuerTrustRegistryService.getIssuerTrustRecordById('trust-1', 'org-1');
+    expect(record).toMatchObject({
+      id: 'trust-1',
+      status: 'accredited',
+      issuerDisplayName: 'Alpha Registry Authority',
+    });
   });
 
   it('accredits a pending issuer trust record', async () => {
@@ -232,6 +280,40 @@ describe('IssuerTrustRegistryService', () => {
       }),
     }));
     expect(result.status).toBe('active');
+  });
+
+  it('lists issuer key history only when the issuer is trusted by the organization', async () => {
+    mockIssuerTrustFindFirst
+      .mockResolvedValueOnce({ id: 'trust-1' })
+      .mockResolvedValueOnce({ id: 'trust-1' });
+
+    const records = await issuerTrustRegistryService.listIssuerKeyHistory('org-1', 'issuer-1');
+    expect(mockIssuerTrustFindFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: {
+        organizationId: 'org-1',
+        issuerIdentityId: 'issuer-1',
+      },
+      select: { id: true },
+    }));
+    expect(records).toHaveLength(1);
+
+    const record = await issuerTrustRegistryService.getIssuerKeyHistoryRecord('org-1', 'issuer-1', 'hist-1');
+    expect(record).toMatchObject({
+      id: 'hist-1',
+      keyVersion: '2',
+      status: 'active',
+    });
+  });
+
+  it('rejects issuer key history access when the issuer is outside the organization trust registry', async () => {
+    mockIssuerTrustFindFirst.mockResolvedValueOnce(null);
+
+    await expect(
+      issuerTrustRegistryService.listIssuerKeyHistory('org-1', 'issuer-1'),
+    ).rejects.toMatchObject<Partial<IssuerTrustRegistryError>>({
+      code: 'ISSUER_TRUST_SCOPE_INVALID',
+      statusCode: 404,
+    });
   });
 
   it('rejects duplicate active trust records for the same issuer and organization', async () => {

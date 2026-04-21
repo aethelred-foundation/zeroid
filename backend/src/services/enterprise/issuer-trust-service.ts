@@ -194,6 +194,14 @@ export class IssuerTrustRegistryService {
     return records.map((record: any) => this.formatTrustRecord(record));
   }
 
+  async getIssuerTrustRecordById(
+    trustRecordId: string,
+    organizationId: string,
+  ): Promise<IssuerTrustSummary> {
+    const record = await this.getTrustRecord(trustRecordId, organizationId);
+    return this.formatTrustRecord(record);
+  }
+
   async accreditIssuer(
     trustRecordId: string,
     organizationId: string,
@@ -370,7 +378,11 @@ export class IssuerTrustRegistryService {
     return this.formatKeyHistoryRecord(record);
   }
 
-  async listIssuerKeyHistory(issuerIdentityId: string): Promise<IssuerKeyHistorySummary[]> {
+  async listIssuerKeyHistory(
+    organizationId: string,
+    issuerIdentityId: string,
+  ): Promise<IssuerKeyHistorySummary[]> {
+    await this.assertIssuerTrustedForOrganization(organizationId, issuerIdentityId);
     const records = await this.getKeyHistoryModel().findMany({
       where: { issuerIdentityId },
       orderBy: {
@@ -379,6 +391,30 @@ export class IssuerTrustRegistryService {
     });
 
     return records.map((record: any) => this.formatKeyHistoryRecord(record));
+  }
+
+  async getIssuerKeyHistoryRecord(
+    organizationId: string,
+    issuerIdentityId: string,
+    keyHistoryId: string,
+  ): Promise<IssuerKeyHistorySummary> {
+    await this.assertIssuerTrustedForOrganization(organizationId, issuerIdentityId);
+    const record = await this.getKeyHistoryModel().findFirst({
+      where: {
+        id: keyHistoryId,
+        issuerIdentityId,
+      },
+    });
+
+    if (!record) {
+      throw new IssuerTrustRegistryError(
+        'Issuer key history record not found',
+        'ISSUER_KEY_HISTORY_NOT_FOUND',
+        404,
+      );
+    }
+
+    return this.formatKeyHistoryRecord(record);
   }
 
   private async resolveIssuerIdentity(input: RegisterIssuerTrustInput): Promise<{ id: string; did: string; status: string }> {
@@ -437,6 +473,29 @@ export class IssuerTrustRegistryService {
     }
 
     return record;
+  }
+
+  private async assertIssuerTrustedForOrganization(
+    organizationId: string,
+    issuerIdentityId: string,
+  ): Promise<void> {
+    const trustRecord = await this.getTrustModel().findFirst({
+      where: {
+        organizationId,
+        issuerIdentityId,
+      },
+      select: {
+        id: true,
+      },
+    });
+
+    if (!trustRecord) {
+      throw new IssuerTrustRegistryError(
+        'Issuer is not registered in this organization trust registry',
+        'ISSUER_TRUST_SCOPE_INVALID',
+        404,
+      );
+    }
   }
 
   private getTrustModel(): any {

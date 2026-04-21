@@ -2,6 +2,7 @@ const routeRegistry: Record<string, Array<(req: any, res: any, next: (err?: unkn
 
 const mockCreateExceptionRequest = jest.fn();
 const mockListExceptions = jest.fn();
+const mockGetExceptionById = jest.fn();
 const mockApproveException = jest.fn();
 const mockRejectException = jest.fn();
 const mockRevokeException = jest.fn();
@@ -129,6 +130,7 @@ jest.mock('../src/services/enterprise/policy-exception-service', () => ({
   policyExceptionService: {
     createExceptionRequest: mockCreateExceptionRequest,
     listExceptions: mockListExceptions,
+    getExceptionById: mockGetExceptionById,
     approveException: mockApproveException,
     rejectException: mockRejectException,
     revokeException: mockRevokeException,
@@ -220,6 +222,19 @@ describe('enterprise policy exception routes', () => {
       scope: 'subject',
       justification: 'Temporary sovereign override for onboarding',
       conditions: { reviewEveryDays: 30 },
+      approvalMode: 'dual_control',
+      requiredApprovals: 2,
+      requiredApprovalRoles: ['admin', 'compliance_officer'],
+      requiredApprovalClasses: ['risk', 'legal'],
+      requiredApprovalJurisdictions: ['AE-ADGM'],
+      governanceProfileId: 'enterprise.compliance',
+      governanceProfileLabel: 'Enterprise / Compliance',
+      governancePackId: 'baseline-core',
+      governancePackVersion: '2026.04',
+      governancePackLabel: 'Baseline Core Governance Pack',
+      governanceProfileRationale: ['Enterprise high-risk exceptions require dual-control approval.'],
+      approvalCount: 0,
+      approvalTrail: [],
       status: 'pending_review',
       requestedByIdentityId: 'admin-1',
       approvedByIdentityId: null,
@@ -230,6 +245,61 @@ describe('enterprise policy exception routes', () => {
       updatedAt: new Date('2026-04-21T00:00:00.000Z'),
     });
     mockListExceptions.mockResolvedValue([]);
+    mockGetExceptionById.mockResolvedValue({
+      id: 'exception-1',
+      organizationId: 'org-1',
+      policyDefinitionId: 'policy-1',
+      policyName: 'jurisdiction_compliance',
+      policyVersion: '2026.05.2',
+      policyReference: 'zeroid://policy/org/org-1/jurisdiction_compliance@2026.05.2',
+      subjectEntityId: 'entity-1',
+      scope: 'subject',
+      justification: 'Temporary sovereign override for onboarding',
+      conditions: { reviewEveryDays: 30 },
+      approvalMode: 'dual_control',
+      requiredApprovals: 2,
+      requiredApprovalRoles: ['admin', 'compliance_officer'],
+      requiredApprovalClasses: ['risk', 'legal'],
+      requiredApprovalJurisdictions: ['AE-ADGM'],
+      governanceProfileId: 'enterprise.compliance',
+      governanceProfileLabel: 'Enterprise / Compliance',
+      governancePackId: 'baseline-core',
+      governancePackVersion: '2026.04',
+      governancePackLabel: 'Baseline Core Governance Pack',
+      governanceProfileRationale: ['Enterprise high-risk exceptions require dual-control approval.'],
+      approvalCount: 2,
+      approvalTrail: [
+        {
+          identityId: 'admin-1',
+          role: 'admin',
+          approvalClasses: ['admin', 'risk'],
+          matchedApprovalClasses: ['risk'],
+          matchedApprovalJurisdictions: ['AE-ADGM'],
+          action: 'approve',
+          decidedAt: '2026-05-01T00:00:00.000Z',
+        },
+        {
+          identityId: 'compliance-1',
+          role: 'compliance_officer',
+          approvalClasses: ['compliance', 'legal'],
+          matchedApprovalClasses: ['legal'],
+          matchedApprovalJurisdictions: ['AE-ADGM'],
+          action: 'approve',
+          decidedAt: '2026-05-02T00:00:00.000Z',
+        },
+      ],
+      status: 'approved',
+      requestedByIdentityId: 'admin-1',
+      approvedByIdentityId: 'compliance-1',
+      effectiveFrom: new Date('2026-05-01T00:00:00.000Z'),
+      expiresAt: new Date('2026-06-01T00:00:00.000Z'),
+      revokedAt: null,
+      revokedByIdentityId: null,
+      revocationReason: null,
+      metadata: null,
+      createdAt: new Date('2026-04-21T00:00:00.000Z'),
+      updatedAt: new Date('2026-05-02T00:00:00.000Z'),
+    });
     mockApproveException.mockResolvedValue({
       id: 'exception-1',
       organizationId: 'org-1',
@@ -241,6 +311,19 @@ describe('enterprise policy exception routes', () => {
       scope: 'subject',
       justification: 'Temporary sovereign override for onboarding',
       conditions: { reviewEveryDays: 30 },
+      approvalMode: 'dual_control',
+      requiredApprovals: 2,
+      requiredApprovalRoles: ['admin', 'compliance_officer'],
+      requiredApprovalClasses: ['risk', 'legal'],
+      requiredApprovalJurisdictions: ['AE-ADGM'],
+      governanceProfileId: 'enterprise.compliance',
+      governanceProfileLabel: 'Enterprise / Compliance',
+      governancePackId: 'baseline-core',
+      governancePackVersion: '2026.04',
+      governancePackLabel: 'Baseline Core Governance Pack',
+      governanceProfileRationale: ['Enterprise high-risk exceptions require dual-control approval.'],
+      approvalCount: 2,
+      approvalTrail: [],
       status: 'approved',
       requestedByIdentityId: 'admin-1',
       approvedByIdentityId: 'admin-1',
@@ -261,6 +344,19 @@ describe('enterprise policy exception routes', () => {
       scope: 'subject',
       justification: 'Temporary sovereign override for onboarding',
       conditions: { reviewEveryDays: 30 },
+      approvalMode: 'dual_control',
+      requiredApprovals: 2,
+      requiredApprovalRoles: ['admin', 'compliance_officer'],
+      requiredApprovalClasses: ['risk', 'legal'],
+      requiredApprovalJurisdictions: ['AE-ADGM'],
+      governanceProfileId: 'enterprise.compliance',
+      governanceProfileLabel: 'Enterprise / Compliance',
+      governancePackId: 'baseline-core',
+      governancePackVersion: '2026.04',
+      governancePackLabel: 'Baseline Core Governance Pack',
+      governanceProfileRationale: ['Enterprise high-risk exceptions require dual-control approval.'],
+      approvalCount: 1,
+      approvalTrail: [],
       status: 'rejected',
       requestedByIdentityId: 'admin-1',
       approvedByIdentityId: 'admin-1',
@@ -281,6 +377,19 @@ describe('enterprise policy exception routes', () => {
       scope: 'subject',
       justification: 'Temporary sovereign override for onboarding',
       conditions: { reviewEveryDays: 30 },
+      approvalMode: 'dual_control',
+      requiredApprovals: 2,
+      requiredApprovalRoles: ['admin', 'compliance_officer'],
+      requiredApprovalClasses: ['risk', 'legal'],
+      requiredApprovalJurisdictions: ['AE-ADGM'],
+      governanceProfileId: 'enterprise.compliance',
+      governanceProfileLabel: 'Enterprise / Compliance',
+      governancePackId: 'baseline-core',
+      governancePackVersion: '2026.04',
+      governancePackLabel: 'Baseline Core Governance Pack',
+      governanceProfileRationale: ['Enterprise high-risk exceptions require dual-control approval.'],
+      approvalCount: 2,
+      approvalTrail: [],
       status: 'revoked',
       requestedByIdentityId: 'admin-1',
       approvedByIdentityId: 'admin-1',
@@ -317,6 +426,60 @@ describe('enterprise policy exception routes', () => {
     expect(mockListExceptions).toHaveBeenCalledWith('org-1', expect.objectContaining({
       policyName: 'jurisdiction_compliance',
     }));
+  });
+
+  it('exports governed policy exception evidence bundles', async () => {
+    const response = await invokeRoute('GET', '/policies/exceptions/:exceptionId/evidence', {
+      params: { exceptionId: 'exception-1' },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(mockGetExceptionById).toHaveBeenCalledWith('exception-1', 'org-1');
+    expect(response.body.data).toMatchObject({
+      formatVersion: 'zeroid.governance_evidence.v1',
+      artifactType: 'policy_exception',
+      artifact: expect.objectContaining({
+        id: 'exception-1',
+        governancePackId: 'baseline-core',
+      }),
+      governingPolicy: {
+        policyDefinitionId: 'policy-1',
+        policyName: 'jurisdiction_compliance',
+        policyVersion: '2026.05.2',
+        policyReference: 'zeroid://policy/org/org-1/jurisdiction_compliance@2026.05.2',
+      },
+      governanceRegime: {
+        pack: {
+          id: 'baseline-core',
+          version: '2026.04',
+          label: 'Baseline Core Governance Pack',
+        },
+        profile: {
+          id: 'enterprise.compliance',
+          label: 'Enterprise / Compliance',
+          rationale: ['Enterprise high-risk exceptions require dual-control approval.'],
+        },
+        approvalMode: 'dual_control',
+        requiredApprovals: 2,
+        requiredApprovalRoles: ['admin', 'compliance_officer'],
+        requiredApprovalClasses: ['risk', 'legal'],
+        requiredApprovalJurisdictions: ['AE-ADGM'],
+      },
+      approvalProvenance: {
+        requestedByIdentityId: 'admin-1',
+        approvedByIdentityId: 'compliance-1',
+        approvalCount: 2,
+        quorum: expect.objectContaining({
+          satisfied: true,
+          rolesSatisfied: ['admin', 'compliance_officer'],
+          classesSatisfied: ['legal', 'risk'],
+          jurisdictionsSatisfied: ['AE-ADGM'],
+        }),
+      },
+      lifecycle: expect.objectContaining({
+        status: 'approved',
+      }),
+    });
   });
 
   it('returns governance compatibility failures from exception creation', async () => {
