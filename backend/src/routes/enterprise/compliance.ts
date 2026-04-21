@@ -5,6 +5,8 @@ import { jurisdictionEngine, ComplianceEvaluationRequestSchema, CrossBorderAsses
 import { sanctionsScreeningService, ScreeningRequestSchema, BatchScreeningRequestSchema, FalsePositiveDecisionSchema } from '../../services/compliance/sanctions-screening';
 import { regulatoryReportingService, ReportTypeSchema, ExportFormatSchema } from '../../services/compliance/regulatory-reporting';
 import { dataSovereigntyService, CrossBorderTransferSchema, PIASchema, BreachNotificationSchema, ConsentRecordSchema } from '../../services/compliance/data-sovereignty';
+import { requireEnterpriseContext } from '../../middleware/enterprise';
+import { EnterpriseRole } from '../../services/enterprise/organization-service';
 
 // ---------------------------------------------------------------------------
 // Logger
@@ -17,6 +19,9 @@ const logger = createLogger({
 });
 
 const router = Router();
+const ENTERPRISE_COMPLIANCE_READ_ROLES: EnterpriseRole[] = ['viewer', 'operator', 'admin', 'compliance_officer', 'auditor'];
+const ENTERPRISE_COMPLIANCE_WRITE_ROLES: EnterpriseRole[] = ['operator', 'admin', 'compliance_officer'];
+const ENTERPRISE_COMPLIANCE_REVIEW_ROLES: EnterpriseRole[] = ['admin', 'compliance_officer', 'auditor'];
 
 // ---------------------------------------------------------------------------
 // Middleware: validate request body with Zod schema
@@ -40,7 +45,7 @@ function validate<T>(schema: z.ZodSchema<T>) {
 // ---------------------------------------------------------------------------
 // POST /enterprise/compliance/screen — Sanctions screening
 // ---------------------------------------------------------------------------
-router.post('/screen', validate(ScreeningRequestSchema), async (req: Request, res: Response): Promise<void> => {
+router.post('/screen', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_ROLES), validate(ScreeningRequestSchema), async (req: Request, res: Response): Promise<void> => {
   try {
     const result = await sanctionsScreeningService.screenEntity(req.body);
     res.status(200).json({ data: result, message: 'Screening completed' });
@@ -54,7 +59,7 @@ router.post('/screen', validate(ScreeningRequestSchema), async (req: Request, re
 // ---------------------------------------------------------------------------
 // POST /enterprise/compliance/screen/batch — Batch screening
 // ---------------------------------------------------------------------------
-router.post('/screen/batch', validate(BatchScreeningRequestSchema), async (req: Request, res: Response): Promise<void> => {
+router.post('/screen/batch', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_ROLES), validate(BatchScreeningRequestSchema), async (req: Request, res: Response): Promise<void> => {
   try {
     const result = await sanctionsScreeningService.screenBatch(req.body);
     res.status(200).json({ data: result, message: 'Batch screening completed' });
@@ -68,7 +73,7 @@ router.post('/screen/batch', validate(BatchScreeningRequestSchema), async (req: 
 // ---------------------------------------------------------------------------
 // POST /enterprise/compliance/screen/resolve — Resolve false positive
 // ---------------------------------------------------------------------------
-router.post('/screen/resolve', validate(FalsePositiveDecisionSchema), async (req: Request, res: Response): Promise<void> => {
+router.post('/screen/resolve', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_REVIEW_ROLES), validate(FalsePositiveDecisionSchema), async (req: Request, res: Response): Promise<void> => {
   try {
     await sanctionsScreeningService.resolveMatch(req.body);
     res.status(200).json({ message: 'Match resolution recorded' });
@@ -82,7 +87,7 @@ router.post('/screen/resolve', validate(FalsePositiveDecisionSchema), async (req
 // ---------------------------------------------------------------------------
 // GET /enterprise/compliance/status/:entityId — Compliance status
 // ---------------------------------------------------------------------------
-router.get('/status/:entityId', async (req: Request, res: Response): Promise<void> => {
+router.get('/status/:entityId', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_READ_ROLES), async (req: Request, res: Response): Promise<void> => {
   try {
     const { entityId } = req.params;
     const jurisdiction = req.query.jurisdiction as string | undefined;
@@ -115,7 +120,7 @@ router.get('/status/:entityId', async (req: Request, res: Response): Promise<voi
 // ---------------------------------------------------------------------------
 // POST /enterprise/compliance/evaluate — Evaluate compliance for entity
 // ---------------------------------------------------------------------------
-router.post('/evaluate', validate(ComplianceEvaluationRequestSchema), async (req: Request, res: Response): Promise<void> => {
+router.post('/evaluate', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_ROLES), validate(ComplianceEvaluationRequestSchema), async (req: Request, res: Response): Promise<void> => {
   try {
     const results = await jurisdictionEngine.evaluateCompliance(req.body);
     res.status(200).json({ data: results, message: 'Compliance evaluation completed' });
@@ -129,7 +134,7 @@ router.post('/evaluate', validate(ComplianceEvaluationRequestSchema), async (req
 // ---------------------------------------------------------------------------
 // POST /enterprise/compliance/report — Generate regulatory report
 // ---------------------------------------------------------------------------
-router.post('/report', async (req: Request, res: Response): Promise<void> => {
+router.post('/report', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_ROLES), async (req: Request, res: Response): Promise<void> => {
   try {
     const { reportType } = req.body;
     const parsed = ReportTypeSchema.safeParse(reportType);
@@ -182,7 +187,7 @@ router.post('/report', async (req: Request, res: Response): Promise<void> => {
 // ---------------------------------------------------------------------------
 // POST /enterprise/compliance/report/:reportId/submit — Submit report
 // ---------------------------------------------------------------------------
-router.post('/report/:reportId/submit', async (req: Request, res: Response): Promise<void> => {
+router.post('/report/:reportId/submit', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_REVIEW_ROLES), async (req: Request, res: Response): Promise<void> => {
   try {
     const result = await regulatoryReportingService.submitReport(req.params.reportId as string);
     res.status(200).json({ data: result, message: 'Report submitted to regulatory authority' });
@@ -196,7 +201,7 @@ router.post('/report/:reportId/submit', async (req: Request, res: Response): Pro
 // ---------------------------------------------------------------------------
 // GET /enterprise/compliance/report/:reportId/export — Export report
 // ---------------------------------------------------------------------------
-router.get('/report/:reportId/export', async (req: Request, res: Response): Promise<void> => {
+router.get('/report/:reportId/export', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_READ_ROLES), async (req: Request, res: Response): Promise<void> => {
   try {
     const fmt = ExportFormatSchema.safeParse(req.query.format ?? 'json');
     if (!fmt.success) {
@@ -217,7 +222,7 @@ router.get('/report/:reportId/export', async (req: Request, res: Response): Prom
 // ---------------------------------------------------------------------------
 // GET /enterprise/compliance/jurisdictions — List supported jurisdictions
 // ---------------------------------------------------------------------------
-router.get('/jurisdictions', (_req: Request, res: Response): void => {
+router.get('/jurisdictions', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_READ_ROLES), (_req: Request, res: Response): void => {
   try {
     const jurisdictions = jurisdictionEngine.listJurisdictions();
     res.status(200).json({ data: jurisdictions });
@@ -231,7 +236,7 @@ router.get('/jurisdictions', (_req: Request, res: Response): void => {
 // ---------------------------------------------------------------------------
 // POST /enterprise/compliance/cross-border — Cross-border transfer assessment
 // ---------------------------------------------------------------------------
-router.post('/cross-border', async (req: Request, res: Response): Promise<void> => {
+router.post('/cross-border', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_ROLES), async (req: Request, res: Response): Promise<void> => {
   try {
     // Compliance cross-border assessment (jurisdiction level)
     const jurisdictionAssessment = CrossBorderAssessmentSchema.safeParse(req.body);
@@ -264,7 +269,7 @@ router.post('/cross-border', async (req: Request, res: Response): Promise<void> 
 // ---------------------------------------------------------------------------
 // POST /enterprise/compliance/dsar — Data subject access request
 // ---------------------------------------------------------------------------
-router.post('/dsar', async (req: Request, res: Response): Promise<void> => {
+router.post('/dsar', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_ROLES), async (req: Request, res: Response): Promise<void> => {
   try {
     const { requestType } = req.body;
 
@@ -286,7 +291,7 @@ router.post('/dsar', async (req: Request, res: Response): Promise<void> => {
 // ---------------------------------------------------------------------------
 // POST /enterprise/compliance/consent — Record consent
 // ---------------------------------------------------------------------------
-router.post('/consent', validate(ConsentRecordSchema), async (req: Request, res: Response): Promise<void> => {
+router.post('/consent', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_ROLES), validate(ConsentRecordSchema), async (req: Request, res: Response): Promise<void> => {
   try {
     const result = dataSovereigntyService.recordConsent(req.body);
     res.status(201).json({ data: result, message: 'Consent recorded' });
@@ -300,7 +305,7 @@ router.post('/consent', validate(ConsentRecordSchema), async (req: Request, res:
 // ---------------------------------------------------------------------------
 // POST /enterprise/compliance/pia — Privacy impact assessment
 // ---------------------------------------------------------------------------
-router.post('/pia', validate(PIASchema), async (req: Request, res: Response): Promise<void> => {
+router.post('/pia', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_ROLES), validate(PIASchema), async (req: Request, res: Response): Promise<void> => {
   try {
     const result = dataSovereigntyService.conductPIA(req.body);
     res.status(200).json({ data: result, message: 'Privacy impact assessment completed' });
@@ -314,7 +319,7 @@ router.post('/pia', validate(PIASchema), async (req: Request, res: Response): Pr
 // ---------------------------------------------------------------------------
 // POST /enterprise/compliance/breach — Breach notification
 // ---------------------------------------------------------------------------
-router.post('/breach', validate(BreachNotificationSchema), async (req: Request, res: Response): Promise<void> => {
+router.post('/breach', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_REVIEW_ROLES), validate(BreachNotificationSchema), async (req: Request, res: Response): Promise<void> => {
   try {
     const timeline = dataSovereigntyService.initiateBreachNotification(req.body);
     res.status(201).json({ data: timeline, message: 'Breach notification workflow initiated' });

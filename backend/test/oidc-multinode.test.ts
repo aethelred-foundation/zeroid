@@ -23,6 +23,23 @@ process.env.OIDC_SIGNING_PUBLIC_KEY = PUBLIC_PEM;
 process.env.JWT_SECRET = 'test-jwt-secret-that-is-at-least-32-chars!!';
 process.env.NODE_ENV = 'test';
 
+jest.mock('winston', () => ({
+  createLogger: jest.fn(() => ({
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn(),
+  })),
+  format: {
+    combine: jest.fn(),
+    timestamp: jest.fn(),
+    json: jest.fn(),
+  },
+  transports: {
+    Console: jest.fn(),
+  },
+}), { virtual: true });
+
 // ---------------------------------------------------------------------------
 // Functional Redis mock — backed by a shared Map so both OIDCBridge instances
 // see the same data, exactly as they would against a real Redis cluster.
@@ -85,7 +102,6 @@ const redisMock = {
 };
 
 jest.mock('../src/index', () => {
-  const { Registry } = require('prom-client');
   return {
     logger: {
       info: jest.fn(),
@@ -98,7 +114,7 @@ jest.mock('../src/index', () => {
       $connect: jest.fn(),
       $disconnect: jest.fn(),
     },
-    metricsRegistry: new Registry(),
+    metricsRegistry: {},
   };
 });
 
@@ -123,6 +139,26 @@ async function registerTestClient(bridge: OIDCBridge) {
     scopes: ['openid', 'profile', 'email'],
     requirePkce: false,
   });
+}
+
+async function registerOwnedClient(
+  bridge: OIDCBridge,
+  ownership: {
+    organizationId: string;
+    registeredByIdentityId: string;
+    registeredByRole: string;
+  },
+) {
+  return bridge.registerClient({
+    clientName: 'Governed Test Client',
+    redirectUris: [REDIRECT_URI],
+    postLogoutRedirectUris: [LOGOUT_URI],
+    grantTypes: ['authorization_code', 'refresh_token'],
+    responseTypes: ['code'],
+    tokenEndpointAuthMethod: 'client_secret_basic',
+    scopes: ['openid', 'profile', 'email'],
+    requirePkce: false,
+  }, ownership);
 }
 
 /** Generate a PKCE pair (S256). */
@@ -267,7 +303,86 @@ describe('OIDC multi-node correctness', () => {
     expect(tokens.access_token).toBeDefined();
   });
 
-  // 6. Cross-instance logout
+  // 6. Pending lifecycle clients cannot authorize before approval
+  test('pending client registered on A cannot authorize on B before approval', async () => {
+    const client = await registerOwnedClient(bridgeA, {
+      organizationId: 'org-governed',
+      registeredByIdentityId: 'operator-1',
+      registeredByRole: 'operator',
+    });
+
+    expect(client.status).toBe('pending_approval');
+    await expect(authorizeCode(bridgeB, client.clientId, 'user-pending-1')).rejects.toMatchObject({
+      errorCode: 'invalid_client',
+    });
+  });
+
+  // 7. Approval must propagate across nodes
+  test('client approved on A becomes usable on B', async () => {
+    const client = await registerOwnedClient(bridgeA, {
+      organizationId: 'org-governed',
+      registeredByIdentityId: 'operator-2',
+      registeredByRole: 'operator',
+    });
+
+    const approved = await bridgeA.approveClient(client.clientId, 'org-governed', 'admin-1');
+    expect(approved.status).toBe('active');
+    expect(approved.active).toBe(true);
+
+    const { code } = await authorizeCode(bridgeB, client.clientId, 'user-approved-1');
+    const tokens = await bridgeB.exchangeToken({
+      grantType: 'authorization_code',
+      code: code!,
+      redirectUri: REDIRECT_URI,
+      clientId: client.clientId,
+      clientSecret: client.clientSecret,
+    });
+
+    expect(tokens.access_token).toBeDefined();
+    expect(tokens.refresh_token).toBeDefined();
+  });
+
+  // 8. Deactivation must block both new auth and refresh reuse
+  test('deactivated client cannot authorize or refresh on another node', async () => {
+    const client = await registerOwnedClient(bridgeA, {
+      organizationId: 'org-governed',
+      registeredByIdentityId: 'admin-2',
+      registeredByRole: 'admin',
+    });
+
+    const { code } = await authorizeCode(bridgeA, client.clientId, 'user-deactivated-1');
+    const tokens = await bridgeA.exchangeToken({
+      grantType: 'authorization_code',
+      code: code!,
+      redirectUri: REDIRECT_URI,
+      clientId: client.clientId,
+      clientSecret: client.clientSecret,
+    });
+
+    const deactivated = await bridgeA.deactivateClient(
+      client.clientId,
+      'org-governed',
+      'admin-2',
+      'Lifecycle shutdown test',
+    );
+    expect(deactivated.status).toBe('revoked');
+    expect(deactivated.active).toBe(false);
+
+    await expect(authorizeCode(bridgeB, client.clientId, 'user-deactivated-2')).rejects.toMatchObject({
+      errorCode: 'invalid_client',
+    });
+
+    await expect(bridgeB.exchangeToken({
+      grantType: 'refresh_token',
+      refreshToken: tokens.refresh_token,
+      clientId: client.clientId,
+      clientSecret: client.clientSecret,
+    })).rejects.toMatchObject({
+      errorCode: 'invalid_client',
+    });
+  });
+
+  // 9. Cross-instance logout
   test('session created on A, front-channel logout on B terminates it', async () => {
     const client = await registerTestClient(bridgeA);
     const { sessionId, code } = await authorizeCode(bridgeA, client.clientId, 'user-6');
@@ -292,7 +407,7 @@ describe('OIDC multi-node correctness', () => {
     expect(secondLogout.logoutUrls).toContain(LOGOUT_URI);
   });
 
-  // 7. JWKS consistency
+  // 10. JWKS consistency
   test('both instances return identical JWKS documents', () => {
     const jwksA = bridgeA.getJWKS();
     const jwksB = bridgeB.getJWKS();
@@ -306,7 +421,7 @@ describe('OIDC multi-node correctness', () => {
     expect(keyA.kid).toBeDefined();
   });
 
-  // 8. Key ID stability
+  // 11. Key ID stability
   test('both instances derive the same kid for the same signing key', () => {
     const jwksA = bridgeA.getJWKS();
     const jwksB = bridgeB.getJWKS();
@@ -319,7 +434,7 @@ describe('OIDC multi-node correctness', () => {
     expect((kidA as string).length).toBeGreaterThan(0);
   });
 
-  // 9. Session-scoped logout — logging out session A must NOT revoke session B's tokens
+  // 12. Session-scoped logout — logging out session A must NOT revoke session B's tokens
   test('logout of session A does not revoke session B tokens for same user', async () => {
     const client = await registerTestClient(bridgeA);
 

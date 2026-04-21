@@ -23,6 +23,23 @@ process.env.OIDC_SIGNING_PUBLIC_KEY = PUBLIC_PEM;
 process.env.JWT_SECRET = 'test-jwt-secret-that-is-at-least-32-chars!!';
 process.env.NODE_ENV = 'test';
 
+jest.mock('winston', () => ({
+  createLogger: jest.fn(() => ({
+    info: jest.fn(),
+    warn: jest.fn(),
+    error: jest.fn(),
+    debug: jest.fn(),
+  })),
+  format: {
+    combine: jest.fn(),
+    timestamp: jest.fn(),
+    json: jest.fn(),
+  },
+  transports: {
+    Console: jest.fn(),
+  },
+}), { virtual: true });
+
 // ---------------------------------------------------------------------------
 // Functional Redis mock backed by a shared Map
 // ---------------------------------------------------------------------------
@@ -83,7 +100,6 @@ const redisMock = {
 };
 
 jest.mock('../src/index', () => {
-  const { Registry } = require('prom-client');
   return {
     logger: {
       info: jest.fn(),
@@ -96,7 +112,7 @@ jest.mock('../src/index', () => {
       $connect: jest.fn(),
       $disconnect: jest.fn(),
     },
-    metricsRegistry: new Registry(),
+    metricsRegistry: {},
   };
 });
 

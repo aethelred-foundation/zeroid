@@ -613,6 +613,15 @@ export class CredentialService {
       throw new CredentialError('Subject identity is not active', 'CRED_SUBJECT_INACTIVE');
     }
 
+    const trustPolicy = await this.resolveIssuerTrustPolicy(request.issuerId, request.credentialType);
+    if (trustPolicy.enforced && !trustPolicy.accredited) {
+      throw new CredentialError(
+        'Issuer is not accredited to issue this credential type',
+        'CRED_ISSUER_NOT_ACCREDITED_FOR_TYPE',
+        403,
+      );
+    }
+
     // Validate schema if provided
     if (request.schemaId) {
       const schema = await prisma.schemaGovernance.findUnique({ where: { id: request.schemaId } });
@@ -698,9 +707,61 @@ export class CredentialService {
       credentialType: request.credentialType,
       subjectId: request.subjectId,
       keyVersion: this.signer.getKeyVersion(),
+      trustPolicyEnforced: trustPolicy.enforced,
+      issuerTrustRecordId: trustPolicy.trustRecordId ?? null,
     });
 
     return this.formatCredential(credential);
+  }
+
+  private async resolveIssuerTrustPolicy(
+    issuerId: string,
+    credentialType: string,
+  ): Promise<{ enforced: boolean; accredited: boolean; trustRecordId?: string }> {
+    const issuerTrustModel = (prisma as any).issuerTrustRecord;
+    if (!issuerTrustModel?.findMany) {
+      return { enforced: false, accredited: true };
+    }
+
+    const records = await issuerTrustModel.findMany({
+      where: {
+        issuerIdentityId: issuerId,
+      },
+      orderBy: {
+        updatedAt: 'desc',
+      },
+    });
+
+    if (!Array.isArray(records) || records.length === 0) {
+      return { enforced: false, accredited: true };
+    }
+
+    const now = new Date();
+    const activeAccreditations = records.filter((record: any) => (
+      record.status === 'ACCREDITED' &&
+      (!record.expiresAt || new Date(record.expiresAt) > now)
+    ));
+
+    const matchingAccreditation = activeAccreditations.find((record: any) =>
+      Array.isArray(record.allowedCredentialTypes) &&
+      record.allowedCredentialTypes.includes(credentialType),
+    );
+
+    if (matchingAccreditation) {
+      return {
+        enforced: true,
+        accredited: true,
+        trustRecordId: matchingAccreditation.id,
+      };
+    }
+
+    logger.warn('credential_issuer_trust_policy_denied', {
+      issuerId,
+      credentialType,
+      activeAccreditationCount: activeAccreditations.length,
+    });
+
+    return { enforced: true, accredited: false };
   }
 
   // -------------------------------------------------------------------------
@@ -1022,7 +1083,7 @@ export class CredentialService {
     }
 
     const signature = Buffer.from(signatureValue, 'base64url');
-    const publicKey = await this.resolveVerificationPublicKey(proof);
+    const publicKey = await this.resolveVerificationPublicKey(proof, issuerId);
     if (!publicKey) {
       logger.warn('credential_verify_no_public_key', { issuerId });
       return false;
@@ -1110,6 +1171,7 @@ export class CredentialService {
    */
   private async resolveVerificationPublicKey(
     proof: Record<string, unknown>,
+    issuerId: string,
   ): Promise<crypto.KeyObject | null> {
     // -----------------------------------------------------------------------
     // Step 1: Per-issuer key resolution from identity table
@@ -1120,6 +1182,7 @@ export class CredentialService {
         const issuerIdentity = await prisma.identity.findUnique({
           where: { did: issuerDid },
           select: {
+            id: true,
             publicKey: true,
             keyVersion: true,
             keyAlgorithm: true,
@@ -1128,32 +1191,42 @@ export class CredentialService {
         });
 
         if (issuerIdentity && issuerIdentity.publicKey) {
-          // Key-version pinning: if the proof specifies a keyVersion, it must
-          // match the issuer's current keyVersion. This prevents replaying a
-          // credential signed with a rotated-out key.
           const proofKeyVersion = proof?.keyVersion as string | undefined;
-          if (proofKeyVersion && proofKeyVersion !== issuerIdentity.keyVersion) {
-            logger.warn('credential_verify_issuer_key_version_mismatch', {
+          const proofVerificationMethod = proof?.verificationMethod as string | undefined;
+          const matchesCurrentKeyVersion = !proofKeyVersion || proofKeyVersion === issuerIdentity.keyVersion;
+          const matchesCurrentVerificationMethod = (
+            !proofVerificationMethod ||
+            !issuerIdentity.verificationMethod ||
+            proofVerificationMethod === issuerIdentity.verificationMethod
+          );
+
+          if (!matchesCurrentKeyVersion || !matchesCurrentVerificationMethod) {
+            const historicalKey = await this.resolveHistoricalIssuerKey(
+              issuerIdentity.id ?? issuerId,
               issuerDid,
               proofKeyVersion,
-              issuerKeyVersion: issuerIdentity.keyVersion,
-            });
-            return null;
-          }
-
-          // Optional verificationMethod check: if the proof references a
-          // specific verificationMethod id, it must match the issuer's record.
-          const proofVerificationMethod = proof?.verificationMethod as string | undefined;
-          if (
-            proofVerificationMethod &&
-            issuerIdentity.verificationMethod &&
-            proofVerificationMethod !== issuerIdentity.verificationMethod
-          ) {
-            logger.warn('credential_verify_verification_method_mismatch', {
-              issuerDid,
               proofVerificationMethod,
-              issuerVerificationMethod: issuerIdentity.verificationMethod,
-            });
+            );
+            if (historicalKey) {
+              return historicalKey;
+            }
+
+            if (!matchesCurrentKeyVersion) {
+              logger.warn('credential_verify_issuer_key_version_mismatch', {
+                issuerDid,
+                proofKeyVersion,
+                issuerKeyVersion: issuerIdentity.keyVersion,
+              });
+            }
+
+            if (!matchesCurrentVerificationMethod) {
+              logger.warn('credential_verify_verification_method_mismatch', {
+                issuerDid,
+                proofVerificationMethod,
+                issuerVerificationMethod: issuerIdentity.verificationMethod,
+              });
+            }
+
             return null;
           }
 
@@ -1236,6 +1309,45 @@ export class CredentialService {
     }
 
     return this.parseVerificationPublicKey(rawKey);
+  }
+
+  private async resolveHistoricalIssuerKey(
+    issuerIdentityId: string,
+    issuerDid: string,
+    proofKeyVersion?: string,
+    proofVerificationMethod?: string,
+  ): Promise<crypto.KeyObject | null> {
+    const issuerKeyHistoryModel = (prisma as any).issuerKeyHistory;
+    if (!issuerKeyHistoryModel?.findFirst) {
+      return null;
+    }
+
+    const historicalRecord = await issuerKeyHistoryModel.findFirst({
+      where: {
+        issuerIdentityId,
+        issuerDid,
+        ...(proofKeyVersion ? { keyVersion: proofKeyVersion } : {}),
+        ...(proofVerificationMethod ? { verificationMethod: proofVerificationMethod } : {}),
+        status: { in: ['ACTIVE', 'RETIRED'] },
+      },
+      orderBy: {
+        validFrom: 'desc',
+      },
+    });
+
+    if (!historicalRecord?.publicKey) {
+      return null;
+    }
+
+    logger.info('credential_verify_issuer_historical_key_resolved', {
+      issuerDid,
+      keyVersion: historicalRecord.keyVersion,
+      verificationMethod: historicalRecord.verificationMethod,
+      status: historicalRecord.status,
+      source: 'issuer_key_history',
+    });
+
+    return this.parseVerificationPublicKey(historicalRecord.publicKey);
   }
 
   private parseVerificationPublicKey(rawKey: string): crypto.KeyObject {

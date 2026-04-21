@@ -21,6 +21,17 @@ process.env.CREDENTIAL_SIGNING_PUBLIC_KEY = testKeyPair.publicKey;
 process.env.KMS_PROVIDER = 'local';
 process.env.ALLOW_LOCAL_CREDENTIAL_SIGNING = 'true';
 
+jest.mock('prom-client', () => ({
+  Registry: jest.fn(() => ({})),
+  Counter: jest.fn(() => ({ inc: jest.fn() })),
+}), { virtual: true });
+
+jest.mock('@aws-sdk/client-kms', () => ({
+  KMSClient: jest.fn(() => ({ send: jest.fn() })),
+  SignCommand: jest.fn(),
+  GetPublicKeyCommand: jest.fn(),
+}), { virtual: true });
+
 // ---------------------------------------------------------------------------
 // Mock ../src/index exports (prisma, redis, logger, metricsRegistry)
 // ---------------------------------------------------------------------------
@@ -32,6 +43,7 @@ const mockLogger = {
 };
 
 const mockIdentityFindUnique = jest.fn();
+const mockIssuerKeyHistoryFindFirst = jest.fn();
 
 jest.mock('../src/index', () => {
   const { Registry, Counter } = require('prom-client');
@@ -46,6 +58,9 @@ jest.mock('../src/index', () => {
     prisma: {
       identity: {
         findUnique: mockIdentityFindUnique,
+      },
+      issuerKeyHistory: {
+        findFirst: mockIssuerKeyHistoryFindFirst,
       },
       credential: {
         findFirst: jest.fn().mockResolvedValue(null),
@@ -152,6 +167,7 @@ describe('CRED-01: Issuer-scoped credential verification', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    mockIssuerKeyHistoryFindFirst.mockResolvedValue(null);
     // Default: identity lookup returns matching DID with per-issuer key material
     mockIdentityFindUnique.mockResolvedValue({
       id: ISSUER_ID,
@@ -416,7 +432,75 @@ describe('CRED-01: Issuer-scoped credential verification', () => {
   });
 
   // -------------------------------------------------------------------------
-  // 8. Production blocks platform fallback when issuerDid present
+  // 8. Historical issuer key version can verify rotated credentials
+  // -------------------------------------------------------------------------
+  it('should resolve a historical issuer key when the proof references a rotated key version', async () => {
+    const legacyKeyPair = crypto.generateKeyPairSync('ec', {
+      namedCurve: 'P-256',
+      publicKeyEncoding: { type: 'spki', format: 'pem' },
+      privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+    });
+
+    mockIdentityFindUnique.mockResolvedValue({
+      id: ISSUER_ID,
+      did: ISSUER_DID_A,
+      publicKey: testKeyPair.publicKey,
+      keyVersion: '2',
+      keyAlgorithm: 'ES256',
+      verificationMethod: 'did:aethelred:issuer:alpha#assertion-key-2',
+      status: 'ACTIVE',
+    });
+
+    mockIssuerKeyHistoryFindFirst.mockResolvedValue({
+      id: 'hist-1',
+      issuerIdentityId: ISSUER_ID,
+      issuerDid: ISSUER_DID_A,
+      keyVersion: '1',
+      keyAlgorithm: 'ES256',
+      publicKey: legacyKeyPair.publicKey,
+      verificationMethod: 'did:aethelred:issuer:alpha#assertion-key-1',
+      status: 'RETIRED',
+      validFrom: new Date('2026-01-01T00:00:00.000Z'),
+    });
+
+    const claimsHash = await hashClaims(CLAIMS);
+    const legacyMessage = crypto.createHash('sha256')
+      .update(`${ISSUER_DID_A}:${claimsHash}`)
+      .digest();
+    const legacySignature = crypto.sign(
+      'sha256',
+      legacyMessage,
+      crypto.createPrivateKey(legacyKeyPair.privateKey),
+    ).toString('base64url');
+
+    const proof = buildProof({
+      issuerDid: ISSUER_DID_A,
+      keyVersion: '1',
+      verificationMethod: 'did:aethelred:issuer:alpha#assertion-key-1',
+      signatureValue: legacySignature,
+    });
+
+    const result = await (service as any).verifyProofSignature(claimsHash, ISSUER_ID, proof);
+    expect(result).toBe(true);
+    expect(mockIssuerKeyHistoryFindFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        issuerIdentityId: ISSUER_ID,
+        keyVersion: '1',
+        verificationMethod: 'did:aethelred:issuer:alpha#assertion-key-1',
+      }),
+    }));
+    expect(mockLogger.info).toHaveBeenCalledWith(
+      'credential_verify_issuer_historical_key_resolved',
+      expect.objectContaining({
+        issuerDid: ISSUER_DID_A,
+        keyVersion: '1',
+        source: 'issuer_key_history',
+      }),
+    );
+  });
+
+  // -------------------------------------------------------------------------
+  // 9. Production blocks platform fallback when issuerDid present
   // -------------------------------------------------------------------------
   it('should block platform key fallback in production when issuerDid is present but identity has no key', async () => {
     jest.resetModules();

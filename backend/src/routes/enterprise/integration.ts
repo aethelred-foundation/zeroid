@@ -3,10 +3,23 @@ import { z } from 'zod';
 import { createLogger, format, transports } from 'winston';
 import { webhookSystem, WebhookRegistrationSchema, WebhookUpdateSchema } from '../../services/enterprise/webhook-system';
 import { apiGateway, CreateAPIKeySchema } from '../../services/enterprise/api-gateway';
-import { oidcBridge, OIDCClientRegistrationSchema } from '../../services/enterprise/oidc-bridge';
+import { oidcBridge, OIDCClientRegistrationSchema, RegisteredClient } from '../../services/enterprise/oidc-bridge';
 import { slaMonitor, SLADefinitionSchema } from '../../services/enterprise/sla-monitor';
 import { AuthenticatedRequest } from '../../middleware/auth';
+import { EnterpriseAuthenticatedRequest, requireEnterpriseContext } from '../../middleware/enterprise';
 import { createRateLimiter } from '../../middleware/rateLimit';
+import {
+  AddOrganizationMemberSchema,
+  CreateOrganizationSchema,
+  enterpriseOrganizationService,
+  EnterpriseRole,
+} from '../../services/enterprise/organization-service';
+import {
+  issuerTrustRegistryService,
+  RecordIssuerKeySchema,
+  RegisterIssuerTrustSchema,
+} from '../../services/enterprise/issuer-trust-service';
+import { prisma } from '../../index';
 
 // ---------------------------------------------------------------------------
 // Logger
@@ -51,6 +64,7 @@ oidcPublicRouter.use(oidcPublicRouteLimiter);
 // internal services might otherwise trust.
 // ---------------------------------------------------------------------------
 const SPOOFABLE_HEADERS = [
+  'x-zeroid-client-id',
   'x-zeroid-subject-id',
   'x-zeroid-identity-id',
   'x-zeroid-did',
@@ -99,8 +113,17 @@ function validate<T>(schema: z.ZodSchema<T>) {
 // Helper: extract client ID from request (API key or session)
 // ---------------------------------------------------------------------------
 function getClientId(req: Request): string {
-  return (req.headers['x-zeroid-client-id'] as string) ?? (req as any).clientId ?? 'anonymous';
+  const enterpriseReq = req as EnterpriseAuthenticatedRequest;
+  return enterpriseReq.enterpriseContext?.organizationId
+    ?? (req.headers['x-zeroid-client-id'] as string)
+    ?? (req as any).clientId
+    ?? 'anonymous';
 }
+
+const ENTERPRISE_READ_ROLES: EnterpriseRole[] = ['viewer', 'operator', 'admin', 'compliance_officer', 'auditor'];
+const ENTERPRISE_OPERATOR_ROLES: EnterpriseRole[] = ['operator', 'admin'];
+const ENTERPRISE_ADMIN_ROLES: EnterpriseRole[] = ['admin'];
+const ENTERPRISE_AUDIT_ROLES: EnterpriseRole[] = ['operator', 'admin', 'auditor', 'compliance_officer'];
 
 function buildTrustedOIDCClaims(subject: {
   displayName: string | null;
@@ -154,6 +177,161 @@ function buildTrustedOIDCClaims(subject: {
   return claims;
 }
 
+function serializeOIDCClient(client: RegisteredClient): Record<string, unknown> {
+  return {
+    clientId: client.clientId,
+    clientName: client.registration.clientName,
+    redirectUris: client.registration.redirectUris,
+    postLogoutRedirectUris: client.registration.postLogoutRedirectUris,
+    grantTypes: client.registration.grantTypes,
+    responseTypes: client.registration.responseTypes,
+    tokenEndpointAuthMethod: client.registration.tokenEndpointAuthMethod,
+    scopes: client.registration.scopes,
+    requirePkce: client.registration.requirePkce,
+    createdAt: client.createdAt,
+    active: client.active,
+    status: client.status ?? (client.active ? 'active' : 'pending_approval'),
+    organizationId: client.organizationId,
+    registeredByIdentityId: client.registeredByIdentityId,
+    registeredByRole: client.registeredByRole,
+    approvedAt: client.approvedAt,
+    approvedByIdentityId: client.approvedByIdentityId,
+    deactivatedAt: client.deactivatedAt,
+    deactivatedByIdentityId: client.deactivatedByIdentityId,
+    deactivationReason: client.deactivationReason,
+  };
+}
+
+function serializeIssuerTrustRecord(record: {
+  id: string;
+  organizationId: string;
+  issuerIdentityId: string;
+  issuerDid: string;
+  issuerDisplayName: string | null;
+  status: string;
+  accreditationScope: string;
+  assuranceLevel: string;
+  allowedCredentialTypes: string[];
+  allowedJurisdictions: string[];
+  proposedByIdentityId: string;
+  accreditedByIdentityId: string | null;
+  suspensionReason: string | null;
+  metadata: Record<string, unknown> | null;
+  accreditedAt: Date | null;
+  expiresAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+}): Record<string, unknown> {
+  return {
+    ...record,
+    accreditedAt: record.accreditedAt?.toISOString() ?? null,
+    expiresAt: record.expiresAt?.toISOString() ?? null,
+    createdAt: record.createdAt.toISOString(),
+    updatedAt: record.updatedAt.toISOString(),
+  };
+}
+
+function serializeIssuerKeyHistory(record: {
+  id: string;
+  issuerIdentityId: string;
+  issuerDid: string;
+  keyVersion: string;
+  keyAlgorithm: string;
+  verificationMethod: string;
+  status: string;
+  validFrom: Date;
+  validUntil: Date | null;
+  rotatedByIdentityId: string | null;
+  metadata: Record<string, unknown> | null;
+  createdAt: Date;
+}): Record<string, unknown> {
+  return {
+    ...record,
+    validFrom: record.validFrom.toISOString(),
+    validUntil: record.validUntil?.toISOString() ?? null,
+    createdAt: record.createdAt.toISOString(),
+  };
+}
+
+// ==========================================================================
+// ORGANIZATION ROUTES
+// ==========================================================================
+
+router.post('/organizations', validate(CreateOrganizationSchema), async (req: Request, res: Response): Promise<void> => {
+  try {
+    const authReq = req as AuthenticatedRequest;
+    const identityId = authReq.identity?.id;
+    if (!identityId) {
+      res.status(401).json({ error: 'Authenticated identity required', code: 'ENTERPRISE_AUTH_REQUIRED' });
+      return;
+    }
+
+    const result = await enterpriseOrganizationService.createOrganization(identityId, req.body);
+    res.status(201).json({
+      data: result,
+      message: 'Organization created and caller added as admin',
+    });
+  } catch (err) {
+    const error = err as Error & { statusCode?: number; code?: string };
+    logger.error('organization_create_error', { error: error.message });
+    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'ENTERPRISE_ORG_CREATE_ERROR' });
+  }
+});
+
+router.get('/organizations', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const authReq = req as AuthenticatedRequest;
+    const identityId = authReq.identity?.id;
+    if (!identityId) {
+      res.status(401).json({ error: 'Authenticated identity required', code: 'ENTERPRISE_AUTH_REQUIRED' });
+      return;
+    }
+
+    const organizations = await enterpriseOrganizationService.listOrganizations(identityId);
+    res.status(200).json({ data: organizations });
+  } catch (err) {
+    const error = err as Error & { statusCode?: number; code?: string };
+    logger.error('organization_list_error', { error: error.message });
+    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'ENTERPRISE_ORG_LIST_ERROR' });
+  }
+});
+
+router.get('/organizations/context', requireEnterpriseContext(ENTERPRISE_READ_ROLES), async (req: Request, res: Response): Promise<void> => {
+  const enterpriseReq = req as EnterpriseAuthenticatedRequest;
+  res.status(200).json({ data: enterpriseReq.enterpriseContext });
+});
+
+router.post(
+  '/organizations/:id/members',
+  requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES, (req) => req.params.id as string),
+  validate(AddOrganizationMemberSchema),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const member = await enterpriseOrganizationService.addMember(req.params.id as string, req.body);
+      res.status(201).json({ data: member, message: 'Organization member added' });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('organization_member_add_error', { error: error.message, organizationId: req.params.id });
+      res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'ENTERPRISE_MEMBER_ADD_ERROR' });
+    }
+  },
+);
+
+router.get(
+  '/organizations/:id/members',
+  requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES, (req) => req.params.id as string),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const members = await enterpriseOrganizationService.listMembers(req.params.id as string);
+      res.status(200).json({ data: members });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('organization_member_list_error', { error: error.message, organizationId: req.params.id });
+      res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'ENTERPRISE_MEMBER_LIST_ERROR' });
+    }
+  },
+);
+
 // ==========================================================================
 // WEBHOOK ROUTES
 // ==========================================================================
@@ -161,10 +339,10 @@ function buildTrustedOIDCClaims(subject: {
 // ---------------------------------------------------------------------------
 // POST /enterprise/webhooks — Register webhook
 // ---------------------------------------------------------------------------
-router.post('/webhooks', validate(WebhookRegistrationSchema), async (req: Request, res: Response): Promise<void> => {
+router.post('/webhooks', requireEnterpriseContext(ENTERPRISE_OPERATOR_ROLES), validate(WebhookRegistrationSchema), async (req: Request, res: Response): Promise<void> => {
   try {
     const clientId = getClientId(req);
-    const webhook = webhookSystem.register(clientId, req.body);
+    const webhook = await webhookSystem.register(clientId, req.body);
     res.status(201).json({
       data: {
         id: webhook.id,
@@ -186,10 +364,10 @@ router.post('/webhooks', validate(WebhookRegistrationSchema), async (req: Reques
 // ---------------------------------------------------------------------------
 // GET /enterprise/webhooks — List webhooks
 // ---------------------------------------------------------------------------
-router.get('/webhooks', async (req: Request, res: Response): Promise<void> => {
+router.get('/webhooks', requireEnterpriseContext(ENTERPRISE_READ_ROLES), async (req: Request, res: Response): Promise<void> => {
   try {
     const clientId = getClientId(req);
-    const webhooks = webhookSystem.list(clientId);
+    const webhooks = await webhookSystem.list(clientId);
     res.status(200).json({
       data: webhooks.map((w) => ({
         id: w.id,
@@ -211,10 +389,10 @@ router.get('/webhooks', async (req: Request, res: Response): Promise<void> => {
 // ---------------------------------------------------------------------------
 // PATCH /enterprise/webhooks/:id — Update webhook
 // ---------------------------------------------------------------------------
-router.patch('/webhooks/:id', validate(WebhookUpdateSchema), async (req: Request, res: Response): Promise<void> => {
+router.patch('/webhooks/:id', requireEnterpriseContext(ENTERPRISE_OPERATOR_ROLES), validate(WebhookUpdateSchema), async (req: Request, res: Response): Promise<void> => {
   try {
     const clientId = getClientId(req);
-    const webhook = webhookSystem.update(req.params.id as string, clientId, req.body);
+    const webhook = await webhookSystem.update(req.params.id as string, clientId, req.body);
     res.status(200).json({ data: webhook, message: 'Webhook updated' });
   } catch (err) {
     const error = err as Error & { statusCode?: number; code?: string };
@@ -226,10 +404,10 @@ router.patch('/webhooks/:id', validate(WebhookUpdateSchema), async (req: Request
 // ---------------------------------------------------------------------------
 // DELETE /enterprise/webhooks/:id — Remove webhook
 // ---------------------------------------------------------------------------
-router.delete('/webhooks/:id', async (req: Request, res: Response): Promise<void> => {
+router.delete('/webhooks/:id', requireEnterpriseContext(ENTERPRISE_OPERATOR_ROLES), async (req: Request, res: Response): Promise<void> => {
   try {
     const clientId = getClientId(req);
-    webhookSystem.remove(req.params.id as string, clientId);
+    await webhookSystem.remove(req.params.id as string, clientId);
     res.status(204).send();
   } catch (err) {
     const error = err as Error & { statusCode?: number; code?: string };
@@ -241,7 +419,7 @@ router.delete('/webhooks/:id', async (req: Request, res: Response): Promise<void
 // ---------------------------------------------------------------------------
 // GET /enterprise/webhooks/:id/deliveries — Get delivery logs
 // ---------------------------------------------------------------------------
-router.get('/webhooks/:id/deliveries', async (req: Request, res: Response): Promise<void> => {
+router.get('/webhooks/:id/deliveries', requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES), async (req: Request, res: Response): Promise<void> => {
   try {
     const limit = parseInt(req.query.limit as string, 10) || 50;
     const deliveries = webhookSystem.getDeliveries(req.params.id as string, limit);
@@ -256,7 +434,7 @@ router.get('/webhooks/:id/deliveries', async (req: Request, res: Response): Prom
 // ---------------------------------------------------------------------------
 // POST /enterprise/webhooks/:id/replay — Replay events
 // ---------------------------------------------------------------------------
-router.post('/webhooks/:id/replay', async (req: Request, res: Response): Promise<void> => {
+router.post('/webhooks/:id/replay', requireEnterpriseContext(ENTERPRISE_OPERATOR_ROLES), async (req: Request, res: Response): Promise<void> => {
   try {
     const { since, until } = req.body;
     if (!since) {
@@ -279,10 +457,10 @@ router.post('/webhooks/:id/replay', async (req: Request, res: Response): Promise
 // ---------------------------------------------------------------------------
 // POST /enterprise/api-keys — Generate API key
 // ---------------------------------------------------------------------------
-router.post('/api-keys', validate(CreateAPIKeySchema), async (req: Request, res: Response): Promise<void> => {
+router.post('/api-keys', requireEnterpriseContext(ENTERPRISE_OPERATOR_ROLES), validate(CreateAPIKeySchema), async (req: Request, res: Response): Promise<void> => {
   try {
     const clientId = getClientId(req);
-    const result = apiGateway.createAPIKey(clientId, req.body);
+    const result = await apiGateway.createAPIKey(clientId, req.body);
     res.status(201).json({
       data: result,
       message: 'API key created. Store the key securely — it will not be shown again.',
@@ -297,10 +475,10 @@ router.post('/api-keys', validate(CreateAPIKeySchema), async (req: Request, res:
 // ---------------------------------------------------------------------------
 // GET /enterprise/api-keys — List API keys
 // ---------------------------------------------------------------------------
-router.get('/api-keys', async (req: Request, res: Response): Promise<void> => {
+router.get('/api-keys', requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES), async (req: Request, res: Response): Promise<void> => {
   try {
     const clientId = getClientId(req);
-    const keys = apiGateway.listAPIKeys(clientId);
+    const keys = await apiGateway.listAPIKeys(clientId);
     res.status(200).json({ data: keys });
   } catch (err) {
     const error = err as Error;
@@ -312,11 +490,11 @@ router.get('/api-keys', async (req: Request, res: Response): Promise<void> => {
 // ---------------------------------------------------------------------------
 // DELETE /enterprise/api-keys/:id — Revoke API key
 // ---------------------------------------------------------------------------
-router.delete('/api-keys/:id', async (req: Request, res: Response): Promise<void> => {
+router.delete('/api-keys/:id', requireEnterpriseContext(ENTERPRISE_OPERATOR_ROLES), async (req: Request, res: Response): Promise<void> => {
   try {
     const clientId = getClientId(req);
     const reason = (req.body?.reason as string) ?? 'Revoked by client';
-    apiGateway.revokeAPIKey(req.params.id as string, clientId, reason);
+    await apiGateway.revokeAPIKey(req.params.id as string, clientId, reason);
     res.status(200).json({ message: 'API key revoked' });
   } catch (err) {
     const error = err as Error & { statusCode?: number; code?: string };
@@ -328,9 +506,9 @@ router.delete('/api-keys/:id', async (req: Request, res: Response): Promise<void
 // ---------------------------------------------------------------------------
 // GET /enterprise/api-keys/:id/quota — Get quota status
 // ---------------------------------------------------------------------------
-router.get('/api-keys/:id/quota', async (req: Request, res: Response): Promise<void> => {
+router.get('/api-keys/:id/quota', requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES), async (req: Request, res: Response): Promise<void> => {
   try {
-    const quota = apiGateway.getQuotaStatus(req.params.id as string);
+    const quota = await apiGateway.getQuotaStatus(req.params.id as string);
     res.status(200).json({ data: quota });
   } catch (err) {
     const error = err as Error & { statusCode?: number; code?: string };
@@ -373,6 +551,121 @@ router.post('/oauth2/token', async (req: Request, res: Response): Promise<void> 
 // OIDC ROUTES
 // ==========================================================================
 
+// ==========================================================================
+// ISSUER TRUST REGISTRY ROUTES
+// ==========================================================================
+
+router.post('/trust/issuers', requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES), validate(RegisterIssuerTrustSchema), async (req: Request, res: Response): Promise<void> => {
+  try {
+    const enterpriseReq = req as EnterpriseAuthenticatedRequest;
+    const organizationId = enterpriseReq.enterpriseContext?.organizationId;
+    const actorIdentityId = enterpriseReq.identity?.id;
+    if (!organizationId || !actorIdentityId) {
+      res.status(401).json({ error: 'Authenticated enterprise admin required', code: 'ENTERPRISE_AUTH_REQUIRED' });
+      return;
+    }
+
+    const record = await issuerTrustRegistryService.registerIssuerTrust(organizationId, actorIdentityId, req.body);
+    res.status(201).json({
+      data: serializeIssuerTrustRecord(record),
+      message: 'Issuer trust record created and pending review',
+    });
+  } catch (err) {
+    const error = err as Error & { statusCode?: number; code?: string };
+    logger.error('issuer_trust_register_error', { error: error.message });
+    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'ISSUER_TRUST_REGISTER_ERROR' });
+  }
+});
+
+router.get('/trust/issuers', requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES), async (req: Request, res: Response): Promise<void> => {
+  try {
+    const enterpriseReq = req as EnterpriseAuthenticatedRequest;
+    const organizationId = enterpriseReq.enterpriseContext?.organizationId;
+    if (!organizationId) {
+      res.status(401).json({ error: 'Authenticated enterprise context required', code: 'ENTERPRISE_AUTH_REQUIRED' });
+      return;
+    }
+
+    const status = typeof req.query.status === 'string' ? req.query.status : undefined;
+    const records = await issuerTrustRegistryService.listIssuerTrustRecords(organizationId, status as any);
+    res.status(200).json({ data: records.map(serializeIssuerTrustRecord) });
+  } catch (err) {
+    const error = err as Error & { statusCode?: number; code?: string };
+    logger.error('issuer_trust_list_error', { error: error.message });
+    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'ISSUER_TRUST_LIST_ERROR' });
+  }
+});
+
+router.post('/trust/issuers/:trustId/approve', requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES), async (req: Request, res: Response): Promise<void> => {
+  try {
+    const enterpriseReq = req as EnterpriseAuthenticatedRequest;
+    const organizationId = enterpriseReq.enterpriseContext?.organizationId;
+    const actorIdentityId = enterpriseReq.identity?.id;
+    if (!organizationId || !actorIdentityId) {
+      res.status(401).json({ error: 'Authenticated enterprise admin required', code: 'ENTERPRISE_AUTH_REQUIRED' });
+      return;
+    }
+
+    const record = await issuerTrustRegistryService.accreditIssuer(req.params.trustId as string, organizationId, actorIdentityId);
+    res.status(200).json({ data: serializeIssuerTrustRecord(record), message: 'Issuer accredited' });
+  } catch (err) {
+    const error = err as Error & { statusCode?: number; code?: string };
+    logger.error('issuer_trust_approve_error', { error: error.message, trustId: req.params.trustId });
+    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'ISSUER_TRUST_APPROVE_ERROR' });
+  }
+});
+
+router.post('/trust/issuers/:trustId/suspend', requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES), async (req: Request, res: Response): Promise<void> => {
+  try {
+    const enterpriseReq = req as EnterpriseAuthenticatedRequest;
+    const organizationId = enterpriseReq.enterpriseContext?.organizationId;
+    const actorIdentityId = enterpriseReq.identity?.id;
+    if (!organizationId || !actorIdentityId) {
+      res.status(401).json({ error: 'Authenticated enterprise admin required', code: 'ENTERPRISE_AUTH_REQUIRED' });
+      return;
+    }
+
+    const reason = typeof req.body?.reason === 'string' && req.body.reason.length > 0
+      ? req.body.reason
+      : 'Suspended by enterprise administrator';
+    const record = await issuerTrustRegistryService.suspendIssuer(req.params.trustId as string, organizationId, actorIdentityId, reason);
+    res.status(200).json({ data: serializeIssuerTrustRecord(record), message: 'Issuer trust suspended' });
+  } catch (err) {
+    const error = err as Error & { statusCode?: number; code?: string };
+    logger.error('issuer_trust_suspend_error', { error: error.message, trustId: req.params.trustId });
+    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'ISSUER_TRUST_SUSPEND_ERROR' });
+  }
+});
+
+router.post('/trust/issuers/:issuerIdentityId/keys', requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES), validate(RecordIssuerKeySchema), async (req: Request, res: Response): Promise<void> => {
+  try {
+    const enterpriseReq = req as EnterpriseAuthenticatedRequest;
+    const actorIdentityId = enterpriseReq.identity?.id;
+    if (!actorIdentityId) {
+      res.status(401).json({ error: 'Authenticated enterprise admin required', code: 'ENTERPRISE_AUTH_REQUIRED' });
+      return;
+    }
+
+    const record = await issuerTrustRegistryService.recordIssuerKeyVersion(req.params.issuerIdentityId as string, actorIdentityId, req.body);
+    res.status(201).json({ data: serializeIssuerKeyHistory(record), message: 'Issuer key version recorded' });
+  } catch (err) {
+    const error = err as Error & { statusCode?: number; code?: string };
+    logger.error('issuer_key_record_error', { error: error.message, issuerIdentityId: req.params.issuerIdentityId });
+    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'ISSUER_KEY_RECORD_ERROR' });
+  }
+});
+
+router.get('/trust/issuers/:issuerIdentityId/keys', requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES), async (req: Request, res: Response): Promise<void> => {
+  try {
+    const records = await issuerTrustRegistryService.listIssuerKeyHistory(req.params.issuerIdentityId as string);
+    res.status(200).json({ data: records.map(serializeIssuerKeyHistory) });
+  } catch (err) {
+    const error = err as Error & { statusCode?: number; code?: string };
+    logger.error('issuer_key_list_error', { error: error.message, issuerIdentityId: req.params.issuerIdentityId });
+    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'ISSUER_KEY_LIST_ERROR' });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // GET /enterprise/oidc/.well-known/openid-configuration  [PUBLIC]
 // ---------------------------------------------------------------------------
@@ -396,14 +689,97 @@ oidcPublicRouter.get('/oidc/.well-known/jwks.json', (_req: Request, res: Respons
 // ---------------------------------------------------------------------------
 // POST /enterprise/oidc/register — Dynamic client registration
 // ---------------------------------------------------------------------------
-router.post('/oidc/register', validate(OIDCClientRegistrationSchema), async (req: Request, res: Response): Promise<void> => {
+router.post('/oidc/register', requireEnterpriseContext(ENTERPRISE_OPERATOR_ROLES), validate(OIDCClientRegistrationSchema), async (req: Request, res: Response): Promise<void> => {
   try {
-    const result = await oidcBridge.registerClient(req.body);
-    res.status(201).json({ data: result, message: 'OIDC client registered' });
+    const enterpriseReq = req as EnterpriseAuthenticatedRequest;
+    const identityId = enterpriseReq.identity?.id;
+    const enterpriseContext = enterpriseReq.enterpriseContext;
+    if (!identityId || !enterpriseContext) {
+      res.status(401).json({ error: 'Authenticated enterprise operator required', code: 'ENTERPRISE_AUTH_REQUIRED' });
+      return;
+    }
+
+    const result = await oidcBridge.registerClient(req.body, {
+      organizationId: enterpriseContext.organizationId,
+      registeredByIdentityId: identityId,
+      registeredByRole: enterpriseContext.role,
+    });
+    const message = result.approvalRequired
+      ? 'OIDC client registered and pending admin approval'
+      : 'OIDC client registered and activated';
+    res.status(201).json({ data: result, message });
   } catch (err) {
     const error = err as Error & { statusCode?: number; code?: string };
     logger.error('oidc_register_error', { error: error.message });
     res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'OIDC_REGISTER_ERROR' });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /enterprise/oidc/clients — List organization-owned OIDC clients
+// ---------------------------------------------------------------------------
+router.get('/oidc/clients', requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES), async (req: Request, res: Response): Promise<void> => {
+  try {
+    const enterpriseReq = req as EnterpriseAuthenticatedRequest;
+    const organizationId = enterpriseReq.enterpriseContext?.organizationId;
+    if (!organizationId) {
+      res.status(401).json({ error: 'Authenticated enterprise context required', code: 'ENTERPRISE_AUTH_REQUIRED' });
+      return;
+    }
+
+    const clients = await oidcBridge.listClientsForOrganization(organizationId);
+    res.status(200).json({ data: clients.map(serializeOIDCClient) });
+  } catch (err) {
+    const error = err as Error & { statusCode?: number; code?: string };
+    logger.error('oidc_client_list_error', { error: error.message });
+    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'OIDC_CLIENT_LIST_ERROR' });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /enterprise/oidc/clients/:clientId/approve — Activate pending OIDC client
+// ---------------------------------------------------------------------------
+router.post('/oidc/clients/:clientId/approve', requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES), async (req: Request, res: Response): Promise<void> => {
+  try {
+    const enterpriseReq = req as EnterpriseAuthenticatedRequest;
+    const organizationId = enterpriseReq.enterpriseContext?.organizationId;
+    const approverIdentityId = enterpriseReq.identity?.id;
+    if (!organizationId || !approverIdentityId) {
+      res.status(401).json({ error: 'Authenticated enterprise admin required', code: 'ENTERPRISE_AUTH_REQUIRED' });
+      return;
+    }
+
+    const client = await oidcBridge.approveClient(req.params.clientId as string, organizationId, approverIdentityId);
+    res.status(200).json({ data: serializeOIDCClient(client), message: 'OIDC client approved and activated' });
+  } catch (err) {
+    const error = err as Error & { statusCode?: number; code?: string };
+    logger.error('oidc_client_approve_error', { error: error.message, clientId: req.params.clientId });
+    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'OIDC_CLIENT_APPROVE_ERROR' });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /enterprise/oidc/clients/:clientId/deactivate — Deactivate OIDC client
+// ---------------------------------------------------------------------------
+router.post('/oidc/clients/:clientId/deactivate', requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES), async (req: Request, res: Response): Promise<void> => {
+  try {
+    const enterpriseReq = req as EnterpriseAuthenticatedRequest;
+    const organizationId = enterpriseReq.enterpriseContext?.organizationId;
+    const actorIdentityId = enterpriseReq.identity?.id;
+    if (!organizationId || !actorIdentityId) {
+      res.status(401).json({ error: 'Authenticated enterprise admin required', code: 'ENTERPRISE_AUTH_REQUIRED' });
+      return;
+    }
+
+    const reason = typeof req.body?.reason === 'string' && req.body.reason.length > 0
+      ? req.body.reason
+      : 'Deactivated by organization administrator';
+    const client = await oidcBridge.deactivateClient(req.params.clientId as string, organizationId, actorIdentityId, reason);
+    res.status(200).json({ data: serializeOIDCClient(client), message: 'OIDC client deactivated' });
+  } catch (err) {
+    const error = err as Error & { statusCode?: number; code?: string };
+    logger.error('oidc_client_deactivate_error', { error: error.message, clientId: req.params.clientId });
+    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'OIDC_CLIENT_DEACTIVATE_ERROR' });
   }
 });
 
@@ -425,7 +801,6 @@ router.post('/oidc/authorize', async (req: Request, res: Response): Promise<void
 
     // Spoofable headers are already stripped by the router-level middleware.
 
-    const { prisma } = await import('../../index');
     const subject = await prisma.identity.findUnique({
       where: { id: subjectId },
       select: {
@@ -531,7 +906,7 @@ router.post('/oidc/saml', (_req: Request, res: Response): void => {
 // ---------------------------------------------------------------------------
 // POST /enterprise/sla/register — Register SLA definition
 // ---------------------------------------------------------------------------
-router.post('/sla/register', validate(SLADefinitionSchema), async (req: Request, res: Response): Promise<void> => {
+router.post('/sla/register', requireEnterpriseContext(['admin', 'compliance_officer']), validate(SLADefinitionSchema), async (req: Request, res: Response): Promise<void> => {
   try {
     slaMonitor.registerSLA(req.body);
     res.status(201).json({ message: 'SLA definition registered' });
@@ -545,7 +920,7 @@ router.post('/sla/register', validate(SLADefinitionSchema), async (req: Request,
 // ---------------------------------------------------------------------------
 // GET /enterprise/sla/report — SLA report
 // ---------------------------------------------------------------------------
-router.get('/sla/report', async (req: Request, res: Response): Promise<void> => {
+router.get('/sla/report', requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES), async (req: Request, res: Response): Promise<void> => {
   try {
     const clientId = getClientId(req);
     const periodDays = parseInt(req.query.period as string, 10) || undefined;

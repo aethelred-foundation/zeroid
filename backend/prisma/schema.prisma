@@ -89,6 +89,8 @@ model Identity {
   schemaProposals SchemaGovernance[]
   sessions        Session[]
   aiAgents        AIAgent[]
+  issuerTrustRecords IssuerTrustRecord[] @relation("trusted_issuer")
+  issuerKeyHistory  IssuerKeyHistory[]   @relation("issuer_key_history")
 
   @@index([did])
   @@index([status])
@@ -252,6 +254,19 @@ enum WebhookStatus {
   PAUSED
   FAILING
   DISABLED
+}
+
+enum IssuerTrustStatus {
+  PENDING_REVIEW
+  ACCREDITED
+  SUSPENDED
+  REVOKED
+}
+
+enum IssuerKeyStatus {
+  ACTIVE
+  RETIRED
+  REVOKED
 }
 
 enum BridgeStatus {
@@ -529,9 +544,63 @@ model Organization {
   apiKeys         APIKey[]
   webhooks        Webhook[]
   members         OrganizationMember[]
+  trustedIssuers  IssuerTrustRecord[]
 
   @@index([domain])
   @@map("organizations")
+}
+
+model IssuerTrustRecord {
+  id                    String            @id @default(uuid())
+  organizationId        String
+  issuerIdentityId      String
+  issuerDid             String
+  status                IssuerTrustStatus @default(PENDING_REVIEW)
+  accreditationScope    String            @default("enterprise")
+  assuranceLevel        String            @default("standard")
+  allowedCredentialTypes String[]
+  allowedJurisdictions  String[]
+  proposedByIdentityId  String
+  accreditedByIdentityId String?
+  suspensionReason      String?
+  metadata              Json?
+  accreditedAt          DateTime?
+  expiresAt             DateTime?
+  createdAt             DateTime          @default(now())
+  updatedAt             DateTime          @updatedAt
+
+  organization          Organization      @relation(fields: [organizationId], references: [id])
+  issuer                Identity          @relation("trusted_issuer", fields: [issuerIdentityId], references: [id])
+
+  @@unique([organizationId, issuerIdentityId])
+  @@index([organizationId])
+  @@index([issuerIdentityId])
+  @@index([status])
+  @@map("issuer_trust_records")
+}
+
+model IssuerKeyHistory {
+  id                  String          @id @default(uuid())
+  issuerIdentityId    String
+  issuerDid           String
+  keyVersion          String
+  keyAlgorithm        String
+  publicKey           String
+  verificationMethod  String
+  status              IssuerKeyStatus @default(ACTIVE)
+  rotatedByIdentityId String?
+  metadata            Json?
+  validFrom           DateTime        @default(now())
+  validUntil          DateTime?
+  createdAt           DateTime        @default(now())
+
+  issuer              Identity        @relation("issuer_key_history", fields: [issuerIdentityId], references: [id])
+
+  @@unique([issuerIdentityId, keyVersion])
+  @@index([issuerIdentityId])
+  @@index([issuerDid, keyVersion])
+  @@index([status])
+  @@map("issuer_key_history")
 }
 
 model OrganizationMember {

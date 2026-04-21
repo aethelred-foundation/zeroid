@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { createLogger, format, transports } from 'winston';
 import crypto from 'crypto';
+import { prisma, redis } from '../../index';
 
 // ---------------------------------------------------------------------------
 // Logger
@@ -82,6 +83,15 @@ interface APIKey {
   revokedReason: string | null;
 }
 
+interface APIKeyConfig {
+  dailyQuota: number;
+  monthlyQuota: number;
+  rateLimit: { requestsPerSecond: number; burstSize: number };
+  metadata: Record<string, string>;
+  revokedAt: string | null;
+  revokedReason: string | null;
+}
+
 interface UsageRecord {
   apiKeyId: string;
   clientId: string;
@@ -131,8 +141,6 @@ interface OAuth2Token {
 // APIGateway
 // ---------------------------------------------------------------------------
 export class APIGateway {
-  private apiKeys: Map<string, APIKey> = new Map();
-  private keyHashIndex: Map<string, string> = new Map(); // hash -> id
   private usageRecords: UsageRecord[] = [];
   private quotaTrackers: Map<string, QuotaTracker> = new Map();
   private rateLimitStates: Map<string, RateLimitState> = new Map();
@@ -149,10 +157,60 @@ export class APIGateway {
     logger.info('APIGateway initialized');
   }
 
+  private apiKeyConfigKey(apiKeyId: string): string {
+    return `enterprise:api-key-config:${apiKeyId}`;
+  }
+
+  private async persistAPIKeyConfig(apiKeyId: string, config: APIKeyConfig): Promise<void> {
+    await redis.set(this.apiKeyConfigKey(apiKeyId), JSON.stringify(config));
+  }
+
+  private async getAPIKeyConfig(apiKeyId: string): Promise<APIKeyConfig | null> {
+    const raw = await redis.get(this.apiKeyConfigKey(apiKeyId));
+    if (!raw) return null;
+
+    try {
+      return JSON.parse(raw) as APIKeyConfig;
+    } catch {
+      return null;
+    }
+  }
+
+  private async hydrateAPIKey(record: any): Promise<APIKey> {
+    const config = await this.getAPIKeyConfig(record.id);
+    const dailyQuota = config?.dailyQuota ?? 10000;
+    const monthlyQuota = config?.monthlyQuota ?? 1_000_000;
+    const rateLimit = config?.rateLimit ?? {
+      requestsPerSecond: Math.max(1, Math.floor((record.rateLimitPerMinute ?? 60) / 60)),
+      burstSize: Math.max(1, Math.floor((record.rateLimitPerMinute ?? 60) / 30)),
+    };
+
+    return {
+      id: record.id,
+      clientId: record.organizationId,
+      keyHash: record.keyHash,
+      keyPrefix: record.keyPrefix,
+      name: record.name,
+      scopes: record.scopes,
+      environment: record.environment,
+      ipAllowlist: record.ipAllowlist,
+      dailyQuota,
+      monthlyQuota,
+      rateLimit,
+      metadata: config?.metadata ?? {},
+      createdAt: record.createdAt.toISOString(),
+      expiresAt: record.expiresAt?.toISOString() ?? new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString(),
+      lastUsedAt: record.lastUsedAt?.toISOString() ?? null,
+      active: record.isActive,
+      revokedAt: config?.revokedAt ?? null,
+      revokedReason: config?.revokedReason ?? null,
+    };
+  }
+
   // -------------------------------------------------------------------------
   // API key management
   // -------------------------------------------------------------------------
-  createAPIKey(clientId: string, options: CreateAPIKey): { apiKey: string; apiKeyId: string; expiresAt: string } {
+  async createAPIKey(clientId: string, options: CreateAPIKey): Promise<{ apiKey: string; apiKeyId: string; expiresAt: string }> {
     const parsed = CreateAPIKeySchema.parse(options);
     const id = crypto.randomUUID();
     const rawKey = `zid_${parsed.environment === 'sandbox' ? 'test' : 'live'}_${crypto.randomBytes(24).toString('base64url')}`;
@@ -160,32 +218,36 @@ export class APIGateway {
     const keyPrefix = rawKey.substring(0, 12);
     const expiresAt = new Date(Date.now() + parsed.expiresInDays * 24 * 60 * 60 * 1000).toISOString();
 
-    const apiKey: APIKey = {
-      id,
-      clientId,
-      keyHash,
-      keyPrefix,
-      name: parsed.name,
-      scopes: parsed.scopes,
-      environment: parsed.environment,
-      ipAllowlist: parsed.ipAllowlist,
+    await prisma.apiKey.create({
+      data: {
+        id,
+        organizationId: clientId,
+        name: parsed.name,
+        keyHash,
+        keyPrefix,
+        scopes: parsed.scopes,
+        environment: parsed.environment,
+        rateLimitPerMinute: parsed.rateLimit.requestsPerSecond * 60,
+        ipAllowlist: parsed.ipAllowlist,
+        expiresAt: new Date(expiresAt),
+        isActive: true,
+      },
+    });
+
+    await this.persistAPIKeyConfig(id, {
       dailyQuota: parsed.dailyQuota,
       monthlyQuota: parsed.monthlyQuota,
       rateLimit: parsed.rateLimit,
       metadata: parsed.metadata,
-      createdAt: new Date().toISOString(),
-      expiresAt,
-      lastUsedAt: null,
-      active: true,
       revokedAt: null,
       revokedReason: null,
-    };
+    });
 
-    this.apiKeys.set(id, apiKey);
-    this.keyHashIndex.set(keyHash, id);
     this.quotaTrackers.set(id, { apiKeyId: id, dailyUsage: new Map(), monthlyUsage: new Map() });
 
     logger.info('api_key_created', {
+      apiKeyId: id,
+      organizationId: clientId,
       name: parsed.name,
       environment: parsed.environment,
       scopeCount: parsed.scopes.length,
@@ -195,44 +257,71 @@ export class APIGateway {
     return { apiKey: rawKey, apiKeyId: id, expiresAt };
   }
 
-  revokeAPIKey(apiKeyId: string, clientId: string, reason: string): void {
-    const key = this.apiKeys.get(apiKeyId);
-    if (!key || key.clientId !== clientId) {
+  async revokeAPIKey(apiKeyId: string, clientId: string, reason: string): Promise<void> {
+    const keyRecord = await prisma.apiKey.findFirst({
+      where: {
+        id: apiKeyId,
+        organizationId: clientId,
+      },
+    });
+    if (!keyRecord) {
       throw new GatewayError('API key not found', 'KEY_NOT_FOUND', 404);
     }
 
-    key.active = false;
-    key.revokedAt = new Date().toISOString();
-    key.revokedReason = reason;
+    await prisma.apiKey.update({
+      where: { id: apiKeyId },
+      data: {
+        isActive: false,
+      },
+    });
+
+    const existingConfig = await this.getAPIKeyConfig(apiKeyId);
+    await this.persistAPIKeyConfig(apiKeyId, {
+      dailyQuota: existingConfig?.dailyQuota ?? 10000,
+      monthlyQuota: existingConfig?.monthlyQuota ?? 1_000_000,
+      rateLimit: existingConfig?.rateLimit ?? { requestsPerSecond: 100, burstSize: 200 },
+      metadata: existingConfig?.metadata ?? {},
+      revokedAt: new Date().toISOString(),
+      revokedReason: reason,
+    });
 
     logger.info('api_key_revoked', {
-      environment: key.environment,
+      apiKeyId,
+      organizationId: clientId,
+      environment: keyRecord.environment,
       reason,
     });
   }
 
-  listAPIKeys(clientId: string): Array<Omit<APIKey, 'keyHash'>> {
-    return [...this.apiKeys.values()]
-      .filter((k) => k.clientId === clientId)
-      .map(({ keyHash: _, ...rest }) => rest);
+  async listAPIKeys(clientId: string): Promise<Array<Omit<APIKey, 'keyHash'>>> {
+    const keyRecords = await prisma.apiKey.findMany({
+      where: { organizationId: clientId },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    const keys = await Promise.all(keyRecords.map((record) => this.hydrateAPIKey(record)));
+    return keys.map(({ keyHash: _, ...rest }) => rest);
   }
 
   // -------------------------------------------------------------------------
   // Authenticate API request
   // -------------------------------------------------------------------------
-  authenticateRequest(rawKey: string, requestIp: string, requiredScopes: APIKeyScope[]): {
+  async authenticateRequest(rawKey: string, requestIp: string, requiredScopes: APIKeyScope[]): Promise<{
     apiKeyId: string;
     clientId: string;
     environment: string;
     scopes: APIKeyScope[];
-  } {
+  }> {
     const keyHash = crypto.createHash('sha256').update(rawKey).digest('hex');
-    const keyId = this.keyHashIndex.get(keyHash);
-    if (!keyId) {
+    const keyRecord = await prisma.apiKey.findUnique({
+      where: { keyHash },
+    });
+    if (!keyRecord) {
       throw new GatewayError('Invalid API key', 'INVALID_KEY', 401);
     }
 
-    const key = this.apiKeys.get(keyId)!;
+    const key = await this.hydrateAPIKey(keyRecord);
+    const keyId = key.id;
 
     if (!key.active) {
       throw new GatewayError('API key has been revoked', 'KEY_REVOKED', 401);
@@ -264,6 +353,12 @@ export class APIGateway {
     }
 
     key.lastUsedAt = new Date().toISOString();
+    await prisma.apiKey.update({
+      where: { id: keyId },
+      data: {
+        lastUsedAt: new Date(key.lastUsedAt),
+      },
+    });
 
     return {
       apiKeyId: keyId,
@@ -386,12 +481,15 @@ export class APIGateway {
     return true;
   }
 
-  getQuotaStatus(apiKeyId: string): { daily: { used: number; limit: number }; monthly: { used: number; limit: number } } {
-    const key = this.apiKeys.get(apiKeyId);
+  async getQuotaStatus(apiKeyId: string): Promise<{ daily: { used: number; limit: number }; monthly: { used: number; limit: number } }> {
+    const keyRecord = await prisma.apiKey.findUnique({
+      where: { id: apiKeyId },
+    });
     const tracker = this.quotaTrackers.get(apiKeyId);
-    if (!key || !tracker) {
+    if (!keyRecord || !tracker) {
       throw new GatewayError('API key not found', 'KEY_NOT_FOUND', 404);
     }
+    const key = await this.hydrateAPIKey(keyRecord);
 
     const now = new Date();
     const dayKey = now.toISOString().substring(0, 10);

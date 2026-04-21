@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { createLogger, format, transports } from 'winston';
 import crypto from 'crypto';
+import { prisma, redis } from '../../index';
 
 // ---------------------------------------------------------------------------
 // Logger
@@ -159,7 +160,6 @@ class SubscriberRateLimiter {
 // WebhookSystem
 // ---------------------------------------------------------------------------
 export class WebhookSystem {
-  private webhooks: Map<string, RegisteredWebhook> = new Map();
   private deliveries: Map<string, WebhookDelivery> = new Map();
   private deadLetterQueue: DeadLetterEntry[] = [];
   private eventLog: WebhookEvent[] = [];
@@ -172,28 +172,104 @@ export class WebhookSystem {
     logger.info('WebhookSystem initialized');
   }
 
+  private webhookConfigKey(webhookId: string): string {
+    return `enterprise:webhook-config:${webhookId}`;
+  }
+
+  private async persistWebhookConfig(webhookId: string, config: {
+    description: string;
+    metadata: Record<string, string>;
+    batchDelivery: boolean;
+    batchIntervalMs: number;
+    headers: Record<string, string>;
+    health: WebhookHealth;
+  }): Promise<void> {
+    await redis.set(this.webhookConfigKey(webhookId), JSON.stringify(config));
+  }
+
+  private async getWebhookConfig(webhookId: string): Promise<{
+    description: string;
+    metadata: Record<string, string>;
+    batchDelivery: boolean;
+    batchIntervalMs: number;
+    headers: Record<string, string>;
+    health: WebhookHealth;
+  } | null> {
+    const raw = await redis.get(this.webhookConfigKey(webhookId));
+    if (!raw) return null;
+
+    try {
+      return JSON.parse(raw) as {
+        description: string;
+        metadata: Record<string, string>;
+        batchDelivery: boolean;
+        batchIntervalMs: number;
+        headers: Record<string, string>;
+        health: WebhookHealth;
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private async hydrateWebhook(record: any): Promise<RegisteredWebhook> {
+    const config = await this.getWebhookConfig(record.id);
+    const health = config?.health ?? {
+      consecutiveFailures: record.failureCount ?? 0,
+      lastSuccessAt: record.lastDeliveredAt?.toISOString() ?? null,
+      lastFailureAt: null,
+      lastStatusCode: record.lastStatusCode ?? null,
+      totalDelivered: 0,
+      totalFailed: 0,
+      averageLatencyMs: 0,
+      disabled: record.status === 'DISABLED',
+      disabledReason: record.status === 'DISABLED' ? 'Persisted disabled webhook' : null,
+    };
+
+    return {
+      id: record.id,
+      clientId: record.organizationId,
+      url: record.url,
+      events: record.events,
+      secret: record.secret,
+      description: config?.description ?? '',
+      active: record.status === 'ACTIVE',
+      metadata: config?.metadata ?? {},
+      batchDelivery: config?.batchDelivery ?? false,
+      batchIntervalMs: config?.batchIntervalMs ?? 5000,
+      headers: config?.headers ?? {},
+      createdAt: record.createdAt.toISOString(),
+      updatedAt: record.updatedAt.toISOString(),
+      health,
+    };
+  }
+
   // -------------------------------------------------------------------------
   // Webhook registration
   // -------------------------------------------------------------------------
-  register(clientId: string, registration: WebhookRegistration): RegisteredWebhook {
+  async register(clientId: string, registration: WebhookRegistration): Promise<RegisteredWebhook> {
     const parsed = WebhookRegistrationSchema.parse(registration);
     const id = crypto.randomUUID();
     const secret = parsed.secret ?? crypto.randomBytes(32).toString('hex');
 
-    const webhook: RegisteredWebhook = {
-      id,
-      clientId,
-      url: parsed.url,
-      events: parsed.events,
-      secret,
+    const record = await prisma.webhook.create({
+      data: {
+        id,
+        organizationId: clientId,
+        url: parsed.url,
+        secret,
+        events: parsed.events,
+        status: parsed.active ? 'ACTIVE' : 'PAUSED',
+        failureCount: 0,
+      },
+    });
+
+    await this.persistWebhookConfig(id, {
       description: parsed.description ?? '',
-      active: parsed.active,
       metadata: parsed.metadata,
       batchDelivery: parsed.batchDelivery,
       batchIntervalMs: parsed.batchIntervalMs,
       headers: parsed.headers,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
       health: {
         consecutiveFailures: 0,
         lastSuccessAt: null,
@@ -205,52 +281,113 @@ export class WebhookSystem {
         disabled: false,
         disabledReason: null,
       },
-    };
+    });
 
-    this.webhooks.set(id, webhook);
     logger.info('webhook_registered', { webhookId: id, clientId, url: parsed.url, events: parsed.events });
-    return webhook;
+    return this.hydrateWebhook(record);
   }
 
   // -------------------------------------------------------------------------
   // Webhook update
   // -------------------------------------------------------------------------
-  update(webhookId: string, clientId: string, updates: WebhookUpdate): RegisteredWebhook {
-    const webhook = this.webhooks.get(webhookId);
-    if (!webhook || webhook.clientId !== clientId) {
+  async update(webhookId: string, clientId: string, updates: WebhookUpdate): Promise<RegisteredWebhook> {
+    const webhookRecord = await prisma.webhook.findFirst({
+      where: {
+        id: webhookId,
+        organizationId: clientId,
+      },
+    });
+    if (!webhookRecord) {
       throw new WebhookError('Webhook not found', 'WEBHOOK_NOT_FOUND', 404);
     }
 
     const parsed = WebhookUpdateSchema.parse(updates);
-    if (parsed.url !== undefined) webhook.url = parsed.url;
-    if (parsed.events !== undefined) webhook.events = parsed.events;
-    if (parsed.active !== undefined) webhook.active = parsed.active;
-    if (parsed.description !== undefined) webhook.description = parsed.description;
-    if (parsed.metadata !== undefined) webhook.metadata = parsed.metadata;
-    if (parsed.headers !== undefined) webhook.headers = parsed.headers;
-    webhook.updatedAt = new Date().toISOString();
+    const existingConfig = await this.getWebhookConfig(webhookId);
+    const nextHealth = existingConfig?.health ?? {
+      consecutiveFailures: webhookRecord.failureCount ?? 0,
+      lastSuccessAt: webhookRecord.lastDeliveredAt?.toISOString() ?? null,
+      lastFailureAt: null,
+      lastStatusCode: webhookRecord.lastStatusCode ?? null,
+      totalDelivered: 0,
+      totalFailed: 0,
+      averageLatencyMs: 0,
+      disabled: webhookRecord.status === 'DISABLED',
+      disabledReason: webhookRecord.status === 'DISABLED' ? 'Persisted disabled webhook' : null,
+    };
 
-    // Re-enable if was auto-disabled
-    if (parsed.active === true && webhook.health.disabled) {
-      webhook.health.disabled = false;
-      webhook.health.disabledReason = null;
-      webhook.health.consecutiveFailures = 0;
+    if (parsed.active === true && nextHealth.disabled) {
+      nextHealth.disabled = false;
+      nextHealth.disabledReason = null;
+      nextHealth.consecutiveFailures = 0;
     }
 
-    this.webhooks.set(webhookId, webhook);
+    const updated = await prisma.webhook.update({
+      where: { id: webhookId },
+      data: {
+        url: parsed.url ?? webhookRecord.url,
+        events: parsed.events ?? webhookRecord.events,
+        status: parsed.active === undefined
+          ? webhookRecord.status
+          : (parsed.active ? 'ACTIVE' : 'PAUSED'),
+      },
+    });
+
+    await this.persistWebhookConfig(webhookId, {
+      description: parsed.description ?? existingConfig?.description ?? '',
+      metadata: parsed.metadata ?? existingConfig?.metadata ?? {},
+      batchDelivery: existingConfig?.batchDelivery ?? false,
+      batchIntervalMs: existingConfig?.batchIntervalMs ?? 5000,
+      headers: parsed.headers ?? existingConfig?.headers ?? {},
+      health: nextHealth,
+    });
+
     logger.info('webhook_updated', { webhookId, updates: Object.keys(parsed) });
-    return webhook;
+    return this.hydrateWebhook(updated);
   }
 
   // -------------------------------------------------------------------------
   // Remove webhook
   // -------------------------------------------------------------------------
-  remove(webhookId: string, clientId: string): void {
-    const webhook = this.webhooks.get(webhookId);
-    if (!webhook || webhook.clientId !== clientId) {
+  async remove(webhookId: string, clientId: string): Promise<void> {
+    const webhookRecord = await prisma.webhook.findFirst({
+      where: {
+        id: webhookId,
+        organizationId: clientId,
+      },
+    });
+    if (!webhookRecord) {
       throw new WebhookError('Webhook not found', 'WEBHOOK_NOT_FOUND', 404);
     }
-    this.webhooks.delete(webhookId);
+
+    await prisma.webhook.update({
+      where: { id: webhookId },
+      data: {
+        status: 'DISABLED',
+      },
+    });
+
+    const existingConfig = await this.getWebhookConfig(webhookId);
+    await this.persistWebhookConfig(webhookId, {
+      description: existingConfig?.description ?? '',
+      metadata: existingConfig?.metadata ?? {},
+      batchDelivery: existingConfig?.batchDelivery ?? false,
+      batchIntervalMs: existingConfig?.batchIntervalMs ?? 5000,
+      headers: existingConfig?.headers ?? {},
+      health: {
+        ...(existingConfig?.health ?? {
+          consecutiveFailures: 0,
+          lastSuccessAt: null,
+          lastFailureAt: null,
+          lastStatusCode: webhookRecord.lastStatusCode ?? null,
+          totalDelivered: 0,
+          totalFailed: 0,
+          averageLatencyMs: 0,
+        }),
+        disabled: true,
+        disabledReason: 'Webhook removed by organization',
+      },
+    });
+
     this.batchBuffers.delete(webhookId);
     logger.info('webhook_removed', { webhookId, clientId });
   }
@@ -258,12 +395,20 @@ export class WebhookSystem {
   // -------------------------------------------------------------------------
   // List webhooks for a client
   // -------------------------------------------------------------------------
-  list(clientId: string): RegisteredWebhook[] {
-    return [...this.webhooks.values()].filter((w) => w.clientId === clientId);
+  async list(clientId: string): Promise<RegisteredWebhook[]> {
+    const webhookRecords = await prisma.webhook.findMany({
+      where: { organizationId: clientId },
+      orderBy: { createdAt: 'desc' },
+    });
+    return Promise.all(webhookRecords.map((record) => this.hydrateWebhook(record)));
   }
 
-  getWebhook(webhookId: string): RegisteredWebhook | null {
-    return this.webhooks.get(webhookId) ?? null;
+  async getWebhook(webhookId: string): Promise<RegisteredWebhook | null> {
+    const webhookRecord = await prisma.webhook.findUnique({
+      where: { id: webhookId },
+    });
+    if (!webhookRecord) return null;
+    return this.hydrateWebhook(webhookRecord);
   }
 
   // -------------------------------------------------------------------------
@@ -283,7 +428,12 @@ export class WebhookSystem {
       this.eventLog = this.eventLog.slice(-5000);
     }
 
-    const matchingWebhooks = [...this.webhooks.values()].filter(
+    const webhookRecords = await prisma.webhook.findMany({
+      where: { status: 'ACTIVE' },
+      orderBy: { createdAt: 'asc' },
+    });
+    const hydratedWebhooks = await Promise.all(webhookRecords.map((record) => this.hydrateWebhook(record)));
+    const matchingWebhooks = hydratedWebhooks.filter(
       (w) => w.active && !w.health.disabled && w.events.includes(eventType),
     );
 
@@ -443,7 +593,7 @@ export class WebhookSystem {
     const buffer = this.batchBuffers.get(webhookId);
     if (!buffer || buffer.length === 0) return null;
 
-    const webhook = this.webhooks.get(webhookId);
+    const webhook = await this.getWebhook(webhookId);
     if (!webhook) return null;
 
     const batchEvent: WebhookEvent = {
@@ -462,7 +612,7 @@ export class WebhookSystem {
   // Event replay for recovery
   // -------------------------------------------------------------------------
   async replayEvents(webhookId: string, since: string, until?: string): Promise<{ replayed: number; deliveryIds: string[] }> {
-    const webhook = this.webhooks.get(webhookId);
+    const webhook = await this.getWebhook(webhookId);
     if (!webhook) {
       throw new WebhookError('Webhook not found', 'WEBHOOK_NOT_FOUND', 404);
     }
@@ -500,7 +650,7 @@ export class WebhookSystem {
     if (!dlEntry) return false;
 
     const delivery = this.deliveries.get(deliveryId);
-    const webhook = this.webhooks.get(dlEntry.webhookId);
+    const webhook = await this.getWebhook(dlEntry.webhookId);
     if (!delivery || !webhook) return false;
 
     delivery.attempts = 0;

@@ -73,6 +73,15 @@ export const TokenRequestSchema = z.object({
 
 export type TokenRequest = z.infer<typeof TokenRequestSchema>;
 
+export interface OIDCClientRegistrationResult {
+  clientId: string;
+  clientSecret: string;
+  clientIdIssuedAt: number;
+  clientSecretExpiresAt: number;
+  status: OIDCClientStatus;
+  approvalRequired: boolean;
+}
+
 // SAML 2.0 support removed — route returns 501, code excised per audit finding SAML-01.
 
 // ---------------------------------------------------------------------------
@@ -92,13 +101,24 @@ const STANDARD_SCOPES: Record<string, string[]> = {
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
-interface RegisteredClient {
+export interface RegisteredClient {
   clientId: string;
   clientSecret: string;
   registration: OIDCClientRegistration;
   createdAt: string;
   active: boolean;
+  status?: OIDCClientStatus;
+  organizationId?: string;
+  registeredByIdentityId?: string;
+  registeredByRole?: string;
+  approvedAt?: string;
+  approvedByIdentityId?: string;
+  deactivatedAt?: string;
+  deactivatedByIdentityId?: string;
+  deactivationReason?: string;
 }
+
+export type OIDCClientStatus = 'pending_approval' | 'active' | 'revoked';
 
 interface AuthorizationCode {
   code: string;
@@ -226,6 +246,8 @@ const OIDC_REFRESH_TOKEN_TTL = 30 * 24 * 3600; // Refresh tokens: 30 days
 // issued under a different session for the same user+client.
 const sessionTokenSetKey = (sessionId: string) =>
   `oidc:session-tokens:${sessionId}`;
+const organizationClientSetKey = (organizationId: string) =>
+  `oidc:org-clients:${organizationId}`;
 
 // ---------------------------------------------------------------------------
 // OIDCBridge
@@ -295,12 +317,23 @@ export class OIDCBridge {
   // -------------------------------------------------------------------------
   // Dynamic client registration
   // -------------------------------------------------------------------------
-  async registerClient(registration: OIDCClientRegistration): Promise<{
-    clientId: string;
-    clientSecret: string;
-    clientIdIssuedAt: number;
-    clientSecretExpiresAt: number;
-  }> {
+  async registerClient(registration: OIDCClientRegistration): Promise<OIDCClientRegistrationResult>;
+  async registerClient(
+    registration: OIDCClientRegistration,
+    ownership: {
+      organizationId: string;
+      registeredByIdentityId: string;
+      registeredByRole: string;
+    },
+  ): Promise<OIDCClientRegistrationResult>;
+  async registerClient(
+    registration: OIDCClientRegistration,
+    ownership?: {
+      organizationId: string;
+      registeredByIdentityId: string;
+      registeredByRole: string;
+    },
+  ): Promise<OIDCClientRegistrationResult> {
     const parsed = OIDCClientRegistrationSchema.parse(registration);
     const requestedSigningAlg = parsed.idTokenSignedResponseAlg ?? this.signingAlgorithm;
     if (requestedSigningAlg !== this.signingAlgorithm) {
@@ -334,6 +367,9 @@ export class OIDCBridge {
 
     const clientId = `zeroid_${crypto.randomBytes(16).toString('hex')}`;
     const clientSecret = crypto.randomBytes(32).toString('base64url');
+    const autoActivate = !ownership?.organizationId || ownership.registeredByRole === 'admin';
+    const createdAt = new Date().toISOString();
+    const status: OIDCClientStatus = autoActivate ? 'active' : 'pending_approval';
 
     const client: RegisteredClient = {
       clientId,
@@ -342,19 +378,40 @@ export class OIDCBridge {
         ...parsed,
         idTokenSignedResponseAlg: requestedSigningAlg,
       },
-      createdAt: new Date().toISOString(),
-      active: true,
+      createdAt,
+      active: autoActivate,
+      status,
+      organizationId: ownership?.organizationId,
+      registeredByIdentityId: ownership?.registeredByIdentityId,
+      registeredByRole: ownership?.registeredByRole,
+      approvedAt: autoActivate ? createdAt : undefined,
+      approvedByIdentityId: autoActivate ? ownership?.registeredByIdentityId : undefined,
     };
 
     await this.clients.set(clientId, client);
+    if (ownership?.organizationId) {
+      const orgKey = organizationClientSetKey(ownership.organizationId);
+      await redis.sadd(orgKey, clientId);
+      await redis.expire(orgKey, OIDC_CLIENT_TTL);
+    }
 
-    logger.info('oidc_client_registered', { clientId, clientName: parsed.clientName, scopes: parsed.scopes });
+    logger.info('oidc_client_registered', {
+      clientId,
+      clientName: parsed.clientName,
+      scopes: parsed.scopes,
+      organizationId: ownership?.organizationId,
+      registeredByIdentityId: ownership?.registeredByIdentityId,
+      registeredByRole: ownership?.registeredByRole,
+      status,
+    });
 
     return {
       clientId,
       clientSecret,
       clientIdIssuedAt: Math.floor(Date.now() / 1000),
       clientSecretExpiresAt: Math.floor(Date.now() / 1000) + 365 * 24 * 60 * 60,
+      status,
+      approvalRequired: status === 'pending_approval',
     };
   }
 
@@ -367,8 +424,8 @@ export class OIDCBridge {
     sessionId: string;
   }> {
     const parsed = AuthorizationRequestSchema.parse(request);
-    const client = await this.clients.get(parsed.clientId);
-    if (!client || !client.active) {
+    const client = await this.getNormalizedClient(parsed.clientId);
+    if (!client || !this.isClientActive(client)) {
       throw new OIDCError('invalid_client', 'Client not found or inactive');
     }
 
@@ -754,12 +811,13 @@ export class OIDCBridge {
   }
 
   private async authenticateClient(clientId: string, clientSecret?: string): Promise<void> {
-    const client = await this.clients.get(clientId);
+    const client = await this.getNormalizedClient(clientId);
     if (!client) {
       throw new OIDCError('invalid_client', 'Client not found');
     }
-    if (!client.active) {
-      throw new OIDCError('invalid_client', 'Client is inactive');
+    if (!this.isClientActive(client)) {
+      const lifecycleState = client.status ?? 'pending_approval';
+      throw new OIDCError('invalid_client', `Client is not active (${lifecycleState})`);
     }
     if (client.registration.tokenEndpointAuthMethod !== 'none' && clientSecret !== client.clientSecret) {
       throw new OIDCError('invalid_client', 'Client authentication failed');
@@ -888,12 +946,13 @@ export class OIDCBridge {
     const configuredKeyId = process.env.OIDC_SIGNING_KEY_ID?.trim();
     if (configuredKeyId) {
       this.signingKeyId = configuredKeyId;
-      return this.signingKeyId;
+      return configuredKeyId;
     }
 
     const spki = this.getSigningPublicKey().export({ format: 'der', type: 'spki' });
-    this.signingKeyId = crypto.createHash('sha256').update(spki).digest('base64url').slice(0, 24);
-    return this.signingKeyId;
+    const derivedKeyId = crypto.createHash('sha256').update(spki).digest('base64url').slice(0, 24);
+    this.signingKeyId = derivedKeyId;
+    return derivedKeyId;
   }
 
   private getSigningKeyInput(): crypto.KeyLike | crypto.SignKeyObjectInput {
@@ -954,16 +1013,109 @@ export class OIDCBridge {
   // Retrieve client info
   // -------------------------------------------------------------------------
   async getClient(clientId: string): Promise<RegisteredClient | null> {
-    return (await this.clients.get(clientId)) ?? null;
+    return (await this.getNormalizedClient(clientId)) ?? null;
+  }
+
+  async listClientsForOrganization(organizationId: string): Promise<RegisteredClient[]> {
+    const clientIds: string[] = await redis.smembers(organizationClientSetKey(organizationId));
+    const clients = await Promise.all(clientIds.map(async (clientId: string) => this.getNormalizedClient(clientId)));
+    return clients
+      .filter((client): client is RegisteredClient => Boolean(client) && client.organizationId === organizationId)
+      .sort((left: RegisteredClient, right: RegisteredClient) => right.createdAt.localeCompare(left.createdAt));
+  }
+
+  async approveClient(clientId: string, organizationId: string, approverIdentityId: string): Promise<RegisteredClient> {
+    const client = await this.requireOwnedClient(clientId, organizationId);
+    if (client.status === 'revoked') {
+      throw new OIDCError('invalid_request', 'Revoked client cannot be reactivated', 409);
+    }
+    if (this.isClientActive(client)) {
+      return client;
+    }
+
+    const approvedClient: RegisteredClient = {
+      ...client,
+      active: true,
+      status: 'active',
+      approvedAt: new Date().toISOString(),
+      approvedByIdentityId: approverIdentityId,
+      deactivatedAt: undefined,
+      deactivatedByIdentityId: undefined,
+      deactivationReason: undefined,
+    };
+    await this.clients.set(clientId, approvedClient);
+    logger.info('oidc_client_approved', { clientId, organizationId, approverIdentityId });
+    return approvedClient;
+  }
+
+  async deactivateClient(
+    clientId: string,
+    organizationId: string,
+    actorIdentityId: string,
+    reason = 'Deactivated by organization administrator',
+  ): Promise<RegisteredClient> {
+    const client = await this.requireOwnedClient(clientId, organizationId);
+    if (client.status === 'revoked' && !client.active) {
+      return client;
+    }
+
+    const deactivatedClient: RegisteredClient = {
+      ...client,
+      active: false,
+      status: 'revoked',
+      deactivatedAt: new Date().toISOString(),
+      deactivatedByIdentityId: actorIdentityId,
+      deactivationReason: reason,
+    };
+    await this.clients.set(clientId, deactivatedClient);
+    logger.info('oidc_client_deactivated', { clientId, organizationId, actorIdentityId, reason });
+    return deactivatedClient;
   }
 
   async revokeClient(clientId: string): Promise<void> {
-    const client = await this.clients.get(clientId);
+    const client = await this.getNormalizedClient(clientId);
     if (client) {
       client.active = false;
+      client.status = 'revoked';
+      client.deactivatedAt = new Date().toISOString();
+      client.deactivationReason = 'Revoked by system';
       await this.clients.set(clientId, client);
       logger.info('oidc_client_revoked', { clientId });
     }
+  }
+
+  private async getNormalizedClient(clientId: string): Promise<RegisteredClient | undefined> {
+    const client = await this.clients.get(clientId);
+    if (!client) {
+      return undefined;
+    }
+
+    if (!client.status) {
+      client.status = client.active ? 'active' : 'pending_approval';
+    }
+
+    if (client.status === 'active' && !client.active) {
+      client.active = true;
+    }
+
+    if (client.status !== 'active' && client.active) {
+      client.active = false;
+    }
+
+    return client;
+  }
+
+  private isClientActive(client: RegisteredClient): boolean {
+    return client.active && (client.status ?? 'active') === 'active';
+  }
+
+  private async requireOwnedClient(clientId: string, organizationId: string): Promise<RegisteredClient> {
+    const client = await this.getNormalizedClient(clientId);
+    if (!client || client.organizationId !== organizationId) {
+      throw new OIDCError('invalid_client', 'Client not found for organization', 404);
+    }
+
+    return client;
   }
 }
 
