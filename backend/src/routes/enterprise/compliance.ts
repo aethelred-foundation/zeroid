@@ -1,9 +1,18 @@
+import crypto from 'crypto';
 import { Router, Request, Response } from 'express';
 import { z } from 'zod';
 import { createLogger, format, transports } from 'winston';
 import { jurisdictionEngine, ComplianceEvaluationRequestSchema, CrossBorderAssessmentSchema, JurisdictionCodeSchema, CrossBorderResult } from '../../services/compliance/jurisdiction-engine';
 import { sanctionsScreeningService, ScreeningRequestSchema, BatchScreeningRequestSchema, FalsePositiveDecisionSchema } from '../../services/compliance/sanctions-screening';
-import { regulatoryReportingService, ReportTypeSchema, ExportFormatSchema, GeneratedReport, ReportEvidenceEvent } from '../../services/compliance/regulatory-reporting';
+import {
+  regulatoryReportingService,
+  ReportTypeSchema,
+  ExportFormatSchema,
+  GeneratedReport,
+  ReportEvidenceEvent,
+  ReportAuthorityManifest,
+  ReportAuthorityManifestEvent,
+} from '../../services/compliance/regulatory-reporting';
 import { dataSovereigntyService, CrossBorderTransferSchema, PIASchema, BreachNotificationSchema, ConsentRecordSchema, TransferAssessmentResult, PIAResult, BreachTimeline } from '../../services/compliance/data-sovereignty';
 import { EnterpriseAuthenticatedRequest, requireEnterpriseContext } from '../../middleware/enterprise';
 import { EnterpriseRole, OrganizationGovernanceSettings } from '../../services/enterprise/organization-service';
@@ -25,14 +34,25 @@ const router = Router();
 const ENTERPRISE_COMPLIANCE_READ_ROLES: EnterpriseRole[] = ['viewer', 'operator', 'admin', 'compliance_officer', 'auditor'];
 const ENTERPRISE_COMPLIANCE_WRITE_ROLES: EnterpriseRole[] = ['operator', 'admin', 'compliance_officer'];
 const ENTERPRISE_COMPLIANCE_REVIEW_ROLES: EnterpriseRole[] = ['admin', 'compliance_officer', 'auditor'];
+const DEV_REGULATORY_SUBMISSION_SIGNING_KEYPAIR = crypto.generateKeyPairSync('ed25519');
 const ReportAmendmentRequestSchema = z.object({
   reason: z.string().min(5),
   changes: z.record(z.unknown()),
+});
+const ReportAcknowledgementRequestSchema = z.object({
+  stage: z.enum(['submitted', 'amended', 'exported']),
+  acknowledgementId: z.string().min(2),
+  acknowledgedAt: z.string().datetime().optional(),
+  deliveryChannel: z.enum(['portal_upload', 'sftp', 'api', 'email']).optional(),
+  destination: z.string().min(2).optional(),
 });
 const ReportExportHandoffQuerySchema = z.object({
   destination: z.string().min(2).optional(),
   deliveryChannel: z.enum(['portal_upload', 'sftp', 'api', 'email']).optional(),
   acknowledgementId: z.string().min(2).optional(),
+});
+const SubmissionPackageVerificationSchema = z.object({
+  bundle: z.record(z.unknown()),
 });
 
 // ---------------------------------------------------------------------------
@@ -194,7 +214,7 @@ type ReportFilingDeadlineSnapshot = {
 
 type ReportEvidenceEventSnapshot = {
   eventId?: string;
-  action: 'generated' | 'submitted' | 'amended' | 'exported';
+  action: 'generated' | 'submitted' | 'amended' | 'exported' | 'acknowledged';
   recordedAt: string;
   receiptId?: string;
   actorIdentityId?: string;
@@ -221,6 +241,61 @@ type ReportFilingPackageSnapshot = {
   status: string;
   filingJurisdiction: string;
   authorityProfile?: RegulatoryAuthorityProfileSnapshot;
+  authorityManifest?: {
+    manifestVersion: 'zeroid.report_authority_manifest.v1';
+    reportId: string;
+    reportType: string;
+    filingJurisdiction: string;
+    authority?: string;
+    filingReference?: string | null;
+    currentVersion: number;
+    submittedAt?: string | null;
+    supportedExportFormats: string[];
+    preferredDeliveryChannels: Array<'portal_upload' | 'api' | 'sftp' | 'email'>;
+    acknowledgementExpected: boolean;
+    latestAmendment?: {
+      version: number;
+      amendedAt: string;
+      reason: string;
+    };
+    latestExport?: {
+      format: string;
+      filename: string;
+      exportedAt: string;
+      deliveryChannel?: string;
+      deliveryDestination?: string;
+      deliveryAcknowledgementId?: string;
+      deliveryAcknowledgedAt?: string;
+    };
+    acknowledgements: Array<{
+      acknowledgementId: string;
+      stage: 'submitted' | 'amended' | 'exported';
+      acknowledgedAt: string;
+      channel?: string;
+      destination?: string;
+      authority?: string;
+    }>;
+    handoffTrail: Array<{
+      eventId: string;
+      stage: 'submitted' | 'amended' | 'exported' | 'acknowledged';
+      recordedAt: string;
+      acknowledgementStage?: 'submitted' | 'amended' | 'exported';
+      actorIdentityId?: string;
+      policyName?: string;
+      policyVersion?: string;
+      authority?: string;
+      filingReference?: string | null;
+      version: number;
+      amendmentReason?: string;
+      exportFormat?: string;
+      exportFilename?: string;
+      deliveryChannel?: string;
+      deliveryDestination?: string;
+      acknowledgementId?: string;
+      acknowledgedAt?: string;
+    }>;
+    lastUpdatedAt: string;
+  };
   deadline?: ReportFilingDeadlineSnapshot;
   lifecycle: {
     generatedAt: string;
@@ -242,6 +317,113 @@ type ReportFilingPackageSnapshot = {
   };
   evidenceTrail: ReportEvidenceEventSnapshot[];
 };
+
+type RegulatorySubmissionBundle = {
+  packageVersion: 'zeroid.regulatory_submission_bundle.v1';
+  exportedAt: string;
+  report: {
+    reportId: string;
+    reportType: string;
+    version: number;
+    status: string;
+    filingJurisdiction: string;
+    filingReference?: string | null;
+  };
+  filingPackage: ReportFilingPackageSnapshot;
+  authorityManifest?: ReportFilingPackageSnapshot['authorityManifest'];
+  packageProfile: {
+    profileId: string;
+    schemaVersion: '2026.04.1';
+    authority?: string;
+    regulatorClass: 'aml' | 'privacy' | 'audit' | 'general';
+    reportType: string;
+    jurisdiction: string;
+    preferredPrimaryFormat: string;
+    requiredArtifacts: string[];
+    recommendedDeliveryChannels: Array<'portal_upload' | 'api' | 'sftp' | 'email'>;
+    acknowledgementExpected: boolean;
+    includesAuthorityManifest: boolean;
+    includesReceiptEvidence: boolean;
+    artifactDigestRequired: boolean;
+  };
+  profileConformance: {
+    requiredArtifacts: string[];
+    availableArtifacts: string[];
+    missingArtifacts: string[];
+    authorityManifestRequired: boolean;
+    authorityManifestPresent: boolean;
+    receiptEvidenceRequired: boolean;
+    receiptEvidencePresent: boolean;
+    satisfied: boolean;
+  };
+  artifacts: Array<{
+    format: string;
+    filename: string;
+    contentType: string;
+    payloadDigest: string;
+    byteLength: number;
+    encoding: 'utf8' | 'base64';
+  }>;
+  relatedReceipts: Array<{
+    receiptId: string;
+    action: ReportEvidenceEventSnapshot['action'];
+    exported: unknown;
+  }>;
+  bundleDigest: string;
+  bundleSignature: {
+    algorithm: 'hmac-sha256' | 'RS256' | 'PS256' | 'ES256' | 'EdDSA';
+    signedAt: string;
+    keyId: string;
+    scope: 'organization_authority' | 'authority' | 'jurisdiction' | 'global';
+    encoding: 'base64url';
+    keyVersion?: string;
+    verificationMethod?: string;
+    publicKeyFingerprint?: string;
+    publicKeyPem?: string;
+    token: string;
+  };
+};
+
+type SubmissionBundleVerificationResult = {
+  verifiedAt: string;
+  valid: boolean;
+  digestValid: boolean;
+  signatureValid: boolean;
+  signingScopeMatched: boolean;
+  verificationKeyMatched: boolean;
+  profileConformanceValid: boolean;
+  issues: string[];
+  packageVersion?: string;
+  profileId?: string;
+  signingKeyId?: string;
+  signingScope?: 'organization_authority' | 'authority' | 'jurisdiction' | 'global';
+  signingAlgorithm?: 'hmac-sha256' | 'RS256' | 'PS256' | 'ES256' | 'EdDSA';
+  signingKeyVersion?: string;
+  signingVerificationMethod?: string;
+};
+
+type RegulatorySubmissionBundleSigningAlgorithm = RegulatorySubmissionBundle['bundleSignature']['algorithm'];
+type RegulatorySubmissionBundleSigningScope = RegulatorySubmissionBundle['bundleSignature']['scope'];
+type RegulatorySubmissionBundleSigningContext =
+  | {
+    mode: 'hmac';
+    algorithm: 'hmac-sha256';
+    keyId: string;
+    scope: RegulatorySubmissionBundleSigningScope;
+    secret: string;
+  }
+  | {
+    mode: 'asymmetric';
+    algorithm: Exclude<RegulatorySubmissionBundleSigningAlgorithm, 'hmac-sha256'>;
+    keyId: string;
+    scope: RegulatorySubmissionBundleSigningScope;
+    keyVersion: string;
+    verificationMethod: string;
+    privateKey: crypto.KeyObject;
+    publicKey: crypto.KeyObject;
+    publicKeyFingerprint: string;
+    publicKeyPem: string;
+  };
 
 function asRecord(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -823,6 +1005,7 @@ function buildReportFilingPackage(
     status: report.status,
     filingJurisdiction: report.filingJurisdiction,
     ...(authorityProfile ? { authorityProfile } : {}),
+    ...(report.authorityManifest ? { authorityManifest: normalizeAuthorityManifest(report.authorityManifest) } : {}),
     ...(deadline ? { deadline } : {}),
     lifecycle: {
       generatedAt: report.generatedAt,
@@ -854,11 +1037,742 @@ function buildReportFilingPackage(
   };
 }
 
+function normalizeAuthorityManifest(
+  manifest: ReportAuthorityManifest,
+): ReportFilingPackageSnapshot['authorityManifest'] {
+  return {
+    manifestVersion: 'zeroid.report_authority_manifest.v1',
+    reportId: manifest.reportId,
+    reportType: manifest.reportType,
+    filingJurisdiction: manifest.filingJurisdiction,
+    ...(typeof manifest.authority === 'string' && manifest.authority.length > 0 ? { authority: manifest.authority } : {}),
+    ...(manifest.filingReference === null || (typeof manifest.filingReference === 'string' && manifest.filingReference.length > 0)
+      ? { filingReference: manifest.filingReference as string | null }
+      : {}),
+    currentVersion: manifest.currentVersion,
+    ...(manifest.submittedAt === null || (typeof manifest.submittedAt === 'string' && manifest.submittedAt.length > 0)
+      ? { submittedAt: manifest.submittedAt as string | null }
+      : {}),
+    supportedExportFormats: manifest.supportedExportFormats,
+    preferredDeliveryChannels: manifest.preferredDeliveryChannels,
+    acknowledgementExpected: manifest.acknowledgementExpected,
+    ...(manifest.latestAmendment ? { latestAmendment: manifest.latestAmendment } : {}),
+    ...(manifest.latestExport ? { latestExport: manifest.latestExport } : {}),
+    acknowledgements: manifest.acknowledgements,
+    handoffTrail: manifest.handoffTrail,
+    lastUpdatedAt: manifest.lastUpdatedAt,
+  };
+}
+
 async function recordReportEvidenceEvent(
   report: GeneratedReport,
   event: Omit<ReportEvidenceEvent, 'eventId' | 'recordedAt'>,
 ): Promise<void> {
   regulatoryReportingService.recordEvidenceEvent(report.reportId, event);
+}
+
+function canonicalizePayload(value: unknown): string {
+  if (value === null || value === undefined) return JSON.stringify(value);
+  if (typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) {
+    return '[' + value.map((entry) => canonicalizePayload(entry)).join(',') + ']';
+  }
+  const obj = value as Record<string, unknown>;
+  const keys = Object.keys(obj).sort();
+  return '{' + keys.map((key) => `${JSON.stringify(key)}:${canonicalizePayload(obj[key])}`).join(',') + '}';
+}
+
+function sha256(value: unknown): string {
+  return crypto.createHash('sha256').update(canonicalizePayload(value)).digest('hex');
+}
+
+function sanitizeSigningSegment(value: string): string {
+  return value.toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+}
+
+function normalizeKeyMaterial(raw: string): string {
+  return raw.trim().replace(/\\n/g, '\n');
+}
+
+function parsePrivateKeyMaterial(raw: string): crypto.KeyObject {
+  return crypto.createPrivateKey(normalizeKeyMaterial(raw));
+}
+
+function parsePublicKeyMaterial(raw: string): crypto.KeyObject {
+  return crypto.createPublicKey(normalizeKeyMaterial(raw));
+}
+
+function exportPublicKeyPem(publicKey: crypto.KeyObject): string {
+  return publicKey.export({ format: 'pem', type: 'spki' }).toString();
+}
+
+function computePublicKeyFingerprint(publicKey: crypto.KeyObject): string {
+  const der = publicKey.export({ format: 'der', type: 'spki' });
+  return crypto.createHash('sha256').update(der).digest('base64url');
+}
+
+function deriveAsymmetricBundleSigningAlgorithm(
+  key: crypto.KeyObject,
+  configuredAlgorithm?: string,
+): Exclude<RegulatorySubmissionBundleSigningAlgorithm, 'hmac-sha256'> {
+  if (configuredAlgorithm) {
+    if (
+      configuredAlgorithm === 'RS256'
+      || configuredAlgorithm === 'PS256'
+      || configuredAlgorithm === 'ES256'
+      || configuredAlgorithm === 'EdDSA'
+    ) {
+      return configuredAlgorithm;
+    }
+    throw new Error(`Unsupported regulatory submission signing algorithm: ${configuredAlgorithm}`);
+  }
+
+  switch (key.asymmetricKeyType) {
+    case 'ed25519':
+    case 'ed448':
+      return 'EdDSA';
+    case 'ec':
+      return 'ES256';
+    case 'rsa-pss':
+      return 'PS256';
+    case 'rsa':
+      return 'RS256';
+    default:
+      throw new Error(`Unsupported asymmetric key type for regulatory submission signing: ${String(key.asymmetricKeyType)}`);
+  }
+}
+
+function getAsymmetricSigningKeyInput(
+  algorithm: Exclude<RegulatorySubmissionBundleSigningAlgorithm, 'hmac-sha256'>,
+  privateKey: crypto.KeyObject,
+): crypto.KeyLike | crypto.SignKeyObjectInput {
+  if (algorithm === 'PS256') {
+    return {
+      key: privateKey,
+      padding: crypto.constants.RSA_PKCS1_PSS_PADDING,
+      saltLength: crypto.constants.RSA_PSS_SALTLEN_DIGEST,
+    };
+  }
+  return privateKey;
+}
+
+function getAsymmetricVerificationKeyInput(
+  algorithm: Exclude<RegulatorySubmissionBundleSigningAlgorithm, 'hmac-sha256'>,
+  publicKey: crypto.KeyObject,
+): crypto.KeyLike | crypto.VerifyKeyObjectInput {
+  if (algorithm === 'PS256') {
+    return {
+      key: publicKey,
+      padding: crypto.constants.RSA_PKCS1_PSS_PADDING,
+      saltLength: crypto.constants.RSA_PSS_SALTLEN_DIGEST,
+    };
+  }
+  return publicKey;
+}
+
+function buildDefaultBundleKeyId(
+  scope: RegulatorySubmissionBundleSigningScope,
+  organizationId: string,
+  authoritySegment: string,
+  jurisdictionSegment: string,
+): string {
+  switch (scope) {
+    case 'organization_authority':
+      return `org:${organizationId}:authority:${authoritySegment.toLowerCase()}`;
+    case 'authority':
+      return `authority:${authoritySegment.toLowerCase()}`;
+    case 'jurisdiction':
+      return `jurisdiction:${jurisdictionSegment.toLowerCase()}`;
+    case 'global':
+    default:
+      return 'global:default';
+  }
+}
+
+function buildDefaultBundleVerificationMethod(keyId: string): string {
+  const sanitizedKeyId = keyId.replace(/[^a-zA-Z0-9:_-]+/g, '-');
+  return `urn:zeroid:regulatory-submission:${sanitizedKeyId}`;
+}
+
+function resolveSubmissionPackageProfile(
+  report: GeneratedReport,
+  filingPackage: ReportFilingPackageSnapshot,
+): RegulatorySubmissionBundle['packageProfile'] {
+  const authority = filingPackage.authorityProfile?.authority;
+  const recommendedDeliveryChannels = filingPackage.authorityProfile?.preferredDeliveryChannels ?? ['portal_upload', 'api'];
+  const acknowledgementExpected = filingPackage.authorityProfile?.acknowledgementExpected ?? true;
+  const availableFormats = report.exportFormats;
+
+  if (report.reportType === 'SAR' || report.reportType === 'CTR' || report.reportType === 'STR') {
+    return {
+      profileId: `regulator.aml.${sanitizeSigningSegment(authority ?? report.filingJurisdiction).toLowerCase()}.v1`,
+      schemaVersion: '2026.04.1',
+      ...(authority ? { authority } : {}),
+      regulatorClass: 'aml',
+      reportType: report.reportType,
+      jurisdiction: report.filingJurisdiction,
+      preferredPrimaryFormat: availableFormats.includes('xml') ? 'xml' : availableFormats[0] ?? 'json',
+      requiredArtifacts: ['json', 'xml', 'pdf'],
+      recommendedDeliveryChannels,
+      acknowledgementExpected,
+      includesAuthorityManifest: true,
+      includesReceiptEvidence: true,
+      artifactDigestRequired: true,
+    };
+  }
+
+  if (report.reportType === 'DSAR' || report.reportType === 'ERASURE') {
+    const requiredArtifacts = report.reportType === 'DSAR'
+      ? ['json', 'pdf', 'csv']
+      : ['json', 'pdf'];
+    return {
+      profileId: `regulator.privacy.${sanitizeSigningSegment(authority ?? report.filingJurisdiction).toLowerCase()}.v1`,
+      schemaVersion: '2026.04.1',
+      ...(authority ? { authority } : {}),
+      regulatorClass: 'privacy',
+      reportType: report.reportType,
+      jurisdiction: report.filingJurisdiction,
+      preferredPrimaryFormat: availableFormats.includes('pdf') ? 'pdf' : availableFormats[0] ?? 'json',
+      requiredArtifacts,
+      recommendedDeliveryChannels,
+      acknowledgementExpected,
+      includesAuthorityManifest: true,
+      includesReceiptEvidence: true,
+      artifactDigestRequired: true,
+    };
+  }
+
+  if (report.reportType === 'AUDIT') {
+    return {
+      profileId: `regulator.audit.${sanitizeSigningSegment(authority ?? report.filingJurisdiction).toLowerCase()}.v1`,
+      schemaVersion: '2026.04.1',
+      ...(authority ? { authority } : {}),
+      regulatorClass: 'audit',
+      reportType: report.reportType,
+      jurisdiction: report.filingJurisdiction,
+      preferredPrimaryFormat: availableFormats.includes('pdf') ? 'pdf' : availableFormats[0] ?? 'json',
+      requiredArtifacts: ['json', 'pdf', 'csv'],
+      recommendedDeliveryChannels,
+      acknowledgementExpected,
+      includesAuthorityManifest: true,
+      includesReceiptEvidence: true,
+      artifactDigestRequired: true,
+    };
+  }
+
+  return {
+    profileId: `regulator.general.${sanitizeSigningSegment(authority ?? report.filingJurisdiction).toLowerCase()}.v1`,
+    schemaVersion: '2026.04.1',
+    ...(authority ? { authority } : {}),
+    regulatorClass: 'general',
+    reportType: report.reportType,
+    jurisdiction: report.filingJurisdiction,
+    preferredPrimaryFormat: availableFormats[0] ?? 'json',
+    requiredArtifacts: Array.from(new Set(['json', ...(availableFormats.includes('pdf') ? ['pdf'] : [])])),
+    recommendedDeliveryChannels,
+    acknowledgementExpected,
+    includesAuthorityManifest: true,
+    includesReceiptEvidence: true,
+    artifactDigestRequired: true,
+  };
+}
+
+function buildSubmissionProfileConformance(
+  packageProfile: RegulatorySubmissionBundle['packageProfile'],
+  filingPackage: ReportFilingPackageSnapshot,
+  artifacts: RegulatorySubmissionBundle['artifacts'],
+  relatedReceipts: RegulatorySubmissionBundle['relatedReceipts'],
+): RegulatorySubmissionBundle['profileConformance'] {
+  const availableArtifacts = artifacts.map((artifact) => artifact.format).sort((left, right) => left.localeCompare(right));
+  const requiredArtifacts = [...packageProfile.requiredArtifacts].sort((left, right) => left.localeCompare(right));
+  const missingArtifacts = requiredArtifacts.filter((format) => !availableArtifacts.includes(format));
+  const authorityManifestPresent = filingPackage.authorityManifest !== undefined;
+  const receiptEvidencePresent = relatedReceipts.length > 0;
+
+  return {
+    requiredArtifacts,
+    availableArtifacts,
+    missingArtifacts,
+    authorityManifestRequired: packageProfile.includesAuthorityManifest,
+    authorityManifestPresent,
+    receiptEvidenceRequired: packageProfile.includesReceiptEvidence,
+    receiptEvidencePresent,
+    satisfied: missingArtifacts.length === 0
+      && (!packageProfile.includesAuthorityManifest || authorityManifestPresent)
+      && (!packageProfile.includesReceiptEvidence || receiptEvidencePresent),
+  };
+}
+
+function assertSubmissionProfileConformance(
+  packageProfile: RegulatorySubmissionBundle['packageProfile'],
+  profileConformance: RegulatorySubmissionBundle['profileConformance'],
+): void {
+  if (profileConformance.satisfied) {
+    return;
+  }
+
+  const issues: string[] = [];
+  if (profileConformance.missingArtifacts.length > 0) {
+    issues.push(`missing required artifacts: ${profileConformance.missingArtifacts.join(', ')}`);
+  }
+  if (packageProfile.includesAuthorityManifest && !profileConformance.authorityManifestPresent) {
+    issues.push('authority manifest missing');
+  }
+  if (packageProfile.includesReceiptEvidence && !profileConformance.receiptEvidencePresent) {
+    issues.push('receipt evidence missing');
+  }
+
+  const error = Object.assign(
+    new Error(`Submission package does not satisfy ${packageProfile.profileId}: ${issues.join('; ')}`),
+    {
+      statusCode: 409,
+      code: 'REPORT_SUBMISSION_PACKAGE_INCOMPLETE',
+    },
+  );
+  throw error;
+}
+
+function resolveBundleSigningContext(
+  organizationId: string,
+  filingPackage: ReportFilingPackageSnapshot,
+): RegulatorySubmissionBundleSigningContext {
+  const authority = filingPackage.authorityProfile?.authority;
+  const authoritySegment = authority ? sanitizeSigningSegment(authority) : '';
+  const jurisdictionSegment = sanitizeSigningSegment(filingPackage.filingJurisdiction);
+  const organizationSegment = sanitizeSigningSegment(organizationId);
+  const envCandidates: Array<{
+    scope: RegulatorySubmissionBundleSigningScope;
+    defaultKeyId: string;
+    secretEnvKey: string;
+    privateKeyEnvKey: string;
+    publicKeyEnvKey: string;
+    algorithmEnvKey: string;
+    keyIdEnvKey: string;
+    keyVersionEnvKey: string;
+    verificationMethodEnvKey: string;
+  }> = [
+    ...(authoritySegment.length > 0 ? [{
+      scope: 'organization_authority' as const,
+      defaultKeyId: buildDefaultBundleKeyId('organization_authority', organizationId, authoritySegment, jurisdictionSegment),
+      secretEnvKey: `REGULATORY_SUBMISSION_BUNDLE_SIGNING_SECRET__ORG__${organizationSegment}__AUTHORITY__${authoritySegment}`,
+      privateKeyEnvKey: `REGULATORY_SUBMISSION_BUNDLE_SIGNING_PRIVATE_KEY__ORG__${organizationSegment}__AUTHORITY__${authoritySegment}`,
+      publicKeyEnvKey: `REGULATORY_SUBMISSION_BUNDLE_SIGNING_PUBLIC_KEY__ORG__${organizationSegment}__AUTHORITY__${authoritySegment}`,
+      algorithmEnvKey: `REGULATORY_SUBMISSION_BUNDLE_SIGNING_ALGORITHM__ORG__${organizationSegment}__AUTHORITY__${authoritySegment}`,
+      keyIdEnvKey: `REGULATORY_SUBMISSION_BUNDLE_SIGNING_KEY_ID__ORG__${organizationSegment}__AUTHORITY__${authoritySegment}`,
+      keyVersionEnvKey: `REGULATORY_SUBMISSION_BUNDLE_SIGNING_KEY_VERSION__ORG__${organizationSegment}__AUTHORITY__${authoritySegment}`,
+      verificationMethodEnvKey: `REGULATORY_SUBMISSION_BUNDLE_SIGNING_VERIFICATION_METHOD__ORG__${organizationSegment}__AUTHORITY__${authoritySegment}`,
+    }] : []),
+    ...(authoritySegment.length > 0 ? [{
+      scope: 'authority' as const,
+      defaultKeyId: buildDefaultBundleKeyId('authority', organizationId, authoritySegment, jurisdictionSegment),
+      secretEnvKey: `REGULATORY_SUBMISSION_BUNDLE_SIGNING_SECRET__AUTHORITY__${authoritySegment}`,
+      privateKeyEnvKey: `REGULATORY_SUBMISSION_BUNDLE_SIGNING_PRIVATE_KEY__AUTHORITY__${authoritySegment}`,
+      publicKeyEnvKey: `REGULATORY_SUBMISSION_BUNDLE_SIGNING_PUBLIC_KEY__AUTHORITY__${authoritySegment}`,
+      algorithmEnvKey: `REGULATORY_SUBMISSION_BUNDLE_SIGNING_ALGORITHM__AUTHORITY__${authoritySegment}`,
+      keyIdEnvKey: `REGULATORY_SUBMISSION_BUNDLE_SIGNING_KEY_ID__AUTHORITY__${authoritySegment}`,
+      keyVersionEnvKey: `REGULATORY_SUBMISSION_BUNDLE_SIGNING_KEY_VERSION__AUTHORITY__${authoritySegment}`,
+      verificationMethodEnvKey: `REGULATORY_SUBMISSION_BUNDLE_SIGNING_VERIFICATION_METHOD__AUTHORITY__${authoritySegment}`,
+    }] : []),
+    {
+      scope: 'jurisdiction' as const,
+      defaultKeyId: buildDefaultBundleKeyId('jurisdiction', organizationId, authoritySegment, jurisdictionSegment),
+      secretEnvKey: `REGULATORY_SUBMISSION_BUNDLE_SIGNING_SECRET__JURISDICTION__${jurisdictionSegment}`,
+      privateKeyEnvKey: `REGULATORY_SUBMISSION_BUNDLE_SIGNING_PRIVATE_KEY__JURISDICTION__${jurisdictionSegment}`,
+      publicKeyEnvKey: `REGULATORY_SUBMISSION_BUNDLE_SIGNING_PUBLIC_KEY__JURISDICTION__${jurisdictionSegment}`,
+      algorithmEnvKey: `REGULATORY_SUBMISSION_BUNDLE_SIGNING_ALGORITHM__JURISDICTION__${jurisdictionSegment}`,
+      keyIdEnvKey: `REGULATORY_SUBMISSION_BUNDLE_SIGNING_KEY_ID__JURISDICTION__${jurisdictionSegment}`,
+      keyVersionEnvKey: `REGULATORY_SUBMISSION_BUNDLE_SIGNING_KEY_VERSION__JURISDICTION__${jurisdictionSegment}`,
+      verificationMethodEnvKey: `REGULATORY_SUBMISSION_BUNDLE_SIGNING_VERIFICATION_METHOD__JURISDICTION__${jurisdictionSegment}`,
+    },
+    {
+      scope: 'global' as const,
+      defaultKeyId: buildDefaultBundleKeyId('global', organizationId, authoritySegment, jurisdictionSegment),
+      secretEnvKey: 'REGULATORY_SUBMISSION_BUNDLE_SIGNING_SECRET',
+      privateKeyEnvKey: 'REGULATORY_SUBMISSION_BUNDLE_SIGNING_PRIVATE_KEY',
+      publicKeyEnvKey: 'REGULATORY_SUBMISSION_BUNDLE_SIGNING_PUBLIC_KEY',
+      algorithmEnvKey: 'REGULATORY_SUBMISSION_BUNDLE_SIGNING_ALGORITHM',
+      keyIdEnvKey: 'REGULATORY_SUBMISSION_BUNDLE_SIGNING_KEY_ID',
+      keyVersionEnvKey: 'REGULATORY_SUBMISSION_BUNDLE_SIGNING_KEY_VERSION',
+      verificationMethodEnvKey: 'REGULATORY_SUBMISSION_BUNDLE_SIGNING_VERIFICATION_METHOD',
+    },
+  ];
+
+  for (const candidate of envCandidates) {
+    const rawPrivateKey = process.env[candidate.privateKeyEnvKey];
+    if (rawPrivateKey && rawPrivateKey.trim().length > 0) {
+      const keyId = process.env[candidate.keyIdEnvKey]?.trim() || candidate.defaultKeyId;
+      const privateKey = parsePrivateKeyMaterial(rawPrivateKey);
+      const publicKey = process.env[candidate.publicKeyEnvKey]?.trim()
+        ? parsePublicKeyMaterial(process.env[candidate.publicKeyEnvKey] as string)
+        : crypto.createPublicKey(privateKey);
+      const algorithm = deriveAsymmetricBundleSigningAlgorithm(privateKey, process.env[candidate.algorithmEnvKey]?.trim());
+      const publicKeyFingerprint = computePublicKeyFingerprint(publicKey);
+      return {
+        mode: 'asymmetric',
+        algorithm,
+        keyId,
+        scope: candidate.scope,
+        keyVersion: process.env[candidate.keyVersionEnvKey]?.trim() || '1',
+        verificationMethod: process.env[candidate.verificationMethodEnvKey]?.trim() || buildDefaultBundleVerificationMethod(keyId),
+        privateKey,
+        publicKey,
+        publicKeyFingerprint,
+        publicKeyPem: exportPublicKeyPem(publicKey),
+      };
+    }
+
+    const secret = process.env[candidate.secretEnvKey];
+    if (secret && secret.length >= 16) {
+      if (process.env.NODE_ENV === 'production') {
+        throw new Error('HMAC regulatory submission bundle signing is blocked in production. Configure asymmetric signing material.');
+      }
+      return {
+        mode: 'hmac',
+        algorithm: 'hmac-sha256',
+        keyId: process.env[candidate.keyIdEnvKey]?.trim() || candidate.defaultKeyId,
+        scope: candidate.scope,
+        secret,
+      };
+    }
+  }
+
+  if (process.env.NODE_ENV !== 'production') {
+    const fallbackScope: RegulatorySubmissionBundleSigningScope = authoritySegment.length > 0
+      ? 'organization_authority'
+      : 'jurisdiction';
+    const fallbackKeyId = buildDefaultBundleKeyId(fallbackScope, organizationId, authoritySegment, jurisdictionSegment);
+    const publicKeyFingerprint = computePublicKeyFingerprint(DEV_REGULATORY_SUBMISSION_SIGNING_KEYPAIR.publicKey);
+    return {
+      mode: 'asymmetric',
+      algorithm: 'EdDSA',
+      keyId: fallbackKeyId,
+      scope: fallbackScope,
+      keyVersion: 'dev-ed25519-1',
+      verificationMethod: buildDefaultBundleVerificationMethod(fallbackKeyId),
+      privateKey: DEV_REGULATORY_SUBMISSION_SIGNING_KEYPAIR.privateKey,
+      publicKey: DEV_REGULATORY_SUBMISSION_SIGNING_KEYPAIR.publicKey,
+      publicKeyFingerprint,
+      publicKeyPem: exportPublicKeyPem(DEV_REGULATORY_SUBMISSION_SIGNING_KEYPAIR.publicKey),
+    };
+  }
+
+  throw new Error('Scoped regulatory submission bundle asymmetric signing key must be configured in production');
+}
+
+function signSubmissionBundleDigest(
+  digest: string,
+  signingContext: RegulatorySubmissionBundleSigningContext,
+): RegulatorySubmissionBundle['bundleSignature'] {
+  const signedAt = new Date().toISOString();
+  const token = computeSubmissionBundleSignatureToken(digest, signedAt, signingContext);
+  return {
+    algorithm: signingContext.algorithm,
+    signedAt,
+    keyId: signingContext.keyId,
+    scope: signingContext.scope,
+    encoding: 'base64url',
+    ...(signingContext.mode === 'asymmetric'
+      ? {
+        keyVersion: signingContext.keyVersion,
+        verificationMethod: signingContext.verificationMethod,
+        publicKeyFingerprint: signingContext.publicKeyFingerprint,
+        publicKeyPem: signingContext.publicKeyPem,
+      }
+      : {}),
+    token,
+  };
+}
+
+function computeSubmissionBundleSignatureToken(
+  digest: string,
+  signedAt: string,
+  signingContext: RegulatorySubmissionBundleSigningContext,
+): string {
+  if (signingContext.mode === 'hmac') {
+    return crypto.createHmac('sha256', signingContext.secret).update(`${digest}:${signedAt}`).digest('base64url');
+  }
+
+  const payload = Buffer.from(`${digest}:${signedAt}`);
+  const signature = signingContext.algorithm === 'EdDSA'
+    ? crypto.sign(null, payload, signingContext.privateKey)
+    : crypto.sign(
+      'sha256',
+      payload,
+      getAsymmetricSigningKeyInput(signingContext.algorithm, signingContext.privateKey),
+  );
+  return signature.toString('base64url');
+}
+
+function verifySubmissionBundleSignatureToken(
+  digest: string,
+  signedAt: string,
+  token: string,
+  signingContext: RegulatorySubmissionBundleSigningContext,
+): boolean {
+  if (signingContext.mode === 'hmac') {
+    const expectedToken = computeSubmissionBundleSignatureToken(digest, signedAt, signingContext);
+    return expectedToken === token;
+  }
+
+  const payload = Buffer.from(`${digest}:${signedAt}`);
+  const signature = Buffer.from(token, 'base64url');
+  if (signingContext.algorithm === 'EdDSA') {
+    return crypto.verify(null, payload, signingContext.publicKey, signature);
+  }
+
+  return crypto.verify(
+    'sha256',
+    payload,
+    getAsymmetricVerificationKeyInput(signingContext.algorithm, signingContext.publicKey),
+    signature,
+  );
+}
+
+async function buildSubmissionArtifacts(
+  report: GeneratedReport,
+): Promise<RegulatorySubmissionBundle['artifacts']> {
+  const artifacts = await Promise.all(report.exportFormats.map(async (format) => {
+    const exported = await regulatoryReportingService.exportReport(report.reportId, format);
+    const encoding = format === 'pdf' ? 'base64' as const : 'utf8' as const;
+    const payloadBuffer = encoding === 'base64'
+      ? Buffer.from(exported.data, 'base64')
+      : Buffer.from(exported.data, 'utf8');
+    return {
+      format,
+      filename: exported.filename,
+      contentType: exported.contentType,
+      payloadDigest: crypto.createHash('sha256').update(payloadBuffer).digest('hex'),
+      byteLength: payloadBuffer.byteLength,
+      encoding,
+    };
+  }));
+
+  return artifacts.sort((left, right) => left.format.localeCompare(right.format));
+}
+
+async function buildRegulatorySubmissionBundle(
+  report: GeneratedReport,
+  evidenceTrail: ReportEvidenceEvent[],
+  organizationId: string,
+): Promise<RegulatorySubmissionBundle> {
+  const exportedAt = new Date().toISOString();
+  const filingPackage = buildReportFilingPackage(report, evidenceTrail, exportedAt);
+  const packageProfile = resolveSubmissionPackageProfile(report, filingPackage);
+  const artifacts = await buildSubmissionArtifacts(report);
+  const receiptLinks = evidenceTrail
+    .filter((event) => typeof event.receiptId === 'string' && event.receiptId.length > 0)
+    .map((event) => ({
+      receiptId: event.receiptId as string,
+      action: event.action,
+    }));
+  const dedupedLinks = receiptLinks.filter((link, index, all) =>
+    all.findIndex((candidate) => candidate.receiptId === link.receiptId) === index);
+  const relatedReceipts = (await Promise.all(dedupedLinks.map(async (link) => {
+    const exported = await policyDecisionReceiptService.exportReceipt(link.receiptId);
+    if (!exported) {
+      return null;
+    }
+    return {
+      receiptId: link.receiptId,
+      action: link.action,
+      exported,
+    };
+  }))).filter((entry): entry is { receiptId: string; action: ReportEvidenceEventSnapshot['action']; exported: unknown } => entry !== null);
+  const profileConformance = buildSubmissionProfileConformance(packageProfile, filingPackage, artifacts, relatedReceipts);
+  assertSubmissionProfileConformance(packageProfile, profileConformance);
+  const signingContext = resolveBundleSigningContext(organizationId, filingPackage);
+
+  const bundleWithoutDigest = {
+    packageVersion: 'zeroid.regulatory_submission_bundle.v1' as const,
+    exportedAt,
+    report: {
+      reportId: report.reportId,
+      reportType: report.reportType,
+      version: report.version,
+      status: report.status,
+      filingJurisdiction: report.filingJurisdiction,
+      ...(report.filingReference !== undefined ? { filingReference: report.filingReference } : {}),
+    },
+    filingPackage,
+    ...(filingPackage.authorityManifest ? { authorityManifest: filingPackage.authorityManifest } : {}),
+    packageProfile,
+    profileConformance,
+    artifacts,
+    relatedReceipts,
+  };
+
+  const bundleDigest = sha256(bundleWithoutDigest);
+
+  return {
+    ...bundleWithoutDigest,
+    bundleDigest,
+    bundleSignature: signSubmissionBundleDigest(bundleDigest, signingContext),
+  };
+}
+
+function verifyRegulatorySubmissionBundle(
+  bundle: unknown,
+  organizationId: string,
+): SubmissionBundleVerificationResult {
+  const verifiedAt = new Date().toISOString();
+  const record = asRecord(bundle);
+  const issues: string[] = [];
+  const packageVersion = typeof record.packageVersion === 'string' ? record.packageVersion : undefined;
+  const bundleDigest = typeof record.bundleDigest === 'string' ? record.bundleDigest : '';
+  const bundleSignature = asRecord(record.bundleSignature);
+  const packageProfile = asRecord(record.packageProfile);
+  const filingPackage = asRecord(record.filingPackage);
+  const profileConformance = asRecord(record.profileConformance);
+  const artifacts = Array.isArray(record.artifacts) ? record.artifacts : [];
+  const relatedReceipts = Array.isArray(record.relatedReceipts) ? record.relatedReceipts : [];
+
+  if (packageVersion !== 'zeroid.regulatory_submission_bundle.v1') {
+    issues.push('unsupported packageVersion');
+  }
+  if (bundleDigest.length !== 64) {
+    issues.push('bundleDigest missing or malformed');
+  }
+  if (typeof bundleSignature.signedAt !== 'string' || bundleSignature.signedAt.length === 0) {
+    issues.push('bundleSignature.signedAt missing');
+  }
+  if (
+    bundleSignature.algorithm !== 'hmac-sha256'
+    && bundleSignature.algorithm !== 'RS256'
+    && bundleSignature.algorithm !== 'PS256'
+    && bundleSignature.algorithm !== 'ES256'
+    && bundleSignature.algorithm !== 'EdDSA'
+  ) {
+    issues.push('unsupported bundleSignature.algorithm');
+  }
+
+  const bundleWithoutDigest = {
+    packageVersion: record.packageVersion,
+    exportedAt: record.exportedAt,
+    report: record.report,
+    filingPackage: record.filingPackage,
+    ...(record.authorityManifest ? { authorityManifest: record.authorityManifest } : {}),
+    packageProfile: record.packageProfile,
+    profileConformance: record.profileConformance,
+    artifacts: record.artifacts,
+    relatedReceipts: record.relatedReceipts,
+  };
+  const computedDigest = sha256(bundleWithoutDigest);
+  const digestValid = bundleDigest.length === 64 && bundleDigest === computedDigest;
+  if (!digestValid) {
+    issues.push('bundleDigest does not match bundle contents');
+  }
+
+  const normalizedFilingPackage = filingPackage as unknown as ReportFilingPackageSnapshot;
+  const normalizedPackageProfile = packageProfile as unknown as RegulatorySubmissionBundle['packageProfile'];
+  const normalizedArtifacts = artifacts as RegulatorySubmissionBundle['artifacts'];
+  const normalizedRelatedReceipts = relatedReceipts as RegulatorySubmissionBundle['relatedReceipts'];
+  const recomputedConformance = buildSubmissionProfileConformance(
+    normalizedPackageProfile,
+    normalizedFilingPackage,
+    normalizedArtifacts,
+    normalizedRelatedReceipts,
+  );
+  const profileConformanceValid = JSON.stringify(profileConformance) === JSON.stringify(recomputedConformance);
+  if (!profileConformanceValid) {
+    issues.push('profileConformance does not match bundle contents');
+  }
+
+  let signingScopeMatched = false;
+  let verificationKeyMatched = false;
+  let signatureValid = false;
+  if (
+    typeof filingPackage.filingJurisdiction === 'string'
+    && filingPackage.filingJurisdiction.length > 0
+  ) {
+    try {
+      const signingContext = resolveBundleSigningContext(organizationId, normalizedFilingPackage);
+      signingScopeMatched = (
+        bundleSignature.keyId === signingContext.keyId
+        && bundleSignature.scope === signingContext.scope
+        && bundleSignature.algorithm === signingContext.algorithm
+        && (signingContext.mode !== 'asymmetric'
+          || (
+            bundleSignature.keyVersion === signingContext.keyVersion
+            && bundleSignature.verificationMethod === signingContext.verificationMethod
+          ))
+      );
+      if (!signingScopeMatched) {
+        issues.push('bundleSignature signing scope does not match resolved signing context');
+      }
+
+      verificationKeyMatched = signingContext.mode === 'asymmetric'
+        ? bundleSignature.publicKeyFingerprint === signingContext.publicKeyFingerprint
+          && bundleSignature.publicKeyPem === signingContext.publicKeyPem
+        : bundleSignature.publicKeyFingerprint === undefined && bundleSignature.publicKeyPem === undefined;
+      if (!verificationKeyMatched) {
+        issues.push('bundleSignature verification key material does not match resolved signing context');
+      }
+
+      if (
+        typeof bundleSignature.signedAt === 'string'
+        && typeof bundleSignature.token === 'string'
+        && bundleDigest.length === 64
+      ) {
+        signatureValid = verifySubmissionBundleSignatureToken(
+          bundleDigest,
+          bundleSignature.signedAt,
+          bundleSignature.token,
+          signingContext,
+        );
+        if (!signatureValid) {
+          issues.push('bundleSignature token verification failed');
+        }
+      }
+    } catch (error) {
+      issues.push((error as Error).message);
+    }
+  } else {
+    issues.push('filingPackage missing filingJurisdiction');
+  }
+
+  return {
+    verifiedAt,
+    valid: digestValid && signatureValid && signingScopeMatched && verificationKeyMatched && profileConformanceValid && issues.length === 0,
+    digestValid,
+    signatureValid,
+    signingScopeMatched,
+    verificationKeyMatched,
+    profileConformanceValid,
+    issues,
+    ...(packageVersion ? { packageVersion } : {}),
+    ...(typeof packageProfile.profileId === 'string' && packageProfile.profileId.length > 0
+      ? { profileId: packageProfile.profileId }
+      : {}),
+    ...(typeof bundleSignature.keyId === 'string' && bundleSignature.keyId.length > 0
+      ? { signingKeyId: bundleSignature.keyId }
+      : {}),
+    ...(bundleSignature.scope === 'organization_authority'
+      || bundleSignature.scope === 'authority'
+      || bundleSignature.scope === 'jurisdiction'
+      || bundleSignature.scope === 'global'
+      ? { signingScope: bundleSignature.scope as SubmissionBundleVerificationResult['signingScope'] }
+      : {}),
+    ...(bundleSignature.algorithm === 'hmac-sha256'
+      || bundleSignature.algorithm === 'RS256'
+      || bundleSignature.algorithm === 'PS256'
+      || bundleSignature.algorithm === 'ES256'
+      || bundleSignature.algorithm === 'EdDSA'
+      ? { signingAlgorithm: bundleSignature.algorithm as SubmissionBundleVerificationResult['signingAlgorithm'] }
+      : {}),
+    ...(typeof bundleSignature.keyVersion === 'string' && bundleSignature.keyVersion.length > 0
+      ? { signingKeyVersion: bundleSignature.keyVersion }
+      : {}),
+    ...(typeof bundleSignature.verificationMethod === 'string' && bundleSignature.verificationMethod.length > 0
+      ? { signingVerificationMethod: bundleSignature.verificationMethod }
+      : {}),
+  };
+}
+
+function recordAuthorityManifestEvent(
+  reportId: string,
+  event: Omit<ReportAuthorityManifestEvent, 'eventId' | 'recordedAt'>,
+): ReportAuthorityManifest {
+  return regulatoryReportingService.recordAuthorityManifestEvent(reportId, event);
 }
 
 function buildReportSubmissionObligationUsage(
@@ -1138,6 +2052,88 @@ function buildReportExportObligationUsage(
       rulePath: `delivery_acknowledgement:${handoff.acknowledgementId}`,
       status: 'satisfied',
       detail: handoff.acknowledgementId,
+      jurisdiction: report.filingJurisdiction,
+      reportType: report.reportType,
+    });
+  }
+
+  return obligations;
+}
+
+function buildReportAcknowledgementObligationUsage(
+  report: GeneratedReport,
+  acknowledgement: {
+    stage: 'submitted' | 'amended' | 'exported';
+    acknowledgementId: string;
+    acknowledgedAt: string;
+    deliveryChannel?: string;
+    destination?: string;
+  },
+): ObligationEvidenceUsageSnapshot[] {
+  const obligations = buildReportingObligationUsage(report, report);
+  const authority = resolveRegulatoryAuthority(report.reportType, report.filingJurisdiction);
+
+  if (authority) {
+    pushUniqueObligation(obligations, {
+      domain: 'reporting',
+      obligationType: 'acknowledgement_authority',
+      rulePath: `acknowledgement_authority:${authority}`,
+      status: 'satisfied',
+      detail: authority,
+      jurisdiction: report.filingJurisdiction,
+      reportType: report.reportType,
+    });
+  }
+
+  pushUniqueObligation(obligations, {
+    domain: 'reporting',
+    obligationType: 'acknowledgement_stage',
+    rulePath: `acknowledgement_stage:${acknowledgement.stage}`,
+    status: 'satisfied',
+    detail: acknowledgement.stage,
+    jurisdiction: report.filingJurisdiction,
+    reportType: report.reportType,
+  });
+
+  pushUniqueObligation(obligations, {
+    domain: 'reporting',
+    obligationType: 'acknowledgement_id',
+    rulePath: `acknowledgement_id:${acknowledgement.acknowledgementId}`,
+    status: 'satisfied',
+    detail: acknowledgement.acknowledgementId,
+    jurisdiction: report.filingJurisdiction,
+    reportType: report.reportType,
+  });
+
+  pushUniqueObligation(obligations, {
+    domain: 'reporting',
+    obligationType: 'acknowledgement_timestamp',
+    rulePath: 'acknowledgement_timestamp',
+    status: 'satisfied',
+    detail: acknowledgement.acknowledgedAt,
+    jurisdiction: report.filingJurisdiction,
+    reportType: report.reportType,
+  });
+
+  if (acknowledgement.deliveryChannel) {
+    pushUniqueObligation(obligations, {
+      domain: 'reporting',
+      obligationType: 'acknowledgement_channel',
+      rulePath: `acknowledgement_channel:${acknowledgement.deliveryChannel}`,
+      status: 'satisfied',
+      detail: acknowledgement.deliveryChannel,
+      jurisdiction: report.filingJurisdiction,
+      reportType: report.reportType,
+    });
+  }
+
+  if (acknowledgement.destination) {
+    pushUniqueObligation(obligations, {
+      domain: 'reporting',
+      obligationType: 'acknowledgement_destination',
+      rulePath: `acknowledgement_destination:${acknowledgement.destination}`,
+      status: 'satisfied',
+      detail: acknowledgement.destination,
       jurisdiction: report.filingJurisdiction,
       reportType: report.reportType,
     });
@@ -2045,6 +3041,17 @@ router.post('/report/:reportId/submit', requireEnterpriseContext(ENTERPRISE_COMP
     const submissionAuthority = submittedReport
       ? resolveRegulatoryAuthority(submittedReport.reportType, submittedReport.filingJurisdiction)
       : null;
+    if (submittedReport) {
+      submittedReport.authorityManifest = recordAuthorityManifestEvent(submittedReport.reportId, {
+        stage: 'submitted',
+        actorIdentityId: context.actorIdentityId,
+        policyName: 'regulatory_submission',
+        policyVersion: '2026.04.1',
+        ...(submissionAuthority ? { authority: submissionAuthority } : {}),
+        filingReference: result.filingReference,
+        version: submittedReport.version,
+      });
+    }
     const submittedEventPreview: ReportEvidenceEventSnapshot | undefined = submittedReport
       ? {
         action: 'submitted',
@@ -2133,6 +3140,16 @@ router.post(
       );
       const amendmentRecordedAt = new Date().toISOString();
       const amendmentAuthority = resolveRegulatoryAuthority(amendedReport.reportType, amendedReport.filingJurisdiction);
+      amendedReport.authorityManifest = recordAuthorityManifestEvent(amendedReport.reportId, {
+        stage: 'amended',
+        actorIdentityId: context.actorIdentityId,
+        policyName: 'regulatory_amendment',
+        policyVersion: '2026.04.1',
+        ...(amendmentAuthority ? { authority: amendmentAuthority } : {}),
+        ...(amendedReport.filingReference !== undefined ? { filingReference: amendedReport.filingReference } : {}),
+        version: amendedReport.version,
+        amendmentReason: req.body.reason,
+      });
       const amendedEventPreview: ReportEvidenceEventSnapshot = {
         action: 'amended',
         recordedAt: amendmentRecordedAt,
@@ -2230,6 +3247,23 @@ router.get('/report/:reportId/export', requireEnterpriseContext(ENTERPRISE_COMPL
     const report = regulatoryReportingService.getReport(req.params.reportId as string);
     const exportedAt = new Date().toISOString();
     const exportAuthority = report ? resolveRegulatoryAuthority(report.reportType, report.filingJurisdiction) : null;
+    if (report) {
+      report.authorityManifest = recordAuthorityManifestEvent(report.reportId, {
+        stage: 'exported',
+        actorIdentityId: context.actorIdentityId,
+        policyName: 'regulatory_export',
+        policyVersion: '2026.04.1',
+        ...(exportAuthority ? { authority: exportAuthority } : {}),
+        ...(report.filingReference !== undefined ? { filingReference: report.filingReference } : {}),
+        version: report.version,
+        exportFormat: fmt.data,
+        exportFilename: exported.filename,
+        ...(handoff?.deliveryChannel ? { deliveryChannel: handoff.deliveryChannel } : {}),
+        ...(handoff?.destination ? { deliveryDestination: handoff.destination } : {}),
+        ...(handoff?.acknowledgementId ? { acknowledgementId: handoff.acknowledgementId } : {}),
+        ...(handoff?.acknowledgedAt ? { acknowledgedAt: handoff.acknowledgedAt } : {}),
+      });
+    }
     const exportedEventPreview: ReportEvidenceEventSnapshot | undefined = report
       ? {
         action: 'exported',
@@ -2330,6 +3364,209 @@ router.get('/report/:reportId/export', requireEnterpriseContext(ENTERPRISE_COMPL
     res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'EXPORT_ERROR' });
   }
 });
+
+// ---------------------------------------------------------------------------
+// GET /enterprise/compliance/report/:reportId/manifest — Export authority submission manifest
+// ---------------------------------------------------------------------------
+router.get('/report/:reportId/manifest', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_READ_ROLES), async (req: Request, res: Response): Promise<void> => {
+  try {
+    const report = regulatoryReportingService.getReport(req.params.reportId as string);
+    if (!report) {
+      res.status(404).json({ error: 'Report not found', code: 'REPORT_NOT_FOUND' });
+      return;
+    }
+
+    const manifest = regulatoryReportingService.getAuthorityManifest(req.params.reportId as string);
+    res.status(200).json({
+      data: {
+        reportId: report.reportId,
+        reportType: report.reportType,
+        version: report.version,
+        filingJurisdiction: report.filingJurisdiction,
+        manifest,
+      },
+    });
+  } catch (err) {
+    const error = err as Error & { statusCode?: number; code?: string };
+    logger.error('report_manifest_error', { error: error.message });
+    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'REPORT_MANIFEST_ERROR' });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /enterprise/compliance/report/:reportId/submission-package — Export a sealed regulator submission bundle
+// ---------------------------------------------------------------------------
+router.get('/report/:reportId/submission-package', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_READ_ROLES), async (req: Request, res: Response): Promise<void> => {
+  try {
+    const context = await requireReceiptContext(req, res);
+    if (!context) return;
+
+    const report = regulatoryReportingService.getReport(req.params.reportId as string);
+    if (!report) {
+      res.status(404).json({ error: 'Report not found', code: 'REPORT_NOT_FOUND' });
+      return;
+    }
+
+    const evidenceTrail = regulatoryReportingService.getEvidenceTrail(req.params.reportId as string);
+    const submissionBundle = await buildRegulatorySubmissionBundle(report, evidenceTrail, context.organizationId);
+
+    res.status(200).json({
+      data: submissionBundle,
+    });
+  } catch (err) {
+    const error = err as Error & { statusCode?: number; code?: string };
+    logger.error('report_submission_package_error', { error: error.message });
+    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'REPORT_SUBMISSION_PACKAGE_ERROR' });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /enterprise/compliance/report/submission-package/verify — Verify a sealed regulator submission bundle
+// ---------------------------------------------------------------------------
+router.post(
+  '/report/submission-package/verify',
+  requireEnterpriseContext(ENTERPRISE_COMPLIANCE_READ_ROLES),
+  validate(SubmissionPackageVerificationSchema),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const context = await requireReceiptContext(req, res);
+      if (!context) return;
+
+      const verification = verifyRegulatorySubmissionBundle(req.body.bundle, context.organizationId);
+      res.status(200).json({
+        data: verification,
+      });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('report_submission_package_verify_error', { error: error.message });
+      res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'REPORT_SUBMISSION_PACKAGE_VERIFY_ERROR' });
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// POST /enterprise/compliance/report/:reportId/acknowledge — Persist regulator acknowledgement
+// ---------------------------------------------------------------------------
+router.post(
+  '/report/:reportId/acknowledge',
+  requireEnterpriseContext(ENTERPRISE_COMPLIANCE_REVIEW_ROLES),
+  validate(ReportAcknowledgementRequestSchema),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const context = await requireReceiptContext(req, res);
+      if (!context) return;
+
+      const report = regulatoryReportingService.getReport(req.params.reportId as string);
+      if (!report) {
+        res.status(404).json({ error: 'Report not found', code: 'REPORT_NOT_FOUND' });
+        return;
+      }
+
+      const authority = resolveRegulatoryAuthority(report.reportType, report.filingJurisdiction);
+      const acknowledgedAt = req.body.acknowledgedAt ?? new Date().toISOString();
+      const manifest = recordAuthorityManifestEvent(report.reportId, {
+        stage: 'acknowledged',
+        acknowledgementStage: req.body.stage,
+        actorIdentityId: context.actorIdentityId,
+        policyName: 'regulatory_acknowledgement',
+        policyVersion: '2026.04.1',
+        ...(authority ? { authority } : {}),
+        ...(report.filingReference !== undefined ? { filingReference: report.filingReference } : {}),
+        version: report.version,
+        acknowledgementId: req.body.acknowledgementId,
+        acknowledgedAt,
+        ...(req.body.deliveryChannel ? { deliveryChannel: req.body.deliveryChannel } : {}),
+        ...(req.body.destination ? { deliveryDestination: req.body.destination } : {}),
+      });
+      report.authorityManifest = manifest;
+      const acknowledgedEventPreview: ReportEvidenceEventSnapshot = {
+        action: 'acknowledged',
+        recordedAt: acknowledgedAt,
+        policyName: 'regulatory_acknowledgement',
+        decisionSummary: `report_acknowledged:${req.params.reportId}:${req.body.stage}`,
+        ...(authority ? { authority } : {}),
+        ...(report.filingReference !== undefined ? { filingReference: report.filingReference } : {}),
+        version: report.version,
+        deliveryChannel: req.body.deliveryChannel,
+        deliveryDestination: req.body.destination,
+        deliveryAcknowledgementId: req.body.acknowledgementId,
+        deliveryAcknowledgedAt: acknowledgedAt,
+      };
+
+      const receipt = await createPolicyAnchoredReceipt(context, {
+        receiptType: 'regulatory_report',
+        policyName: 'regulatory_acknowledgement',
+        jurisdictionCodes: report.filingJurisdiction ? [report.filingJurisdiction] : [],
+        decisionSummary: `report_acknowledged:${req.params.reportId}:${req.body.stage}`,
+        payload: {
+          reportId: req.params.reportId,
+          stage: req.body.stage,
+          acknowledgementId: req.body.acknowledgementId,
+          acknowledgedAt,
+          deliveryChannel: req.body.deliveryChannel,
+          destination: req.body.destination,
+        },
+        result: {
+          manifestVersion: manifest.manifestVersion,
+          acknowledgementId: req.body.acknowledgementId,
+          stage: req.body.stage,
+        },
+        evidence: {
+          reportId: req.params.reportId,
+          reportType: report.reportType,
+          version: report.version,
+          filingReference: report.filingReference,
+          acknowledgementId: req.body.acknowledgementId,
+          stage: req.body.stage,
+          acknowledgedAt,
+        },
+        metadata: {
+          route: '/enterprise/compliance/report/:reportId/acknowledge',
+          reportFilingPackage: buildReportFilingPackage(
+            report,
+            [...(report.evidenceTrail ?? []), acknowledgedEventPreview],
+            acknowledgedAt,
+          ),
+          obligationEvidenceUsage: buildReportAcknowledgementObligationUsage(report, {
+            stage: req.body.stage,
+            acknowledgementId: req.body.acknowledgementId,
+            acknowledgedAt,
+            ...(req.body.deliveryChannel ? { deliveryChannel: req.body.deliveryChannel } : {}),
+            ...(req.body.destination ? { destination: req.body.destination } : {}),
+          }),
+        },
+      });
+      await recordReportEvidenceEvent(report, {
+        action: 'acknowledged',
+        receiptId: receipt.receiptId,
+        actorIdentityId: context.actorIdentityId,
+        policyName: receipt.policyName,
+        policyVersion: receipt.policyVersion,
+        decisionSummary: receipt.decisionSummary,
+        ...(authority ? { authority } : {}),
+        ...(report.filingReference !== undefined ? { filingReference: report.filingReference } : {}),
+        version: report.version,
+        deliveryChannel: req.body.deliveryChannel,
+        deliveryDestination: req.body.destination,
+        deliveryAcknowledgementId: req.body.acknowledgementId,
+        deliveryAcknowledgedAt: acknowledgedAt,
+      });
+
+      res.status(200).json({
+        data: {
+          reportId: report.reportId,
+          manifest,
+        },
+        receipt: summarizeReceipt(receipt),
+        message: 'Report acknowledgement recorded',
+      });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('report_acknowledgement_error', { error: error.message });
+      res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'ACKNOWLEDGEMENT_ERROR' });
+    }
+  },
+);
 
 // ---------------------------------------------------------------------------
 // GET /enterprise/compliance/report/:reportId/evidence — Export regulator-ready filing package

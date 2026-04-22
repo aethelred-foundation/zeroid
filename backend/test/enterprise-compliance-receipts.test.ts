@@ -32,6 +32,8 @@ const mockAmendReport = jest.fn();
 const mockExportReport = jest.fn();
 const mockRecordEvidenceEvent = jest.fn();
 const mockGetEvidenceTrail = jest.fn();
+const mockRecordAuthorityManifestEvent = jest.fn();
+const mockGetAuthorityManifest = jest.fn();
 const mockConductPIA = jest.fn();
 const mockInitiateBreachNotification = jest.fn();
 const mockGetRequiredCredentials = jest.fn();
@@ -149,6 +151,8 @@ jest.mock('../src/services/compliance/regulatory-reporting', () => ({
     exportReport: mockExportReport,
     recordEvidenceEvent: mockRecordEvidenceEvent,
     getEvidenceTrail: mockGetEvidenceTrail,
+    recordAuthorityManifestEvent: mockRecordAuthorityManifestEvent,
+    getAuthorityManifest: mockGetAuthorityManifest,
   },
 }));
 
@@ -584,10 +588,28 @@ describe('enterprise compliance receipt routes', () => {
       filingReference: 'SAR-20260422-abc123',
       exportFormats: ['json', 'xml', 'pdf'],
     });
-    mockExportReport.mockResolvedValue({
-      data: 'ZmFrZS1wZGY=',
-      contentType: 'application/pdf',
-      filename: 'SAR_report-1_v2.pdf',
+    mockExportReport.mockImplementation(async (reportId: string, format: string) => {
+      switch (format) {
+        case 'json':
+          return {
+            data: JSON.stringify({ reportId, format }),
+            contentType: 'application/json',
+            filename: `SAR_${reportId}_v2.json`,
+          };
+        case 'xml':
+          return {
+            data: `<report id="${reportId}" format="${format}" />`,
+            contentType: 'application/xml',
+            filename: `SAR_${reportId}_v2.xml`,
+          };
+        case 'pdf':
+        default:
+          return {
+            data: 'ZmFrZS1wZGY=',
+            contentType: 'application/pdf',
+            filename: `SAR_${reportId}_v2.pdf`,
+          };
+      }
     });
     mockRecordEvidenceEvent.mockImplementation((_reportId: string, event: Record<string, unknown>) => ({
       eventId: 'evt-1',
@@ -595,6 +617,138 @@ describe('enterprise compliance receipt routes', () => {
       ...event,
     }));
     mockGetEvidenceTrail.mockReturnValue([]);
+    mockRecordAuthorityManifestEvent.mockImplementation((_reportId: string, event: Record<string, unknown>) => ({
+      manifestVersion: 'zeroid.report_authority_manifest.v1',
+      reportId: 'report-1',
+      reportType: 'SAR',
+      filingJurisdiction: 'AE-ADGM',
+      authority: 'FSRA',
+      filingReference: 'SAR-20260422-abc123',
+      currentVersion: typeof event.version === 'number' ? event.version : 1,
+      submittedAt: '2026-04-22T10:00:00.000Z',
+      supportedExportFormats: ['json', 'xml', 'pdf'],
+      preferredDeliveryChannels: ['portal_upload', 'api', 'sftp'],
+      acknowledgementExpected: true,
+      acknowledgements: [],
+      handoffTrail: [
+        {
+          eventId: 'manifest-evt-1',
+          stage: event.stage ?? 'submitted',
+          recordedAt: '2026-04-22T12:30:00.000Z',
+          ...(event.acknowledgementStage ? { acknowledgementStage: event.acknowledgementStage } : {}),
+          ...(event.authority ? { authority: event.authority } : {}),
+          ...(event.filingReference !== undefined ? { filingReference: event.filingReference } : {}),
+          version: typeof event.version === 'number' ? event.version : 1,
+          ...(event.amendmentReason ? { amendmentReason: event.amendmentReason } : {}),
+          ...(event.exportFormat ? { exportFormat: event.exportFormat } : {}),
+          ...(event.exportFilename ? { exportFilename: event.exportFilename } : {}),
+          ...(event.deliveryChannel ? { deliveryChannel: event.deliveryChannel } : {}),
+          ...(event.deliveryDestination ? { deliveryDestination: event.deliveryDestination } : {}),
+          ...(event.acknowledgementId ? { acknowledgementId: event.acknowledgementId } : {}),
+          ...(event.acknowledgedAt ? { acknowledgedAt: event.acknowledgedAt } : {}),
+        },
+      ],
+      lastUpdatedAt: '2026-04-22T12:30:00.000Z',
+      ...(event.stage === 'amended'
+        ? {
+          latestAmendment: {
+            version: typeof event.version === 'number' ? event.version : 2,
+            amendedAt: '2026-04-22T12:00:00.000Z',
+            reason: event.amendmentReason ?? 'Corrected transaction narrative',
+          },
+        }
+        : {}),
+      ...(event.stage === 'exported'
+        ? {
+          latestExport: {
+            format: event.exportFormat ?? 'pdf',
+            filename: event.exportFilename ?? 'SAR_report-1_v2.pdf',
+            exportedAt: '2026-04-22T13:00:00.000Z',
+            ...(event.deliveryChannel ? { deliveryChannel: event.deliveryChannel } : {}),
+            ...(event.deliveryDestination ? { deliveryDestination: event.deliveryDestination } : {}),
+            ...(event.acknowledgementId ? { deliveryAcknowledgementId: event.acknowledgementId } : {}),
+            ...(event.acknowledgedAt ? { deliveryAcknowledgedAt: event.acknowledgedAt } : {}),
+          },
+        }
+        : {}),
+      ...(event.stage === 'acknowledged'
+        ? {
+          latestExport: {
+            format: 'pdf',
+            filename: 'SAR_report-1_v2.pdf',
+            exportedAt: '2026-04-22T13:00:00.000Z',
+            ...(event.deliveryChannel ? { deliveryChannel: event.deliveryChannel } : {}),
+            ...(event.deliveryDestination ? { deliveryDestination: event.deliveryDestination } : {}),
+            ...(event.acknowledgementId ? { deliveryAcknowledgementId: event.acknowledgementId } : {}),
+            ...(event.acknowledgedAt ? { deliveryAcknowledgedAt: event.acknowledgedAt } : {}),
+          },
+          acknowledgements: [
+            {
+              acknowledgementId: event.acknowledgementId ?? 'ack-report-1',
+              stage: event.acknowledgementStage ?? 'exported',
+              acknowledgedAt: event.acknowledgedAt ?? '2026-04-22T13:02:00.000Z',
+              ...(event.deliveryChannel ? { channel: event.deliveryChannel } : {}),
+              ...(event.deliveryDestination ? { destination: event.deliveryDestination } : {}),
+              authority: 'FSRA',
+            },
+          ],
+        }
+        : {}),
+    }));
+    mockGetAuthorityManifest.mockReturnValue({
+      manifestVersion: 'zeroid.report_authority_manifest.v1',
+      reportId: 'report-1',
+      reportType: 'SAR',
+      filingJurisdiction: 'AE-ADGM',
+      authority: 'FSRA',
+      filingReference: 'SAR-20260422-abc123',
+      currentVersion: 2,
+      submittedAt: '2026-04-22T10:00:00.000Z',
+      supportedExportFormats: ['json', 'xml', 'pdf'],
+      preferredDeliveryChannels: ['portal_upload', 'api', 'sftp'],
+      acknowledgementExpected: true,
+      latestAmendment: {
+        version: 2,
+        amendedAt: '2026-04-22T12:00:00.000Z',
+        reason: 'Corrected transaction narrative',
+      },
+      latestExport: {
+        format: 'pdf',
+        filename: 'SAR_report-1_v2.pdf',
+        exportedAt: '2026-04-22T13:00:00.000Z',
+        deliveryChannel: 'portal_upload',
+        deliveryDestination: 'fsra-portal',
+        deliveryAcknowledgementId: 'ack-report-1',
+        deliveryAcknowledgedAt: '2026-04-22T13:02:00.000Z',
+      },
+      acknowledgements: [
+        {
+          acknowledgementId: 'ack-report-1',
+          stage: 'exported',
+          acknowledgedAt: '2026-04-22T13:02:00.000Z',
+          channel: 'portal_upload',
+          destination: 'fsra-portal',
+          authority: 'FSRA',
+        },
+      ],
+      handoffTrail: [
+        {
+          eventId: 'manifest-evt-export-1',
+          stage: 'exported',
+          recordedAt: '2026-04-22T13:00:00.000Z',
+          authority: 'FSRA',
+          filingReference: 'SAR-20260422-abc123',
+          version: 2,
+          exportFormat: 'pdf',
+          exportFilename: 'SAR_report-1_v2.pdf',
+          deliveryChannel: 'portal_upload',
+          deliveryDestination: 'fsra-portal',
+          acknowledgementId: 'ack-report-1',
+          acknowledgedAt: '2026-04-22T13:02:00.000Z',
+        },
+      ],
+      lastUpdatedAt: '2026-04-22T13:02:00.000Z',
+    });
     mockGetDashboardData.mockReturnValue({
       totalReports: 0,
       reportsByType: {},
@@ -672,6 +826,15 @@ describe('enterprise compliance receipt routes', () => {
         organizationId: 'org-1',
       },
     });
+    mockExportReceipt.mockImplementation(async (receiptId: string) => ({
+      formatVersion: 'zeroid.policy_receipt_export.v1',
+      exportedAt: '2026-04-21T01:00:00.000Z',
+      verified: true,
+      receipt: {
+        receiptId,
+        organizationId: 'org-1',
+      },
+    }));
     mockGetRequiredCredentials.mockImplementation((jurisdiction: string, operationType: string) => {
       if (jurisdiction === 'AE-ADGM' && operationType === 'onboarding') {
         return ['kyc_enhanced', 'source_of_funds'];
@@ -1185,6 +1348,11 @@ describe('enterprise compliance receipt routes', () => {
           lifecycle: expect.objectContaining({
             filingReference: 'SAR-20260422-abc123',
           }),
+          authorityManifest: expect.objectContaining({
+            manifestVersion: 'zeroid.report_authority_manifest.v1',
+            authority: 'FSRA',
+            currentVersion: 1,
+          }),
           evidenceTrail: expect.arrayContaining([
             expect.objectContaining({
               action: 'submitted',
@@ -1274,6 +1442,13 @@ describe('enterprise compliance receipt routes', () => {
           version: 2,
           lifecycle: expect.objectContaining({
             amendmentCount: 1,
+            latestAmendment: expect.objectContaining({
+              version: 2,
+              reason: 'Corrected transaction narrative',
+            }),
+          }),
+          authorityManifest: expect.objectContaining({
+            manifestVersion: 'zeroid.report_authority_manifest.v1',
             latestAmendment: expect.objectContaining({
               version: 2,
               reason: 'Corrected transaction narrative',
@@ -1425,6 +1600,14 @@ describe('enterprise compliance receipt routes', () => {
             lastDeliveryDestination: 'fsra-portal',
             lastDeliveryAcknowledgementId: 'ack-report-1',
           }),
+          authorityManifest: expect.objectContaining({
+            manifestVersion: 'zeroid.report_authority_manifest.v1',
+            latestExport: expect.objectContaining({
+              format: 'pdf',
+              filename: 'SAR_report-1_v2.pdf',
+              deliveryChannel: 'portal_upload',
+            }),
+          }),
           evidenceTrail: expect.arrayContaining([
             expect.objectContaining({
               action: 'exported',
@@ -1482,6 +1665,553 @@ describe('enterprise compliance receipt routes', () => {
       exportFilename: 'SAR_report-1_v2.pdf',
       deliveryChannel: 'portal_upload',
       deliveryAcknowledgementId: 'ack-report-1',
+    }));
+  });
+
+  it('returns the persisted authority submission manifest for a report', async () => {
+    const response = await invokeRoute('GET', '/report/:reportId/manifest', {
+      params: { reportId: 'report-1' },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body.data).toMatchObject({
+      reportId: 'report-1',
+      reportType: 'SAR',
+      version: 1,
+      filingJurisdiction: 'AE-ADGM',
+      manifest: expect.objectContaining({
+        manifestVersion: 'zeroid.report_authority_manifest.v1',
+        authority: 'FSRA',
+        latestExport: expect.objectContaining({
+          format: 'pdf',
+          deliveryAcknowledgementId: 'ack-report-1',
+        }),
+        acknowledgements: expect.arrayContaining([
+          expect.objectContaining({
+            acknowledgementId: 'ack-report-1',
+            stage: 'exported',
+          }),
+        ]),
+      }),
+    });
+    expect(mockGetAuthorityManifest).toHaveBeenCalledWith('report-1');
+  });
+
+  it('exports a regulator submission bundle with related receipt evidence', async () => {
+    mockGetReport.mockReturnValue({
+      reportId: 'report-1',
+      reportType: 'SAR',
+      version: 2,
+      status: 'amended',
+      filingJurisdiction: 'AE-ADGM',
+      generatedAt: '2026-04-21T00:00:00.000Z',
+      submittedAt: '2026-04-22T10:00:00.000Z',
+      expiresAt: '2026-05-21T00:00:00.000Z',
+      content: {
+        filingDeadline: '2026-04-30T00:00:00.000Z',
+      },
+      amendments: [
+        {
+          version: 2,
+          amendedAt: '2026-04-22T12:00:00.000Z',
+          reason: 'Corrected transaction narrative',
+          changes: {
+            narrativeDescription: 'Updated narrative',
+          },
+        },
+      ],
+      filingReference: 'SAR-20260422-abc123',
+      exportFormats: ['json', 'xml', 'pdf'],
+      authorityManifest: mockGetAuthorityManifest(),
+    });
+    mockGetEvidenceTrail.mockReturnValue([
+      {
+        eventId: 'evt-gen-1',
+        action: 'generated',
+        recordedAt: '2026-04-21T00:00:00.000Z',
+        receiptId: 'pdr-gen-1',
+        policyName: 'regulatory_reporting',
+        version: 1,
+      },
+      {
+        eventId: 'evt-sub-1',
+        action: 'submitted',
+        recordedAt: '2026-04-22T10:00:00.000Z',
+        receiptId: 'pdr-sub-1',
+        policyName: 'regulatory_submission',
+        filingReference: 'SAR-20260422-abc123',
+        version: 1,
+      },
+      {
+        eventId: 'evt-exp-1',
+        action: 'exported',
+        recordedAt: '2026-04-22T13:00:00.000Z',
+        receiptId: 'pdr-exp-1',
+        policyName: 'regulatory_export',
+        filingReference: 'SAR-20260422-abc123',
+        version: 2,
+        exportFormat: 'pdf',
+        exportFilename: 'SAR_report-1_v2.pdf',
+      },
+      {
+        eventId: 'evt-ack-1',
+        action: 'acknowledged',
+        recordedAt: '2026-04-22T13:02:00.000Z',
+        receiptId: 'pdr-ack-1',
+        policyName: 'regulatory_acknowledgement',
+        filingReference: 'SAR-20260422-abc123',
+        version: 2,
+        deliveryAcknowledgementId: 'ack-report-1',
+        deliveryAcknowledgedAt: '2026-04-22T13:02:00.000Z',
+      },
+    ]);
+
+    const response = await invokeRoute('GET', '/report/:reportId/submission-package', {
+      params: { reportId: 'report-1' },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body.data).toMatchObject({
+      packageVersion: 'zeroid.regulatory_submission_bundle.v1',
+      report: expect.objectContaining({
+        reportId: 'report-1',
+        reportType: 'SAR',
+        version: 2,
+        filingReference: 'SAR-20260422-abc123',
+      }),
+      filingPackage: expect.objectContaining({
+        packageVersion: 'zeroid.regulatory_filing_package.v1',
+        authorityManifest: expect.objectContaining({
+          manifestVersion: 'zeroid.report_authority_manifest.v1',
+          authority: 'FSRA',
+        }),
+      }),
+      authorityManifest: expect.objectContaining({
+        manifestVersion: 'zeroid.report_authority_manifest.v1',
+        authority: 'FSRA',
+      }),
+      packageProfile: expect.objectContaining({
+        profileId: 'regulator.aml.fsra.v1',
+        schemaVersion: '2026.04.1',
+        authority: 'FSRA',
+        regulatorClass: 'aml',
+        reportType: 'SAR',
+        jurisdiction: 'AE-ADGM',
+        preferredPrimaryFormat: 'xml',
+        requiredArtifacts: ['json', 'xml', 'pdf'],
+        recommendedDeliveryChannels: ['portal_upload', 'api', 'sftp'],
+        acknowledgementExpected: true,
+        includesAuthorityManifest: true,
+        includesReceiptEvidence: true,
+        artifactDigestRequired: true,
+      }),
+      profileConformance: expect.objectContaining({
+        requiredArtifacts: ['json', 'pdf', 'xml'],
+        availableArtifacts: ['json', 'pdf', 'xml'],
+        missingArtifacts: [],
+        authorityManifestRequired: true,
+        authorityManifestPresent: true,
+        receiptEvidenceRequired: true,
+        receiptEvidencePresent: true,
+        satisfied: true,
+      }),
+      artifacts: expect.arrayContaining([
+        expect.objectContaining({
+          format: 'json',
+          filename: 'SAR_report-1_v2.json',
+          contentType: 'application/json',
+          encoding: 'utf8',
+        }),
+        expect.objectContaining({
+          format: 'xml',
+          filename: 'SAR_report-1_v2.xml',
+          contentType: 'application/xml',
+          encoding: 'utf8',
+        }),
+        expect.objectContaining({
+          format: 'pdf',
+          filename: 'SAR_report-1_v2.pdf',
+          contentType: 'application/pdf',
+          encoding: 'base64',
+        }),
+      ]),
+      relatedReceipts: expect.arrayContaining([
+        expect.objectContaining({
+          receiptId: 'pdr-gen-1',
+          action: 'generated',
+          exported: expect.objectContaining({
+            formatVersion: 'zeroid.policy_receipt_export.v1',
+          }),
+        }),
+        expect.objectContaining({
+          receiptId: 'pdr-ack-1',
+          action: 'acknowledged',
+        }),
+      ]),
+      bundleSignature: expect.objectContaining({
+        algorithm: 'EdDSA',
+        keyId: 'org:org-1:authority:fsra',
+        scope: 'organization_authority',
+        encoding: 'base64url',
+        keyVersion: 'dev-ed25519-1',
+        verificationMethod: 'urn:zeroid:regulatory-submission:org:org-1:authority:fsra',
+      }),
+    });
+    expect(typeof response.body.data.bundleDigest).toBe('string');
+    expect(response.body.data.bundleDigest).toHaveLength(64);
+    expect(typeof response.body.data.bundleSignature.token).toBe('string');
+    expect(typeof response.body.data.bundleSignature.publicKeyFingerprint).toBe('string');
+    expect(response.body.data.bundleSignature.publicKeyFingerprint.length).toBeGreaterThan(16);
+    expect(String(response.body.data.bundleSignature.publicKeyPem)).toContain('BEGIN PUBLIC KEY');
+    expect(mockExportReceipt).toHaveBeenCalledWith('pdr-gen-1');
+    expect(mockExportReceipt).toHaveBeenCalledWith('pdr-sub-1');
+    expect(mockExportReceipt).toHaveBeenCalledWith('pdr-exp-1');
+    expect(mockExportReceipt).toHaveBeenCalledWith('pdr-ack-1');
+    expect(mockExportReport).toHaveBeenCalledWith('report-1', 'json');
+    expect(mockExportReport).toHaveBeenCalledWith('report-1', 'xml');
+    expect(mockExportReport).toHaveBeenCalledWith('report-1', 'pdf');
+  });
+
+  it('rejects incomplete regulator submission bundles when required artifacts are unavailable', async () => {
+    mockGetReport.mockReturnValue({
+      reportId: 'report-1',
+      reportType: 'SAR',
+      version: 1,
+      status: 'submitted',
+      filingJurisdiction: 'AE-ADGM',
+      generatedAt: '2026-04-21T00:00:00.000Z',
+      submittedAt: '2026-04-22T10:00:00.000Z',
+      expiresAt: '2026-05-21T00:00:00.000Z',
+      content: {
+        filingDeadline: '2026-04-30T00:00:00.000Z',
+      },
+      amendments: [],
+      filingReference: 'SAR-20260422-incomplete',
+      exportFormats: ['json', 'pdf'],
+      authorityManifest: mockGetAuthorityManifest(),
+    });
+    mockGetEvidenceTrail.mockReturnValue([
+      {
+        eventId: 'evt-gen-1',
+        action: 'generated',
+        recordedAt: '2026-04-21T00:00:00.000Z',
+        receiptId: 'pdr-gen-1',
+        policyName: 'regulatory_reporting',
+        version: 1,
+      },
+      {
+        eventId: 'evt-sub-1',
+        action: 'submitted',
+        recordedAt: '2026-04-22T10:00:00.000Z',
+        receiptId: 'pdr-sub-1',
+        policyName: 'regulatory_submission',
+        filingReference: 'SAR-20260422-incomplete',
+        version: 1,
+      },
+    ]);
+
+    const response = await invokeRoute('GET', '/report/:reportId/submission-package', {
+      params: { reportId: 'report-1' },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.body).toMatchObject({
+      code: 'REPORT_SUBMISSION_PACKAGE_INCOMPLETE',
+    });
+    expect(String(response.body.error)).toContain('missing required artifacts: xml');
+    expect(mockExportReport).toHaveBeenCalledWith('report-1', 'json');
+    expect(mockExportReport).toHaveBeenCalledWith('report-1', 'pdf');
+  });
+
+  it('verifies an untampered regulator submission bundle', async () => {
+    mockGetReport.mockReturnValue({
+      reportId: 'report-1',
+      reportType: 'SAR',
+      version: 2,
+      status: 'amended',
+      filingJurisdiction: 'AE-ADGM',
+      generatedAt: '2026-04-21T00:00:00.000Z',
+      submittedAt: '2026-04-22T10:00:00.000Z',
+      expiresAt: '2026-05-21T00:00:00.000Z',
+      content: {
+        filingDeadline: '2026-04-30T00:00:00.000Z',
+      },
+      amendments: [
+        {
+          version: 2,
+          amendedAt: '2026-04-22T12:00:00.000Z',
+          reason: 'Corrected transaction narrative',
+          changes: {
+            narrativeDescription: 'Updated narrative',
+          },
+        },
+      ],
+      filingReference: 'SAR-20260422-verify',
+      exportFormats: ['json', 'xml', 'pdf'],
+      authorityManifest: mockGetAuthorityManifest(),
+    });
+    mockGetEvidenceTrail.mockReturnValue([
+      {
+        eventId: 'evt-gen-1',
+        action: 'generated',
+        recordedAt: '2026-04-21T00:00:00.000Z',
+        receiptId: 'pdr-gen-1',
+        policyName: 'regulatory_reporting',
+        version: 1,
+      },
+      {
+        eventId: 'evt-sub-1',
+        action: 'submitted',
+        recordedAt: '2026-04-22T10:00:00.000Z',
+        receiptId: 'pdr-sub-1',
+        policyName: 'regulatory_submission',
+        filingReference: 'SAR-20260422-verify',
+        version: 1,
+      },
+      {
+        eventId: 'evt-exp-1',
+        action: 'exported',
+        recordedAt: '2026-04-22T13:00:00.000Z',
+        receiptId: 'pdr-exp-1',
+        policyName: 'regulatory_export',
+        filingReference: 'SAR-20260422-verify',
+        version: 2,
+        exportFormat: 'pdf',
+        exportFilename: 'SAR_report-1_v2.pdf',
+      },
+    ]);
+
+    const bundleResponse = await invokeRoute('GET', '/report/:reportId/submission-package', {
+      params: { reportId: 'report-1' },
+    });
+
+    expect(bundleResponse.statusCode).toBe(200);
+
+    const verifyResponse = await invokeRoute('POST', '/report/submission-package/verify', {
+      body: {
+        bundle: bundleResponse.body.data,
+      },
+    });
+
+    expect(verifyResponse.statusCode).toBe(200);
+    expect(verifyResponse.body.data).toMatchObject({
+      valid: true,
+      digestValid: true,
+      signatureValid: true,
+      signingScopeMatched: true,
+      verificationKeyMatched: true,
+      profileConformanceValid: true,
+      packageVersion: 'zeroid.regulatory_submission_bundle.v1',
+      profileId: 'regulator.aml.fsra.v1',
+      signingKeyId: 'org:org-1:authority:fsra',
+      signingScope: 'organization_authority',
+      signingAlgorithm: 'EdDSA',
+      signingKeyVersion: 'dev-ed25519-1',
+      signingVerificationMethod: 'urn:zeroid:regulatory-submission:org:org-1:authority:fsra',
+      issues: [],
+    });
+  });
+
+  it('detects tampering in regulator submission bundle verification', async () => {
+    mockGetReport.mockReturnValue({
+      reportId: 'report-1',
+      reportType: 'SAR',
+      version: 2,
+      status: 'amended',
+      filingJurisdiction: 'AE-ADGM',
+      generatedAt: '2026-04-21T00:00:00.000Z',
+      submittedAt: '2026-04-22T10:00:00.000Z',
+      expiresAt: '2026-05-21T00:00:00.000Z',
+      content: {
+        filingDeadline: '2026-04-30T00:00:00.000Z',
+      },
+      amendments: [],
+      filingReference: 'SAR-20260422-tamper',
+      exportFormats: ['json', 'xml', 'pdf'],
+      authorityManifest: mockGetAuthorityManifest(),
+    });
+    mockGetEvidenceTrail.mockReturnValue([
+      {
+        eventId: 'evt-gen-1',
+        action: 'generated',
+        recordedAt: '2026-04-21T00:00:00.000Z',
+        receiptId: 'pdr-gen-1',
+        policyName: 'regulatory_reporting',
+        version: 1,
+      },
+      {
+        eventId: 'evt-sub-1',
+        action: 'submitted',
+        recordedAt: '2026-04-22T10:00:00.000Z',
+        receiptId: 'pdr-sub-1',
+        policyName: 'regulatory_submission',
+        filingReference: 'SAR-20260422-tamper',
+        version: 1,
+      },
+    ]);
+
+    const bundleResponse = await invokeRoute('GET', '/report/:reportId/submission-package', {
+      params: { reportId: 'report-1' },
+    });
+
+    expect(bundleResponse.statusCode).toBe(200);
+    const tamperedBundle = JSON.parse(JSON.stringify(bundleResponse.body.data));
+    tamperedBundle.artifacts[0].payloadDigest = '0'.repeat(64);
+
+    const verifyResponse = await invokeRoute('POST', '/report/submission-package/verify', {
+      body: {
+        bundle: tamperedBundle,
+      },
+    });
+
+    expect(verifyResponse.statusCode).toBe(200);
+    expect(verifyResponse.body.data).toMatchObject({
+      valid: false,
+      digestValid: false,
+      signatureValid: true,
+      signingScopeMatched: true,
+      verificationKeyMatched: true,
+      profileConformanceValid: true,
+      profileId: 'regulator.aml.fsra.v1',
+      signingAlgorithm: 'EdDSA',
+      signingKeyVersion: 'dev-ed25519-1',
+    });
+    expect(verifyResponse.body.data.issues).toEqual(expect.arrayContaining([
+      'bundleDigest does not match bundle contents',
+    ]));
+  });
+
+  it('detects signature verification key tampering in regulator submission bundle verification', async () => {
+    mockGetReport.mockReturnValue({
+      reportId: 'report-1',
+      reportType: 'SAR',
+      version: 2,
+      status: 'amended',
+      filingJurisdiction: 'AE-ADGM',
+      generatedAt: '2026-04-21T00:00:00.000Z',
+      submittedAt: '2026-04-22T10:00:00.000Z',
+      expiresAt: '2026-05-21T00:00:00.000Z',
+      content: {
+        filingDeadline: '2026-04-30T00:00:00.000Z',
+      },
+      amendments: [],
+      filingReference: 'SAR-20260422-sig-tamper',
+      exportFormats: ['json', 'xml', 'pdf'],
+      authorityManifest: mockGetAuthorityManifest(),
+    });
+    mockGetEvidenceTrail.mockReturnValue([
+      {
+        eventId: 'evt-gen-1',
+        action: 'generated',
+        recordedAt: '2026-04-21T00:00:00.000Z',
+        receiptId: 'pdr-gen-1',
+        policyName: 'regulatory_reporting',
+        version: 1,
+      },
+      {
+        eventId: 'evt-sub-1',
+        action: 'submitted',
+        recordedAt: '2026-04-22T10:00:00.000Z',
+        receiptId: 'pdr-sub-1',
+        policyName: 'regulatory_submission',
+        filingReference: 'SAR-20260422-sig-tamper',
+        version: 1,
+      },
+    ]);
+
+    const bundleResponse = await invokeRoute('GET', '/report/:reportId/submission-package', {
+      params: { reportId: 'report-1' },
+    });
+
+    expect(bundleResponse.statusCode).toBe(200);
+    const tamperedBundle = JSON.parse(JSON.stringify(bundleResponse.body.data));
+    tamperedBundle.bundleSignature.publicKeyFingerprint = 'tampered-fingerprint';
+
+    const verifyResponse = await invokeRoute('POST', '/report/submission-package/verify', {
+      body: {
+        bundle: tamperedBundle,
+      },
+    });
+
+    expect(verifyResponse.statusCode).toBe(200);
+    expect(verifyResponse.body.data).toMatchObject({
+      valid: false,
+      digestValid: true,
+      signatureValid: true,
+      signingScopeMatched: true,
+      verificationKeyMatched: false,
+      profileConformanceValid: true,
+      signingAlgorithm: 'EdDSA',
+      signingKeyVersion: 'dev-ed25519-1',
+    });
+    expect(verifyResponse.body.data.issues).toEqual(expect.arrayContaining([
+      'bundleSignature verification key material does not match resolved signing context',
+    ]));
+  });
+
+  it('records a regulator acknowledgement as receipt-backed manifest state', async () => {
+    const response = await invokeRoute('POST', '/report/:reportId/acknowledge', {
+      params: { reportId: 'report-1' },
+      body: {
+        stage: 'exported',
+        acknowledgementId: 'ack-report-2',
+        acknowledgedAt: '2026-04-22T13:10:00.000Z',
+        deliveryChannel: 'portal_upload',
+        destination: 'fsra-portal',
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body.data).toMatchObject({
+      reportId: 'report-1',
+      manifest: expect.objectContaining({
+        manifestVersion: 'zeroid.report_authority_manifest.v1',
+        acknowledgements: expect.arrayContaining([
+          expect.objectContaining({
+            acknowledgementId: 'ack-report-2',
+            stage: 'exported',
+          }),
+        ]),
+      }),
+    });
+    expect(mockRecordAuthorityManifestEvent).toHaveBeenCalledWith('report-1', expect.objectContaining({
+      stage: 'acknowledged',
+      acknowledgementStage: 'exported',
+      acknowledgementId: 'ack-report-2',
+      deliveryChannel: 'portal_upload',
+      deliveryDestination: 'fsra-portal',
+    }));
+    expect(mockCreateReceipt).toHaveBeenCalledWith(expect.objectContaining({
+      policyName: 'regulatory_acknowledgement',
+      decisionSummary: 'report_acknowledged:report-1:exported',
+      metadata: expect.objectContaining({
+        reportFilingPackage: expect.objectContaining({
+          evidenceTrail: expect.arrayContaining([
+            expect.objectContaining({
+              action: 'acknowledged',
+              deliveryAcknowledgementId: 'ack-report-2',
+            }),
+          ]),
+          authorityManifest: expect.objectContaining({
+            acknowledgements: expect.arrayContaining([
+              expect.objectContaining({
+                acknowledgementId: 'ack-report-2',
+                stage: 'exported',
+              }),
+            ]),
+          }),
+        }),
+        obligationEvidenceUsage: expect.arrayContaining([
+          expect.objectContaining({
+            obligationType: 'acknowledgement_id',
+            rulePath: 'acknowledgement_id:ack-report-2',
+          }),
+          expect.objectContaining({
+            obligationType: 'acknowledgement_stage',
+            rulePath: 'acknowledgement_stage:exported',
+          }),
+        ]),
+      }),
     }));
   });
 

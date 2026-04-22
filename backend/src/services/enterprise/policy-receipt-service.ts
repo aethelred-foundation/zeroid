@@ -364,7 +364,7 @@ interface ReportFilingDeadlineLineageSnapshot {
 
 interface ReportEvidenceEventLineageSnapshot {
   eventId?: string;
-  action: 'generated' | 'submitted' | 'amended' | 'exported';
+  action: 'generated' | 'submitted' | 'amended' | 'exported' | 'acknowledged';
   recordedAt: string;
   receiptId?: string;
   actorIdentityId?: string;
@@ -391,6 +391,61 @@ interface ReportFilingPackageLineageSnapshot {
   status: string;
   filingJurisdiction: string;
   authorityProfile?: ReportAuthorityProfileLineageSnapshot;
+  authorityManifest?: {
+    manifestVersion: 'zeroid.report_authority_manifest.v1';
+    reportId: string;
+    reportType: string;
+    filingJurisdiction: string;
+    authority?: string;
+    filingReference?: string | null;
+    currentVersion: number;
+    submittedAt?: string | null;
+    supportedExportFormats: string[];
+    preferredDeliveryChannels: Array<'portal_upload' | 'api' | 'sftp' | 'email'>;
+    acknowledgementExpected: boolean;
+    latestAmendment?: {
+      version: number;
+      amendedAt: string;
+      reason: string;
+    };
+    latestExport?: {
+      format: string;
+      filename: string;
+      exportedAt: string;
+      deliveryChannel?: string;
+      deliveryDestination?: string;
+      deliveryAcknowledgementId?: string;
+      deliveryAcknowledgedAt?: string;
+    };
+    acknowledgements: Array<{
+      acknowledgementId: string;
+      stage: 'submitted' | 'amended' | 'exported';
+      acknowledgedAt: string;
+      channel?: string;
+      destination?: string;
+      authority?: string;
+    }>;
+    handoffTrail: Array<{
+      eventId: string;
+      stage: 'submitted' | 'amended' | 'exported' | 'acknowledged';
+      recordedAt: string;
+      acknowledgementStage?: 'submitted' | 'amended' | 'exported';
+      actorIdentityId?: string;
+      policyName?: string;
+      policyVersion?: string;
+      authority?: string;
+      filingReference?: string | null;
+      version: number;
+      amendmentReason?: string;
+      exportFormat?: string;
+      exportFilename?: string;
+      deliveryChannel?: string;
+      deliveryDestination?: string;
+      acknowledgementId?: string;
+      acknowledgedAt?: string;
+    }>;
+    lastUpdatedAt: string;
+  };
   deadline?: ReportFilingDeadlineLineageSnapshot;
   lifecycle: {
     generatedAt: string;
@@ -1588,7 +1643,7 @@ export class PolicyDecisionReceiptService {
           const policyName = typeof entry.policyName === 'string' ? entry.policyName : '';
           const eventVersion = typeof entry.version === 'number' ? entry.version : Number.NaN;
           if (
-            !['generated', 'submitted', 'amended', 'exported'].includes(action)
+            !['generated', 'submitted', 'amended', 'exported', 'acknowledged'].includes(action)
             || recordedAt.length === 0
             || policyName.length === 0
             || Number.isNaN(eventVersion)
@@ -1689,6 +1744,11 @@ export class PolicyDecisionReceiptService {
           },
         }
         : {}),
+      ...(typeof this.asRecord(record.authorityManifest).manifestVersion === 'string'
+        ? {
+          authorityManifest: this.normalizeAuthorityManifestLineage(record.authorityManifest),
+        }
+        : {}),
       lifecycle: {
         generatedAt: lifecycle.generatedAt,
         ...(lifecycle.submittedAt === null || (typeof lifecycle.submittedAt === 'string' && lifecycle.submittedAt.length > 0)
@@ -1733,6 +1793,150 @@ export class PolicyDecisionReceiptService {
           : {}),
       },
       evidenceTrail: normalizedTrail,
+    };
+  }
+
+  private normalizeAuthorityManifestLineage(
+    value: unknown,
+  ): ReportFilingPackageLineageSnapshot['authorityManifest'] | undefined {
+    const record = this.asRecord(value);
+    if (
+      record.manifestVersion !== 'zeroid.report_authority_manifest.v1'
+      || typeof record.reportId !== 'string'
+      || typeof record.reportType !== 'string'
+      || typeof record.filingJurisdiction !== 'string'
+      || typeof record.currentVersion !== 'number'
+      || !Array.isArray(record.supportedExportFormats)
+      || !Array.isArray(record.preferredDeliveryChannels)
+      || typeof record.acknowledgementExpected !== 'boolean'
+      || typeof record.lastUpdatedAt !== 'string'
+    ) {
+      return undefined;
+    }
+
+    const acknowledgements = Array.isArray(record.acknowledgements)
+      ? record.acknowledgements
+        .map((entry) => this.asRecord(entry))
+        .map((entry) => ({
+          acknowledgementId: typeof entry.acknowledgementId === 'string' ? entry.acknowledgementId : '',
+          stage: entry.stage === 'submitted' || entry.stage === 'amended' ? entry.stage : 'exported',
+          acknowledgedAt: typeof entry.acknowledgedAt === 'string' ? entry.acknowledgedAt : '',
+          ...(typeof entry.channel === 'string' && entry.channel.length > 0 ? { channel: entry.channel } : {}),
+          ...(typeof entry.destination === 'string' && entry.destination.length > 0 ? { destination: entry.destination } : {}),
+          ...(typeof entry.authority === 'string' && entry.authority.length > 0 ? { authority: entry.authority } : {}),
+        }))
+        .filter((entry) => entry.acknowledgementId.length > 0 && entry.acknowledgedAt.length > 0)
+      : [];
+
+    const handoffTrail = Array.isArray(record.handoffTrail)
+      ? record.handoffTrail
+        .map((entry) => this.asRecord(entry))
+        .map((entry) => ({
+          eventId: typeof entry.eventId === 'string' ? entry.eventId : '',
+          stage: entry.stage === 'submitted' || entry.stage === 'amended' || entry.stage === 'exported'
+            ? entry.stage
+            : 'acknowledged',
+          recordedAt: typeof entry.recordedAt === 'string' ? entry.recordedAt : '',
+          ...(entry.acknowledgementStage === 'submitted'
+            || entry.acknowledgementStage === 'amended'
+            || entry.acknowledgementStage === 'exported'
+            ? { acknowledgementStage: entry.acknowledgementStage as 'submitted' | 'amended' | 'exported' }
+            : {}),
+          ...(typeof entry.actorIdentityId === 'string' && entry.actorIdentityId.length > 0
+            ? { actorIdentityId: entry.actorIdentityId }
+            : {}),
+          ...(typeof entry.policyName === 'string' && entry.policyName.length > 0 ? { policyName: entry.policyName } : {}),
+          ...(typeof entry.policyVersion === 'string' && entry.policyVersion.length > 0
+            ? { policyVersion: entry.policyVersion }
+            : {}),
+          ...(typeof entry.authority === 'string' && entry.authority.length > 0 ? { authority: entry.authority } : {}),
+          ...(entry.filingReference === null || (typeof entry.filingReference === 'string' && entry.filingReference.length > 0)
+            ? { filingReference: entry.filingReference as string | null }
+            : {}),
+          version: typeof entry.version === 'number' ? entry.version : Number.NaN,
+          ...(typeof entry.amendmentReason === 'string' && entry.amendmentReason.length > 0
+            ? { amendmentReason: entry.amendmentReason }
+            : {}),
+          ...(typeof entry.exportFormat === 'string' && entry.exportFormat.length > 0
+            ? { exportFormat: entry.exportFormat }
+            : {}),
+          ...(typeof entry.exportFilename === 'string' && entry.exportFilename.length > 0
+            ? { exportFilename: entry.exportFilename }
+            : {}),
+          ...(typeof entry.deliveryChannel === 'string' && entry.deliveryChannel.length > 0
+            ? { deliveryChannel: entry.deliveryChannel }
+            : {}),
+          ...(typeof entry.deliveryDestination === 'string' && entry.deliveryDestination.length > 0
+            ? { deliveryDestination: entry.deliveryDestination }
+            : {}),
+          ...(typeof entry.acknowledgementId === 'string' && entry.acknowledgementId.length > 0
+            ? { acknowledgementId: entry.acknowledgementId }
+            : {}),
+          ...(typeof entry.acknowledgedAt === 'string' && entry.acknowledgedAt.length > 0
+            ? { acknowledgedAt: entry.acknowledgedAt }
+            : {}),
+        }))
+        .filter((entry) => entry.eventId.length > 0 && entry.recordedAt.length > 0 && !Number.isNaN(entry.version))
+      : [];
+
+    return {
+      manifestVersion: 'zeroid.report_authority_manifest.v1',
+      reportId: record.reportId as string,
+      reportType: record.reportType as string,
+      filingJurisdiction: record.filingJurisdiction as string,
+      ...(typeof record.authority === 'string' && record.authority.length > 0 ? { authority: record.authority } : {}),
+      ...(record.filingReference === null || (typeof record.filingReference === 'string' && record.filingReference.length > 0)
+        ? { filingReference: record.filingReference as string | null }
+        : {}),
+      currentVersion: record.currentVersion as number,
+      ...(record.submittedAt === null || (typeof record.submittedAt === 'string' && record.submittedAt.length > 0)
+        ? { submittedAt: record.submittedAt as string | null }
+        : {}),
+      supportedExportFormats: (record.supportedExportFormats as unknown[])
+        .filter((entry): entry is string => typeof entry === 'string' && entry.length > 0),
+      preferredDeliveryChannels: (record.preferredDeliveryChannels as unknown[])
+        .filter((entry): entry is 'portal_upload' | 'api' | 'sftp' | 'email' =>
+          entry === 'portal_upload' || entry === 'api' || entry === 'sftp' || entry === 'email'),
+      acknowledgementExpected: record.acknowledgementExpected as boolean,
+      ...(this.asRecord(record.latestAmendment)
+        && typeof this.asRecord(record.latestAmendment).version === 'number'
+        && typeof this.asRecord(record.latestAmendment).amendedAt === 'string'
+        && typeof this.asRecord(record.latestAmendment).reason === 'string'
+        ? {
+          latestAmendment: {
+            version: this.asRecord(record.latestAmendment).version as number,
+            amendedAt: this.asRecord(record.latestAmendment).amendedAt as string,
+            reason: this.asRecord(record.latestAmendment).reason as string,
+          },
+        }
+        : {}),
+      ...(this.asRecord(record.latestExport)
+        && typeof this.asRecord(record.latestExport).format === 'string'
+        && typeof this.asRecord(record.latestExport).filename === 'string'
+        && typeof this.asRecord(record.latestExport).exportedAt === 'string'
+        ? {
+          latestExport: {
+            format: this.asRecord(record.latestExport).format as string,
+            filename: this.asRecord(record.latestExport).filename as string,
+            exportedAt: this.asRecord(record.latestExport).exportedAt as string,
+            ...(typeof this.asRecord(record.latestExport).deliveryChannel === 'string'
+              ? { deliveryChannel: this.asRecord(record.latestExport).deliveryChannel as string }
+              : {}),
+            ...(typeof this.asRecord(record.latestExport).deliveryDestination === 'string'
+              ? { deliveryDestination: this.asRecord(record.latestExport).deliveryDestination as string }
+              : {}),
+            ...(typeof this.asRecord(record.latestExport).deliveryAcknowledgementId === 'string'
+              ? { deliveryAcknowledgementId: this.asRecord(record.latestExport).deliveryAcknowledgementId as string }
+              : {}),
+            ...(typeof this.asRecord(record.latestExport).deliveryAcknowledgedAt === 'string'
+              ? { deliveryAcknowledgedAt: this.asRecord(record.latestExport).deliveryAcknowledgedAt as string }
+              : {}),
+          },
+        }
+        : {}),
+      acknowledgements,
+      handoffTrail,
+      lastUpdatedAt: record.lastUpdatedAt as string,
     };
   }
 

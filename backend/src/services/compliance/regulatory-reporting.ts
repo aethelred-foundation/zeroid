@@ -160,7 +160,7 @@ export type ExportFormat = z.infer<typeof ExportFormatSchema>;
 // ---------------------------------------------------------------------------
 export interface ReportEvidenceEvent {
   eventId: string;
-  action: 'generated' | 'submitted' | 'amended' | 'exported';
+  action: 'generated' | 'submitted' | 'amended' | 'exported' | 'acknowledged';
   recordedAt: string;
   receiptId?: string;
   actorIdentityId?: string;
@@ -179,6 +179,64 @@ export interface ReportEvidenceEvent {
   deliveryAcknowledgedAt?: string;
 }
 
+export interface ReportAuthorityManifestEvent {
+  eventId: string;
+  stage: 'submitted' | 'amended' | 'exported' | 'acknowledged';
+  recordedAt: string;
+  acknowledgementStage?: 'submitted' | 'amended' | 'exported';
+  actorIdentityId?: string;
+  policyName?: string;
+  policyVersion?: string;
+  authority?: string;
+  filingReference?: string | null;
+  version: number;
+  amendmentReason?: string;
+  exportFormat?: string;
+  exportFilename?: string;
+  deliveryChannel?: string;
+  deliveryDestination?: string;
+  acknowledgementId?: string;
+  acknowledgedAt?: string;
+}
+
+export interface ReportAuthorityManifest {
+  manifestVersion: 'zeroid.report_authority_manifest.v1';
+  reportId: string;
+  reportType: ReportType;
+  filingJurisdiction: string;
+  authority?: string;
+  filingReference?: string | null;
+  currentVersion: number;
+  submittedAt?: string | null;
+  supportedExportFormats: ExportFormat[];
+  preferredDeliveryChannels: Array<'portal_upload' | 'api' | 'sftp' | 'email'>;
+  acknowledgementExpected: boolean;
+  latestAmendment?: {
+    version: number;
+    amendedAt: string;
+    reason: string;
+  };
+  latestExport?: {
+    format: string;
+    filename: string;
+    exportedAt: string;
+    deliveryChannel?: string;
+    deliveryDestination?: string;
+    deliveryAcknowledgementId?: string;
+    deliveryAcknowledgedAt?: string;
+  };
+  acknowledgements: Array<{
+    acknowledgementId: string;
+    stage: 'submitted' | 'amended' | 'exported';
+    acknowledgedAt: string;
+    channel?: string;
+    destination?: string;
+    authority?: string;
+  }>;
+  handoffTrail: ReportAuthorityManifestEvent[];
+  lastUpdatedAt: string;
+}
+
 export interface GeneratedReport {
   reportId: string;
   reportType: ReportType;
@@ -193,6 +251,7 @@ export interface GeneratedReport {
   filingReference: string | null;
   exportFormats: ExportFormat[];
   evidenceTrail?: ReportEvidenceEvent[];
+  authorityManifest?: ReportAuthorityManifest;
 }
 
 export interface DashboardData {
@@ -251,6 +310,7 @@ export class RegulatoryReportingService {
       filingReference: null,
       exportFormats: ['json', 'xml', 'pdf'],
       evidenceTrail: [],
+      authorityManifest: this.buildAuthorityManifest('SAR', parsed.filingInstitution.jurisdiction, reportId, 1, ['json', 'xml', 'pdf']),
     };
 
     this.reports.set(reportId, report);
@@ -290,6 +350,7 @@ export class RegulatoryReportingService {
       filingReference: null,
       exportFormats: ['json', 'xml', 'pdf'],
       evidenceTrail: [],
+      authorityManifest: this.buildAuthorityManifest('CTR', parsed.filingInstitution.jurisdiction, reportId, 1, ['json', 'xml', 'pdf']),
     };
 
     this.reports.set(reportId, report);
@@ -332,6 +393,7 @@ export class RegulatoryReportingService {
       filingReference: null,
       exportFormats: ['json', 'xml', 'pdf'],
       evidenceTrail: [],
+      authorityManifest: this.buildAuthorityManifest('STR', `AE-${parsed.filingInstitution.emirate}`, reportId, 1, ['json', 'xml', 'pdf']),
     };
 
     this.reports.set(reportId, report);
@@ -384,6 +446,7 @@ export class RegulatoryReportingService {
       filingReference: null,
       exportFormats: ['json', 'csv', 'pdf'],
       evidenceTrail: [],
+      authorityManifest: this.buildAuthorityManifest('DSAR', parsed.jurisdiction, reportId, 1, ['json', 'csv', 'pdf']),
     };
 
     this.reports.set(reportId, report);
@@ -446,6 +509,7 @@ export class RegulatoryReportingService {
       filingReference: null,
       exportFormats: ['json', 'pdf'],
       evidenceTrail: [],
+      authorityManifest: this.buildAuthorityManifest('ERASURE', parsed.jurisdiction, reportId, 1, ['json', 'pdf']),
     };
 
     this.reports.set(reportId, report);
@@ -492,6 +556,7 @@ export class RegulatoryReportingService {
       filingReference: null,
       exportFormats: ['json', 'xml', 'pdf', 'csv'],
       evidenceTrail: [],
+      authorityManifest: this.buildAuthorityManifest('AUDIT', jurisdiction, reportId, 1, ['json', 'xml', 'pdf', 'csv']),
     };
 
     this.reports.set(reportId, report);
@@ -684,6 +749,108 @@ export class RegulatoryReportingService {
       .sort((left, right) => new Date(left.recordedAt).getTime() - new Date(right.recordedAt).getTime());
   }
 
+  recordAuthorityManifestEvent(
+    reportId: string,
+    event: Omit<ReportAuthorityManifestEvent, 'eventId' | 'recordedAt'>,
+  ): ReportAuthorityManifest {
+    const report = this.reports.get(reportId);
+    if (!report) {
+      throw new ReportingError(`Report not found: ${reportId}`, 'REPORT_NOT_FOUND', 404);
+    }
+
+    const recordedAt = new Date().toISOString();
+    const manifest = report.authorityManifest ?? this.buildAuthorityManifest(
+      report.reportType,
+      report.filingJurisdiction,
+      report.reportId,
+      report.version,
+      report.exportFormats,
+    );
+    const trailEntry: ReportAuthorityManifestEvent = {
+      eventId: crypto.randomUUID(),
+      recordedAt,
+      ...event,
+    };
+
+    manifest.currentVersion = report.version;
+    manifest.reportType = report.reportType;
+    manifest.filingJurisdiction = report.filingJurisdiction;
+    manifest.filingReference = report.filingReference;
+    if (event.authority) {
+      manifest.authority = event.authority;
+    }
+    if (report.submittedAt !== undefined) {
+      manifest.submittedAt = report.submittedAt;
+    }
+
+    if (event.stage === 'amended') {
+      const latestAmendment = report.amendments[report.amendments.length - 1];
+      if (latestAmendment) {
+        manifest.latestAmendment = {
+          version: latestAmendment.version,
+          amendedAt: latestAmendment.amendedAt,
+          reason: latestAmendment.reason,
+        };
+      }
+    }
+
+    if (event.stage === 'exported') {
+      manifest.latestExport = {
+        format: event.exportFormat ?? manifest.latestExport?.format ?? 'unknown',
+        filename: event.exportFilename ?? manifest.latestExport?.filename ?? `${report.reportType}_${report.reportId}_v${report.version}`,
+        exportedAt: recordedAt,
+        ...(event.deliveryChannel ? { deliveryChannel: event.deliveryChannel } : {}),
+        ...(event.deliveryDestination ? { deliveryDestination: event.deliveryDestination } : {}),
+        ...(event.acknowledgementId ? { deliveryAcknowledgementId: event.acknowledgementId } : {}),
+        ...(event.acknowledgedAt ? { deliveryAcknowledgedAt: event.acknowledgedAt } : {}),
+      };
+    }
+
+    if (event.stage === 'acknowledged' && event.acknowledgementId && event.acknowledgementStage) {
+      manifest.acknowledgements = [
+        ...manifest.acknowledgements,
+        {
+          acknowledgementId: event.acknowledgementId,
+          stage: event.acknowledgementStage,
+          acknowledgedAt: event.acknowledgedAt ?? recordedAt,
+          ...(event.deliveryChannel ? { channel: event.deliveryChannel } : {}),
+          ...(event.deliveryDestination ? { destination: event.deliveryDestination } : {}),
+          ...(event.authority ? { authority: event.authority } : {}),
+        },
+      ].sort((left, right) => new Date(left.acknowledgedAt).getTime() - new Date(right.acknowledgedAt).getTime());
+
+      if (manifest.latestExport && event.acknowledgementStage === 'exported') {
+        manifest.latestExport = {
+          ...manifest.latestExport,
+          deliveryAcknowledgementId: event.acknowledgementId,
+          deliveryAcknowledgedAt: event.acknowledgedAt ?? recordedAt,
+          ...(event.deliveryChannel ? { deliveryChannel: event.deliveryChannel } : {}),
+          ...(event.deliveryDestination ? { deliveryDestination: event.deliveryDestination } : {}),
+        };
+      }
+    }
+
+    manifest.handoffTrail = [...manifest.handoffTrail, trailEntry]
+      .sort((left, right) => new Date(left.recordedAt).getTime() - new Date(right.recordedAt).getTime());
+    manifest.lastUpdatedAt = recordedAt;
+
+    report.authorityManifest = manifest;
+    this.reports.set(reportId, report);
+    logger.info('report_authority_manifest_recorded', {
+      reportId,
+      stage: event.stage,
+      acknowledgementStage: event.acknowledgementStage,
+      version: event.version,
+    });
+
+    return manifest;
+  }
+
+  getAuthorityManifest(reportId: string): ReportAuthorityManifest | null {
+    const report = this.reports.get(reportId);
+    return report?.authorityManifest ?? null;
+  }
+
   // -------------------------------------------------------------------------
   // Private helpers
   // -------------------------------------------------------------------------
@@ -705,6 +872,42 @@ export class RegulatoryReportingService {
 
   private generateGoAMLRef(): string {
     return `GOAML-AE-${Date.now()}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
+  }
+
+  private buildAuthorityManifest(
+    reportType: ReportType,
+    filingJurisdiction: string,
+    reportId: string,
+    version: number,
+    exportFormats: ExportFormat[],
+  ): ReportAuthorityManifest {
+    return {
+      manifestVersion: 'zeroid.report_authority_manifest.v1',
+      reportId,
+      reportType,
+      filingJurisdiction,
+      currentVersion: version,
+      supportedExportFormats: exportFormats,
+      preferredDeliveryChannels: this.resolvePreferredDeliveryChannels(reportType),
+      acknowledgementExpected: true,
+      acknowledgements: [],
+      handoffTrail: [],
+      lastUpdatedAt: new Date().toISOString(),
+    };
+  }
+
+  private resolvePreferredDeliveryChannels(
+    reportType: ReportType,
+  ): Array<'portal_upload' | 'api' | 'sftp' | 'email'> {
+    if (reportType === 'DSAR' || reportType === 'ERASURE') {
+      return ['portal_upload', 'email', 'api'];
+    }
+
+    if (reportType === 'AUDIT') {
+      return ['portal_upload', 'sftp', 'api'];
+    }
+
+    return ['portal_upload', 'api', 'sftp'];
   }
 
   private getRetentionPolicyForCategory(category: string): { days: number; basis: string } {
