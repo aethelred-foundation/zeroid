@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import { prisma, redis } from '../../index';
+import { credentialService } from '../credential';
 
 const RECEIPT_TTL_SECONDS = 90 * 24 * 60 * 60;
 const RECEIPT_INDEX_LIMIT = 200;
@@ -131,6 +132,36 @@ interface ReceiptTrustAnchorSnapshot {
   expiresAt?: string;
 }
 
+interface ReceiptCredentialEvidenceReference {
+  credentialId: string;
+  issuerId: string;
+  credentialType: string;
+}
+
+interface ReceiptCredentialEvidenceUsageSnapshot {
+  credentialId: string;
+  issuerId: string;
+  credentialType: string;
+  operationType?: string;
+  rulePaths: Array<{
+    jurisdiction: string;
+    rulePath: string;
+    status: 'satisfied' | 'supplemental';
+  }>;
+}
+
+interface ReceiptObligationEvidenceUsageSnapshot {
+  domain: 'cross_border' | 'reporting' | 'privacy';
+  obligationType: string;
+  rulePath: string;
+  status: 'satisfied' | 'escalated';
+  detail?: string;
+  sourceJurisdiction?: string;
+  targetJurisdiction?: string;
+  jurisdiction?: string;
+  reportType?: string;
+}
+
 interface TrustAnchorLineageTrustRecord {
   trustRecordId: string;
   status: string;
@@ -180,6 +211,102 @@ interface TrustAnchorLineageSnapshot {
   };
 }
 
+interface CredentialEvidenceLineageSnapshot {
+  credentialId: string;
+  credentialType: string;
+  issuerId: string;
+  subjectId: string;
+  status: string;
+  issuedAt: string;
+  expiresAt?: string | null;
+  verification: {
+    valid: boolean;
+    checks: Record<string, boolean>;
+  };
+  issuer: {
+    identityId: string;
+    did?: string;
+    status?: string;
+    keyVersion?: string;
+    keyAlgorithm?: string;
+    verificationMethod?: string | null;
+  };
+  subject: {
+    identityId: string;
+    did?: string;
+    status?: string;
+  };
+  trustLineage?: {
+    enforced: boolean;
+    selectedTrustRecordId?: string;
+    accreditationScope?: string;
+    assuranceLevel?: string;
+    evaluatedJurisdictions: string[];
+    matchedJurisdictions: string[];
+    trustRecord?: {
+      trustRecordId: string;
+      status: string;
+      accreditationScope?: string;
+      assuranceLevel?: string;
+      allowedCredentialTypes: string[];
+      allowedJurisdictions: string[];
+      proposedByIdentityId?: string | null;
+      accreditedByIdentityId?: string | null;
+      suspensionReason?: string | null;
+      metadata?: Record<string, unknown> | null;
+      accreditedAt?: string;
+      expiresAt?: string;
+      updatedAt?: string;
+    };
+    keyLineage?: {
+      current?: {
+        keyHistoryId: string;
+        keyVersion: string;
+        keyAlgorithm: string;
+        verificationMethod: string;
+        status: string;
+        validFrom: string;
+        validUntil?: string | null;
+        rotatedByIdentityId?: string | null;
+        metadata?: Record<string, unknown> | null;
+        createdAt: string;
+      };
+      history: Array<{
+        keyHistoryId: string;
+        keyVersion: string;
+        keyAlgorithm: string;
+        verificationMethod: string;
+        status: string;
+        validFrom: string;
+        validUntil?: string | null;
+        rotatedByIdentityId?: string | null;
+        metadata?: Record<string, unknown> | null;
+        createdAt: string;
+      }>;
+    };
+  };
+  usage?: {
+    operationType?: string;
+    rulePaths: Array<{
+      jurisdiction: string;
+      rulePath: string;
+      status: 'satisfied' | 'supplemental';
+    }>;
+  };
+}
+
+interface ObligationEvidenceLineageSnapshot {
+  domain: 'cross_border' | 'reporting' | 'privacy';
+  obligationType: string;
+  rulePath: string;
+  status: 'satisfied' | 'escalated';
+  detail?: string;
+  sourceJurisdiction?: string;
+  targetJurisdiction?: string;
+  jurisdiction?: string;
+  reportType?: string;
+}
+
 export interface PolicyDecisionReceiptExport {
   formatVersion: 'zeroid.policy_receipt_export.v1';
   exportedAt: string;
@@ -227,6 +354,8 @@ export interface PolicyDecisionReceiptExport {
       revokedByIdentityId?: string | null;
       revocationReason?: string | null;
     }>;
+    credentials: CredentialEvidenceLineageSnapshot[];
+    obligations: ObligationEvidenceLineageSnapshot[];
     trustAnchors: TrustAnchorLineageSnapshot[];
   };
   operatingRegime?: {
@@ -658,9 +787,17 @@ export class PolicyDecisionReceiptService {
       })
       : [];
 
+    const credentials = await this.buildCredentialEvidenceLineage(receipt);
+    const obligations = this.buildObligationEvidenceLineage(receipt);
     const trustAnchors = await this.buildTrustAnchorLineage(receipt);
 
-    if (!policy && (!exceptions || exceptions.length === 0) && trustAnchors.length === 0) {
+    if (
+      !policy
+      && (!exceptions || exceptions.length === 0)
+      && credentials.length === 0
+      && obligations.length === 0
+      && trustAnchors.length === 0
+    ) {
       return undefined;
     }
 
@@ -712,8 +849,42 @@ export class PolicyDecisionReceiptService {
         ...(exception.revokedByIdentityId !== undefined ? { revokedByIdentityId: exception.revokedByIdentityId ?? null } : {}),
         ...(exception.revocationReason !== undefined ? { revocationReason: exception.revocationReason ?? null } : {}),
       })),
+      credentials,
+      obligations,
       trustAnchors,
     };
+  }
+
+  private async buildCredentialEvidenceLineage(
+    receipt: PolicyDecisionReceipt,
+  ): Promise<CredentialEvidenceLineageSnapshot[]> {
+    const metadata = this.asRecord(receipt.metadata);
+    const credentialReferences = this.normalizeCredentialEvidenceReferences(metadata.credentialEvidenceRefs);
+    const credentialUsage = this.normalizeCredentialEvidenceUsage(metadata.credentialEvidenceUsage);
+    if (credentialReferences.length === 0) {
+      return [];
+    }
+
+    const exports = await Promise.all(credentialReferences.map(async (reference) => {
+      try {
+        const exported = await credentialService.exportCredentialEvidence(reference.credentialId);
+        return this.sanitizeCredentialEvidenceLineage(
+          exported,
+          credentialUsage.find((usage) => usage.credentialId === reference.credentialId),
+        );
+      } catch {
+        return null;
+      }
+    }));
+
+    return exports.filter((entry): entry is CredentialEvidenceLineageSnapshot => entry !== null);
+  }
+
+  private buildObligationEvidenceLineage(
+    receipt: PolicyDecisionReceipt,
+  ): ObligationEvidenceLineageSnapshot[] {
+    const metadata = this.asRecord(receipt.metadata);
+    return this.normalizeObligationEvidenceUsage(metadata.obligationEvidenceUsage);
   }
 
   private async buildTrustAnchorLineage(
@@ -1067,6 +1238,139 @@ export class PolicyDecisionReceiptService {
           : {}),
       }))
       .filter((entry) => entry.issuerIdentityId.length > 0);
+  }
+
+  private normalizeCredentialEvidenceReferences(value: unknown): ReceiptCredentialEvidenceReference[] {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    return value
+      .map((entry) => this.asRecord(entry))
+      .map((entry) => ({
+        credentialId: typeof entry.credentialId === 'string' ? entry.credentialId : '',
+        issuerId: typeof entry.issuerId === 'string' ? entry.issuerId : '',
+        credentialType: typeof entry.credentialType === 'string' ? entry.credentialType : '',
+      }))
+      .filter((entry) => entry.credentialId.length > 0)
+      .reduce<ReceiptCredentialEvidenceReference[]>((acc, entry) => {
+        if (!acc.some((existing) => existing.credentialId === entry.credentialId)) {
+          acc.push(entry);
+        }
+        return acc;
+      }, []);
+  }
+
+  private normalizeCredentialEvidenceUsage(value: unknown): ReceiptCredentialEvidenceUsageSnapshot[] {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    return value
+      .map((entry) => this.asRecord(entry))
+      .map((entry) => ({
+        credentialId: typeof entry.credentialId === 'string' ? entry.credentialId : '',
+        issuerId: typeof entry.issuerId === 'string' ? entry.issuerId : '',
+        credentialType: typeof entry.credentialType === 'string' ? entry.credentialType : '',
+        ...(typeof entry.operationType === 'string' && entry.operationType.length > 0
+          ? { operationType: entry.operationType }
+          : {}),
+        rulePaths: Array.isArray(entry.rulePaths)
+          ? entry.rulePaths
+            .map((rulePath) => this.asRecord(rulePath))
+            .map((rulePath) => ({
+              jurisdiction: typeof rulePath.jurisdiction === 'string' ? rulePath.jurisdiction : '',
+              rulePath: typeof rulePath.rulePath === 'string' ? rulePath.rulePath : '',
+              status: rulePath.status === 'satisfied' ? 'satisfied' as const : 'supplemental' as const,
+            }))
+            .filter((rulePath) => rulePath.jurisdiction.length > 0 && rulePath.rulePath.length > 0)
+          : [],
+      }))
+      .filter((entry) => entry.credentialId.length > 0);
+  }
+
+  private normalizeObligationEvidenceUsage(value: unknown): ObligationEvidenceLineageSnapshot[] {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    return value
+      .map((entry) => this.asRecord(entry))
+      .map((entry) => ({
+        domain: entry.domain === 'cross_border'
+          ? 'cross_border' as const
+          : entry.domain === 'privacy'
+            ? 'privacy' as const
+            : 'reporting' as const,
+        obligationType: typeof entry.obligationType === 'string' ? entry.obligationType : '',
+        rulePath: typeof entry.rulePath === 'string' ? entry.rulePath : '',
+        status: entry.status === 'escalated' ? 'escalated' as const : 'satisfied' as const,
+        ...(typeof entry.detail === 'string' && entry.detail.length > 0
+          ? { detail: entry.detail }
+          : {}),
+        ...(typeof entry.sourceJurisdiction === 'string' && entry.sourceJurisdiction.length > 0
+          ? { sourceJurisdiction: entry.sourceJurisdiction }
+          : {}),
+        ...(typeof entry.targetJurisdiction === 'string' && entry.targetJurisdiction.length > 0
+          ? { targetJurisdiction: entry.targetJurisdiction }
+          : {}),
+        ...(typeof entry.jurisdiction === 'string' && entry.jurisdiction.length > 0
+          ? { jurisdiction: entry.jurisdiction }
+          : {}),
+        ...(typeof entry.reportType === 'string' && entry.reportType.length > 0
+          ? { reportType: entry.reportType }
+          : {}),
+      }))
+      .filter((entry) => entry.obligationType.length > 0 && entry.rulePath.length > 0)
+      .reduce<ObligationEvidenceLineageSnapshot[]>((acc, entry) => {
+        if (!acc.some((existing) =>
+          existing.domain === entry.domain
+          && existing.obligationType === entry.obligationType
+          && existing.rulePath === entry.rulePath
+          && existing.status === entry.status
+          && existing.detail === entry.detail
+          && existing.sourceJurisdiction === entry.sourceJurisdiction
+          && existing.targetJurisdiction === entry.targetJurisdiction
+          && existing.jurisdiction === entry.jurisdiction
+          && existing.reportType === entry.reportType
+        )) {
+          acc.push(entry);
+        }
+        return acc;
+      }, []);
+  }
+
+  private sanitizeCredentialEvidenceLineage(
+    exported: Awaited<ReturnType<typeof credentialService.exportCredentialEvidence>>,
+    usage?: ReceiptCredentialEvidenceUsageSnapshot,
+  ): CredentialEvidenceLineageSnapshot {
+    return {
+      credentialId: exported.credential.id,
+      credentialType: exported.credential.credentialType,
+      issuerId: exported.credential.issuerId,
+      subjectId: exported.credential.subjectId,
+      status: exported.credential.status,
+      issuedAt: exported.credential.issuedAt instanceof Date
+        ? exported.credential.issuedAt.toISOString()
+        : String(exported.credential.issuedAt),
+      ...(exported.credential.expiresAt
+        ? {
+          expiresAt: exported.credential.expiresAt instanceof Date
+            ? exported.credential.expiresAt.toISOString()
+            : String(exported.credential.expiresAt),
+        }
+        : {}),
+      verification: exported.verification,
+      issuer: exported.issuer,
+      subject: exported.subject,
+      ...(exported.trustLineage ? { trustLineage: exported.trustLineage } : {}),
+      ...(usage ? {
+        usage: {
+          ...(usage.operationType ? { operationType: usage.operationType } : {}),
+          rulePaths: usage.rulePaths,
+        },
+      } : {}),
+    };
   }
 
   private serializeTrustAnchorTrustRecord(record: any): TrustAnchorLineageTrustRecord {

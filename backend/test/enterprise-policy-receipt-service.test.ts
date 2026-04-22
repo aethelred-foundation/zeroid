@@ -6,6 +6,7 @@ const mockPolicyDefinitionFindFirst = jest.fn();
 const mockPolicyExceptionFindMany = jest.fn();
 const mockIssuerTrustFindMany = jest.fn();
 const mockIssuerKeyHistoryFindMany = jest.fn();
+const mockExportCredentialEvidence = jest.fn();
 
 const redisStore: Record<string, string> = {};
 
@@ -41,6 +42,12 @@ jest.mock('../src/index', () => ({
   },
 }));
 
+jest.mock('../src/services/credential', () => ({
+  credentialService: {
+    exportCredentialEvidence: mockExportCredentialEvidence,
+  },
+}));
+
 import { PolicyDecisionReceiptService } from '../src/services/enterprise/policy-receipt-service';
 
 describe('PolicyDecisionReceiptService', () => {
@@ -59,6 +66,50 @@ describe('PolicyDecisionReceiptService', () => {
     mockPolicyExceptionFindMany.mockResolvedValue([]);
     mockIssuerTrustFindMany.mockResolvedValue([]);
     mockIssuerKeyHistoryFindMany.mockResolvedValue([]);
+    mockExportCredentialEvidence.mockResolvedValue({
+      formatVersion: 'zeroid.credential_evidence_export.v1',
+      exportedAt: '2026-04-21T00:00:00.000Z',
+      credential: {
+        id: 'cred-9',
+        credentialType: 'privacy_assessment',
+        issuerId: 'issuer-privacy-1',
+        subjectId: 'entity-7',
+        claims: { redacted: true },
+        claimsHash: 'claims-hash',
+        proof: { signatureValue: 'sig' },
+        status: 'ACTIVE',
+        issuedAt: new Date('2026-04-15T00:00:00.000Z'),
+        expiresAt: new Date('2027-04-15T00:00:00.000Z'),
+      },
+      verification: {
+        valid: true,
+        checks: {
+          statusActive: true,
+          signatureValid: true,
+        },
+      },
+      issuer: {
+        identityId: 'issuer-privacy-1',
+        did: 'did:aethelred:issuer:privacy-registry',
+        status: 'ACTIVE',
+        keyVersion: '2',
+        keyAlgorithm: 'ES256',
+        verificationMethod: 'did:aethelred:issuer:privacy-registry#assertion-key-2',
+      },
+      subject: {
+        identityId: 'entity-7',
+        did: 'did:aethelred:entity:7',
+        status: 'ACTIVE',
+      },
+      trustLineage: {
+        enforced: true,
+        selectedTrustRecordId: 'trust-privacy-1',
+        accreditationScope: 'sovereign',
+        assuranceLevel: 'qualified',
+        evaluatedJurisdictions: ['EU-GDPR'],
+        matchedJurisdictions: ['EU-GDPR'],
+      },
+    });
   });
 
   afterAll(() => {
@@ -489,6 +540,56 @@ describe('PolicyDecisionReceiptService', () => {
             },
           ],
         },
+        credentialEvidenceRefs: [
+          {
+            credentialId: 'cred-9',
+            issuerId: 'issuer-privacy-1',
+            credentialType: 'privacy_assessment',
+          },
+        ],
+        credentialEvidenceUsage: [
+          {
+            credentialId: 'cred-9',
+            issuerId: 'issuer-privacy-1',
+            credentialType: 'privacy_assessment',
+            operationType: 'onboarding',
+            rulePaths: [
+              {
+                jurisdiction: 'EU-GDPR',
+                rulePath: 'required_credential:privacy_assessment',
+                status: 'satisfied',
+              },
+            ],
+          },
+        ],
+        obligationEvidenceUsage: [
+          {
+            domain: 'cross_border',
+            obligationType: 'required_safeguard',
+            rulePath: 'required_safeguard:customer_managed_keys',
+            status: 'escalated',
+            detail: 'customer_managed_keys',
+            sourceJurisdiction: 'AE-ADGM',
+            targetJurisdiction: 'EU-GDPR',
+          },
+          {
+            domain: 'reporting',
+            obligationType: 'deadline',
+            rulePath: 'deadline:filingDeadline',
+            status: 'satisfied',
+            detail: '2026-04-30T00:00:00.000Z',
+            jurisdiction: 'EU-GDPR',
+            reportType: 'DSAR',
+          },
+          {
+            domain: 'privacy',
+            obligationType: 'subject_notification',
+            rulePath: 'subject_notification:high',
+            status: 'escalated',
+            detail: 'high',
+            jurisdiction: 'EU-GDPR',
+          },
+        ],
       },
     });
 
@@ -521,6 +622,55 @@ describe('PolicyDecisionReceiptService', () => {
             exceptionId: 'exception-9',
             status: 'revoked',
             revokedByIdentityId: 'privacy-auditor',
+          }),
+        ],
+        credentials: [
+          expect.objectContaining({
+            credentialId: 'cred-9',
+            credentialType: 'privacy_assessment',
+            issuerId: 'issuer-privacy-1',
+            subjectId: 'entity-7',
+            verification: expect.objectContaining({
+              valid: true,
+            }),
+            trustLineage: expect.objectContaining({
+              selectedTrustRecordId: 'trust-privacy-1',
+            }),
+            usage: expect.objectContaining({
+              operationType: 'onboarding',
+              rulePaths: [
+                expect.objectContaining({
+                  jurisdiction: 'EU-GDPR',
+                  rulePath: 'required_credential:privacy_assessment',
+                  status: 'satisfied',
+                }),
+              ],
+            }),
+          }),
+        ],
+        obligations: [
+          expect.objectContaining({
+            domain: 'cross_border',
+            obligationType: 'required_safeguard',
+            rulePath: 'required_safeguard:customer_managed_keys',
+            status: 'escalated',
+            sourceJurisdiction: 'AE-ADGM',
+            targetJurisdiction: 'EU-GDPR',
+          }),
+          expect.objectContaining({
+            domain: 'reporting',
+            obligationType: 'deadline',
+            rulePath: 'deadline:filingDeadline',
+            status: 'satisfied',
+            jurisdiction: 'EU-GDPR',
+            reportType: 'DSAR',
+          }),
+          expect.objectContaining({
+            domain: 'privacy',
+            obligationType: 'subject_notification',
+            rulePath: 'subject_notification:high',
+            status: 'escalated',
+            jurisdiction: 'EU-GDPR',
           }),
         ],
         trustAnchors: [

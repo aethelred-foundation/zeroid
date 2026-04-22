@@ -28,6 +28,7 @@ const mockGenerateAuditPackage = jest.fn();
 const mockGetDashboardData = jest.fn();
 const mockConductPIA = jest.fn();
 const mockInitiateBreachNotification = jest.fn();
+const mockGetRequiredCredentials = jest.fn();
 
 jest.mock('express', () => {
   const router = {
@@ -121,6 +122,7 @@ jest.mock('../src/services/compliance/jurisdiction-engine', () => ({
     getComplianceStatus: jest.fn(),
     listJurisdictions: jest.fn(() => []),
     assessCrossBorder: mockAssessCrossBorder,
+    getRequiredCredentials: mockGetRequiredCredentials,
   },
 }));
 
@@ -598,6 +600,12 @@ describe('enterprise compliance receipt routes', () => {
         organizationId: 'org-1',
       },
     });
+    mockGetRequiredCredentials.mockImplementation((jurisdiction: string, operationType: string) => {
+      if (jurisdiction === 'AE-ADGM' && operationType === 'onboarding') {
+        return ['kyc_enhanced', 'source_of_funds'];
+      }
+      return [];
+    });
   });
 
   it('emits a receipt for compliance evaluation decisions', async () => {
@@ -650,7 +658,15 @@ describe('enterprise compliance receipt routes', () => {
         entityId: 'entity-1',
         entityType: 'individual',
         jurisdictions: ['AE-ADGM'],
-        credentials: [],
+        credentials: [
+          {
+            credentialId: 'cred-1',
+            issuerId: 'issuer-1',
+            credentialType: 'kyc_enhanced',
+            claims: {},
+            issuedAt: '2026-04-20T00:00:00.000Z',
+          },
+        ],
         operationType: 'onboarding',
       },
     });
@@ -742,6 +758,28 @@ describe('enterprise compliance receipt routes', () => {
           enforced: true,
           accreditedIssuerCount: 1,
         }),
+        credentialEvidenceRefs: [
+          {
+            credentialId: 'cred-1',
+            issuerId: 'issuer-1',
+            credentialType: 'kyc_enhanced',
+          },
+        ],
+        credentialEvidenceUsage: [
+          {
+            credentialId: 'cred-1',
+            issuerId: 'issuer-1',
+            credentialType: 'kyc_enhanced',
+            operationType: 'onboarding',
+            rulePaths: [
+              {
+                jurisdiction: 'AE-ADGM',
+                rulePath: 'required_credential:kyc_enhanced',
+                status: 'satisfied',
+              },
+            ],
+          },
+        ],
         exceptionContext: expect.objectContaining({
           active: true,
           count: 1,
@@ -886,6 +924,26 @@ describe('enterprise compliance receipt routes', () => {
       receiptType: 'cross_border_assessment',
       policyName: 'data_sovereignty_cross_border',
       metadata: expect.objectContaining({
+        obligationEvidenceUsage: expect.arrayContaining([
+          expect.objectContaining({
+            domain: 'cross_border',
+            obligationType: 'legal_basis',
+            rulePath: 'legal_basis:standard_contractual_clauses',
+            status: 'satisfied',
+          }),
+          expect.objectContaining({
+            domain: 'cross_border',
+            obligationType: 'required_safeguard',
+            rulePath: 'required_safeguard:customer_managed_keys',
+            status: 'escalated',
+          }),
+          expect.objectContaining({
+            domain: 'cross_border',
+            obligationType: 'policy_decision',
+            rulePath: 'policy_decision:blocked',
+            status: 'escalated',
+          }),
+        ]),
         policyExecutionTrace: expect.objectContaining({
           policyDefinitionId: 'policy-7',
         }),
@@ -970,6 +1028,26 @@ describe('enterprise compliance receipt routes', () => {
       receiptType: 'regulatory_report',
       policyName: 'regulatory_reporting',
       metadata: expect.objectContaining({
+        obligationEvidenceUsage: expect.arrayContaining([
+          expect.objectContaining({
+            domain: 'reporting',
+            obligationType: 'filing_jurisdiction',
+            rulePath: 'filing_jurisdiction:AE-ADGM',
+            status: 'satisfied',
+          }),
+          expect.objectContaining({
+            domain: 'reporting',
+            obligationType: 'review_gate',
+            rulePath: 'review_gate:SAR',
+            status: 'escalated',
+          }),
+          expect.objectContaining({
+            domain: 'reporting',
+            obligationType: 'policy_decision',
+            rulePath: 'policy_decision:review_required',
+            status: 'escalated',
+          }),
+        ]),
         policyExecutionTrace: expect.objectContaining({
           policyDefinitionId: 'policy-7',
         }),
@@ -1035,6 +1113,26 @@ describe('enterprise compliance receipt routes', () => {
       receiptType: 'regulatory_report',
       policyName: 'data_subject_access',
       metadata: expect.objectContaining({
+        obligationEvidenceUsage: expect.arrayContaining([
+          expect.objectContaining({
+            domain: 'privacy',
+            obligationType: 'request_jurisdiction',
+            rulePath: 'request_jurisdiction:EU-GDPR',
+            status: 'satisfied',
+          }),
+          expect.objectContaining({
+            domain: 'privacy',
+            obligationType: 'request_review',
+            rulePath: 'request_review:access',
+            status: 'escalated',
+          }),
+          expect.objectContaining({
+            domain: 'privacy',
+            obligationType: 'policy_decision',
+            rulePath: 'policy_decision:review_required',
+            status: 'escalated',
+          }),
+        ]),
         policyExecutionTrace: expect.objectContaining({
           policyDefinitionId: 'policy-7',
         }),
@@ -1112,6 +1210,26 @@ describe('enterprise compliance receipt routes', () => {
     expect(mockCreateReceipt).toHaveBeenCalledWith(expect.objectContaining({
       receiptType: 'privacy_impact_assessment',
       metadata: expect.objectContaining({
+        obligationEvidenceUsage: expect.arrayContaining([
+          expect.objectContaining({
+            domain: 'privacy',
+            obligationType: 'dpia_required',
+            rulePath: 'dpia_required:true',
+            status: 'satisfied',
+          }),
+          expect.objectContaining({
+            domain: 'privacy',
+            obligationType: 'supervisory_consultation',
+            rulePath: 'supervisory_consultation:high',
+            status: 'escalated',
+          }),
+          expect.objectContaining({
+            domain: 'privacy',
+            obligationType: 'processor_dpa',
+            rulePath: 'processor_dpa:true',
+            status: 'satisfied',
+          }),
+        ]),
         policyExecutionTrace: expect.objectContaining({
           policyDefinitionId: 'policy-7',
         }),
@@ -1199,6 +1317,26 @@ describe('enterprise compliance receipt routes', () => {
       receiptType: 'breach_notification',
       policyName: 'data_breach_notification',
       metadata: expect.objectContaining({
+        obligationEvidenceUsage: expect.arrayContaining([
+          expect.objectContaining({
+            domain: 'privacy',
+            obligationType: 'regulatory_deadline',
+            rulePath: 'regulatory_deadline:EU-GDPR',
+            status: 'escalated',
+          }),
+          expect.objectContaining({
+            domain: 'privacy',
+            obligationType: 'subject_notification',
+            rulePath: 'subject_notification:high',
+            status: 'escalated',
+          }),
+          expect.objectContaining({
+            domain: 'privacy',
+            obligationType: 'policy_decision',
+            rulePath: 'policy_decision:review_required',
+            status: 'escalated',
+          }),
+        ]),
         policyExecutionTrace: expect.objectContaining({
           policyDefinitionId: 'policy-7',
           governanceOverlay: expect.objectContaining({

@@ -1,15 +1,15 @@
 import { Router, Request, Response } from 'express';
 import { z } from 'zod';
 import { createLogger, format, transports } from 'winston';
-import { jurisdictionEngine, ComplianceEvaluationRequestSchema, CrossBorderAssessmentSchema, JurisdictionCodeSchema } from '../../services/compliance/jurisdiction-engine';
+import { jurisdictionEngine, ComplianceEvaluationRequestSchema, CrossBorderAssessmentSchema, JurisdictionCodeSchema, CrossBorderResult } from '../../services/compliance/jurisdiction-engine';
 import { sanctionsScreeningService, ScreeningRequestSchema, BatchScreeningRequestSchema, FalsePositiveDecisionSchema } from '../../services/compliance/sanctions-screening';
-import { regulatoryReportingService, ReportTypeSchema, ExportFormatSchema } from '../../services/compliance/regulatory-reporting';
-import { dataSovereigntyService, CrossBorderTransferSchema, PIASchema, BreachNotificationSchema, ConsentRecordSchema } from '../../services/compliance/data-sovereignty';
+import { regulatoryReportingService, ReportTypeSchema, ExportFormatSchema, GeneratedReport } from '../../services/compliance/regulatory-reporting';
+import { dataSovereigntyService, CrossBorderTransferSchema, PIASchema, BreachNotificationSchema, ConsentRecordSchema, TransferAssessmentResult, PIAResult, BreachTimeline } from '../../services/compliance/data-sovereignty';
 import { EnterpriseAuthenticatedRequest, requireEnterpriseContext } from '../../middleware/enterprise';
 import { EnterpriseRole, OrganizationGovernanceSettings } from '../../services/enterprise/organization-service';
 import { policyDecisionReceiptService, PolicyDecisionReceipt } from '../../services/enterprise/policy-receipt-service';
 import { policyContextService, PolicyExecutionContext } from '../../services/enterprise/policy-context-service';
-import { policyExecutionService } from '../../services/enterprise/policy-execution-service';
+import { policyExecutionService, PolicyExecutionTrace } from '../../services/enterprise/policy-execution-service';
 
 // ---------------------------------------------------------------------------
 // Logger
@@ -80,6 +80,726 @@ function summarizeReceipt(receipt: PolicyDecisionReceipt): Record<string, unknow
   };
 }
 
+function buildCredentialEvidenceUsage(
+  jurisdictions: string[],
+  operationType: string,
+  credentials: Array<{ credentialId?: string; issuerId: string; credentialType: string }>,
+): Array<{
+  credentialId: string;
+  issuerId: string;
+  credentialType: string;
+  operationType: string;
+  rulePaths: Array<{
+    jurisdiction: string;
+    rulePath: string;
+    status: 'satisfied' | 'supplemental';
+  }>;
+}> {
+  return credentials
+    .filter((credential) => typeof credential.credentialId === 'string' && credential.credentialId.length > 0)
+    .map((credential) => ({
+      credentialId: credential.credentialId!,
+      issuerId: credential.issuerId,
+      credentialType: credential.credentialType,
+      operationType,
+      rulePaths: jurisdictions.map((jurisdiction) => {
+        const requiredCredentials = jurisdictionEngine.getRequiredCredentials(
+          jurisdiction as z.infer<typeof JurisdictionCodeSchema>,
+          operationType as z.infer<typeof ComplianceEvaluationRequestSchema>['operationType'],
+        );
+        return {
+          jurisdiction,
+          rulePath: `required_credential:${credential.credentialType}`,
+          status: requiredCredentials.includes(credential.credentialType) ? 'satisfied' as const : 'supplemental' as const,
+        };
+      }),
+    }));
+}
+
+type ObligationEvidenceUsageSnapshot = {
+  domain: 'cross_border' | 'reporting' | 'privacy';
+  obligationType: string;
+  rulePath: string;
+  status: 'satisfied' | 'escalated';
+  detail?: string;
+  sourceJurisdiction?: string;
+  targetJurisdiction?: string;
+  jurisdiction?: string;
+  reportType?: string;
+};
+
+function asRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {};
+  }
+
+  return value as Record<string, unknown>;
+}
+
+function pushUniqueObligation(
+  obligations: ObligationEvidenceUsageSnapshot[],
+  obligation: ObligationEvidenceUsageSnapshot,
+): void {
+  const key = [
+    obligation.domain,
+    obligation.obligationType,
+    obligation.rulePath,
+    obligation.status,
+    obligation.sourceJurisdiction ?? '',
+    obligation.targetJurisdiction ?? '',
+    obligation.jurisdiction ?? '',
+    obligation.reportType ?? '',
+    obligation.detail ?? '',
+  ].join('::');
+  if (!obligations.some((entry) => [
+    entry.domain,
+    entry.obligationType,
+    entry.rulePath,
+    entry.status,
+    entry.sourceJurisdiction ?? '',
+    entry.targetJurisdiction ?? '',
+    entry.jurisdiction ?? '',
+    entry.reportType ?? '',
+    entry.detail ?? '',
+  ].join('::') === key)) {
+    obligations.push(obligation);
+  }
+}
+
+function isTransferAssessmentResult(
+  result: CrossBorderResult | TransferAssessmentResult,
+): result is TransferAssessmentResult {
+  return 'requiredSafeguards' in result && 'conditions' in result && 'regulatoryNotifications' in result;
+}
+
+function isJurisdictionCrossBorderResult(
+  result: CrossBorderResult | TransferAssessmentResult,
+): result is CrossBorderResult {
+  return 'acceptedCredentials' in result && 'additionalRequired' in result && 'restrictions' in result;
+}
+
+function buildCrossBorderObligationUsage(
+  sourceJurisdiction: string,
+  targetJurisdiction: string,
+  baseResult: CrossBorderResult | TransferAssessmentResult,
+  adjustedResult: (CrossBorderResult | TransferAssessmentResult) & { policyDecision?: string },
+  trace?: PolicyExecutionTrace,
+): ObligationEvidenceUsageSnapshot[] {
+  const obligations: ObligationEvidenceUsageSnapshot[] = [];
+
+  if (isTransferAssessmentResult(adjustedResult) && isTransferAssessmentResult(baseResult)) {
+    if (typeof adjustedResult.legalBasis === 'string' && adjustedResult.legalBasis.length > 0) {
+      pushUniqueObligation(obligations, {
+        domain: 'cross_border',
+        obligationType: 'legal_basis',
+        rulePath: `legal_basis:${adjustedResult.legalBasis}`,
+        status: 'satisfied',
+        detail: adjustedResult.legalBasis,
+        sourceJurisdiction,
+        targetJurisdiction,
+      });
+    }
+
+    const baseSafeguards = new Set(baseResult.requiredSafeguards);
+    for (const safeguard of adjustedResult.requiredSafeguards) {
+      pushUniqueObligation(obligations, {
+        domain: 'cross_border',
+        obligationType: 'required_safeguard',
+        rulePath: `required_safeguard:${safeguard}`,
+        status: baseSafeguards.has(safeguard) ? 'satisfied' : 'escalated',
+        detail: safeguard,
+        sourceJurisdiction,
+        targetJurisdiction,
+      });
+    }
+
+    const baseConditions = new Set(baseResult.conditions);
+    for (const condition of adjustedResult.conditions) {
+      pushUniqueObligation(obligations, {
+        domain: 'cross_border',
+        obligationType: 'transfer_condition',
+        rulePath: `transfer_condition:${condition}`,
+        status: baseConditions.has(condition) ? 'satisfied' : 'escalated',
+        detail: condition,
+        sourceJurisdiction,
+        targetJurisdiction,
+      });
+    }
+
+    const baseNotifications = new Set(baseResult.regulatoryNotifications);
+    for (const notification of adjustedResult.regulatoryNotifications) {
+      pushUniqueObligation(obligations, {
+        domain: 'cross_border',
+        obligationType: 'regulatory_notification',
+        rulePath: `regulatory_notification:${notification}`,
+        status: baseNotifications.has(notification) ? 'satisfied' : 'escalated',
+        detail: notification,
+        sourceJurisdiction,
+        targetJurisdiction,
+      });
+    }
+  }
+
+  if (isJurisdictionCrossBorderResult(adjustedResult) && isJurisdictionCrossBorderResult(baseResult)) {
+    pushUniqueObligation(obligations, {
+      domain: 'cross_border',
+      obligationType: 'transfer_mechanism',
+      rulePath: `transfer_mechanism:${adjustedResult.dataTransferMechanism}`,
+      status: 'satisfied',
+      detail: adjustedResult.dataTransferMechanism,
+      sourceJurisdiction,
+      targetJurisdiction,
+    });
+
+    const baseRestrictions = new Set(baseResult.restrictions);
+    for (const restriction of adjustedResult.restrictions) {
+      pushUniqueObligation(obligations, {
+        domain: 'cross_border',
+        obligationType: 'restriction',
+        rulePath: `restriction:${restriction}`,
+        status: baseRestrictions.has(restriction) ? 'satisfied' : 'escalated',
+        detail: restriction,
+        sourceJurisdiction,
+        targetJurisdiction,
+      });
+    }
+
+    const baseAdditionalRequired = new Set(baseResult.additionalRequired);
+    for (const credentialType of adjustedResult.additionalRequired) {
+      pushUniqueObligation(obligations, {
+        domain: 'cross_border',
+        obligationType: 'required_credential',
+        rulePath: `required_credential:${credentialType}`,
+        status: baseAdditionalRequired.has(credentialType) ? 'satisfied' : 'escalated',
+        detail: credentialType,
+        sourceJurisdiction,
+        targetJurisdiction,
+      });
+    }
+  }
+
+  const crossBorderChanges = trace?.crossBorderAdjustments
+    ?.filter((adjustment) => adjustment.source === sourceJurisdiction && adjustment.target === targetJurisdiction)
+    .flatMap((adjustment) => adjustment.changes)
+    ?? [];
+
+  for (const change of crossBorderChanges) {
+    const [prefix, rawValue] = change.split(':', 2);
+    if (!rawValue) {
+      continue;
+    }
+
+    switch (prefix) {
+      case 'prohibited_pair':
+        pushUniqueObligation(obligations, {
+          domain: 'cross_border',
+          obligationType: 'jurisdiction_pair',
+          rulePath: `jurisdiction_pair:${rawValue}`,
+          status: 'escalated',
+          detail: rawValue,
+          sourceJurisdiction,
+          targetJurisdiction,
+        });
+        break;
+      case 'disallowed_categories':
+        for (const category of rawValue.split('|').filter((value) => value.length > 0)) {
+          pushUniqueObligation(obligations, {
+            domain: 'cross_border',
+            obligationType: 'data_category_restriction',
+            rulePath: `data_category_restriction:${category}`,
+            status: 'escalated',
+            detail: category,
+            sourceJurisdiction,
+            targetJurisdiction,
+          });
+        }
+        break;
+      case 'legal_basis':
+        pushUniqueObligation(obligations, {
+          domain: 'cross_border',
+          obligationType: 'legal_basis',
+          rulePath: `legal_basis:${rawValue}`,
+          status: 'escalated',
+          detail: rawValue,
+          sourceJurisdiction,
+          targetJurisdiction,
+        });
+        break;
+      case 'blocked_mechanism':
+        pushUniqueObligation(obligations, {
+          domain: 'cross_border',
+          obligationType: 'transfer_mechanism',
+          rulePath: `transfer_mechanism:${rawValue}`,
+          status: 'escalated',
+          detail: rawValue,
+          sourceJurisdiction,
+          targetJurisdiction,
+        });
+        break;
+      case 'risk_review':
+        pushUniqueObligation(obligations, {
+          domain: 'cross_border',
+          obligationType: 'risk_review',
+          rulePath: `risk_review:${rawValue}`,
+          status: 'escalated',
+          detail: rawValue,
+          sourceJurisdiction,
+          targetJurisdiction,
+        });
+        break;
+      case 'required_safeguards':
+        for (const safeguard of rawValue.split('|').filter((value) => value.length > 0)) {
+          pushUniqueObligation(obligations, {
+            domain: 'cross_border',
+            obligationType: 'required_safeguard',
+            rulePath: `required_safeguard:${safeguard}`,
+            status: 'escalated',
+            detail: safeguard,
+            sourceJurisdiction,
+            targetJurisdiction,
+          });
+        }
+        break;
+    }
+  }
+
+  if (typeof adjustedResult.policyDecision === 'string' && adjustedResult.policyDecision !== 'allow') {
+    pushUniqueObligation(obligations, {
+      domain: 'cross_border',
+      obligationType: 'policy_decision',
+      rulePath: `policy_decision:${adjustedResult.policyDecision}`,
+      status: 'escalated',
+      detail: adjustedResult.policyDecision,
+      sourceJurisdiction,
+      targetJurisdiction,
+    });
+  }
+
+  return obligations;
+}
+
+function extractReportDeadline(report: GeneratedReport): { field: 'filingDeadline' | 'responseDeadline'; value: string } | undefined {
+  const content = asRecord(report.content);
+  if (typeof content.filingDeadline === 'string' && content.filingDeadline.length > 0) {
+    return {
+      field: 'filingDeadline',
+      value: content.filingDeadline,
+    };
+  }
+  if (typeof content.responseDeadline === 'string' && content.responseDeadline.length > 0) {
+    return {
+      field: 'responseDeadline',
+      value: content.responseDeadline,
+    };
+  }
+  return undefined;
+}
+
+function buildReportingObligationUsage(
+  baseReport: GeneratedReport,
+  adjustedReport: GeneratedReport & { policyDecision?: string },
+  trace?: PolicyExecutionTrace,
+): ObligationEvidenceUsageSnapshot[] {
+  const obligations: ObligationEvidenceUsageSnapshot[] = [];
+  const reportType = String(adjustedReport.reportType ?? baseReport.reportType ?? 'UNKNOWN');
+  const jurisdiction = String(adjustedReport.filingJurisdiction ?? baseReport.filingJurisdiction ?? '');
+
+  if (jurisdiction.length > 0) {
+    pushUniqueObligation(obligations, {
+      domain: 'reporting',
+      obligationType: 'filing_jurisdiction',
+      rulePath: `filing_jurisdiction:${jurisdiction}`,
+      status: 'satisfied',
+      detail: jurisdiction,
+      jurisdiction,
+      reportType,
+    });
+  }
+
+  const deadline = extractReportDeadline(adjustedReport) ?? extractReportDeadline(baseReport);
+  if (deadline) {
+    pushUniqueObligation(obligations, {
+      domain: 'reporting',
+      obligationType: 'deadline',
+      rulePath: `deadline:${deadline.field}`,
+      status: 'satisfied',
+      detail: deadline.value,
+      jurisdiction,
+      reportType,
+    });
+  }
+
+  const reportingChanges = trace?.reportingAdjustments
+    ?.filter((adjustment) => adjustment.reportType === reportType)
+    .flatMap((adjustment) => adjustment.changes)
+    ?? [];
+
+  for (const change of reportingChanges) {
+    const [prefix, rawValue] = change.split(':', 2);
+    if (!rawValue) {
+      continue;
+    }
+
+    switch (prefix) {
+      case 'pending_review':
+        pushUniqueObligation(obligations, {
+          domain: 'reporting',
+          obligationType: 'review_gate',
+          rulePath: `review_gate:${rawValue}`,
+          status: 'escalated',
+          detail: rawValue,
+          jurisdiction,
+          reportType,
+        });
+        break;
+      case 'missing_fields':
+        for (const field of rawValue.split('|').filter((value) => value.length > 0)) {
+          pushUniqueObligation(obligations, {
+            domain: 'reporting',
+            obligationType: 'required_field',
+            rulePath: `required_field:${field}`,
+            status: 'escalated',
+            detail: field,
+            jurisdiction,
+            reportType,
+          });
+        }
+        break;
+      case 'priority_review':
+        pushUniqueObligation(obligations, {
+          domain: 'reporting',
+          obligationType: 'priority_review',
+          rulePath: `priority_review:${rawValue}`,
+          status: 'escalated',
+          detail: rawValue,
+          jurisdiction,
+          reportType,
+        });
+        break;
+    }
+  }
+
+  if (typeof adjustedReport.policyDecision === 'string' && adjustedReport.policyDecision !== 'allow') {
+    pushUniqueObligation(obligations, {
+      domain: 'reporting',
+      obligationType: 'policy_decision',
+      rulePath: `policy_decision:${adjustedReport.policyDecision}`,
+      status: 'escalated',
+      detail: adjustedReport.policyDecision,
+      jurisdiction,
+      reportType,
+    });
+  }
+
+  if (adjustedReport.status !== baseReport.status) {
+    pushUniqueObligation(obligations, {
+      domain: 'reporting',
+      obligationType: 'status_transition',
+      rulePath: `status_transition:${baseReport.status}->${adjustedReport.status}`,
+      status: 'escalated',
+      detail: `${baseReport.status}->${adjustedReport.status}`,
+      jurisdiction,
+      reportType,
+    });
+  }
+
+  return obligations;
+}
+
+function isPiaResult(value: unknown): value is PIAResult {
+  return Boolean(value) && typeof value === 'object' && 'riskScore' in (value as Record<string, unknown>);
+}
+
+function isBreachTimeline(value: unknown): value is BreachTimeline {
+  return Boolean(value) && typeof value === 'object' && 'regulatoryDeadlines' in (value as Record<string, unknown>);
+}
+
+function buildPrivacyObligationUsage(
+  operation: 'dsar' | 'erasure' | 'pia' | 'breach',
+  jurisdictionCodes: string[],
+  baseResult: GeneratedReport | PIAResult | BreachTimeline,
+  adjustedResult: (GeneratedReport | PIAResult | BreachTimeline) & { policyDecision?: string },
+  trace?: PolicyExecutionTrace,
+): ObligationEvidenceUsageSnapshot[] {
+  const obligations: ObligationEvidenceUsageSnapshot[] = [];
+  const primaryJurisdiction = jurisdictionCodes[0];
+
+  if ((operation === 'dsar' || operation === 'erasure') && !isPiaResult(adjustedResult) && !isBreachTimeline(adjustedResult)) {
+    const baseReport = baseResult as GeneratedReport;
+    const report = adjustedResult as GeneratedReport & { policyDecision?: string };
+
+    if (primaryJurisdiction) {
+      pushUniqueObligation(obligations, {
+        domain: 'privacy',
+        obligationType: 'request_jurisdiction',
+        rulePath: `request_jurisdiction:${primaryJurisdiction}`,
+        status: 'satisfied',
+        detail: primaryJurisdiction,
+        jurisdiction: primaryJurisdiction,
+        reportType: report.reportType,
+      });
+    }
+
+    const deadline = extractReportDeadline(report) ?? extractReportDeadline(baseReport);
+    if (deadline) {
+      pushUniqueObligation(obligations, {
+        domain: 'privacy',
+        obligationType: 'response_deadline',
+        rulePath: `response_deadline:${deadline.field}`,
+        status: 'satisfied',
+        detail: deadline.value,
+        jurisdiction: primaryJurisdiction,
+        reportType: report.reportType,
+      });
+    }
+
+    const privacyChanges = trace?.privacyAdjustments
+      ?.filter((adjustment) => adjustment.operation === operation)
+      .flatMap((adjustment) => adjustment.changes)
+      ?? [];
+
+    for (const change of privacyChanges) {
+      const [prefix, rawValue] = change.split(':', 2);
+      if (!rawValue) {
+        continue;
+      }
+
+      switch (prefix) {
+        case 'request_type_review':
+          pushUniqueObligation(obligations, {
+            domain: 'privacy',
+            obligationType: 'request_review',
+            rulePath: `request_review:${rawValue}`,
+            status: 'escalated',
+            detail: rawValue,
+            jurisdiction: primaryJurisdiction,
+            reportType: report.reportType,
+          });
+          break;
+        case 'missing_categories':
+          for (const category of rawValue.split('|').filter((value) => value.length > 0)) {
+            pushUniqueObligation(obligations, {
+              domain: 'privacy',
+              obligationType: 'required_data_category',
+              rulePath: `required_data_category:${category}`,
+              status: 'escalated',
+              detail: category,
+              jurisdiction: primaryJurisdiction,
+              reportType: report.reportType,
+            });
+          }
+          break;
+        case 'missing_retention_overrides':
+          for (const category of rawValue.split('|').filter((value) => value.length > 0)) {
+            pushUniqueObligation(obligations, {
+              domain: 'privacy',
+              obligationType: 'retention_override',
+              rulePath: `retention_override:${category}`,
+              status: 'escalated',
+              detail: category,
+              jurisdiction: primaryJurisdiction,
+              reportType: report.reportType,
+            });
+          }
+          break;
+      }
+    }
+
+    if (typeof report.policyDecision === 'string' && report.policyDecision !== 'allow') {
+      pushUniqueObligation(obligations, {
+        domain: 'privacy',
+        obligationType: 'policy_decision',
+        rulePath: `policy_decision:${report.policyDecision}`,
+        status: 'escalated',
+        detail: report.policyDecision,
+        jurisdiction: primaryJurisdiction,
+        reportType: report.reportType,
+      });
+    }
+
+    if (report.status !== baseReport.status) {
+      pushUniqueObligation(obligations, {
+        domain: 'privacy',
+        obligationType: 'status_transition',
+        rulePath: `status_transition:${baseReport.status}->${report.status}`,
+        status: 'escalated',
+        detail: `${baseReport.status}->${report.status}`,
+        jurisdiction: primaryJurisdiction,
+        reportType: report.reportType,
+      });
+    }
+
+    return obligations;
+  }
+
+  if (operation === 'pia' && isPiaResult(baseResult) && isPiaResult(adjustedResult)) {
+    if (adjustedResult.dpiaRequired) {
+      pushUniqueObligation(obligations, {
+        domain: 'privacy',
+        obligationType: 'dpia_required',
+        rulePath: 'dpia_required:true',
+        status: 'satisfied',
+        detail: 'true',
+        jurisdiction: primaryJurisdiction,
+      });
+    }
+
+    if (adjustedResult.dpaRequired) {
+      pushUniqueObligation(obligations, {
+        domain: 'privacy',
+        obligationType: 'processor_dpa',
+        rulePath: 'processor_dpa:true',
+        status: baseResult.dpaRequired ? 'satisfied' : 'escalated',
+        detail: 'true',
+        jurisdiction: primaryJurisdiction,
+      });
+    }
+
+    if (adjustedResult.supervisoryConsultationRequired) {
+      pushUniqueObligation(obligations, {
+        domain: 'privacy',
+        obligationType: 'supervisory_consultation',
+        rulePath: `supervisory_consultation:${adjustedResult.riskLevel}`,
+        status: baseResult.supervisoryConsultationRequired ? 'satisfied' : 'escalated',
+        detail: adjustedResult.riskLevel,
+        jurisdiction: primaryJurisdiction,
+      });
+    }
+
+    const privacyChanges = trace?.privacyAdjustments
+      ?.filter((adjustment) => adjustment.operation === 'pia')
+      .flatMap((adjustment) => adjustment.changes)
+      ?? [];
+
+    for (const change of privacyChanges) {
+      const [prefix, rawValue] = change.split(':', 2);
+      if (!rawValue) {
+        continue;
+      }
+
+      switch (prefix) {
+        case 'supervisory_consultation':
+          pushUniqueObligation(obligations, {
+            domain: 'privacy',
+            obligationType: 'supervisory_consultation',
+            rulePath: `supervisory_consultation:${rawValue}`,
+            status: 'escalated',
+            detail: rawValue,
+            jurisdiction: primaryJurisdiction,
+          });
+          break;
+        case 'missing_dpa':
+          pushUniqueObligation(obligations, {
+            domain: 'privacy',
+            obligationType: 'processor_dpa',
+            rulePath: `processor_dpa:${rawValue}`,
+            status: 'escalated',
+            detail: rawValue,
+            jurisdiction: primaryJurisdiction,
+          });
+          break;
+        case 'cross_border_pia':
+          pushUniqueObligation(obligations, {
+            domain: 'privacy',
+            obligationType: 'cross_border_review',
+            rulePath: `cross_border_review:${rawValue}`,
+            status: 'escalated',
+            detail: rawValue,
+            jurisdiction: primaryJurisdiction,
+          });
+          break;
+      }
+    }
+
+    if (typeof adjustedResult.policyDecision === 'string' && adjustedResult.policyDecision !== 'allow') {
+      pushUniqueObligation(obligations, {
+        domain: 'privacy',
+        obligationType: 'policy_decision',
+        rulePath: `policy_decision:${adjustedResult.policyDecision}`,
+        status: 'escalated',
+        detail: adjustedResult.policyDecision,
+        jurisdiction: primaryJurisdiction,
+      });
+    }
+
+    return obligations;
+  }
+
+  if (operation === 'breach' && isBreachTimeline(baseResult) && isBreachTimeline(adjustedResult)) {
+    const baseDeadlines = new Map(baseResult.regulatoryDeadlines.map((deadline) => [deadline.jurisdiction, deadline]));
+    for (const deadline of adjustedResult.regulatoryDeadlines) {
+      const baseDeadline = baseDeadlines.get(deadline.jurisdiction);
+      pushUniqueObligation(obligations, {
+        domain: 'privacy',
+        obligationType: 'regulatory_deadline',
+        rulePath: `regulatory_deadline:${deadline.jurisdiction}`,
+        status: baseDeadline && baseDeadline.deadlineHours === deadline.deadlineHours ? 'satisfied' : 'escalated',
+        detail: deadline.deadline,
+        jurisdiction: deadline.jurisdiction,
+      });
+    }
+
+    if (adjustedResult.dataSubjectNotificationRequired) {
+      pushUniqueObligation(obligations, {
+        domain: 'privacy',
+        obligationType: 'subject_notification',
+        rulePath: `subject_notification:${adjustedResult.dataSubjectDeadlineHours}`,
+        status: baseResult.dataSubjectNotificationRequired ? 'satisfied' : 'escalated',
+        detail: String(adjustedResult.dataSubjectDeadlineHours),
+        jurisdiction: primaryJurisdiction,
+      });
+    }
+
+    const privacyChanges = trace?.privacyAdjustments
+      ?.filter((adjustment) => adjustment.operation === 'breach')
+      .flatMap((adjustment) => adjustment.changes)
+      ?? [];
+
+    for (const change of privacyChanges) {
+      const [prefix, rawValue] = change.split(':', 2);
+      if (!rawValue) {
+        continue;
+      }
+
+      switch (prefix) {
+        case 'subject_notification':
+          pushUniqueObligation(obligations, {
+            domain: 'privacy',
+            obligationType: 'subject_notification',
+            rulePath: `subject_notification:${rawValue}`,
+            status: 'escalated',
+            detail: rawValue,
+            jurisdiction: primaryJurisdiction,
+          });
+          break;
+        case 'accelerated_deadline':
+          pushUniqueObligation(obligations, {
+            domain: 'privacy',
+            obligationType: 'regulatory_deadline',
+            rulePath: `regulatory_deadline:${rawValue}`,
+            status: 'escalated',
+            detail: rawValue,
+            jurisdiction: rawValue,
+          });
+          break;
+      }
+    }
+
+    if (typeof adjustedResult.policyDecision === 'string' && adjustedResult.policyDecision !== 'allow') {
+      pushUniqueObligation(obligations, {
+        domain: 'privacy',
+        obligationType: 'policy_decision',
+        rulePath: `policy_decision:${adjustedResult.policyDecision}`,
+        status: 'escalated',
+        detail: adjustedResult.policyDecision,
+        jurisdiction: primaryJurisdiction,
+      });
+    }
+  }
+
+  return obligations;
+}
+
 async function requireReceiptContext(req: Request, res: Response): Promise<{ organizationId: string; actorIdentityId: string } | null> {
   const context = getEnterpriseReceiptContext(req);
   if (!context) {
@@ -105,7 +825,7 @@ async function createPolicyAnchoredReceipt(
     result: unknown;
     evidence?: unknown;
     metadata?: Record<string, unknown>;
-    credentials?: Array<{ issuerId: string; credentialType: string }>;
+    credentials?: Array<{ credentialId?: string; issuerId: string; credentialType: string }>;
     policyContextOverride?: PolicyExecutionContext;
   },
 ): Promise<PolicyDecisionReceipt> {
@@ -177,6 +897,15 @@ async function createPolicyAnchoredReceipt(
         },
       } : {}),
       ...(policyContext.trustContext ? { trustContext: policyContext.trustContext } : {}),
+      ...(input.credentials && input.credentials.length > 0 ? {
+        credentialEvidenceRefs: input.credentials
+          .filter((credential) => typeof credential.credentialId === 'string' && credential.credentialId.length > 0)
+          .map((credential) => ({
+            credentialId: credential.credentialId,
+            issuerId: credential.issuerId,
+            credentialType: credential.credentialType,
+          })),
+      } : {}),
       ...(policyContext.exceptionContext ? { exceptionContext: policyContext.exceptionContext } : {}),
       ...(input.metadata ?? {}),
     },
@@ -405,6 +1134,7 @@ router.post('/evaluate', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_RO
     if (!context) return;
 
     const credentialInputs = (req.body.credentials ?? []).map((credential: Record<string, unknown>) => ({
+      credentialId: typeof credential.credentialId === 'string' ? credential.credentialId : undefined,
       issuerId: String(credential.issuerId ?? ''),
       credentialType: String(credential.credentialType ?? ''),
     }));
@@ -444,6 +1174,13 @@ router.post('/evaluate', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_RO
       metadata: {
         route: '/enterprise/compliance/evaluate',
         operationType: req.body.operationType,
+        ...(credentialInputs.length > 0 ? {
+          credentialEvidenceUsage: buildCredentialEvidenceUsage(
+            req.body.jurisdictions ?? [],
+            req.body.operationType,
+            credentialInputs,
+          ),
+        } : {}),
         ...(policyExecution.trace ? { policyExecutionTrace: policyExecution.trace } : {}),
       },
       policyContextOverride: policyContext,
@@ -476,7 +1213,7 @@ router.post('/report', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_ROLE
       return;
     }
 
-    let report;
+    let report: GeneratedReport;
     switch (parsed.data) {
       case 'SAR':
         report = await regulatoryReportingService.generateSAR(req.body);
@@ -540,11 +1277,12 @@ router.post('/report', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_ROLE
         subjectEntityId: req.body.entityId ?? req.body.subject?.entityId ?? req.body.dataSubject?.entityId,
       },
     );
+    const baseReport = report;
     const policyExecution = await policyExecutionService.applyReportingPolicy(
       context.organizationId,
       policyContext,
       req.body,
-      report,
+      baseReport,
     );
     report = policyExecution.result;
     const receipt = await createPolicyAnchoredReceipt(context, {
@@ -564,6 +1302,11 @@ router.post('/report', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_ROLE
       },
       metadata: {
         route: '/enterprise/compliance/report',
+        obligationEvidenceUsage: buildReportingObligationUsage(
+          baseReport,
+          report,
+          policyExecution.trace,
+        ),
         ...(policyExecution.trace ? { policyExecutionTrace: policyExecution.trace } : {}),
       },
       policyContextOverride: policyContext,
@@ -697,6 +1440,13 @@ router.post('/cross-border', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRIT
         metadata: {
           route: '/enterprise/compliance/cross-border',
           assessmentKind: 'jurisdiction',
+          obligationEvidenceUsage: buildCrossBorderObligationUsage(
+            jurisdictionAssessment.data.sourceJurisdiction,
+            jurisdictionAssessment.data.targetJurisdiction,
+            baseResult,
+            result,
+            policyExecution.trace,
+          ),
           ...(policyExecution.trace ? { policyExecutionTrace: policyExecution.trace } : {}),
         },
         policyContextOverride: policyContext,
@@ -750,6 +1500,13 @@ router.post('/cross-border', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRIT
         metadata: {
           route: '/enterprise/compliance/cross-border',
           assessmentKind: 'data_transfer',
+          obligationEvidenceUsage: buildCrossBorderObligationUsage(
+            transferAssessment.data.sourceJurisdiction,
+            transferAssessment.data.targetJurisdiction,
+            baseResult,
+            result,
+            policyExecution.trace,
+          ),
           ...(policyExecution.trace ? { policyExecutionTrace: policyExecution.trace } : {}),
         },
         policyContextOverride: policyContext,
@@ -817,6 +1574,13 @@ router.post('/dsar', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_ROLES)
         },
         metadata: {
           route: '/enterprise/compliance/dsar',
+          obligationEvidenceUsage: buildPrivacyObligationUsage(
+            'erasure',
+            req.body.jurisdiction ? [req.body.jurisdiction] : [],
+            baseReport,
+            report,
+            policyExecution.trace,
+          ),
           ...(policyExecution.trace ? { policyExecutionTrace: policyExecution.trace } : {}),
         },
         policyContextOverride: policyContext,
@@ -861,6 +1625,13 @@ router.post('/dsar', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_ROLES)
       },
       metadata: {
         route: '/enterprise/compliance/dsar',
+        obligationEvidenceUsage: buildPrivacyObligationUsage(
+          'dsar',
+          req.body.jurisdiction ? [req.body.jurisdiction] : [],
+          baseReport,
+          report,
+          policyExecution.trace,
+        ),
         ...(policyExecution.trace ? { policyExecutionTrace: policyExecution.trace } : {}),
       },
       policyContextOverride: policyContext,
@@ -932,6 +1703,13 @@ router.post('/pia', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_ROLES),
       },
       metadata: {
         route: '/enterprise/compliance/pia',
+        obligationEvidenceUsage: buildPrivacyObligationUsage(
+          'pia',
+          req.body.jurisdictions ?? [],
+          baseResult,
+          result,
+          policyExecution.trace,
+        ),
         ...(policyExecution.trace ? { policyExecutionTrace: policyExecution.trace } : {}),
       },
       policyContextOverride: policyContext,
@@ -988,6 +1766,13 @@ router.post('/breach', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_REVIEW_ROL
       },
       metadata: {
         route: '/enterprise/compliance/breach',
+        obligationEvidenceUsage: buildPrivacyObligationUsage(
+          'breach',
+          req.body.jurisdictions ?? [],
+          baseTimeline,
+          timeline,
+          policyExecution.trace,
+        ),
         ...(policyExecution.trace ? { policyExecutionTrace: policyExecution.trace } : {}),
       },
       policyContextOverride: policyContext,

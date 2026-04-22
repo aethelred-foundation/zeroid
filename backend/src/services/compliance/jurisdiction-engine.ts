@@ -49,6 +49,7 @@ export const ComplianceEvaluationRequestSchema = z.object({
   entityType: z.enum(['individual', 'corporate', 'institution']),
   jurisdictions: z.array(JurisdictionCodeSchema),
   credentials: z.array(z.object({
+    credentialId: z.string().optional(),
     credentialType: z.string(),
     issuerId: z.string(),
     issuingJurisdiction: JurisdictionCodeSchema.optional(),
@@ -653,6 +654,13 @@ export class JurisdictionEngine extends EventEmitter {
   // -------------------------------------------------------------------------
   listJurisdictions(): JurisdictionMeta[] {
     return [...JURISDICTION_REGISTRY.values()];
+  }
+
+  getRequiredCredentials(
+    jurisdiction: JurisdictionCode,
+    operationType: ComplianceEvaluationRequest['operationType'],
+  ): string[] {
+    return [...(JURISDICTION_REQUIREMENTS.get(jurisdiction)?.get(operationType) ?? [])];
   }
 
   // -------------------------------------------------------------------------
