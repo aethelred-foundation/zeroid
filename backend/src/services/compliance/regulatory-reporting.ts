@@ -158,6 +158,27 @@ export type ExportFormat = z.infer<typeof ExportFormatSchema>;
 // ---------------------------------------------------------------------------
 // Report types
 // ---------------------------------------------------------------------------
+export interface ReportEvidenceEvent {
+  eventId: string;
+  action: 'generated' | 'submitted' | 'amended' | 'exported';
+  recordedAt: string;
+  receiptId?: string;
+  actorIdentityId?: string;
+  policyName: string;
+  policyVersion?: string;
+  decisionSummary?: string;
+  authority?: string;
+  filingReference?: string | null;
+  version: number;
+  amendmentReason?: string;
+  exportFormat?: string;
+  exportFilename?: string;
+  deliveryChannel?: string;
+  deliveryDestination?: string;
+  deliveryAcknowledgementId?: string;
+  deliveryAcknowledgedAt?: string;
+}
+
 export interface GeneratedReport {
   reportId: string;
   reportType: ReportType;
@@ -171,6 +192,7 @@ export interface GeneratedReport {
   amendments: Array<{ version: number; amendedAt: string; reason: string; changes: Record<string, unknown> }>;
   filingReference: string | null;
   exportFormats: ExportFormat[];
+  evidenceTrail?: ReportEvidenceEvent[];
 }
 
 export interface DashboardData {
@@ -228,6 +250,7 @@ export class RegulatoryReportingService {
       amendments: [],
       filingReference: null,
       exportFormats: ['json', 'xml', 'pdf'],
+      evidenceTrail: [],
     };
 
     this.reports.set(reportId, report);
@@ -266,6 +289,7 @@ export class RegulatoryReportingService {
       amendments: [],
       filingReference: null,
       exportFormats: ['json', 'xml', 'pdf'],
+      evidenceTrail: [],
     };
 
     this.reports.set(reportId, report);
@@ -307,6 +331,7 @@ export class RegulatoryReportingService {
       amendments: [],
       filingReference: null,
       exportFormats: ['json', 'xml', 'pdf'],
+      evidenceTrail: [],
     };
 
     this.reports.set(reportId, report);
@@ -358,6 +383,7 @@ export class RegulatoryReportingService {
       amendments: [],
       filingReference: null,
       exportFormats: ['json', 'csv', 'pdf'],
+      evidenceTrail: [],
     };
 
     this.reports.set(reportId, report);
@@ -419,6 +445,7 @@ export class RegulatoryReportingService {
       amendments: [],
       filingReference: null,
       exportFormats: ['json', 'pdf'],
+      evidenceTrail: [],
     };
 
     this.reports.set(reportId, report);
@@ -464,6 +491,7 @@ export class RegulatoryReportingService {
       amendments: [],
       filingReference: null,
       exportFormats: ['json', 'xml', 'pdf', 'csv'],
+      evidenceTrail: [],
     };
 
     this.reports.set(reportId, report);
@@ -616,6 +644,44 @@ export class RegulatoryReportingService {
     if (filters?.status) reports = reports.filter((r) => r.status === filters.status);
     if (filters?.jurisdiction) reports = reports.filter((r) => r.filingJurisdiction === filters.jurisdiction);
     return reports.sort((a, b) => new Date(b.generatedAt).getTime() - new Date(a.generatedAt).getTime());
+  }
+
+  recordEvidenceEvent(
+    reportId: string,
+    event: Omit<ReportEvidenceEvent, 'eventId' | 'recordedAt'>,
+  ): ReportEvidenceEvent {
+    const report = this.reports.get(reportId);
+    if (!report) {
+      throw new ReportingError(`Report not found: ${reportId}`, 'REPORT_NOT_FOUND', 404);
+    }
+
+    const recordedAt = new Date().toISOString();
+    const entry: ReportEvidenceEvent = {
+      eventId: crypto.randomUUID(),
+      recordedAt,
+      ...event,
+    };
+
+    report.evidenceTrail = [...(report.evidenceTrail ?? []), entry]
+      .sort((left, right) => new Date(left.recordedAt).getTime() - new Date(right.recordedAt).getTime());
+    this.reports.set(reportId, report);
+    logger.info('report_evidence_recorded', {
+      reportId,
+      action: event.action,
+      receiptId: event.receiptId,
+      version: event.version,
+    });
+    return entry;
+  }
+
+  getEvidenceTrail(reportId: string): ReportEvidenceEvent[] {
+    const report = this.reports.get(reportId);
+    if (!report?.evidenceTrail) {
+      return [];
+    }
+
+    return [...report.evidenceTrail]
+      .sort((left, right) => new Date(left.recordedAt).getTime() - new Date(right.recordedAt).getTime());
   }
 
   // -------------------------------------------------------------------------

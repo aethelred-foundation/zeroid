@@ -307,6 +307,112 @@ interface ObligationEvidenceLineageSnapshot {
   reportType?: string;
 }
 
+interface ReportLifecycleLineageSnapshot {
+  action: 'generated' | 'submitted' | 'amended' | 'exported';
+  reportId: string;
+  reportType: string;
+  version: number;
+  status: string;
+  filingJurisdiction: string;
+  authority?: string;
+  filingReference?: string | null;
+  deadlineField?: 'filingDeadline' | 'responseDeadline';
+  deadline?: string;
+  submittedAt?: string | null;
+  amendmentCount?: number;
+  amendmentReason?: string;
+  amendedAt?: string;
+  exportFormat?: string;
+  exportFilename?: string;
+  exportRequestedAt?: string;
+  amendmentHistory?: Array<{
+    version: number;
+    amendedAt: string;
+    reason: string;
+  }>;
+  deliveryChannel?: string;
+  deliveryDestination?: string;
+  deliveryAcknowledgementId?: string;
+  deliveryAcknowledgedAt?: string;
+}
+
+interface ReportAuthorityProfileLineageSnapshot {
+  authority: string;
+  authorityClass:
+    | 'financial_intelligence_unit'
+    | 'market_regulator'
+    | 'data_protection_authority'
+    | 'audit_supervisor'
+    | 'general_regulator';
+  packageProfile: 'aml_filing' | 'privacy_rights' | 'audit_package' | 'general_reporting';
+  jurisdiction: string;
+  reportType: string;
+  preferredDeliveryChannels: Array<'portal_upload' | 'api' | 'sftp' | 'email'>;
+  acknowledgementExpected: boolean;
+  supportsAmendments: boolean;
+  supportsExports: boolean;
+}
+
+interface ReportFilingDeadlineLineageSnapshot {
+  field: 'filingDeadline' | 'responseDeadline';
+  value: string;
+  status: 'pending' | 'met' | 'overdue';
+  evaluatedAt: string;
+  remainingHours?: number;
+  submittedOnTime?: boolean;
+}
+
+interface ReportEvidenceEventLineageSnapshot {
+  eventId?: string;
+  action: 'generated' | 'submitted' | 'amended' | 'exported';
+  recordedAt: string;
+  receiptId?: string;
+  actorIdentityId?: string;
+  policyName: string;
+  policyVersion?: string;
+  decisionSummary?: string;
+  authority?: string;
+  filingReference?: string | null;
+  version: number;
+  amendmentReason?: string;
+  exportFormat?: string;
+  exportFilename?: string;
+  deliveryChannel?: string;
+  deliveryDestination?: string;
+  deliveryAcknowledgementId?: string;
+  deliveryAcknowledgedAt?: string;
+}
+
+interface ReportFilingPackageLineageSnapshot {
+  packageVersion: 'zeroid.regulatory_filing_package.v1';
+  reportId: string;
+  reportType: string;
+  version: number;
+  status: string;
+  filingJurisdiction: string;
+  authorityProfile?: ReportAuthorityProfileLineageSnapshot;
+  deadline?: ReportFilingDeadlineLineageSnapshot;
+  lifecycle: {
+    generatedAt: string;
+    submittedAt?: string | null;
+    filingReference?: string | null;
+    amendmentCount: number;
+    latestAmendment?: {
+      version: number;
+      amendedAt: string;
+      reason: string;
+    };
+    lastExportedAt?: string;
+    lastExportFormat?: string;
+    lastExportFilename?: string;
+    lastDeliveryChannel?: string;
+    lastDeliveryDestination?: string;
+    lastDeliveryAcknowledgementId?: string;
+    lastDeliveryAcknowledgedAt?: string;
+  };
+  evidenceTrail: ReportEvidenceEventLineageSnapshot[];
+}
+
 export interface PolicyDecisionReceiptExport {
   formatVersion: 'zeroid.policy_receipt_export.v1';
   exportedAt: string;
@@ -356,6 +462,8 @@ export interface PolicyDecisionReceiptExport {
     }>;
     credentials: CredentialEvidenceLineageSnapshot[];
     obligations: ObligationEvidenceLineageSnapshot[];
+    reportLifecycle?: ReportLifecycleLineageSnapshot;
+    reportFilingPackage?: ReportFilingPackageLineageSnapshot;
     trustAnchors: TrustAnchorLineageSnapshot[];
   };
   operatingRegime?: {
@@ -789,6 +897,8 @@ export class PolicyDecisionReceiptService {
 
     const credentials = await this.buildCredentialEvidenceLineage(receipt);
     const obligations = this.buildObligationEvidenceLineage(receipt);
+    const reportLifecycle = this.buildReportLifecycleLineage(receipt);
+    const reportFilingPackage = this.buildReportFilingPackageLineage(receipt);
     const trustAnchors = await this.buildTrustAnchorLineage(receipt);
 
     if (
@@ -796,6 +906,8 @@ export class PolicyDecisionReceiptService {
       && (!exceptions || exceptions.length === 0)
       && credentials.length === 0
       && obligations.length === 0
+      && !reportLifecycle
+      && !reportFilingPackage
       && trustAnchors.length === 0
     ) {
       return undefined;
@@ -851,6 +963,8 @@ export class PolicyDecisionReceiptService {
       })),
       credentials,
       obligations,
+      ...(reportLifecycle ? { reportLifecycle } : {}),
+      ...(reportFilingPackage ? { reportFilingPackage } : {}),
       trustAnchors,
     };
   }
@@ -885,6 +999,20 @@ export class PolicyDecisionReceiptService {
   ): ObligationEvidenceLineageSnapshot[] {
     const metadata = this.asRecord(receipt.metadata);
     return this.normalizeObligationEvidenceUsage(metadata.obligationEvidenceUsage);
+  }
+
+  private buildReportLifecycleLineage(
+    receipt: PolicyDecisionReceipt,
+  ): ReportLifecycleLineageSnapshot | undefined {
+    const metadata = this.asRecord(receipt.metadata);
+    return this.normalizeReportLifecycle(metadata.reportLifecycle);
+  }
+
+  private buildReportFilingPackageLineage(
+    receipt: PolicyDecisionReceipt,
+  ): ReportFilingPackageLineageSnapshot | undefined {
+    const metadata = this.asRecord(receipt.metadata);
+    return this.normalizeReportFilingPackage(metadata.reportFilingPackage);
   }
 
   private async buildTrustAnchorLineage(
@@ -1338,6 +1466,274 @@ export class PolicyDecisionReceiptService {
         }
         return acc;
       }, []);
+  }
+
+  private normalizeReportLifecycle(value: unknown): ReportLifecycleLineageSnapshot | undefined {
+    const record = this.asRecord(value);
+    const action = typeof record.action === 'string' ? record.action : '';
+    const reportId = typeof record.reportId === 'string' ? record.reportId : '';
+    const reportType = typeof record.reportType === 'string' ? record.reportType : '';
+    const filingJurisdiction = typeof record.filingJurisdiction === 'string' ? record.filingJurisdiction : '';
+    const status = typeof record.status === 'string' ? record.status : '';
+    const version = typeof record.version === 'number' ? record.version : Number.NaN;
+
+    if (
+      !['generated', 'submitted', 'amended', 'exported'].includes(action)
+      || reportId.length === 0
+      || reportType.length === 0
+      || filingJurisdiction.length === 0
+      || status.length === 0
+      || Number.isNaN(version)
+    ) {
+      return undefined;
+    }
+
+    return {
+      action: action as ReportLifecycleLineageSnapshot['action'],
+      reportId,
+      reportType,
+      version,
+      status,
+      filingJurisdiction,
+      ...(typeof record.authority === 'string' && record.authority.length > 0
+        ? { authority: record.authority }
+        : {}),
+      ...(record.filingReference === null || (typeof record.filingReference === 'string' && record.filingReference.length > 0)
+        ? { filingReference: record.filingReference as string | null }
+        : {}),
+      ...(record.deadlineField === 'filingDeadline' || record.deadlineField === 'responseDeadline'
+        ? { deadlineField: record.deadlineField as 'filingDeadline' | 'responseDeadline' }
+        : {}),
+      ...(typeof record.deadline === 'string' && record.deadline.length > 0
+        ? { deadline: record.deadline }
+        : {}),
+      ...(record.submittedAt === null || (typeof record.submittedAt === 'string' && record.submittedAt.length > 0)
+        ? { submittedAt: record.submittedAt as string | null }
+        : {}),
+      ...(typeof record.amendmentCount === 'number' ? { amendmentCount: record.amendmentCount } : {}),
+      ...(typeof record.amendmentReason === 'string' && record.amendmentReason.length > 0
+        ? { amendmentReason: record.amendmentReason }
+        : {}),
+      ...(typeof record.amendedAt === 'string' && record.amendedAt.length > 0
+        ? { amendedAt: record.amendedAt }
+        : {}),
+      ...(typeof record.exportFormat === 'string' && record.exportFormat.length > 0
+        ? { exportFormat: record.exportFormat }
+        : {}),
+      ...(typeof record.exportFilename === 'string' && record.exportFilename.length > 0
+        ? { exportFilename: record.exportFilename }
+        : {}),
+      ...(typeof record.exportRequestedAt === 'string' && record.exportRequestedAt.length > 0
+        ? { exportRequestedAt: record.exportRequestedAt }
+        : {}),
+      ...(Array.isArray(record.amendmentHistory)
+        ? {
+          amendmentHistory: record.amendmentHistory
+            .map((entry) => this.asRecord(entry))
+            .map((entry) => ({
+              version: typeof entry.version === 'number' ? entry.version : Number.NaN,
+              amendedAt: typeof entry.amendedAt === 'string' ? entry.amendedAt : '',
+              reason: typeof entry.reason === 'string' ? entry.reason : '',
+            }))
+            .filter((entry) => !Number.isNaN(entry.version) && entry.amendedAt.length > 0 && entry.reason.length > 0)
+        }
+        : {}),
+      ...(typeof record.deliveryChannel === 'string' && record.deliveryChannel.length > 0
+        ? { deliveryChannel: record.deliveryChannel }
+        : {}),
+      ...(typeof record.deliveryDestination === 'string' && record.deliveryDestination.length > 0
+        ? { deliveryDestination: record.deliveryDestination }
+        : {}),
+      ...(typeof record.deliveryAcknowledgementId === 'string' && record.deliveryAcknowledgementId.length > 0
+        ? { deliveryAcknowledgementId: record.deliveryAcknowledgementId }
+        : {}),
+      ...(typeof record.deliveryAcknowledgedAt === 'string' && record.deliveryAcknowledgedAt.length > 0
+        ? { deliveryAcknowledgedAt: record.deliveryAcknowledgedAt }
+        : {}),
+    };
+  }
+
+  private normalizeReportFilingPackage(value: unknown): ReportFilingPackageLineageSnapshot | undefined {
+    const record = this.asRecord(value);
+    const packageVersion = typeof record.packageVersion === 'string' ? record.packageVersion : '';
+    const reportId = typeof record.reportId === 'string' ? record.reportId : '';
+    const reportType = typeof record.reportType === 'string' ? record.reportType : '';
+    const filingJurisdiction = typeof record.filingJurisdiction === 'string' ? record.filingJurisdiction : '';
+    const status = typeof record.status === 'string' ? record.status : '';
+    const version = typeof record.version === 'number' ? record.version : Number.NaN;
+    const lifecycle = this.asRecord(record.lifecycle);
+    const authorityProfile = this.asRecord(record.authorityProfile);
+    const deadline = this.asRecord(record.deadline);
+
+    if (
+      packageVersion !== 'zeroid.regulatory_filing_package.v1'
+      || reportId.length === 0
+      || reportType.length === 0
+      || filingJurisdiction.length === 0
+      || status.length === 0
+      || Number.isNaN(version)
+      || typeof lifecycle.generatedAt !== 'string'
+      || lifecycle.generatedAt.length === 0
+      || typeof lifecycle.amendmentCount !== 'number'
+    ) {
+      return undefined;
+    }
+
+    const normalizedTrail = Array.isArray(record.evidenceTrail)
+      ? record.evidenceTrail
+        .map((entry) => this.asRecord(entry))
+        .map((entry) => {
+          const action = typeof entry.action === 'string' ? entry.action : '';
+          const recordedAt = typeof entry.recordedAt === 'string' ? entry.recordedAt : '';
+          const policyName = typeof entry.policyName === 'string' ? entry.policyName : '';
+          const eventVersion = typeof entry.version === 'number' ? entry.version : Number.NaN;
+          if (
+            !['generated', 'submitted', 'amended', 'exported'].includes(action)
+            || recordedAt.length === 0
+            || policyName.length === 0
+            || Number.isNaN(eventVersion)
+          ) {
+            return null;
+          }
+
+          return {
+            ...(typeof entry.eventId === 'string' && entry.eventId.length > 0 ? { eventId: entry.eventId } : {}),
+            action: action as ReportEvidenceEventLineageSnapshot['action'],
+            recordedAt,
+            ...(typeof entry.receiptId === 'string' && entry.receiptId.length > 0 ? { receiptId: entry.receiptId } : {}),
+            ...(typeof entry.actorIdentityId === 'string' && entry.actorIdentityId.length > 0
+              ? { actorIdentityId: entry.actorIdentityId }
+              : {}),
+            policyName,
+            ...(typeof entry.policyVersion === 'string' && entry.policyVersion.length > 0
+              ? { policyVersion: entry.policyVersion }
+              : {}),
+            ...(typeof entry.decisionSummary === 'string' && entry.decisionSummary.length > 0
+              ? { decisionSummary: entry.decisionSummary }
+              : {}),
+            ...(typeof entry.authority === 'string' && entry.authority.length > 0 ? { authority: entry.authority } : {}),
+            ...(entry.filingReference === null || (typeof entry.filingReference === 'string' && entry.filingReference.length > 0)
+              ? { filingReference: entry.filingReference as string | null }
+              : {}),
+            version: eventVersion,
+            ...(typeof entry.amendmentReason === 'string' && entry.amendmentReason.length > 0
+              ? { amendmentReason: entry.amendmentReason }
+              : {}),
+            ...(typeof entry.exportFormat === 'string' && entry.exportFormat.length > 0
+              ? { exportFormat: entry.exportFormat }
+              : {}),
+            ...(typeof entry.exportFilename === 'string' && entry.exportFilename.length > 0
+              ? { exportFilename: entry.exportFilename }
+              : {}),
+            ...(typeof entry.deliveryChannel === 'string' && entry.deliveryChannel.length > 0
+              ? { deliveryChannel: entry.deliveryChannel }
+              : {}),
+            ...(typeof entry.deliveryDestination === 'string' && entry.deliveryDestination.length > 0
+              ? { deliveryDestination: entry.deliveryDestination }
+              : {}),
+            ...(typeof entry.deliveryAcknowledgementId === 'string' && entry.deliveryAcknowledgementId.length > 0
+              ? { deliveryAcknowledgementId: entry.deliveryAcknowledgementId }
+              : {}),
+            ...(typeof entry.deliveryAcknowledgedAt === 'string' && entry.deliveryAcknowledgedAt.length > 0
+              ? { deliveryAcknowledgedAt: entry.deliveryAcknowledgedAt }
+              : {}),
+          } satisfies ReportEvidenceEventLineageSnapshot;
+        })
+        .filter((entry): entry is ReportEvidenceEventLineageSnapshot => entry !== null)
+      : [];
+
+    return {
+      packageVersion: 'zeroid.regulatory_filing_package.v1',
+      reportId,
+      reportType,
+      version,
+      status,
+      filingJurisdiction,
+      ...(typeof authorityProfile.authority === 'string'
+        && authorityProfile.authority.length > 0
+        && typeof authorityProfile.jurisdiction === 'string'
+        && authorityProfile.jurisdiction.length > 0
+        && typeof authorityProfile.reportType === 'string'
+        && authorityProfile.reportType.length > 0
+        && ['financial_intelligence_unit', 'market_regulator', 'data_protection_authority', 'audit_supervisor', 'general_regulator']
+          .includes(String(authorityProfile.authorityClass))
+        && ['aml_filing', 'privacy_rights', 'audit_package', 'general_reporting']
+          .includes(String(authorityProfile.packageProfile))
+        ? {
+          authorityProfile: {
+            authority: authorityProfile.authority,
+            authorityClass: authorityProfile.authorityClass as ReportAuthorityProfileLineageSnapshot['authorityClass'],
+            packageProfile: authorityProfile.packageProfile as ReportAuthorityProfileLineageSnapshot['packageProfile'],
+            jurisdiction: authorityProfile.jurisdiction,
+            reportType: authorityProfile.reportType,
+            preferredDeliveryChannels: Array.isArray(authorityProfile.preferredDeliveryChannels)
+              ? authorityProfile.preferredDeliveryChannels
+                .filter((channel): channel is 'portal_upload' | 'api' | 'sftp' | 'email' =>
+                  channel === 'portal_upload' || channel === 'api' || channel === 'sftp' || channel === 'email')
+              : [],
+            acknowledgementExpected: authorityProfile.acknowledgementExpected === true,
+            supportsAmendments: authorityProfile.supportsAmendments === true,
+            supportsExports: authorityProfile.supportsExports === true,
+          },
+        }
+        : {}),
+      ...(deadline.field === 'filingDeadline' || deadline.field === 'responseDeadline'
+        ? {
+          deadline: {
+            field: deadline.field as ReportFilingDeadlineLineageSnapshot['field'],
+            value: typeof deadline.value === 'string' ? deadline.value : '',
+            status: deadline.status === 'met' || deadline.status === 'overdue' ? deadline.status : 'pending',
+            evaluatedAt: typeof deadline.evaluatedAt === 'string' ? deadline.evaluatedAt : '',
+            ...(typeof deadline.remainingHours === 'number' ? { remainingHours: deadline.remainingHours } : {}),
+            ...(typeof deadline.submittedOnTime === 'boolean' ? { submittedOnTime: deadline.submittedOnTime } : {}),
+          },
+        }
+        : {}),
+      lifecycle: {
+        generatedAt: lifecycle.generatedAt,
+        ...(lifecycle.submittedAt === null || (typeof lifecycle.submittedAt === 'string' && lifecycle.submittedAt.length > 0)
+          ? { submittedAt: lifecycle.submittedAt as string | null }
+          : {}),
+        ...(lifecycle.filingReference === null || (typeof lifecycle.filingReference === 'string' && lifecycle.filingReference.length > 0)
+          ? { filingReference: lifecycle.filingReference as string | null }
+          : {}),
+        amendmentCount: lifecycle.amendmentCount,
+        ...(this.asRecord(lifecycle.latestAmendment)
+          && typeof this.asRecord(lifecycle.latestAmendment).version === 'number'
+          && typeof this.asRecord(lifecycle.latestAmendment).amendedAt === 'string'
+          && typeof this.asRecord(lifecycle.latestAmendment).reason === 'string'
+          ? {
+            latestAmendment: {
+              version: this.asRecord(lifecycle.latestAmendment).version as number,
+              amendedAt: this.asRecord(lifecycle.latestAmendment).amendedAt as string,
+              reason: this.asRecord(lifecycle.latestAmendment).reason as string,
+            },
+          }
+          : {}),
+        ...(typeof lifecycle.lastExportedAt === 'string' && lifecycle.lastExportedAt.length > 0
+          ? { lastExportedAt: lifecycle.lastExportedAt }
+          : {}),
+        ...(typeof lifecycle.lastExportFormat === 'string' && lifecycle.lastExportFormat.length > 0
+          ? { lastExportFormat: lifecycle.lastExportFormat }
+          : {}),
+        ...(typeof lifecycle.lastExportFilename === 'string' && lifecycle.lastExportFilename.length > 0
+          ? { lastExportFilename: lifecycle.lastExportFilename }
+          : {}),
+        ...(typeof lifecycle.lastDeliveryChannel === 'string' && lifecycle.lastDeliveryChannel.length > 0
+          ? { lastDeliveryChannel: lifecycle.lastDeliveryChannel }
+          : {}),
+        ...(typeof lifecycle.lastDeliveryDestination === 'string' && lifecycle.lastDeliveryDestination.length > 0
+          ? { lastDeliveryDestination: lifecycle.lastDeliveryDestination }
+          : {}),
+        ...(typeof lifecycle.lastDeliveryAcknowledgementId === 'string' && lifecycle.lastDeliveryAcknowledgementId.length > 0
+          ? { lastDeliveryAcknowledgementId: lifecycle.lastDeliveryAcknowledgementId }
+          : {}),
+        ...(typeof lifecycle.lastDeliveryAcknowledgedAt === 'string' && lifecycle.lastDeliveryAcknowledgedAt.length > 0
+          ? { lastDeliveryAcknowledgedAt: lifecycle.lastDeliveryAcknowledgedAt }
+          : {}),
+      },
+      evidenceTrail: normalizedTrail,
+    };
   }
 
   private sanitizeCredentialEvidenceLineage(

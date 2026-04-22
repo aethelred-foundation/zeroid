@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { createLogger, format, transports } from 'winston';
 import { jurisdictionEngine, ComplianceEvaluationRequestSchema, CrossBorderAssessmentSchema, JurisdictionCodeSchema, CrossBorderResult } from '../../services/compliance/jurisdiction-engine';
 import { sanctionsScreeningService, ScreeningRequestSchema, BatchScreeningRequestSchema, FalsePositiveDecisionSchema } from '../../services/compliance/sanctions-screening';
-import { regulatoryReportingService, ReportTypeSchema, ExportFormatSchema, GeneratedReport } from '../../services/compliance/regulatory-reporting';
+import { regulatoryReportingService, ReportTypeSchema, ExportFormatSchema, GeneratedReport, ReportEvidenceEvent } from '../../services/compliance/regulatory-reporting';
 import { dataSovereigntyService, CrossBorderTransferSchema, PIASchema, BreachNotificationSchema, ConsentRecordSchema, TransferAssessmentResult, PIAResult, BreachTimeline } from '../../services/compliance/data-sovereignty';
 import { EnterpriseAuthenticatedRequest, requireEnterpriseContext } from '../../middleware/enterprise';
 import { EnterpriseRole, OrganizationGovernanceSettings } from '../../services/enterprise/organization-service';
@@ -25,6 +25,15 @@ const router = Router();
 const ENTERPRISE_COMPLIANCE_READ_ROLES: EnterpriseRole[] = ['viewer', 'operator', 'admin', 'compliance_officer', 'auditor'];
 const ENTERPRISE_COMPLIANCE_WRITE_ROLES: EnterpriseRole[] = ['operator', 'admin', 'compliance_officer'];
 const ENTERPRISE_COMPLIANCE_REVIEW_ROLES: EnterpriseRole[] = ['admin', 'compliance_officer', 'auditor'];
+const ReportAmendmentRequestSchema = z.object({
+  reason: z.string().min(5),
+  changes: z.record(z.unknown()),
+});
+const ReportExportHandoffQuerySchema = z.object({
+  destination: z.string().min(2).optional(),
+  deliveryChannel: z.enum(['portal_upload', 'sftp', 'api', 'email']).optional(),
+  acknowledgementId: z.string().min(2).optional(),
+});
 
 // ---------------------------------------------------------------------------
 // Middleware: validate request body with Zod schema
@@ -126,6 +135,112 @@ type ObligationEvidenceUsageSnapshot = {
   targetJurisdiction?: string;
   jurisdiction?: string;
   reportType?: string;
+};
+
+type ReportLifecycleSnapshot = {
+  action: 'generated' | 'submitted' | 'amended' | 'exported';
+  reportId: string;
+  reportType: string;
+  version: number;
+  status: string;
+  filingJurisdiction: string;
+  authority?: string;
+  filingReference?: string | null;
+  deadlineField?: 'filingDeadline' | 'responseDeadline';
+  deadline?: string;
+  submittedAt?: string | null;
+  amendmentCount?: number;
+  amendmentReason?: string;
+  amendedAt?: string;
+  exportFormat?: string;
+  exportFilename?: string;
+  exportRequestedAt?: string;
+  amendmentHistory?: Array<{
+    version: number;
+    amendedAt: string;
+    reason: string;
+  }>;
+  deliveryChannel?: string;
+  deliveryDestination?: string;
+  deliveryAcknowledgementId?: string;
+  deliveryAcknowledgedAt?: string;
+};
+
+type RegulatoryAuthorityProfileSnapshot = {
+  authority: string;
+  authorityClass:
+    | 'financial_intelligence_unit'
+    | 'market_regulator'
+    | 'data_protection_authority'
+    | 'audit_supervisor'
+    | 'general_regulator';
+  packageProfile: 'aml_filing' | 'privacy_rights' | 'audit_package' | 'general_reporting';
+  jurisdiction: string;
+  reportType: string;
+  preferredDeliveryChannels: Array<'portal_upload' | 'api' | 'sftp' | 'email'>;
+  acknowledgementExpected: boolean;
+  supportsAmendments: boolean;
+  supportsExports: boolean;
+};
+
+type ReportFilingDeadlineSnapshot = {
+  field: 'filingDeadline' | 'responseDeadline';
+  value: string;
+  status: 'pending' | 'met' | 'overdue';
+  evaluatedAt: string;
+  remainingHours?: number;
+  submittedOnTime?: boolean;
+};
+
+type ReportEvidenceEventSnapshot = {
+  eventId?: string;
+  action: 'generated' | 'submitted' | 'amended' | 'exported';
+  recordedAt: string;
+  receiptId?: string;
+  actorIdentityId?: string;
+  policyName: string;
+  policyVersion?: string;
+  decisionSummary?: string;
+  authority?: string;
+  filingReference?: string | null;
+  version: number;
+  amendmentReason?: string;
+  exportFormat?: string;
+  exportFilename?: string;
+  deliveryChannel?: string;
+  deliveryDestination?: string;
+  deliveryAcknowledgementId?: string;
+  deliveryAcknowledgedAt?: string;
+};
+
+type ReportFilingPackageSnapshot = {
+  packageVersion: 'zeroid.regulatory_filing_package.v1';
+  reportId: string;
+  reportType: string;
+  version: number;
+  status: string;
+  filingJurisdiction: string;
+  authorityProfile?: RegulatoryAuthorityProfileSnapshot;
+  deadline?: ReportFilingDeadlineSnapshot;
+  lifecycle: {
+    generatedAt: string;
+    submittedAt?: string | null;
+    filingReference?: string | null;
+    amendmentCount: number;
+    latestAmendment?: {
+      version: number;
+      amendedAt: string;
+      reason: string;
+    };
+    lastExportedAt?: string;
+    lastExportFormat?: string;
+    lastExportFilename?: string;
+    lastDeliveryChannel?: string;
+    lastDeliveryDestination?: string;
+    lastDeliveryAcknowledgementId?: string;
+    lastDeliveryAcknowledgedAt?: string;
+  };
+  evidenceTrail: ReportEvidenceEventSnapshot[];
 };
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -403,6 +518,7 @@ function buildReportingObligationUsage(
   const obligations: ObligationEvidenceUsageSnapshot[] = [];
   const reportType = String(adjustedReport.reportType ?? baseReport.reportType ?? 'UNKNOWN');
   const jurisdiction = String(adjustedReport.filingJurisdiction ?? baseReport.filingJurisdiction ?? '');
+  const authority = resolveRegulatoryAuthority(reportType, jurisdiction);
 
   if (jurisdiction.length > 0) {
     pushUniqueObligation(obligations, {
@@ -411,6 +527,18 @@ function buildReportingObligationUsage(
       rulePath: `filing_jurisdiction:${jurisdiction}`,
       status: 'satisfied',
       detail: jurisdiction,
+      jurisdiction,
+      reportType,
+    });
+  }
+
+  if (authority) {
+    pushUniqueObligation(obligations, {
+      domain: 'reporting',
+      obligationType: 'regulatory_authority',
+      rulePath: `regulatory_authority:${authority}`,
+      status: 'satisfied',
+      detail: authority,
       jurisdiction,
       reportType,
     });
@@ -500,6 +628,518 @@ function buildReportingObligationUsage(
       detail: `${baseReport.status}->${adjustedReport.status}`,
       jurisdiction,
       reportType,
+    });
+  }
+
+  return obligations;
+}
+
+function resolveRegulatoryAuthority(reportType: string, jurisdiction: string): string | null {
+  if (reportType === 'STR' && jurisdiction.startsWith('AE-')) {
+    return 'UAE FIU';
+  }
+
+  const authorities: Record<string, string> = {
+    'AE-CBUAE': 'Central Bank of UAE',
+    'AE-SCA': 'Securities & Commodities Authority',
+    'AE-ADGM': 'FSRA',
+    'AE-DIFC': 'DFSA',
+    'EU-EIDAS': 'EU Supervisory Authority',
+    'EU-GDPR': 'Data Protection Authority',
+    'EU-MICA': 'EBA/ESMA',
+    'US-FINCEN': 'FinCEN',
+    'US-SEC': 'SEC',
+    'US-NY': 'NYDFS',
+    'US-CA': 'CPPA',
+    'US-TX': 'Texas Department of Banking',
+    'US-FL': 'OFR',
+    'SG-MAS': 'MAS',
+    'UK-FCA': 'FCA',
+    'BH-CBB': 'CBB',
+    'SA-SAMA': 'SAMA',
+    all: 'Multi-jurisdiction Audit Authority',
+  };
+
+  return authorities[jurisdiction] ?? null;
+}
+
+function buildRegulatoryAuthorityProfile(
+  reportType: string,
+  jurisdiction: string,
+): RegulatoryAuthorityProfileSnapshot | undefined {
+  const authority = resolveRegulatoryAuthority(reportType, jurisdiction);
+  if (!authority) {
+    return undefined;
+  }
+
+  if (reportType === 'SAR' || reportType === 'CTR' || reportType === 'STR') {
+    return {
+      authority,
+      authorityClass: reportType === 'STR' ? 'financial_intelligence_unit' : 'market_regulator',
+      packageProfile: 'aml_filing',
+      jurisdiction,
+      reportType,
+      preferredDeliveryChannels: ['portal_upload', 'api', 'sftp'],
+      acknowledgementExpected: true,
+      supportsAmendments: true,
+      supportsExports: true,
+    };
+  }
+
+  if (reportType === 'DSAR' || reportType === 'ERASURE') {
+    return {
+      authority,
+      authorityClass: 'data_protection_authority',
+      packageProfile: 'privacy_rights',
+      jurisdiction,
+      reportType,
+      preferredDeliveryChannels: ['portal_upload', 'email', 'api'],
+      acknowledgementExpected: true,
+      supportsAmendments: true,
+      supportsExports: true,
+    };
+  }
+
+  if (reportType === 'AUDIT') {
+    return {
+      authority,
+      authorityClass: 'audit_supervisor',
+      packageProfile: 'audit_package',
+      jurisdiction,
+      reportType,
+      preferredDeliveryChannels: ['portal_upload', 'sftp', 'api'],
+      acknowledgementExpected: true,
+      supportsAmendments: true,
+      supportsExports: true,
+    };
+  }
+
+  return {
+    authority,
+    authorityClass: 'general_regulator',
+    packageProfile: 'general_reporting',
+    jurisdiction,
+    reportType,
+    preferredDeliveryChannels: ['portal_upload', 'api', 'email'],
+    acknowledgementExpected: true,
+    supportsAmendments: true,
+    supportsExports: true,
+  };
+}
+
+function normalizeReportEvidenceEvent(
+  event: ReportEvidenceEvent | ReportEvidenceEventSnapshot,
+): ReportEvidenceEventSnapshot {
+  return {
+    ...(typeof event.eventId === 'string' && event.eventId.length > 0 ? { eventId: event.eventId } : {}),
+    action: event.action,
+    recordedAt: event.recordedAt,
+    ...(typeof event.receiptId === 'string' && event.receiptId.length > 0 ? { receiptId: event.receiptId } : {}),
+    ...(typeof event.actorIdentityId === 'string' && event.actorIdentityId.length > 0
+      ? { actorIdentityId: event.actorIdentityId }
+      : {}),
+    policyName: event.policyName,
+    ...(typeof event.policyVersion === 'string' && event.policyVersion.length > 0 ? { policyVersion: event.policyVersion } : {}),
+    ...(typeof event.decisionSummary === 'string' && event.decisionSummary.length > 0
+      ? { decisionSummary: event.decisionSummary }
+      : {}),
+    ...(typeof event.authority === 'string' && event.authority.length > 0 ? { authority: event.authority } : {}),
+    ...(event.filingReference === null || (typeof event.filingReference === 'string' && event.filingReference.length > 0)
+      ? { filingReference: event.filingReference as string | null }
+      : {}),
+    version: event.version,
+    ...(typeof event.amendmentReason === 'string' && event.amendmentReason.length > 0
+      ? { amendmentReason: event.amendmentReason }
+      : {}),
+    ...(typeof event.exportFormat === 'string' && event.exportFormat.length > 0 ? { exportFormat: event.exportFormat } : {}),
+    ...(typeof event.exportFilename === 'string' && event.exportFilename.length > 0
+      ? { exportFilename: event.exportFilename }
+      : {}),
+    ...(typeof event.deliveryChannel === 'string' && event.deliveryChannel.length > 0
+      ? { deliveryChannel: event.deliveryChannel }
+      : {}),
+    ...(typeof event.deliveryDestination === 'string' && event.deliveryDestination.length > 0
+      ? { deliveryDestination: event.deliveryDestination }
+      : {}),
+    ...(typeof event.deliveryAcknowledgementId === 'string' && event.deliveryAcknowledgementId.length > 0
+      ? { deliveryAcknowledgementId: event.deliveryAcknowledgementId }
+      : {}),
+    ...(typeof event.deliveryAcknowledgedAt === 'string' && event.deliveryAcknowledgedAt.length > 0
+      ? { deliveryAcknowledgedAt: event.deliveryAcknowledgedAt }
+      : {}),
+  };
+}
+
+function buildReportFilingDeadline(
+  report: GeneratedReport,
+  evaluatedAt: string,
+): ReportFilingDeadlineSnapshot | undefined {
+  const deadline = extractReportDeadline(report);
+  if (!deadline) {
+    return undefined;
+  }
+
+  const deadlineTime = new Date(deadline.value).getTime();
+  const evaluatedTime = new Date(evaluatedAt).getTime();
+  const submittedTime = report.submittedAt ? new Date(report.submittedAt).getTime() : null;
+
+  if (submittedTime !== null) {
+    return {
+      field: deadline.field,
+      value: deadline.value,
+      status: submittedTime <= deadlineTime ? 'met' : 'overdue',
+      evaluatedAt,
+      submittedOnTime: submittedTime <= deadlineTime,
+    };
+  }
+
+  return {
+    field: deadline.field,
+    value: deadline.value,
+    status: evaluatedTime <= deadlineTime ? 'pending' : 'overdue',
+    evaluatedAt,
+    remainingHours: Math.ceil((deadlineTime - evaluatedTime) / (1000 * 60 * 60)),
+  };
+}
+
+function buildReportFilingPackage(
+  report: GeneratedReport,
+  evidenceTrail: Array<ReportEvidenceEvent | ReportEvidenceEventSnapshot>,
+  evaluatedAt: string,
+): ReportFilingPackageSnapshot {
+  const authorityProfile = buildRegulatoryAuthorityProfile(report.reportType, report.filingJurisdiction);
+  const deadline = buildReportFilingDeadline(report, evaluatedAt);
+  const normalizedTrail = evidenceTrail
+    .map((event) => normalizeReportEvidenceEvent(event))
+    .sort((left, right) => new Date(left.recordedAt).getTime() - new Date(right.recordedAt).getTime());
+  const latestExport = [...normalizedTrail].reverse().find((event) => event.action === 'exported');
+  const latestAmendment = report.amendments[report.amendments.length - 1];
+
+  return {
+    packageVersion: 'zeroid.regulatory_filing_package.v1',
+    reportId: report.reportId,
+    reportType: report.reportType,
+    version: report.version,
+    status: report.status,
+    filingJurisdiction: report.filingJurisdiction,
+    ...(authorityProfile ? { authorityProfile } : {}),
+    ...(deadline ? { deadline } : {}),
+    lifecycle: {
+      generatedAt: report.generatedAt,
+      ...(report.submittedAt !== undefined ? { submittedAt: report.submittedAt } : {}),
+      ...(report.filingReference !== undefined ? { filingReference: report.filingReference } : {}),
+      amendmentCount: report.amendments.length,
+      ...(latestAmendment
+        ? {
+          latestAmendment: {
+            version: latestAmendment.version,
+            amendedAt: latestAmendment.amendedAt,
+            reason: latestAmendment.reason,
+          },
+        }
+        : {}),
+      ...(latestExport?.recordedAt ? { lastExportedAt: latestExport.recordedAt } : {}),
+      ...(latestExport?.exportFormat ? { lastExportFormat: latestExport.exportFormat } : {}),
+      ...(latestExport?.exportFilename ? { lastExportFilename: latestExport.exportFilename } : {}),
+      ...(latestExport?.deliveryChannel ? { lastDeliveryChannel: latestExport.deliveryChannel } : {}),
+      ...(latestExport?.deliveryDestination ? { lastDeliveryDestination: latestExport.deliveryDestination } : {}),
+      ...(latestExport?.deliveryAcknowledgementId
+        ? { lastDeliveryAcknowledgementId: latestExport.deliveryAcknowledgementId }
+        : {}),
+      ...(latestExport?.deliveryAcknowledgedAt
+        ? { lastDeliveryAcknowledgedAt: latestExport.deliveryAcknowledgedAt }
+        : {}),
+    },
+    evidenceTrail: normalizedTrail,
+  };
+}
+
+async function recordReportEvidenceEvent(
+  report: GeneratedReport,
+  event: Omit<ReportEvidenceEvent, 'eventId' | 'recordedAt'>,
+): Promise<void> {
+  regulatoryReportingService.recordEvidenceEvent(report.reportId, event);
+}
+
+function buildReportSubmissionObligationUsage(
+  report: GeneratedReport,
+  submission: { filingReference: string; submittedAt: string },
+): ObligationEvidenceUsageSnapshot[] {
+  const obligations = buildReportingObligationUsage(report, report);
+  const authority = resolveRegulatoryAuthority(report.reportType, report.filingJurisdiction);
+  const deadline = extractReportDeadline(report);
+
+  if (authority) {
+    pushUniqueObligation(obligations, {
+      domain: 'reporting',
+      obligationType: 'submission_authority',
+      rulePath: `submission_authority:${authority}`,
+      status: 'satisfied',
+      detail: authority,
+      jurisdiction: report.filingJurisdiction,
+      reportType: report.reportType,
+    });
+  }
+
+  pushUniqueObligation(obligations, {
+    domain: 'reporting',
+    obligationType: 'filing_reference',
+    rulePath: `filing_reference:${submission.filingReference}`,
+    status: 'satisfied',
+    detail: submission.filingReference,
+    jurisdiction: report.filingJurisdiction,
+    reportType: report.reportType,
+  });
+
+  pushUniqueObligation(obligations, {
+    domain: 'reporting',
+    obligationType: 'submission_timestamp',
+    rulePath: 'submission_timestamp',
+    status: 'satisfied',
+    detail: submission.submittedAt,
+    jurisdiction: report.filingJurisdiction,
+    reportType: report.reportType,
+  });
+
+  if (deadline) {
+    const submittedOnTime = new Date(submission.submittedAt).getTime() <= new Date(deadline.value).getTime();
+    pushUniqueObligation(obligations, {
+      domain: 'reporting',
+      obligationType: 'submission_sla',
+      rulePath: `submission_sla:${deadline.field}`,
+      status: submittedOnTime ? 'satisfied' : 'escalated',
+      detail: `${submission.submittedAt}|${deadline.value}`,
+      jurisdiction: report.filingJurisdiction,
+      reportType: report.reportType,
+    });
+  }
+
+  return obligations;
+}
+
+function buildReportLifecycleSnapshot(
+  action: ReportLifecycleSnapshot['action'],
+  report: GeneratedReport,
+  extras: Partial<Omit<ReportLifecycleSnapshot, 'action' | 'reportId' | 'reportType' | 'version' | 'status' | 'filingJurisdiction'>> = {},
+): ReportLifecycleSnapshot {
+  const authority = resolveRegulatoryAuthority(report.reportType, report.filingJurisdiction);
+  const deadline = extractReportDeadline(report);
+
+  return {
+    action,
+    reportId: report.reportId,
+    reportType: report.reportType,
+    version: report.version,
+    status: report.status,
+    filingJurisdiction: report.filingJurisdiction,
+    ...(authority ? { authority } : {}),
+    ...(report.filingReference !== undefined ? { filingReference: report.filingReference } : {}),
+    ...(deadline ? { deadlineField: deadline.field, deadline: deadline.value } : {}),
+    ...(report.submittedAt !== undefined ? { submittedAt: report.submittedAt } : {}),
+    ...(report.amendments ? { amendmentCount: report.amendments.length } : {}),
+    ...(Array.isArray(report.amendments) && report.amendments.length > 0
+      ? {
+        amendmentHistory: report.amendments.map((amendment) => ({
+          version: amendment.version,
+          amendedAt: amendment.amendedAt,
+          reason: amendment.reason,
+        })),
+      }
+      : {}),
+    ...extras,
+  };
+}
+
+function buildReportAmendmentObligationUsage(
+  amendedReport: GeneratedReport,
+  amendment: { reason: string; changes: Record<string, unknown> },
+): ObligationEvidenceUsageSnapshot[] {
+  const obligations = buildReportingObligationUsage(amendedReport, amendedReport);
+  const authority = resolveRegulatoryAuthority(amendedReport.reportType, amendedReport.filingJurisdiction);
+  const latestAmendment = amendedReport.amendments[amendedReport.amendments.length - 1];
+
+  if (authority) {
+    pushUniqueObligation(obligations, {
+      domain: 'reporting',
+      obligationType: 'amendment_authority',
+      rulePath: `amendment_authority:${authority}`,
+      status: 'satisfied',
+      detail: authority,
+      jurisdiction: amendedReport.filingJurisdiction,
+      reportType: amendedReport.reportType,
+    });
+  }
+
+  if (amendedReport.filingReference) {
+    pushUniqueObligation(obligations, {
+      domain: 'reporting',
+      obligationType: 'filing_reference',
+      rulePath: `filing_reference:${amendedReport.filingReference}`,
+      status: 'satisfied',
+      detail: amendedReport.filingReference,
+      jurisdiction: amendedReport.filingJurisdiction,
+      reportType: amendedReport.reportType,
+    });
+  }
+
+  if (latestAmendment) {
+    pushUniqueObligation(obligations, {
+      domain: 'reporting',
+      obligationType: 'amendment_version',
+      rulePath: `amendment_version:${latestAmendment.version}`,
+      status: 'satisfied',
+      detail: String(latestAmendment.version),
+      jurisdiction: amendedReport.filingJurisdiction,
+      reportType: amendedReport.reportType,
+    });
+    pushUniqueObligation(obligations, {
+      domain: 'reporting',
+      obligationType: 'amendment_timestamp',
+      rulePath: 'amendment_timestamp',
+      status: 'satisfied',
+      detail: latestAmendment.amendedAt,
+      jurisdiction: amendedReport.filingJurisdiction,
+      reportType: amendedReport.reportType,
+    });
+  }
+
+  pushUniqueObligation(obligations, {
+    domain: 'reporting',
+    obligationType: 'amendment_reason',
+    rulePath: `amendment_reason:${amendment.reason}`,
+    status: 'satisfied',
+    detail: amendment.reason,
+    jurisdiction: amendedReport.filingJurisdiction,
+    reportType: amendedReport.reportType,
+  });
+
+  for (const field of Object.keys(amendment.changes)) {
+    pushUniqueObligation(obligations, {
+      domain: 'reporting',
+      obligationType: 'amended_field',
+      rulePath: `amended_field:${field}`,
+      status: 'satisfied',
+      detail: field,
+      jurisdiction: amendedReport.filingJurisdiction,
+      reportType: amendedReport.reportType,
+    });
+  }
+
+  pushUniqueObligation(obligations, {
+    domain: 'reporting',
+    obligationType: 'status_transition',
+    rulePath: `status_transition:${amendedReport.status}`,
+    status: 'satisfied',
+    detail: amendedReport.status,
+    jurisdiction: amendedReport.filingJurisdiction,
+    reportType: amendedReport.reportType,
+  });
+
+  return obligations;
+}
+
+function buildReportExportObligationUsage(
+  report: GeneratedReport,
+  format: string,
+  filename: string,
+  exportedAt: string,
+  handoff?: {
+    destination?: string;
+    deliveryChannel?: string;
+    acknowledgementId?: string;
+    acknowledgedAt?: string;
+  },
+): ObligationEvidenceUsageSnapshot[] {
+  const obligations = buildReportingObligationUsage(report, report);
+  const authority = resolveRegulatoryAuthority(report.reportType, report.filingJurisdiction);
+
+  if (authority) {
+    pushUniqueObligation(obligations, {
+      domain: 'reporting',
+      obligationType: 'export_authority',
+      rulePath: `export_authority:${authority}`,
+      status: 'satisfied',
+      detail: authority,
+      jurisdiction: report.filingJurisdiction,
+      reportType: report.reportType,
+    });
+  }
+
+  pushUniqueObligation(obligations, {
+    domain: 'reporting',
+    obligationType: 'export_format',
+    rulePath: `export_format:${format}`,
+    status: 'satisfied',
+    detail: format,
+    jurisdiction: report.filingJurisdiction,
+    reportType: report.reportType,
+  });
+
+  pushUniqueObligation(obligations, {
+    domain: 'reporting',
+    obligationType: 'export_filename',
+    rulePath: `export_filename:${filename}`,
+    status: 'satisfied',
+    detail: filename,
+    jurisdiction: report.filingJurisdiction,
+    reportType: report.reportType,
+  });
+
+  pushUniqueObligation(obligations, {
+    domain: 'reporting',
+    obligationType: 'export_timestamp',
+    rulePath: 'export_timestamp',
+    status: 'satisfied',
+    detail: exportedAt,
+    jurisdiction: report.filingJurisdiction,
+    reportType: report.reportType,
+  });
+
+  if (report.filingReference) {
+    pushUniqueObligation(obligations, {
+      domain: 'reporting',
+      obligationType: 'filing_reference',
+      rulePath: `filing_reference:${report.filingReference}`,
+      status: 'satisfied',
+      detail: report.filingReference,
+      jurisdiction: report.filingJurisdiction,
+      reportType: report.reportType,
+    });
+  }
+
+  if (handoff?.deliveryChannel) {
+    pushUniqueObligation(obligations, {
+      domain: 'reporting',
+      obligationType: 'delivery_channel',
+      rulePath: `delivery_channel:${handoff.deliveryChannel}`,
+      status: 'satisfied',
+      detail: handoff.deliveryChannel,
+      jurisdiction: report.filingJurisdiction,
+      reportType: report.reportType,
+    });
+  }
+
+  if (handoff?.destination) {
+    pushUniqueObligation(obligations, {
+      domain: 'reporting',
+      obligationType: 'delivery_destination',
+      rulePath: `delivery_destination:${handoff.destination}`,
+      status: 'satisfied',
+      detail: handoff.destination,
+      jurisdiction: report.filingJurisdiction,
+      reportType: report.reportType,
+    });
+  }
+
+  if (handoff?.acknowledgementId) {
+    pushUniqueObligation(obligations, {
+      domain: 'reporting',
+      obligationType: 'delivery_acknowledgement',
+      rulePath: `delivery_acknowledgement:${handoff.acknowledgementId}`,
+      status: 'satisfied',
+      detail: handoff.acknowledgementId,
+      jurisdiction: report.filingJurisdiction,
+      reportType: report.reportType,
     });
   }
 
@@ -798,6 +1438,44 @@ function buildPrivacyObligationUsage(
   }
 
   return obligations;
+}
+
+function parseReportExportHandoff(
+  query: Record<string, unknown>,
+): {
+  destination?: string;
+  deliveryChannel?: 'portal_upload' | 'sftp' | 'api' | 'email';
+  acknowledgementId?: string;
+  acknowledgedAt?: string;
+} | null {
+  const parsed = ReportExportHandoffQuerySchema.safeParse({
+    destination: typeof query.destination === 'string' ? query.destination : undefined,
+    deliveryChannel: typeof query.deliveryChannel === 'string' ? query.deliveryChannel : undefined,
+    acknowledgementId: typeof query.acknowledgementId === 'string' ? query.acknowledgementId : undefined,
+  });
+
+  if (!parsed.success) {
+    return null;
+  }
+
+  if (
+    parsed.data.destination === undefined
+    && parsed.data.deliveryChannel === undefined
+    && parsed.data.acknowledgementId === undefined
+  ) {
+    return {};
+  }
+
+  return {
+    ...(parsed.data.destination ? { destination: parsed.data.destination } : {}),
+    ...(parsed.data.deliveryChannel ? { deliveryChannel: parsed.data.deliveryChannel } : {}),
+    ...(parsed.data.acknowledgementId
+      ? {
+        acknowledgementId: parsed.data.acknowledgementId,
+        acknowledgedAt: new Date().toISOString(),
+      }
+      : {}),
+  };
 }
 
 async function requireReceiptContext(req: Request, res: Response): Promise<{ organizationId: string; actorIdentityId: string } | null> {
@@ -1285,6 +1963,17 @@ router.post('/report', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_ROLE
       baseReport,
     );
     report = policyExecution.result;
+    const reportEventRecordedAt = new Date().toISOString();
+    const reportAuthority = resolveRegulatoryAuthority(report.reportType, report.filingJurisdiction);
+    const generatedEventPreview: ReportEvidenceEventSnapshot = {
+      action: 'generated',
+      recordedAt: reportEventRecordedAt,
+      policyName: 'regulatory_reporting',
+      decisionSummary: `report_generated:${parsed.data}`,
+      ...(reportAuthority ? { authority: reportAuthority } : {}),
+      ...(report.filingReference !== undefined ? { filingReference: report.filingReference } : {}),
+      version: report.version,
+    };
     const receipt = await createPolicyAnchoredReceipt(context, {
       receiptType: 'regulatory_report',
       policyName: 'regulatory_reporting',
@@ -1302,6 +1991,12 @@ router.post('/report', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_ROLE
       },
       metadata: {
         route: '/enterprise/compliance/report',
+        reportLifecycle: buildReportLifecycleSnapshot('generated', report),
+        reportFilingPackage: buildReportFilingPackage(
+          report,
+          [...(report.evidenceTrail ?? []), generatedEventPreview],
+          reportEventRecordedAt,
+        ),
         obligationEvidenceUsage: buildReportingObligationUsage(
           baseReport,
           report,
@@ -1310,6 +2005,17 @@ router.post('/report', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_ROLE
         ...(policyExecution.trace ? { policyExecutionTrace: policyExecution.trace } : {}),
       },
       policyContextOverride: policyContext,
+    });
+    await recordReportEvidenceEvent(report, {
+      action: 'generated',
+      receiptId: receipt.receiptId,
+      actorIdentityId: context.actorIdentityId,
+      policyName: receipt.policyName,
+      policyVersion: receipt.policyVersion,
+      decisionSummary: receipt.decisionSummary,
+      ...(reportAuthority ? { authority: reportAuthority } : {}),
+      ...(report.filingReference !== undefined ? { filingReference: report.filingReference } : {}),
+      version: report.version,
     });
 
     res.status(201).json({
@@ -1334,9 +2040,26 @@ router.post('/report/:reportId/submit', requireEnterpriseContext(ENTERPRISE_COMP
     if (!context) return;
 
     const result = await regulatoryReportingService.submitReport(req.params.reportId as string);
+    const submittedReport = regulatoryReportingService.getReport(req.params.reportId as string);
+    const submissionRecordedAt = new Date().toISOString();
+    const submissionAuthority = submittedReport
+      ? resolveRegulatoryAuthority(submittedReport.reportType, submittedReport.filingJurisdiction)
+      : null;
+    const submittedEventPreview: ReportEvidenceEventSnapshot | undefined = submittedReport
+      ? {
+        action: 'submitted',
+        recordedAt: submissionRecordedAt,
+        policyName: 'regulatory_submission',
+        decisionSummary: `report_submitted:${req.params.reportId}`,
+        ...(submissionAuthority ? { authority: submissionAuthority } : {}),
+        filingReference: result.filingReference,
+        version: submittedReport.version,
+      }
+      : undefined;
     const receipt = await createPolicyAnchoredReceipt(context, {
       receiptType: 'regulatory_report',
       policyName: 'regulatory_submission',
+      jurisdictionCodes: submittedReport?.filingJurisdiction ? [submittedReport.filingJurisdiction] : [],
       decisionSummary: `report_submitted:${req.params.reportId}`,
       payload: {
         reportId: req.params.reportId,
@@ -1344,11 +2067,45 @@ router.post('/report/:reportId/submit', requireEnterpriseContext(ENTERPRISE_COMP
       result,
       evidence: {
         reportId: req.params.reportId,
+        filingReference: result.filingReference,
+        submittedAt: result.submittedAt,
       },
       metadata: {
         route: '/enterprise/compliance/report/:reportId/submit',
+        ...(submittedReport ? {
+          reportLifecycle: buildReportLifecycleSnapshot('submitted', submittedReport, {
+            filingReference: result.filingReference,
+            submittedAt: result.submittedAt,
+          }),
+        } : {}),
+        ...(submittedReport && submittedEventPreview ? {
+          reportFilingPackage: buildReportFilingPackage(
+            submittedReport,
+            [...(submittedReport.evidenceTrail ?? []), submittedEventPreview],
+            submissionRecordedAt,
+          ),
+        } : {}),
+        ...(submittedReport ? {
+          obligationEvidenceUsage: buildReportSubmissionObligationUsage(
+            submittedReport,
+            result,
+          ),
+        } : {}),
       },
     });
+    if (submittedReport) {
+      await recordReportEvidenceEvent(submittedReport, {
+        action: 'submitted',
+        receiptId: receipt.receiptId,
+        actorIdentityId: context.actorIdentityId,
+        policyName: receipt.policyName,
+        policyVersion: receipt.policyVersion,
+        decisionSummary: receipt.decisionSummary,
+        ...(submissionAuthority ? { authority: submissionAuthority } : {}),
+        filingReference: result.filingReference,
+        version: submittedReport.version,
+      });
+    }
     res.status(200).json({ data: result, receipt: summarizeReceipt(receipt), message: 'Report submitted to regulatory authority' });
   } catch (err) {
     const error = err as Error & { statusCode?: number; code?: string };
@@ -1358,23 +2115,246 @@ router.post('/report/:reportId/submit', requireEnterpriseContext(ENTERPRISE_COMP
 });
 
 // ---------------------------------------------------------------------------
+// POST /enterprise/compliance/report/:reportId/amend — Amend report
+// ---------------------------------------------------------------------------
+router.post(
+  '/report/:reportId/amend',
+  requireEnterpriseContext(ENTERPRISE_COMPLIANCE_REVIEW_ROLES),
+  validate(ReportAmendmentRequestSchema),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const context = await requireReceiptContext(req, res);
+      if (!context) return;
+
+      const amendedReport = await regulatoryReportingService.amendReport(
+        req.params.reportId as string,
+        req.body.reason,
+        req.body.changes,
+      );
+      const amendmentRecordedAt = new Date().toISOString();
+      const amendmentAuthority = resolveRegulatoryAuthority(amendedReport.reportType, amendedReport.filingJurisdiction);
+      const amendedEventPreview: ReportEvidenceEventSnapshot = {
+        action: 'amended',
+        recordedAt: amendmentRecordedAt,
+        policyName: 'regulatory_amendment',
+        decisionSummary: `report_amended:${req.params.reportId}:v${amendedReport.version}`,
+        ...(amendmentAuthority ? { authority: amendmentAuthority } : {}),
+        ...(amendedReport.filingReference !== undefined ? { filingReference: amendedReport.filingReference } : {}),
+        version: amendedReport.version,
+        amendmentReason: req.body.reason,
+      };
+
+      const receipt = await createPolicyAnchoredReceipt(context, {
+        receiptType: 'regulatory_report',
+        policyName: 'regulatory_amendment',
+        jurisdictionCodes: amendedReport.filingJurisdiction ? [amendedReport.filingJurisdiction] : [],
+        decisionSummary: `report_amended:${req.params.reportId}:v${amendedReport.version}`,
+        payload: {
+          reportId: req.params.reportId,
+          reason: req.body.reason,
+          changes: req.body.changes,
+        },
+        result: amendedReport,
+        evidence: {
+          reportId: req.params.reportId,
+          version: amendedReport.version,
+          filingReference: amendedReport.filingReference,
+          amendmentCount: amendedReport.amendments.length,
+        },
+        metadata: {
+          route: '/enterprise/compliance/report/:reportId/amend',
+          reportLifecycle: buildReportLifecycleSnapshot('amended', amendedReport, {
+            filingReference: amendedReport.filingReference,
+            amendmentReason: req.body.reason,
+            amendedAt: amendedReport.amendments[amendedReport.amendments.length - 1]?.amendedAt,
+          }),
+          reportFilingPackage: buildReportFilingPackage(
+            amendedReport,
+            [...(amendedReport.evidenceTrail ?? []), amendedEventPreview],
+            amendmentRecordedAt,
+          ),
+          obligationEvidenceUsage: buildReportAmendmentObligationUsage(
+            amendedReport,
+            {
+              reason: req.body.reason,
+              changes: req.body.changes,
+            },
+          ),
+        },
+      });
+      await recordReportEvidenceEvent(amendedReport, {
+        action: 'amended',
+        receiptId: receipt.receiptId,
+        actorIdentityId: context.actorIdentityId,
+        policyName: receipt.policyName,
+        policyVersion: receipt.policyVersion,
+        decisionSummary: receipt.decisionSummary,
+        ...(amendmentAuthority ? { authority: amendmentAuthority } : {}),
+        ...(amendedReport.filingReference !== undefined ? { filingReference: amendedReport.filingReference } : {}),
+        version: amendedReport.version,
+        amendmentReason: req.body.reason,
+      });
+
+      res.status(200).json({
+        data: amendedReport,
+        receipt: summarizeReceipt(receipt),
+        message: 'Report amended',
+      });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('report_amend_error', { error: error.message });
+      res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'AMEND_ERROR' });
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
 // GET /enterprise/compliance/report/:reportId/export — Export report
 // ---------------------------------------------------------------------------
 router.get('/report/:reportId/export', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_READ_ROLES), async (req: Request, res: Response): Promise<void> => {
   try {
+    const context = await requireReceiptContext(req, res);
+    if (!context) return;
+
     const fmt = ExportFormatSchema.safeParse(req.query.format ?? 'json');
     if (!fmt.success) {
       res.status(400).json({ error: 'Invalid export format', code: 'INVALID_FORMAT' });
       return;
     }
+    const handoff = parseReportExportHandoff(req.query as Record<string, unknown>);
+    if (handoff === null) {
+      res.status(400).json({ error: 'Invalid export handoff parameters', code: 'INVALID_EXPORT_HANDOFF' });
+      return;
+    }
     const exported = await regulatoryReportingService.exportReport(req.params.reportId as string, fmt.data);
+    const report = regulatoryReportingService.getReport(req.params.reportId as string);
+    const exportedAt = new Date().toISOString();
+    const exportAuthority = report ? resolveRegulatoryAuthority(report.reportType, report.filingJurisdiction) : null;
+    const exportedEventPreview: ReportEvidenceEventSnapshot | undefined = report
+      ? {
+        action: 'exported',
+        recordedAt: exportedAt,
+        policyName: 'regulatory_export',
+        decisionSummary: `report_exported:${req.params.reportId}:${fmt.data}`,
+        ...(exportAuthority ? { authority: exportAuthority } : {}),
+        ...(report.filingReference !== undefined ? { filingReference: report.filingReference } : {}),
+        version: report.version,
+        exportFormat: fmt.data,
+        exportFilename: exported.filename,
+        ...(handoff?.deliveryChannel ? { deliveryChannel: handoff.deliveryChannel } : {}),
+        ...(handoff?.destination ? { deliveryDestination: handoff.destination } : {}),
+        ...(handoff?.acknowledgementId ? { deliveryAcknowledgementId: handoff.acknowledgementId } : {}),
+        ...(handoff?.acknowledgedAt ? { deliveryAcknowledgedAt: handoff.acknowledgedAt } : {}),
+      }
+      : undefined;
+    const receipt = report
+      ? await createPolicyAnchoredReceipt(context, {
+        receiptType: 'regulatory_report',
+        policyName: 'regulatory_export',
+        jurisdictionCodes: report.filingJurisdiction ? [report.filingJurisdiction] : [],
+        decisionSummary: `report_exported:${req.params.reportId}:${fmt.data}`,
+        payload: {
+          reportId: req.params.reportId,
+          format: fmt.data,
+        },
+        result: {
+          filename: exported.filename,
+          contentType: exported.contentType,
+        },
+        evidence: {
+          reportId: req.params.reportId,
+          reportType: report.reportType,
+          version: report.version,
+          format: fmt.data,
+          filename: exported.filename,
+          filingReference: report.filingReference,
+          exportedAt,
+        },
+        metadata: {
+          route: '/enterprise/compliance/report/:reportId/export',
+          reportLifecycle: buildReportLifecycleSnapshot('exported', report, {
+            exportFormat: fmt.data,
+            exportFilename: exported.filename,
+            exportRequestedAt: exportedAt,
+            ...(handoff?.deliveryChannel ? { deliveryChannel: handoff.deliveryChannel } : {}),
+            ...(handoff?.destination ? { deliveryDestination: handoff.destination } : {}),
+            ...(handoff?.acknowledgementId ? { deliveryAcknowledgementId: handoff.acknowledgementId } : {}),
+            ...(handoff?.acknowledgedAt ? { deliveryAcknowledgedAt: handoff.acknowledgedAt } : {}),
+          }),
+          ...(exportedEventPreview ? {
+            reportFilingPackage: buildReportFilingPackage(
+              report,
+              [...(report.evidenceTrail ?? []), exportedEventPreview],
+              exportedAt,
+            ),
+          } : {}),
+          obligationEvidenceUsage: buildReportExportObligationUsage(
+            report,
+            fmt.data,
+            exported.filename,
+            exportedAt,
+            handoff ?? undefined,
+          ),
+        },
+      })
+      : null;
+    if (report && receipt) {
+      await recordReportEvidenceEvent(report, {
+        action: 'exported',
+        receiptId: receipt.receiptId,
+        actorIdentityId: context.actorIdentityId,
+        policyName: receipt.policyName,
+        policyVersion: receipt.policyVersion,
+        decisionSummary: receipt.decisionSummary,
+        ...(exportAuthority ? { authority: exportAuthority } : {}),
+        ...(report.filingReference !== undefined ? { filingReference: report.filingReference } : {}),
+        version: report.version,
+        exportFormat: fmt.data,
+        exportFilename: exported.filename,
+        ...(handoff?.deliveryChannel ? { deliveryChannel: handoff.deliveryChannel } : {}),
+        ...(handoff?.destination ? { deliveryDestination: handoff.destination } : {}),
+        ...(handoff?.acknowledgementId ? { deliveryAcknowledgementId: handoff.acknowledgementId } : {}),
+        ...(handoff?.acknowledgedAt ? { deliveryAcknowledgedAt: handoff.acknowledgedAt } : {}),
+      });
+    }
     res.setHeader('Content-Type', exported.contentType);
     res.setHeader('Content-Disposition', `attachment; filename="${exported.filename}"`);
+    if (receipt) {
+      res.setHeader('X-ZeroID-Receipt-Id', receipt.receiptId);
+      res.setHeader('X-ZeroID-Receipt-Hash', receipt.integrityHash);
+    }
     res.status(200).send(exported.data);
   } catch (err) {
     const error = err as Error & { statusCode?: number; code?: string };
     logger.error('report_export_error', { error: error.message });
     res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'EXPORT_ERROR' });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /enterprise/compliance/report/:reportId/evidence — Export regulator-ready filing package
+// ---------------------------------------------------------------------------
+router.get('/report/:reportId/evidence', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_READ_ROLES), async (req: Request, res: Response): Promise<void> => {
+  try {
+    const report = regulatoryReportingService.getReport(req.params.reportId as string);
+    if (!report) {
+      res.status(404).json({ error: 'Report not found', code: 'REPORT_NOT_FOUND' });
+      return;
+    }
+
+    const evidenceTrail = regulatoryReportingService.getEvidenceTrail(req.params.reportId as string);
+    const evaluatedAt = new Date().toISOString();
+
+    res.status(200).json({
+      data: {
+        report,
+        filingPackage: buildReportFilingPackage(report, evidenceTrail, evaluatedAt),
+      },
+    });
+  } catch (err) {
+    const error = err as Error & { statusCode?: number; code?: string };
+    logger.error('report_evidence_error', { error: error.message });
+    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'REPORT_EVIDENCE_ERROR' });
   }
 });
 
