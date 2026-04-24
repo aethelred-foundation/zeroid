@@ -1,7 +1,11 @@
 import { prisma, logger, redis, credentialIssuedCounter } from '../index';
 import { CredentialStatus } from '@prisma/client';
 import crypto from 'crypto';
-import { KMSClient, SignCommand, GetPublicKeyCommand, type SigningAlgorithmSpec } from '@aws-sdk/client-kms';
+import {
+  EnterpriseKeySigner,
+  EnterpriseSigningError,
+  type EnterpriseKmsProvider,
+} from './enterprise/enterprise-key-signer';
 
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 
@@ -21,49 +25,13 @@ export class CredentialError extends Error {
 }
 
 // ---------------------------------------------------------------------------
-// KMS Provider Types
+// Credential Signer Adapter
 // ---------------------------------------------------------------------------
-type KMSProvider = 'aws-kms' | 'gcp-kms' | 'azure-kms' | 'local';
-
-// ---------------------------------------------------------------------------
-// Credential Signer Interface
-// ---------------------------------------------------------------------------
-interface CredentialSigner {
-  sign(message: Buffer): Promise<Buffer>;
-  getPublicKey(): Promise<crypto.KeyObject>;
-  getProofType(): string;
-  getVerificationMethod(): string;
-  supportsKeyRotation(): boolean;
-  getKeyVersion(): string;
-}
-
-// ---------------------------------------------------------------------------
-// KMS Credential Signer
-// ---------------------------------------------------------------------------
-class KMSCredentialSigner implements CredentialSigner {
-  private readonly provider: KMSProvider;
-  private readonly keyId: string;
-  private keyVersion: string;
-  private cachedPublicKey?: crypto.KeyObject;
-  private localSigningKey?: crypto.KeyObject;
+class KMSCredentialSigner {
+  private readonly signer: EnterpriseKeySigner;
+  private readonly provider: EnterpriseKmsProvider;
 
   constructor() {
-    this.provider = (process.env.KMS_PROVIDER as KMSProvider) || 'local';
-    this.keyId = process.env.KMS_KEY_ID || '';
-    this.keyVersion = process.env.KMS_KEY_VERSION || '1';
-
-    if (
-      IS_PRODUCTION &&
-      this.provider === 'local' &&
-      process.env.ALLOW_LOCAL_CREDENTIAL_SIGNING !== 'true'
-    ) {
-      throw new CredentialError(
-        'Local credential signing is blocked in production. Configure AWS/GCP/Azure KMS or explicitly set ALLOW_LOCAL_CREDENTIAL_SIGNING=true for a controlled break-glass deployment.',
-        'CRED_LOCAL_SIGNING_BLOCKED',
-        500,
-      );
-    }
-
     if (
       IS_PRODUCTION &&
       process.env.ALLOW_LEGACY_HMAC_CREDENTIAL_SIGNING === 'true'
@@ -75,467 +43,103 @@ class KMSCredentialSigner implements CredentialSigner {
       );
     }
 
-    if (this.provider !== 'local' && !this.keyId) {
-      throw new CredentialError(
-        `KMS_KEY_ID is required when KMS_PROVIDER is '${this.provider}'.`,
-        'CRED_KMS_CONFIG_MISSING',
-        500,
-      );
+    this.provider = (process.env.KMS_PROVIDER as EnterpriseKmsProvider) || 'local';
+    try {
+      this.signer = new EnterpriseKeySigner({
+        provider: this.provider,
+        keyId: process.env.KMS_KEY_ID || '',
+        keyVersion: process.env.KMS_KEY_VERSION || '1',
+        privateKeyEnvKey: 'CREDENTIAL_SIGNING_PRIVATE_KEY',
+        publicKeyEnvKey: 'CREDENTIAL_SIGNING_PUBLIC_KEY',
+        verificationMethodEnvKey: 'CREDENTIAL_SIGNING_VERIFICATION_METHOD',
+        defaultVerificationMethod: 'did:aethelred:zeroid:credential-signer#key-1',
+        allowLocalSigning: process.env.ALLOW_LOCAL_CREDENTIAL_SIGNING === 'true',
+        localSigningBlockedMessage: 'Local credential signing is blocked in production. Configure AWS/GCP/Azure KMS or explicitly set ALLOW_LOCAL_CREDENTIAL_SIGNING=true for a controlled break-glass deployment.',
+        localSigningBlockedCode: 'CRED_LOCAL_SIGNING_BLOCKED',
+        signingUnavailableMessage: 'CREDENTIAL_SIGNING_PRIVATE_KEY not configured. Credential issuance is disabled until signing is configured.',
+        signingUnavailableCode: 'CRED_SIGNING_UNAVAILABLE',
+        kmsConfigMissingCode: 'CRED_KMS_CONFIG_MISSING',
+        kmsUnsupportedProviderCode: 'CRED_KMS_UNSUPPORTED_PROVIDER',
+        kmsSignFailedCode: 'CRED_KMS_SIGN_FAILED',
+        kmsPublicKeyFailedCode: 'CRED_KMS_PUBKEY_FAILED',
+        kmsAuthFailedCode: 'CRED_KMS_AUTH_FAILED',
+        awsSigningAlgorithmEnvKey: 'AWS_KMS_SIGNING_ALGORITHM',
+        gcpAccessTokenEnvKey: 'GCP_ACCESS_TOKEN',
+        azureAccessTokenEnvKey: 'AZURE_ACCESS_TOKEN',
+        azureKeyVaultNameEnvKey: 'AZURE_KEYVAULT_NAME',
+        azureKeyNameEnvKey: 'AZURE_KEY_NAME',
+        azureAlgorithmEnvKey: 'AZURE_KMS_ALGORITHM',
+        logger,
+      });
+    } catch (error) {
+      throw this.toCredentialError(error);
     }
 
     logger.info('kms_signer_initialized', {
       provider: this.provider,
-      keyVersion: this.keyVersion,
-      // Never log keyId in full — log only a safe prefix
-      keyIdPrefix: this.keyId ? this.keyId.substring(0, 12) + '...' : 'n/a',
+      keyVersion: this.signer.getKeyVersion(),
+      keyIdPrefix: process.env.KMS_KEY_ID ? process.env.KMS_KEY_ID.substring(0, 12) + '...' : 'n/a',
     });
   }
 
   async sign(message: Buffer): Promise<Buffer> {
-    logger.info('credential_sign_operation', {
-      provider: this.provider,
-      keyVersion: this.keyVersion,
-    });
-
-    switch (this.provider) {
-      case 'aws-kms':
-        return this.signWithAWS(message);
-      case 'gcp-kms':
-        return this.signWithGCP(message);
-      case 'azure-kms':
-        return this.signWithAzure(message);
-      case 'local':
-        return this.signLocal(message);
-      default:
-        throw new CredentialError(
-          `Unsupported KMS provider: ${this.provider}`,
-          'CRED_KMS_UNSUPPORTED_PROVIDER',
-          500,
-        );
+    try {
+      return await this.signer.sign(message);
+    } catch (error) {
+      throw this.toCredentialError(error);
     }
   }
 
   async getPublicKey(): Promise<crypto.KeyObject> {
-    if (this.cachedPublicKey) {
-      return this.cachedPublicKey;
+    try {
+      return await this.signer.getPublicKey();
+    } catch (error) {
+      throw this.toCredentialError(error);
     }
-
-    switch (this.provider) {
-      case 'aws-kms':
-        this.cachedPublicKey = await this.getPublicKeyFromAWS();
-        break;
-      case 'gcp-kms':
-        this.cachedPublicKey = await this.getPublicKeyFromGCP();
-        break;
-      case 'azure-kms':
-        this.cachedPublicKey = await this.getPublicKeyFromAzure();
-        break;
-      case 'local':
-        this.cachedPublicKey = this.getLocalPublicKey();
-        break;
-      default:
-        throw new CredentialError(
-          `Unsupported KMS provider: ${this.provider}`,
-          'CRED_KMS_UNSUPPORTED_PROVIDER',
-          500,
-        );
-    }
-
-    return this.cachedPublicKey;
   }
 
   getProofType(): string {
-    if (this.provider === 'local') {
-      const key = this.getLocalPublicKey();
-      if (key.asymmetricKeyType === 'ed25519' || key.asymmetricKeyType === 'ed448') {
-        return 'Ed25519Signature2020';
-      }
-    }
-    // KMS providers typically use ECDSA or RSA
-    return 'JsonWebSignature2020';
+    return this.signer.getProofType();
   }
 
   getVerificationMethod(): string {
-    const base = process.env.CREDENTIAL_SIGNING_VERIFICATION_METHOD
-      ?? 'did:aethelred:zeroid:credential-signer#key-1';
-    // Append key version for KMS-backed keys to support rotation
-    if (this.provider !== 'local') {
-      return `${base}?versionId=${this.keyVersion}`;
-    }
-    return base;
+    return this.signer.getVerificationMethod();
   }
 
   supportsKeyRotation(): boolean {
-    return this.provider !== 'local';
+    return this.signer.supportsKeyRotation();
   }
 
   getKeyVersion(): string {
-    return this.keyVersion;
+    return this.signer.getKeyVersion();
   }
 
-  /**
-   * Rotate to a new key version. Only supported for KMS-backed providers.
-   * Returns the previous key version for audit purposes.
-   */
   rotateToVersion(newVersion: string): string {
-    if (!this.supportsKeyRotation()) {
-      throw new CredentialError(
-        'Key rotation is not supported for the local provider.',
-        'CRED_ROTATION_UNSUPPORTED',
-        400,
-      );
-    }
-    const previousVersion = this.keyVersion;
-    this.keyVersion = newVersion;
-    // Invalidate cached public key so next call fetches the new version
-    this.cachedPublicKey = undefined;
-
-    logger.info('kms_key_rotated', {
-      provider: this.provider,
-      previousVersion,
-      newVersion,
-    });
-
-    return previousVersion;
-  }
-
-  // ---------------------------------------------------------------------------
-  // AWS KMS via official SDK (SigV4 signing, credential chain, retries)
-  // ---------------------------------------------------------------------------
-  private _kmsClient: KMSClient | null = null;
-
-  private getKMSClient(): KMSClient {
-    if (!this._kmsClient) {
-      // The SDK resolves credentials via the standard chain:
-      // env vars → shared credentials file → ECS/EC2 instance role → SSO
-      this._kmsClient = new KMSClient({
-        region: process.env.AWS_REGION || 'us-east-1',
+    try {
+      const previousVersion = this.signer.rotateToVersion(newVersion);
+      logger.info('kms_key_rotated', {
+        provider: this.provider,
+        previousVersion,
+        newVersion,
       });
-    }
-    return this._kmsClient;
-  }
-
-  private async signWithAWS(message: Buffer): Promise<Buffer> {
-    try {
-      const result = await this.getKMSClient().send(new SignCommand({
-        KeyId: this.keyId,
-        Message: message,
-        MessageType: 'RAW',
-        SigningAlgorithm: (process.env.AWS_KMS_SIGNING_ALGORITHM || 'ECDSA_SHA_256') as SigningAlgorithmSpec,
-      }));
-
-      if (!result.Signature) {
-        throw new CredentialError(
-          'AWS KMS Sign returned empty signature',
-          'CRED_KMS_SIGN_FAILED',
-          500,
-        );
-      }
-
-      return Buffer.from(result.Signature);
-    } catch (err) {
-      if (err instanceof CredentialError) throw err;
-      logger.error('aws_kms_sign_failed', { error: (err as Error).message });
-      throw new CredentialError(
-        `AWS KMS signing failed: ${(err as Error).message}`,
-        'CRED_KMS_SIGN_FAILED',
-        500,
-      );
+      return previousVersion;
+    } catch (error) {
+      throw this.toCredentialError(error, 'CRED_ROTATION_UNSUPPORTED');
     }
   }
 
-  private async getPublicKeyFromAWS(): Promise<crypto.KeyObject> {
-    try {
-      const result = await this.getKMSClient().send(new GetPublicKeyCommand({
-        KeyId: this.keyId,
-      }));
-
-      if (!result.PublicKey) {
-        throw new CredentialError(
-          'AWS KMS GetPublicKey returned empty key',
-          'CRED_KMS_PUBKEY_FAILED',
-          500,
-        );
-      }
-
-      return crypto.createPublicKey({
-        key: Buffer.from(result.PublicKey),
-        format: 'der',
-        type: 'spki',
-      });
-    } catch (err) {
-      if (err instanceof CredentialError) throw err;
-      logger.error('aws_kms_get_public_key_failed', { error: (err as Error).message });
-      throw new CredentialError(
-        `AWS KMS GetPublicKey failed: ${(err as Error).message}`,
-        'CRED_KMS_PUBKEY_FAILED',
-        500,
-      );
+  private toCredentialError(error: unknown, fallbackCode?: string): CredentialError {
+    if (error instanceof CredentialError) {
+      return error;
     }
-  }
-
-  // ---------------------------------------------------------------------------
-  // GCP Cloud KMS via REST API
-  // ---------------------------------------------------------------------------
-  private async signWithGCP(message: Buffer): Promise<Buffer> {
-    // keyId format: projects/{project}/locations/{location}/keyRings/{ring}/cryptoKeys/{key}/cryptoKeyVersions/{version}
-    const keyName = this.keyId.includes('cryptoKeyVersions')
-      ? this.keyId
-      : `${this.keyId}/cryptoKeyVersions/${this.keyVersion}`;
-    const endpoint = `https://cloudkms.googleapis.com/v1/${keyName}:asymmetricSign`;
-
-    // GCP expects the digest, not the raw message
-    const digest = crypto.createHash('sha256').update(message).digest();
-    const body = JSON.stringify({
-      digest: {
-        sha256: digest.toString('base64'),
-      },
-    });
-
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${await this.getGCPAccessToken()}`,
-      },
-      body,
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      logger.error('gcp_kms_sign_failed', { status: response.status, error: errorText });
-      throw new CredentialError(
-        `GCP KMS signing failed: ${response.status}`,
-        'CRED_KMS_SIGN_FAILED',
-        500,
-      );
+    if (error instanceof EnterpriseSigningError) {
+      return new CredentialError(error.message, fallbackCode ?? error.code, error.statusCode);
     }
-
-    const result = (await response.json()) as { signature: string };
-    return Buffer.from(result.signature, 'base64');
-  }
-
-  private async getPublicKeyFromGCP(): Promise<crypto.KeyObject> {
-    const keyName = this.keyId.includes('cryptoKeyVersions')
-      ? this.keyId
-      : `${this.keyId}/cryptoKeyVersions/${this.keyVersion}`;
-    const endpoint = `https://cloudkms.googleapis.com/v1/${keyName}:getPublicKey`;
-
-    const response = await fetch(endpoint, {
-      method: 'GET',
-      headers: {
-        Authorization: `Bearer ${await this.getGCPAccessToken()}`,
-      },
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      logger.error('gcp_kms_get_public_key_failed', { status: response.status, error: errorText });
-      throw new CredentialError(
-        `GCP KMS GetPublicKey failed: ${response.status}`,
-        'CRED_KMS_PUBKEY_FAILED',
-        500,
-      );
-    }
-
-    const result = (await response.json()) as { pem: string };
-    return crypto.createPublicKey(result.pem);
-  }
-
-  private async getGCPAccessToken(): Promise<string> {
-    // Use the GCP metadata server for workload identity, or fall back to env var
-    const envToken = process.env.GCP_ACCESS_TOKEN;
-    if (envToken) return envToken;
-
-    try {
-      const metadataResponse = await fetch(
-        'http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token',
-        { headers: { 'Metadata-Flavor': 'Google' } },
-      );
-      if (metadataResponse.ok) {
-        const tokenData = (await metadataResponse.json()) as { access_token: string };
-        return tokenData.access_token;
-      }
-    } catch {
-      // Not running on GCP — fall through
-    }
-
-    throw new CredentialError(
-      'GCP access token unavailable. Set GCP_ACCESS_TOKEN or run on a GCP instance with workload identity.',
-      'CRED_KMS_AUTH_FAILED',
+    return new CredentialError(
+      (error as Error).message,
+      fallbackCode ?? 'CRED_KMS_SIGN_FAILED',
       500,
     );
-  }
-
-  // ---------------------------------------------------------------------------
-  // Azure Key Vault via REST API
-  // ---------------------------------------------------------------------------
-  private async signWithAzure(message: Buffer): Promise<Buffer> {
-    const vaultName = process.env.AZURE_KEYVAULT_NAME;
-    const keyName = process.env.AZURE_KEY_NAME || this.keyId;
-    if (!vaultName) {
-      throw new CredentialError(
-        'AZURE_KEYVAULT_NAME is required for Azure KMS.',
-        'CRED_KMS_CONFIG_MISSING',
-        500,
-      );
-    }
-
-    const digest = crypto.createHash('sha256').update(message).digest();
-    const endpoint = `https://${vaultName}.vault.azure.net/keys/${keyName}/${this.keyVersion}/sign?api-version=7.4`;
-    const body = JSON.stringify({
-      alg: process.env.AZURE_KMS_ALGORITHM || 'ES256',
-      value: digest.toString('base64url'),
-    });
-
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${await this.getAzureAccessToken()}`,
-      },
-      body,
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      logger.error('azure_kms_sign_failed', { status: response.status, error: errorText });
-      throw new CredentialError(
-        `Azure Key Vault signing failed: ${response.status}`,
-        'CRED_KMS_SIGN_FAILED',
-        500,
-      );
-    }
-
-    const result = (await response.json()) as { value: string };
-    return Buffer.from(result.value, 'base64url');
-  }
-
-  private async getPublicKeyFromAzure(): Promise<crypto.KeyObject> {
-    const vaultName = process.env.AZURE_KEYVAULT_NAME;
-    const keyName = process.env.AZURE_KEY_NAME || this.keyId;
-    if (!vaultName) {
-      throw new CredentialError(
-        'AZURE_KEYVAULT_NAME is required for Azure KMS.',
-        'CRED_KMS_CONFIG_MISSING',
-        500,
-      );
-    }
-
-    const endpoint = `https://${vaultName}.vault.azure.net/keys/${keyName}/${this.keyVersion}?api-version=7.4`;
-    const response = await fetch(endpoint, {
-      method: 'GET',
-      headers: {
-        Authorization: `Bearer ${await this.getAzureAccessToken()}`,
-      },
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      logger.error('azure_kms_get_key_failed', { status: response.status, error: errorText });
-      throw new CredentialError(
-        `Azure Key Vault GetKey failed: ${response.status}`,
-        'CRED_KMS_PUBKEY_FAILED',
-        500,
-      );
-    }
-
-    const result = (await response.json()) as { key: { x: string; y: string; crv: string; kty: string } };
-    // Convert JWK to KeyObject
-    return crypto.createPublicKey({
-      key: {
-        kty: result.key.kty,
-        crv: result.key.crv,
-        x: result.key.x,
-        y: result.key.y,
-      },
-      format: 'jwk',
-    });
-  }
-
-  private async getAzureAccessToken(): Promise<string> {
-    const envToken = process.env.AZURE_ACCESS_TOKEN;
-    if (envToken) return envToken;
-
-    // Try Azure IMDS (managed identity)
-    try {
-      const imdsResponse = await fetch(
-        'http://169.254.169.254/metadata/identity/oauth2/token?api-version=2019-08-01&resource=https://vault.azure.net',
-        { headers: { Metadata: 'true' } },
-      );
-      if (imdsResponse.ok) {
-        const tokenData = (await imdsResponse.json()) as { access_token: string };
-        return tokenData.access_token;
-      }
-    } catch {
-      // Not running on Azure — fall through
-    }
-
-    throw new CredentialError(
-      'Azure access token unavailable. Set AZURE_ACCESS_TOKEN or run on an Azure instance with managed identity.',
-      'CRED_KMS_AUTH_FAILED',
-      500,
-    );
-  }
-
-  // ---------------------------------------------------------------------------
-  // Local signing (dev/test only)
-  // ---------------------------------------------------------------------------
-  private signLocal(message: Buffer): Promise<Buffer> {
-    const key = this.getLocalSigningKey();
-    let signature: Buffer;
-    if (key.asymmetricKeyType === 'ed25519' || key.asymmetricKeyType === 'ed448') {
-      signature = crypto.sign(null, message, key);
-    } else {
-      signature = crypto.sign('sha256', message, key);
-    }
-    return Promise.resolve(signature);
-  }
-
-  private getLocalSigningKey(): crypto.KeyObject {
-    if (this.localSigningKey) {
-      return this.localSigningKey;
-    }
-
-    const rawKey = process.env.CREDENTIAL_SIGNING_PRIVATE_KEY;
-    if (!rawKey) {
-      throw new CredentialError(
-        'CREDENTIAL_SIGNING_PRIVATE_KEY not configured. Credential issuance is disabled until signing is configured.',
-        'CRED_SIGNING_UNAVAILABLE',
-        500,
-      );
-    }
-
-    const trimmed = rawKey.trim();
-    if (trimmed.includes('BEGIN PRIVATE KEY')) {
-      this.localSigningKey = crypto.createPrivateKey(trimmed);
-    } else {
-      const normalized = trimmed.replace(/-/g, '+').replace(/_/g, '/');
-      this.localSigningKey = crypto.createPrivateKey({
-        key: Buffer.from(normalized, 'base64'),
-        format: 'der',
-        type: 'pkcs8',
-      });
-    }
-
-    return this.localSigningKey;
-  }
-
-  private getLocalPublicKey(): crypto.KeyObject {
-    const rawPublicKey = process.env.CREDENTIAL_SIGNING_PUBLIC_KEY;
-    if (rawPublicKey) {
-      const trimmed = rawPublicKey.trim();
-      if (trimmed.includes('BEGIN PUBLIC KEY')) {
-        return crypto.createPublicKey(trimmed);
-      }
-      const normalized = trimmed.replace(/-/g, '+').replace(/_/g, '/');
-      return crypto.createPublicKey({
-        key: Buffer.from(normalized, 'base64'),
-        format: 'der',
-        type: 'spki',
-      });
-    }
-    return crypto.createPublicKey(this.getLocalSigningKey());
   }
 }
 
@@ -1839,6 +1443,18 @@ export class CredentialService {
   private verifyMessage(message: Buffer, signature: Buffer, key: crypto.KeyObject): boolean {
     if (key.asymmetricKeyType === 'ed25519' || key.asymmetricKeyType === 'ed448') {
       return crypto.verify(null, message, key, signature);
+    }
+    if (key.asymmetricKeyType === 'rsa-pss') {
+      return crypto.verify(
+        'sha256',
+        message,
+        {
+          key,
+          padding: crypto.constants.RSA_PKCS1_PSS_PADDING,
+          saltLength: crypto.constants.RSA_PSS_SALTLEN_DIGEST,
+        },
+        signature,
+      );
     }
 
     return crypto.verify('sha256', message, key, signature);

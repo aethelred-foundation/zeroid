@@ -19,6 +19,10 @@ import { EnterpriseRole, OrganizationGovernanceSettings } from '../../services/e
 import { policyDecisionReceiptService, PolicyDecisionReceipt } from '../../services/enterprise/policy-receipt-service';
 import { policyContextService, PolicyExecutionContext } from '../../services/enterprise/policy-context-service';
 import { policyExecutionService, PolicyExecutionTrace } from '../../services/enterprise/policy-execution-service';
+import {
+  createRegulatorySubmissionBundleSignature,
+  verifyRegulatorySubmissionBundleSignature,
+} from '../../services/enterprise/regulatory-submission-signing';
 
 // ---------------------------------------------------------------------------
 // Logger
@@ -34,7 +38,6 @@ const router = Router();
 const ENTERPRISE_COMPLIANCE_READ_ROLES: EnterpriseRole[] = ['viewer', 'operator', 'admin', 'compliance_officer', 'auditor'];
 const ENTERPRISE_COMPLIANCE_WRITE_ROLES: EnterpriseRole[] = ['operator', 'admin', 'compliance_officer'];
 const ENTERPRISE_COMPLIANCE_REVIEW_ROLES: EnterpriseRole[] = ['admin', 'compliance_officer', 'auditor'];
-const DEV_REGULATORY_SUBMISSION_SIGNING_KEYPAIR = crypto.generateKeyPairSync('ed25519');
 const ReportAmendmentRequestSchema = z.object({
   reason: z.string().min(5),
   changes: z.record(z.unknown()),
@@ -401,29 +404,6 @@ type SubmissionBundleVerificationResult = {
   signingKeyVersion?: string;
   signingVerificationMethod?: string;
 };
-
-type RegulatorySubmissionBundleSigningAlgorithm = RegulatorySubmissionBundle['bundleSignature']['algorithm'];
-type RegulatorySubmissionBundleSigningScope = RegulatorySubmissionBundle['bundleSignature']['scope'];
-type RegulatorySubmissionBundleSigningContext =
-  | {
-    mode: 'hmac';
-    algorithm: 'hmac-sha256';
-    keyId: string;
-    scope: RegulatorySubmissionBundleSigningScope;
-    secret: string;
-  }
-  | {
-    mode: 'asymmetric';
-    algorithm: Exclude<RegulatorySubmissionBundleSigningAlgorithm, 'hmac-sha256'>;
-    keyId: string;
-    scope: RegulatorySubmissionBundleSigningScope;
-    keyVersion: string;
-    verificationMethod: string;
-    privateKey: crypto.KeyObject;
-    publicKey: crypto.KeyObject;
-    publicKeyFingerprint: string;
-    publicKeyPem: string;
-  };
 
 function asRecord(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -1090,110 +1070,6 @@ function sanitizeSigningSegment(value: string): string {
   return value.toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
 }
 
-function normalizeKeyMaterial(raw: string): string {
-  return raw.trim().replace(/\\n/g, '\n');
-}
-
-function parsePrivateKeyMaterial(raw: string): crypto.KeyObject {
-  return crypto.createPrivateKey(normalizeKeyMaterial(raw));
-}
-
-function parsePublicKeyMaterial(raw: string): crypto.KeyObject {
-  return crypto.createPublicKey(normalizeKeyMaterial(raw));
-}
-
-function exportPublicKeyPem(publicKey: crypto.KeyObject): string {
-  return publicKey.export({ format: 'pem', type: 'spki' }).toString();
-}
-
-function computePublicKeyFingerprint(publicKey: crypto.KeyObject): string {
-  const der = publicKey.export({ format: 'der', type: 'spki' });
-  return crypto.createHash('sha256').update(der).digest('base64url');
-}
-
-function deriveAsymmetricBundleSigningAlgorithm(
-  key: crypto.KeyObject,
-  configuredAlgorithm?: string,
-): Exclude<RegulatorySubmissionBundleSigningAlgorithm, 'hmac-sha256'> {
-  if (configuredAlgorithm) {
-    if (
-      configuredAlgorithm === 'RS256'
-      || configuredAlgorithm === 'PS256'
-      || configuredAlgorithm === 'ES256'
-      || configuredAlgorithm === 'EdDSA'
-    ) {
-      return configuredAlgorithm;
-    }
-    throw new Error(`Unsupported regulatory submission signing algorithm: ${configuredAlgorithm}`);
-  }
-
-  switch (key.asymmetricKeyType) {
-    case 'ed25519':
-    case 'ed448':
-      return 'EdDSA';
-    case 'ec':
-      return 'ES256';
-    case 'rsa-pss':
-      return 'PS256';
-    case 'rsa':
-      return 'RS256';
-    default:
-      throw new Error(`Unsupported asymmetric key type for regulatory submission signing: ${String(key.asymmetricKeyType)}`);
-  }
-}
-
-function getAsymmetricSigningKeyInput(
-  algorithm: Exclude<RegulatorySubmissionBundleSigningAlgorithm, 'hmac-sha256'>,
-  privateKey: crypto.KeyObject,
-): crypto.KeyLike | crypto.SignKeyObjectInput {
-  if (algorithm === 'PS256') {
-    return {
-      key: privateKey,
-      padding: crypto.constants.RSA_PKCS1_PSS_PADDING,
-      saltLength: crypto.constants.RSA_PSS_SALTLEN_DIGEST,
-    };
-  }
-  return privateKey;
-}
-
-function getAsymmetricVerificationKeyInput(
-  algorithm: Exclude<RegulatorySubmissionBundleSigningAlgorithm, 'hmac-sha256'>,
-  publicKey: crypto.KeyObject,
-): crypto.KeyLike | crypto.VerifyKeyObjectInput {
-  if (algorithm === 'PS256') {
-    return {
-      key: publicKey,
-      padding: crypto.constants.RSA_PKCS1_PSS_PADDING,
-      saltLength: crypto.constants.RSA_PSS_SALTLEN_DIGEST,
-    };
-  }
-  return publicKey;
-}
-
-function buildDefaultBundleKeyId(
-  scope: RegulatorySubmissionBundleSigningScope,
-  organizationId: string,
-  authoritySegment: string,
-  jurisdictionSegment: string,
-): string {
-  switch (scope) {
-    case 'organization_authority':
-      return `org:${organizationId}:authority:${authoritySegment.toLowerCase()}`;
-    case 'authority':
-      return `authority:${authoritySegment.toLowerCase()}`;
-    case 'jurisdiction':
-      return `jurisdiction:${jurisdictionSegment.toLowerCase()}`;
-    case 'global':
-    default:
-      return 'global:default';
-  }
-}
-
-function buildDefaultBundleVerificationMethod(keyId: string): string {
-  const sanitizedKeyId = keyId.replace(/[^a-zA-Z0-9:_-]+/g, '-');
-  return `urn:zeroid:regulatory-submission:${sanitizedKeyId}`;
-}
-
 function resolveSubmissionPackageProfile(
   report: GeneratedReport,
   filingPackage: ReportFilingPackageSnapshot,
@@ -1332,202 +1208,6 @@ function assertSubmissionProfileConformance(
   throw error;
 }
 
-function resolveBundleSigningContext(
-  organizationId: string,
-  filingPackage: ReportFilingPackageSnapshot,
-): RegulatorySubmissionBundleSigningContext {
-  const authority = filingPackage.authorityProfile?.authority;
-  const authoritySegment = authority ? sanitizeSigningSegment(authority) : '';
-  const jurisdictionSegment = sanitizeSigningSegment(filingPackage.filingJurisdiction);
-  const organizationSegment = sanitizeSigningSegment(organizationId);
-  const envCandidates: Array<{
-    scope: RegulatorySubmissionBundleSigningScope;
-    defaultKeyId: string;
-    secretEnvKey: string;
-    privateKeyEnvKey: string;
-    publicKeyEnvKey: string;
-    algorithmEnvKey: string;
-    keyIdEnvKey: string;
-    keyVersionEnvKey: string;
-    verificationMethodEnvKey: string;
-  }> = [
-    ...(authoritySegment.length > 0 ? [{
-      scope: 'organization_authority' as const,
-      defaultKeyId: buildDefaultBundleKeyId('organization_authority', organizationId, authoritySegment, jurisdictionSegment),
-      secretEnvKey: `REGULATORY_SUBMISSION_BUNDLE_SIGNING_SECRET__ORG__${organizationSegment}__AUTHORITY__${authoritySegment}`,
-      privateKeyEnvKey: `REGULATORY_SUBMISSION_BUNDLE_SIGNING_PRIVATE_KEY__ORG__${organizationSegment}__AUTHORITY__${authoritySegment}`,
-      publicKeyEnvKey: `REGULATORY_SUBMISSION_BUNDLE_SIGNING_PUBLIC_KEY__ORG__${organizationSegment}__AUTHORITY__${authoritySegment}`,
-      algorithmEnvKey: `REGULATORY_SUBMISSION_BUNDLE_SIGNING_ALGORITHM__ORG__${organizationSegment}__AUTHORITY__${authoritySegment}`,
-      keyIdEnvKey: `REGULATORY_SUBMISSION_BUNDLE_SIGNING_KEY_ID__ORG__${organizationSegment}__AUTHORITY__${authoritySegment}`,
-      keyVersionEnvKey: `REGULATORY_SUBMISSION_BUNDLE_SIGNING_KEY_VERSION__ORG__${organizationSegment}__AUTHORITY__${authoritySegment}`,
-      verificationMethodEnvKey: `REGULATORY_SUBMISSION_BUNDLE_SIGNING_VERIFICATION_METHOD__ORG__${organizationSegment}__AUTHORITY__${authoritySegment}`,
-    }] : []),
-    ...(authoritySegment.length > 0 ? [{
-      scope: 'authority' as const,
-      defaultKeyId: buildDefaultBundleKeyId('authority', organizationId, authoritySegment, jurisdictionSegment),
-      secretEnvKey: `REGULATORY_SUBMISSION_BUNDLE_SIGNING_SECRET__AUTHORITY__${authoritySegment}`,
-      privateKeyEnvKey: `REGULATORY_SUBMISSION_BUNDLE_SIGNING_PRIVATE_KEY__AUTHORITY__${authoritySegment}`,
-      publicKeyEnvKey: `REGULATORY_SUBMISSION_BUNDLE_SIGNING_PUBLIC_KEY__AUTHORITY__${authoritySegment}`,
-      algorithmEnvKey: `REGULATORY_SUBMISSION_BUNDLE_SIGNING_ALGORITHM__AUTHORITY__${authoritySegment}`,
-      keyIdEnvKey: `REGULATORY_SUBMISSION_BUNDLE_SIGNING_KEY_ID__AUTHORITY__${authoritySegment}`,
-      keyVersionEnvKey: `REGULATORY_SUBMISSION_BUNDLE_SIGNING_KEY_VERSION__AUTHORITY__${authoritySegment}`,
-      verificationMethodEnvKey: `REGULATORY_SUBMISSION_BUNDLE_SIGNING_VERIFICATION_METHOD__AUTHORITY__${authoritySegment}`,
-    }] : []),
-    {
-      scope: 'jurisdiction' as const,
-      defaultKeyId: buildDefaultBundleKeyId('jurisdiction', organizationId, authoritySegment, jurisdictionSegment),
-      secretEnvKey: `REGULATORY_SUBMISSION_BUNDLE_SIGNING_SECRET__JURISDICTION__${jurisdictionSegment}`,
-      privateKeyEnvKey: `REGULATORY_SUBMISSION_BUNDLE_SIGNING_PRIVATE_KEY__JURISDICTION__${jurisdictionSegment}`,
-      publicKeyEnvKey: `REGULATORY_SUBMISSION_BUNDLE_SIGNING_PUBLIC_KEY__JURISDICTION__${jurisdictionSegment}`,
-      algorithmEnvKey: `REGULATORY_SUBMISSION_BUNDLE_SIGNING_ALGORITHM__JURISDICTION__${jurisdictionSegment}`,
-      keyIdEnvKey: `REGULATORY_SUBMISSION_BUNDLE_SIGNING_KEY_ID__JURISDICTION__${jurisdictionSegment}`,
-      keyVersionEnvKey: `REGULATORY_SUBMISSION_BUNDLE_SIGNING_KEY_VERSION__JURISDICTION__${jurisdictionSegment}`,
-      verificationMethodEnvKey: `REGULATORY_SUBMISSION_BUNDLE_SIGNING_VERIFICATION_METHOD__JURISDICTION__${jurisdictionSegment}`,
-    },
-    {
-      scope: 'global' as const,
-      defaultKeyId: buildDefaultBundleKeyId('global', organizationId, authoritySegment, jurisdictionSegment),
-      secretEnvKey: 'REGULATORY_SUBMISSION_BUNDLE_SIGNING_SECRET',
-      privateKeyEnvKey: 'REGULATORY_SUBMISSION_BUNDLE_SIGNING_PRIVATE_KEY',
-      publicKeyEnvKey: 'REGULATORY_SUBMISSION_BUNDLE_SIGNING_PUBLIC_KEY',
-      algorithmEnvKey: 'REGULATORY_SUBMISSION_BUNDLE_SIGNING_ALGORITHM',
-      keyIdEnvKey: 'REGULATORY_SUBMISSION_BUNDLE_SIGNING_KEY_ID',
-      keyVersionEnvKey: 'REGULATORY_SUBMISSION_BUNDLE_SIGNING_KEY_VERSION',
-      verificationMethodEnvKey: 'REGULATORY_SUBMISSION_BUNDLE_SIGNING_VERIFICATION_METHOD',
-    },
-  ];
-
-  for (const candidate of envCandidates) {
-    const rawPrivateKey = process.env[candidate.privateKeyEnvKey];
-    if (rawPrivateKey && rawPrivateKey.trim().length > 0) {
-      const keyId = process.env[candidate.keyIdEnvKey]?.trim() || candidate.defaultKeyId;
-      const privateKey = parsePrivateKeyMaterial(rawPrivateKey);
-      const publicKey = process.env[candidate.publicKeyEnvKey]?.trim()
-        ? parsePublicKeyMaterial(process.env[candidate.publicKeyEnvKey] as string)
-        : crypto.createPublicKey(privateKey);
-      const algorithm = deriveAsymmetricBundleSigningAlgorithm(privateKey, process.env[candidate.algorithmEnvKey]?.trim());
-      const publicKeyFingerprint = computePublicKeyFingerprint(publicKey);
-      return {
-        mode: 'asymmetric',
-        algorithm,
-        keyId,
-        scope: candidate.scope,
-        keyVersion: process.env[candidate.keyVersionEnvKey]?.trim() || '1',
-        verificationMethod: process.env[candidate.verificationMethodEnvKey]?.trim() || buildDefaultBundleVerificationMethod(keyId),
-        privateKey,
-        publicKey,
-        publicKeyFingerprint,
-        publicKeyPem: exportPublicKeyPem(publicKey),
-      };
-    }
-
-    const secret = process.env[candidate.secretEnvKey];
-    if (secret && secret.length >= 16) {
-      if (process.env.NODE_ENV === 'production') {
-        throw new Error('HMAC regulatory submission bundle signing is blocked in production. Configure asymmetric signing material.');
-      }
-      return {
-        mode: 'hmac',
-        algorithm: 'hmac-sha256',
-        keyId: process.env[candidate.keyIdEnvKey]?.trim() || candidate.defaultKeyId,
-        scope: candidate.scope,
-        secret,
-      };
-    }
-  }
-
-  if (process.env.NODE_ENV !== 'production') {
-    const fallbackScope: RegulatorySubmissionBundleSigningScope = authoritySegment.length > 0
-      ? 'organization_authority'
-      : 'jurisdiction';
-    const fallbackKeyId = buildDefaultBundleKeyId(fallbackScope, organizationId, authoritySegment, jurisdictionSegment);
-    const publicKeyFingerprint = computePublicKeyFingerprint(DEV_REGULATORY_SUBMISSION_SIGNING_KEYPAIR.publicKey);
-    return {
-      mode: 'asymmetric',
-      algorithm: 'EdDSA',
-      keyId: fallbackKeyId,
-      scope: fallbackScope,
-      keyVersion: 'dev-ed25519-1',
-      verificationMethod: buildDefaultBundleVerificationMethod(fallbackKeyId),
-      privateKey: DEV_REGULATORY_SUBMISSION_SIGNING_KEYPAIR.privateKey,
-      publicKey: DEV_REGULATORY_SUBMISSION_SIGNING_KEYPAIR.publicKey,
-      publicKeyFingerprint,
-      publicKeyPem: exportPublicKeyPem(DEV_REGULATORY_SUBMISSION_SIGNING_KEYPAIR.publicKey),
-    };
-  }
-
-  throw new Error('Scoped regulatory submission bundle asymmetric signing key must be configured in production');
-}
-
-function signSubmissionBundleDigest(
-  digest: string,
-  signingContext: RegulatorySubmissionBundleSigningContext,
-): RegulatorySubmissionBundle['bundleSignature'] {
-  const signedAt = new Date().toISOString();
-  const token = computeSubmissionBundleSignatureToken(digest, signedAt, signingContext);
-  return {
-    algorithm: signingContext.algorithm,
-    signedAt,
-    keyId: signingContext.keyId,
-    scope: signingContext.scope,
-    encoding: 'base64url',
-    ...(signingContext.mode === 'asymmetric'
-      ? {
-        keyVersion: signingContext.keyVersion,
-        verificationMethod: signingContext.verificationMethod,
-        publicKeyFingerprint: signingContext.publicKeyFingerprint,
-        publicKeyPem: signingContext.publicKeyPem,
-      }
-      : {}),
-    token,
-  };
-}
-
-function computeSubmissionBundleSignatureToken(
-  digest: string,
-  signedAt: string,
-  signingContext: RegulatorySubmissionBundleSigningContext,
-): string {
-  if (signingContext.mode === 'hmac') {
-    return crypto.createHmac('sha256', signingContext.secret).update(`${digest}:${signedAt}`).digest('base64url');
-  }
-
-  const payload = Buffer.from(`${digest}:${signedAt}`);
-  const signature = signingContext.algorithm === 'EdDSA'
-    ? crypto.sign(null, payload, signingContext.privateKey)
-    : crypto.sign(
-      'sha256',
-      payload,
-      getAsymmetricSigningKeyInput(signingContext.algorithm, signingContext.privateKey),
-  );
-  return signature.toString('base64url');
-}
-
-function verifySubmissionBundleSignatureToken(
-  digest: string,
-  signedAt: string,
-  token: string,
-  signingContext: RegulatorySubmissionBundleSigningContext,
-): boolean {
-  if (signingContext.mode === 'hmac') {
-    const expectedToken = computeSubmissionBundleSignatureToken(digest, signedAt, signingContext);
-    return expectedToken === token;
-  }
-
-  const payload = Buffer.from(`${digest}:${signedAt}`);
-  const signature = Buffer.from(token, 'base64url');
-  if (signingContext.algorithm === 'EdDSA') {
-    return crypto.verify(null, payload, signingContext.publicKey, signature);
-  }
-
-  return crypto.verify(
-    'sha256',
-    payload,
-    getAsymmetricVerificationKeyInput(signingContext.algorithm, signingContext.publicKey),
-    signature,
-  );
-}
-
 async function buildSubmissionArtifacts(
   report: GeneratedReport,
 ): Promise<RegulatorySubmissionBundle['artifacts']> {
@@ -1580,7 +1260,6 @@ async function buildRegulatorySubmissionBundle(
   }))).filter((entry): entry is { receiptId: string; action: ReportEvidenceEventSnapshot['action']; exported: unknown } => entry !== null);
   const profileConformance = buildSubmissionProfileConformance(packageProfile, filingPackage, artifacts, relatedReceipts);
   assertSubmissionProfileConformance(packageProfile, profileConformance);
-  const signingContext = resolveBundleSigningContext(organizationId, filingPackage);
 
   const bundleWithoutDigest = {
     packageVersion: 'zeroid.regulatory_submission_bundle.v1' as const,
@@ -1606,14 +1285,18 @@ async function buildRegulatorySubmissionBundle(
   return {
     ...bundleWithoutDigest,
     bundleDigest,
-    bundleSignature: signSubmissionBundleDigest(bundleDigest, signingContext),
+    bundleSignature: await createRegulatorySubmissionBundleSignature(bundleDigest, {
+      organizationId,
+      authority: filingPackage.authorityProfile?.authority,
+      filingJurisdiction: filingPackage.filingJurisdiction,
+    }),
   };
 }
 
-function verifyRegulatorySubmissionBundle(
+async function verifyRegulatorySubmissionBundle(
   bundle: unknown,
   organizationId: string,
-): SubmissionBundleVerificationResult {
+): Promise<SubmissionBundleVerificationResult> {
   const verifiedAt = new Date().toISOString();
   const record = asRecord(bundle);
   const issues: string[] = [];
@@ -1680,49 +1363,34 @@ function verifyRegulatorySubmissionBundle(
   let signingScopeMatched = false;
   let verificationKeyMatched = false;
   let signatureValid = false;
+  let signingAlgorithm: SubmissionBundleVerificationResult['signingAlgorithm'];
+  let signingKeyId: string | undefined;
+  let signingScope: SubmissionBundleVerificationResult['signingScope'];
+  let signingKeyVersion: string | undefined;
+  let signingVerificationMethod: string | undefined;
   if (
     typeof filingPackage.filingJurisdiction === 'string'
     && filingPackage.filingJurisdiction.length > 0
   ) {
     try {
-      const signingContext = resolveBundleSigningContext(organizationId, normalizedFilingPackage);
-      signingScopeMatched = (
-        bundleSignature.keyId === signingContext.keyId
-        && bundleSignature.scope === signingContext.scope
-        && bundleSignature.algorithm === signingContext.algorithm
-        && (signingContext.mode !== 'asymmetric'
-          || (
-            bundleSignature.keyVersion === signingContext.keyVersion
-            && bundleSignature.verificationMethod === signingContext.verificationMethod
-          ))
+      const signatureVerification = await verifyRegulatorySubmissionBundleSignature(
+        bundleDigest,
+        record.bundleSignature,
+        {
+          organizationId,
+          authority: normalizedFilingPackage.authorityProfile?.authority,
+          filingJurisdiction: normalizedFilingPackage.filingJurisdiction,
+        },
       );
-      if (!signingScopeMatched) {
-        issues.push('bundleSignature signing scope does not match resolved signing context');
-      }
-
-      verificationKeyMatched = signingContext.mode === 'asymmetric'
-        ? bundleSignature.publicKeyFingerprint === signingContext.publicKeyFingerprint
-          && bundleSignature.publicKeyPem === signingContext.publicKeyPem
-        : bundleSignature.publicKeyFingerprint === undefined && bundleSignature.publicKeyPem === undefined;
-      if (!verificationKeyMatched) {
-        issues.push('bundleSignature verification key material does not match resolved signing context');
-      }
-
-      if (
-        typeof bundleSignature.signedAt === 'string'
-        && typeof bundleSignature.token === 'string'
-        && bundleDigest.length === 64
-      ) {
-        signatureValid = verifySubmissionBundleSignatureToken(
-          bundleDigest,
-          bundleSignature.signedAt,
-          bundleSignature.token,
-          signingContext,
-        );
-        if (!signatureValid) {
-          issues.push('bundleSignature token verification failed');
-        }
-      }
+      signingScopeMatched = signatureVerification.signingScopeMatched;
+      verificationKeyMatched = signatureVerification.verificationKeyMatched;
+      signatureValid = signatureVerification.signatureValid;
+      signingAlgorithm = signatureVerification.signingAlgorithm;
+      signingKeyId = signatureVerification.signingKeyId;
+      signingScope = signatureVerification.signingScope;
+      signingKeyVersion = signatureVerification.signingKeyVersion;
+      signingVerificationMethod = signatureVerification.signingVerificationMethod;
+      issues.push(...signatureVerification.issues);
     } catch (error) {
       issues.push((error as Error).message);
     }
@@ -1743,27 +1411,16 @@ function verifyRegulatorySubmissionBundle(
     ...(typeof packageProfile.profileId === 'string' && packageProfile.profileId.length > 0
       ? { profileId: packageProfile.profileId }
       : {}),
-    ...(typeof bundleSignature.keyId === 'string' && bundleSignature.keyId.length > 0
-      ? { signingKeyId: bundleSignature.keyId }
+    ...(typeof signingKeyId === 'string' && signingKeyId.length > 0
+      ? { signingKeyId }
       : {}),
-    ...(bundleSignature.scope === 'organization_authority'
-      || bundleSignature.scope === 'authority'
-      || bundleSignature.scope === 'jurisdiction'
-      || bundleSignature.scope === 'global'
-      ? { signingScope: bundleSignature.scope as SubmissionBundleVerificationResult['signingScope'] }
+    ...(signingScope ? { signingScope } : {}),
+    ...(signingAlgorithm ? { signingAlgorithm } : {}),
+    ...(typeof signingKeyVersion === 'string' && signingKeyVersion.length > 0
+      ? { signingKeyVersion }
       : {}),
-    ...(bundleSignature.algorithm === 'hmac-sha256'
-      || bundleSignature.algorithm === 'RS256'
-      || bundleSignature.algorithm === 'PS256'
-      || bundleSignature.algorithm === 'ES256'
-      || bundleSignature.algorithm === 'EdDSA'
-      ? { signingAlgorithm: bundleSignature.algorithm as SubmissionBundleVerificationResult['signingAlgorithm'] }
-      : {}),
-    ...(typeof bundleSignature.keyVersion === 'string' && bundleSignature.keyVersion.length > 0
-      ? { signingKeyVersion: bundleSignature.keyVersion }
-      : {}),
-    ...(typeof bundleSignature.verificationMethod === 'string' && bundleSignature.verificationMethod.length > 0
-      ? { signingVerificationMethod: bundleSignature.verificationMethod }
+    ...(typeof signingVerificationMethod === 'string' && signingVerificationMethod.length > 0
+      ? { signingVerificationMethod }
       : {}),
   };
 }
@@ -3432,7 +3089,7 @@ router.post(
       const context = await requireReceiptContext(req, res);
       if (!context) return;
 
-      const verification = verifyRegulatorySubmissionBundle(req.body.bundle, context.organizationId);
+      const verification = await verifyRegulatorySubmissionBundle(req.body.bundle, context.organizationId);
       res.status(200).json({
         data: verification,
       });
