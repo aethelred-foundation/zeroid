@@ -1,27 +1,7 @@
-const routeRegistry: Record<string, Array<(req: any, res: any, next: (err?: unknown) => void) => unknown>> = {};
+import express from 'express';
+import request from 'supertest';
 
 const mockExportCredentialEvidence = jest.fn();
-
-jest.mock('express', () => {
-  const createRouter = () => {
-    const router: any = {
-      use: jest.fn(() => router),
-      get: jest.fn((path: string, ...handlers: Array<(req: any, res: any, next: (err?: unknown) => void) => unknown>) => {
-        routeRegistry[`GET ${path}`] = handlers;
-        return router;
-      }),
-      post: jest.fn((path: string, ...handlers: Array<(req: any, res: any, next: (err?: unknown) => void) => unknown>) => {
-        routeRegistry[`POST ${path}`] = handlers;
-        return router;
-      }),
-    };
-    return router;
-  };
-
-  return {
-    Router: jest.fn(() => createRouter()),
-  };
-}, { virtual: true });
 
 jest.mock('../src/middleware/rateLimit', () => ({
   apiRateLimiter: (_req: unknown, _res: unknown, next: () => void) => next(),
@@ -48,78 +28,23 @@ jest.mock('../src/index', () => ({
   },
 }));
 
-import '../src/routes/credentials';
+import { credentialRoutes } from '../src/routes/credentials';
 
-async function invokeRoute(
-  method: 'GET',
-  path: string,
-  options: { params?: Record<string, string>; identityId?: string } = {},
-): Promise<{ statusCode: number; body: any }> {
-  const handlers = routeRegistry[`${method} ${path}`];
-  if (!handlers) {
-    throw new Error(`Route not registered: ${method} ${path}`);
-  }
-
-  const req: Record<string, any> = {
-    params: options.params ?? {},
-    query: {},
-    body: {},
-    path,
-    method,
-    headers: {},
-    identity: {
-      id: options.identityId ?? 'issuer-1',
+function createApp() {
+  const app = express();
+  app.use(express.json());
+  app.use((req, _res, next) => {
+    const identityId = req.get('x-test-identity-id') ?? 'issuer-1';
+    (req as any).identity = {
+      id: identityId,
       did: 'did:aethelred:test:actor',
       publicKey: 'pub',
       status: 'ACTIVE',
-    },
-  };
-
-  let statusCode = 200;
-  let responseBody: any;
-  let ended = false;
-
-  const res: Record<string, any> = {
-    status(code: number) {
-      statusCode = code;
-      return res;
-    },
-    json(payload: any) {
-      responseBody = payload;
-      ended = true;
-      return res;
-    },
-  };
-
-  for (const handler of handlers) {
-    if (ended) break;
-    await new Promise<void>((resolve, reject) => {
-      let nextCalled = false;
-      const next = (err?: unknown) => {
-        nextCalled = true;
-        if (err) {
-          reject(err);
-          return;
-        }
-        resolve();
-      };
-
-      try {
-        const result = handler(req, res, next);
-        if (result && typeof (result as Promise<unknown>).then === 'function') {
-          (result as Promise<unknown>).then(() => {
-            if (!nextCalled) resolve();
-          }).catch(reject);
-          return;
-        }
-        if (!nextCalled) resolve();
-      } catch (error) {
-        reject(error);
-      }
-    });
-  }
-
-  return { statusCode, body: responseBody };
+    };
+    next();
+  });
+  app.use('/credentials', credentialRoutes);
+  return app;
 }
 
 describe('credential evidence routes', () => {
@@ -165,12 +90,11 @@ describe('credential evidence routes', () => {
   });
 
   it('returns the full evidence bundle to the issuer', async () => {
-    const response = await invokeRoute('GET', '/:id/evidence', {
-      params: { id: '11111111-1111-1111-1111-111111111111' },
-      identityId: 'issuer-1',
-    });
+    const response = await request(createApp())
+      .get('/credentials/11111111-1111-1111-1111-111111111111/evidence')
+      .set('x-test-identity-id', 'issuer-1')
+      .expect(200);
 
-    expect(response.statusCode).toBe(200);
     expect(response.body.data).toMatchObject({
       formatVersion: 'zeroid.credential_evidence_export.v1',
       credential: expect.objectContaining({
@@ -185,18 +109,19 @@ describe('credential evidence routes', () => {
   });
 
   it('sanitizes credential claims and proof for non-owner verifiers', async () => {
-    const response = await invokeRoute('GET', '/:id/evidence', {
-      params: { id: '11111111-1111-1111-1111-111111111111' },
-      identityId: 'verifier-9',
-    });
+    const response = await request(createApp())
+      .get('/credentials/11111111-1111-1111-1111-111111111111/evidence')
+      .set('x-test-identity-id', 'verifier-9')
+      .expect(200);
 
-    expect(response.statusCode).toBe(200);
     expect(response.body.data).toMatchObject({
       formatVersion: 'zeroid.credential_evidence_export.v1',
       credential: {
         id: '11111111-1111-1111-1111-111111111111',
         credentialType: 'KYC_LEVEL_2',
         status: 'ACTIVE',
+        issuedAt: '2026-04-21T00:00:00.000Z',
+        expiresAt: '2027-04-21T00:00:00.000Z',
       },
       trustLineage: expect.objectContaining({
         enforced: true,

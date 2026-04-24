@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { createLogger, format, transports } from 'winston';
 import crypto from 'crypto';
+import { isProductionRuntime, isSanctionsScreeningDisabled } from '../production-safety';
 
 // ---------------------------------------------------------------------------
 // Logger
@@ -15,6 +16,19 @@ const logger = createLogger({
 // ---------------------------------------------------------------------------
 // Zod Schemas
 // ---------------------------------------------------------------------------
+export const SANCTIONS_LIST_NAMES = ['ofac_sdn', 'eu_consolidated', 'un_sanctions', 'uae_local', 'pep_database'] as const;
+export type SanctionsListName = typeof SANCTIONS_LIST_NAMES[number];
+
+export const SanctionsListMetadataSchema = z.object({
+  updatedAt: z.string().datetime(),
+  sourceDigest: z.string().regex(/^[a-f0-9]{64}$/i),
+  sourceName: z.string().min(1).optional(),
+  signingKeyId: z.string().min(1).optional(),
+  signature: z.string().min(16).optional(),
+});
+
+export type SanctionsListMetadata = z.infer<typeof SanctionsListMetadataSchema>;
+
 export const ScreeningRequestSchema = z.object({
   entityId: z.string(),
   entityType: z.enum(['individual', 'corporate', 'vessel', 'aircraft']),
@@ -35,7 +49,7 @@ export const ScreeningRequestSchema = z.object({
     city: z.string().optional(),
     fullAddress: z.string().optional(),
   })).default([]),
-  screenAgainst: z.array(z.enum(['ofac_sdn', 'eu_consolidated', 'un_sanctions', 'uae_local', 'pep_database'])).default(['ofac_sdn', 'eu_consolidated', 'un_sanctions', 'uae_local', 'pep_database']),
+  screenAgainst: z.array(z.enum(SANCTIONS_LIST_NAMES)).default([...SANCTIONS_LIST_NAMES]),
 });
 
 export type ScreeningRequest = z.infer<typeof ScreeningRequestSchema>;
@@ -99,6 +113,38 @@ export interface AuditEntry {
   details: Record<string, unknown>;
 }
 
+export interface SanctionsListReadiness {
+  listName: SanctionsListName;
+  entryCount: number;
+  ready: boolean;
+  issues: string[];
+  updatedAt?: string;
+  sourceDigest?: string;
+  signingKeyId?: string;
+}
+
+export function computeSanctionsListDigest(entries: SanctionsListEntry[]): string {
+  return crypto
+    .createHash('sha256')
+    .update(JSON.stringify([...entries].sort((a, b) => a.id.localeCompare(b.id))))
+    .digest('hex');
+}
+
+export function buildSanctionsListSignaturePayload(
+  listName: SanctionsListName,
+  entries: SanctionsListEntry[],
+  metadata: Omit<SanctionsListMetadata, 'signature'>,
+): string {
+  return JSON.stringify({
+    listName,
+    updatedAt: metadata.updatedAt,
+    sourceDigest: metadata.sourceDigest,
+    entryDigest: computeSanctionsListDigest(entries),
+    sourceName: metadata.sourceName ?? null,
+    signingKeyId: metadata.signingKeyId ?? null,
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Arabic/Latin transliteration map
 // ---------------------------------------------------------------------------
@@ -126,25 +172,25 @@ const ARABIC_LATIN_MAP: Record<string, string[]> = {
 // ---------------------------------------------------------------------------
 export class SanctionsScreeningService {
   private sanctionsLists: Map<string, SanctionsListEntry[]> = new Map();
+  private sanctionsListMetadata: Map<string, SanctionsListMetadata> = new Map();
   private screeningResults: Map<string, ScreeningResult> = new Map();
   private auditLog: AuditEntry[] = [];
   private falsePositives: Map<string, FalsePositiveDecision> = new Map();
   private continuousMonitoringEntities: Set<string> = new Set();
   private matchThreshold: number;
+  private listMaxAgeMs: number;
 
   constructor(matchThreshold = 0.78) {
     this.matchThreshold = matchThreshold;
+    this.listMaxAgeMs = this.resolveListMaxAgeMs();
     this.initializeLists();
     logger.info('SanctionsScreeningService initialized', { threshold: matchThreshold });
   }
 
   private initializeLists(): void {
-    // Initialize with empty lists; in production these are synced from regulatory feeds
-    this.sanctionsLists.set('ofac_sdn', []);
-    this.sanctionsLists.set('eu_consolidated', []);
-    this.sanctionsLists.set('un_sanctions', []);
-    this.sanctionsLists.set('uae_local', []);
-    this.sanctionsLists.set('pep_database', []);
+    for (const listName of SANCTIONS_LIST_NAMES) {
+      this.sanctionsLists.set(listName, []);
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -152,6 +198,12 @@ export class SanctionsScreeningService {
   // -------------------------------------------------------------------------
   async screenEntity(request: ScreeningRequest): Promise<ScreeningResult> {
     const parsed = ScreeningRequestSchema.parse(request);
+    if (isSanctionsScreeningDisabled()) {
+      const error = new Error('Sanctions screening is disabled by deployment configuration');
+      (error as Error & { code: string }).code = 'SANCTIONS_SCREENING_DISABLED';
+      throw error;
+    }
+    this.assertScreeningListsReady(parsed.screenAgainst);
     const startTime = Date.now();
     const screeningId = crypto.randomUUID();
 
@@ -531,8 +583,12 @@ export class SanctionsScreeningService {
     logger.info('continuous_monitoring_disabled', { entityId });
   }
 
-  async onListUpdate(listName: string, updatedEntries: SanctionsListEntry[]): Promise<ScreeningResult[]> {
-    this.sanctionsLists.set(listName, updatedEntries);
+  async onListUpdate(
+    listName: SanctionsListName,
+    updatedEntries: SanctionsListEntry[],
+    metadata?: SanctionsListMetadata,
+  ): Promise<ScreeningResult[]> {
+    this.updateSanctionsList(listName, updatedEntries, metadata);
     logger.info('sanctions_list_updated', { listName, entryCount: updatedEntries.length });
 
     // Re-screen all continuously monitored entities
@@ -548,6 +604,36 @@ export class SanctionsScreeningService {
     }
 
     return results;
+  }
+
+  updateSanctionsList(
+    listName: SanctionsListName,
+    updatedEntries: SanctionsListEntry[],
+    metadata?: SanctionsListMetadata,
+  ): void {
+    if (!SANCTIONS_LIST_NAMES.includes(listName)) {
+      throw new Error(`Unsupported sanctions list: ${listName}`);
+    }
+
+    if (isProductionRuntime() && !metadata) {
+      const error = new Error(`Production sanctions list update requires metadata for ${listName}`);
+      (error as Error & { code: string }).code = 'SANCTIONS_LIST_METADATA_REQUIRED';
+      throw error;
+    }
+
+    const nextMetadata = SanctionsListMetadataSchema.parse(metadata ?? {
+      updatedAt: new Date().toISOString(),
+      sourceDigest: computeSanctionsListDigest(updatedEntries),
+      sourceName: listName,
+    });
+
+    this.assertListSignatureTrusted(listName, updatedEntries, nextMetadata);
+    this.sanctionsLists.set(listName, [...updatedEntries]);
+    this.sanctionsListMetadata.set(listName, nextMetadata);
+  }
+
+  getListReadiness(screenAgainst: SanctionsListName[] = [...SANCTIONS_LIST_NAMES]): SanctionsListReadiness[] {
+    return screenAgainst.map((listName) => this.buildListReadiness(listName));
   }
 
   // -------------------------------------------------------------------------
@@ -590,6 +676,119 @@ export class SanctionsScreeningService {
     }
     this.matchThreshold = threshold;
     logger.info('match_threshold_updated', { threshold });
+  }
+
+  private assertScreeningListsReady(screenAgainst: SanctionsListName[]): void {
+    const readiness = this.getListReadiness(screenAgainst);
+    const blocked = readiness.filter((list) => !list.ready);
+
+    if (blocked.length === 0) return;
+
+    if (!isProductionRuntime()) {
+      logger.warn('sanctions_screening_lists_not_ready', {
+        blocked: blocked.map((list) => ({ listName: list.listName, issues: list.issues })),
+      });
+      return;
+    }
+
+    const error = new Error(
+      `Production sanctions screening blocked; list data is not ready: ` +
+      blocked.map((list) => `${list.listName}(${list.issues.join(',')})`).join('; '),
+    );
+    (error as Error & { code: string }).code = 'SANCTIONS_LIST_NOT_READY';
+    throw error;
+  }
+
+  private buildListReadiness(listName: SanctionsListName): SanctionsListReadiness {
+    const entries = this.sanctionsLists.get(listName) ?? [];
+    const metadata = this.sanctionsListMetadata.get(listName);
+    const issues: string[] = [];
+
+    if (entries.length === 0) issues.push('empty');
+    if (!metadata) {
+      issues.push('missing_metadata');
+    } else {
+      const updatedAtMs = Date.parse(metadata.updatedAt);
+      if (!Number.isFinite(updatedAtMs)) {
+        issues.push('invalid_updated_at');
+      } else if (updatedAtMs > Date.now() + 5 * 60 * 1000) {
+        issues.push('future_updated_at');
+      } else if (Date.now() - updatedAtMs > this.listMaxAgeMs) {
+        issues.push('stale');
+      }
+      if (isProductionRuntime() && (!metadata.signingKeyId || !metadata.signature)) {
+        issues.push('unsigned');
+      }
+    }
+
+    return {
+      listName,
+      entryCount: entries.length,
+      ready: issues.length === 0,
+      issues,
+      updatedAt: metadata?.updatedAt,
+      sourceDigest: metadata?.sourceDigest,
+      signingKeyId: metadata?.signingKeyId,
+    };
+  }
+
+  private assertListSignatureTrusted(
+    listName: SanctionsListName,
+    entries: SanctionsListEntry[],
+    metadata: SanctionsListMetadata,
+  ): void {
+    if (!isProductionRuntime()) return;
+
+    if (!metadata.signingKeyId || !metadata.signature) {
+      const error = new Error(`Production sanctions list update requires a signed manifest for ${listName}`);
+      (error as Error & { code: string }).code = 'SANCTIONS_LIST_SIGNATURE_REQUIRED';
+      throw error;
+    }
+
+    const publicKey = this.resolveTrustedListPublicKey(metadata.signingKeyId);
+    if (!publicKey) {
+      const error = new Error(`No trusted sanctions list key configured for ${metadata.signingKeyId}`);
+      (error as Error & { code: string }).code = 'SANCTIONS_LIST_TRUSTED_KEY_NOT_FOUND';
+      throw error;
+    }
+
+    const payload = buildSanctionsListSignaturePayload(listName, entries, metadata);
+    const valid = crypto.verify(
+      null,
+      Buffer.from(payload),
+      publicKey,
+      Buffer.from(metadata.signature, 'base64url'),
+    );
+
+    if (!valid) {
+      const error = new Error(`Invalid sanctions list manifest signature for ${listName}`);
+      (error as Error & { code: string }).code = 'SANCTIONS_LIST_SIGNATURE_INVALID';
+      throw error;
+    }
+  }
+
+  private resolveTrustedListPublicKey(signingKeyId: string): crypto.KeyObject | null {
+    const rawKeys = process.env.SANCTIONS_LIST_SIGNATURE_PUBLIC_KEYS_JSON;
+    if (!rawKeys) return null;
+
+    try {
+      const keys = JSON.parse(rawKeys) as Record<string, string>;
+      const encodedKey = keys[signingKeyId];
+      if (!encodedKey) return null;
+
+      const keyMaterial = encodedKey.includes('BEGIN PUBLIC KEY')
+        ? encodedKey
+        : Buffer.from(encodedKey, 'base64').toString('utf8');
+      return crypto.createPublicKey(keyMaterial);
+    } catch {
+      return null;
+    }
+  }
+
+  private resolveListMaxAgeMs(): number {
+    const configuredHours = Number(process.env.SANCTIONS_LIST_MAX_AGE_HOURS ?? '24');
+    const hours = Number.isFinite(configuredHours) && configuredHours > 0 ? configuredHours : 24;
+    return hours * 60 * 60 * 1000;
   }
 }
 

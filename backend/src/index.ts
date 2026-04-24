@@ -16,6 +16,13 @@ import enterpriseIntegrationRoutes, { oidcPublicRouter } from './routes/enterpri
 import enterpriseComplianceRoutes from './routes/enterprise/compliance';
 import { authMiddleware } from './middleware/auth';
 import { createRateLimiter } from './middleware/rateLimit';
+import {
+  checkedProductionSafetyControls,
+  collectProductionSafetyViolations,
+  isMetricsAccessConfigured,
+  isMetricsEndpointDisabled,
+  isMetricsRequestAuthorized,
+} from './services/production-safety';
 
 // ---------------------------------------------------------------------------
 // Logger
@@ -226,8 +233,29 @@ app.get('/ready', publicHealthLimiter, async (_req: Request, res: Response) => {
   });
 });
 
-// Metrics endpoint (unauthenticated — bind to internal port in production)
-app.get('/metrics', metricsLimiter, async (_req: Request, res: Response) => {
+function requireMetricsAccess(req: Request, res: Response, next: NextFunction): void {
+  if (isMetricsEndpointDisabled()) {
+    res.status(404).json({ error: 'Metrics endpoint disabled', code: 'METRICS_DISABLED' });
+    return;
+  }
+
+  if (!isMetricsAccessConfigured()) {
+    res.status(503).json({
+      error: 'Metrics access is not configured for production',
+      code: 'METRICS_ACCESS_NOT_CONFIGURED',
+    });
+    return;
+  }
+
+  if (!isMetricsRequestAuthorized(req.get('authorization'))) {
+    res.status(401).json({ error: 'Metrics authorization required', code: 'METRICS_AUTH_REQUIRED' });
+    return;
+  }
+
+  next();
+}
+
+app.get('/metrics', metricsLimiter, requireMetricsAccess, async (_req: Request, res: Response) => {
   res.set('Content-Type', metricsRegistry.contentType);
   res.end(await metricsRegistry.metrics());
 });
@@ -312,47 +340,24 @@ const PORT = parseInt(process.env.PORT ?? '4000', 10);
 function validateProductionConfig(): void {
   if (process.env.NODE_ENV !== 'production') return;
 
-  const unsafeFlags: { flag: string; value: string | undefined; risk: string }[] = [
-    {
-      flag: 'ALLOW_LOCAL_CREDENTIAL_SIGNING',
-      value: process.env.ALLOW_LOCAL_CREDENTIAL_SIGNING,
-      risk: 'Bypasses KMS/HSM — signing keys in env vars or local files',
-    },
-    {
-      flag: 'ALLOW_LEGACY_HMAC_CREDENTIAL_SIGNING',
-      value: process.env.ALLOW_LEGACY_HMAC_CREDENTIAL_SIGNING,
-      risk: 'Enables deprecated HMAC credential verification path',
-    },
-    {
-      flag: 'ALLOW_PUBLIC_OIDC_CLIENTS',
-      value: process.env.ALLOW_PUBLIC_OIDC_CLIENTS,
-      risk: 'Allows OIDC clients without client_secret authentication',
-    },
-    {
-      flag: 'ALLOW_UNSAFE_TEE_ATTESTATION',
-      value: process.env.ALLOW_UNSAFE_TEE_ATTESTATION,
-      risk: 'Disables DCAP quote verification — attestation is decorative only',
-    },
-  ];
-
-  const violations = unsafeFlags.filter((f) => f.value === 'true');
+  const violations = collectProductionSafetyViolations();
 
   if (violations.length > 0) {
     for (const v of violations) {
-      logger.error('CRITICAL_SECURITY_VIOLATION: unsafe flag enabled in production', {
-        flag: v.flag,
+      logger.error('CRITICAL_SECURITY_VIOLATION: production safety control failed', {
+        control: v.control,
         risk: v.risk,
       });
     }
     throw new Error(
-      `Production startup blocked: ${violations.length} unsafe flag(s) detected: ` +
-      `${violations.map((v) => v.flag).join(', ')}. ` +
-      'Set all ALLOW_* flags to false or remove them from env before deploying.',
+      `Production startup blocked: ${violations.length} unsafe control(s) detected: ` +
+      `${violations.map((v) => v.control).join(', ')}. ` +
+      'Fix production safety controls before deploying.',
     );
   }
 
   logger.info('production_safety_gates_passed', {
-    checkedFlags: unsafeFlags.map((f) => f.flag),
+    checkedControls: checkedProductionSafetyControls(),
   });
 }
 

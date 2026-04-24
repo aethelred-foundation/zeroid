@@ -8,7 +8,7 @@ const redisStore: Record<string, string> = {};
 
 jest.mock('../src/index', () => ({
   prisma: {
-    apiKey: {
+    aPIKey: {
       create: mockApiKeyCreate,
       findMany: mockApiKeyFindMany,
       findFirst: mockApiKeyFindFirst,
