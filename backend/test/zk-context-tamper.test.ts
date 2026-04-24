@@ -6,13 +6,15 @@
  *
  *   1. Context commitment mismatch (step 5)
  *   2. Audience swap (step 2)
- *   3. Context commitment not in publicSignals (step 7)
- *   4. Nonce reuse / replay (step 3)
- *   5. Expired proof (step 1)
- *   6. Future issuedAt (step 1)
- *   7. Modified subjectId in context (step 5)
- *   8. Modified credentialId in context (step 5)
- *   9. Happy-path valid proof (all 8 steps pass)
+ *   3. Metadata rebinding (audience/issuedAt mismatch with nonce record)
+ *   4. Claims commitment not in publicSignals (step 7)
+ *   5. Context commitment not in publicSignals (step 7)
+ *   6. Nonce reuse / replay (step 3)
+ *   7. Expired proof (step 1)
+ *   8. Future issuedAt (step 1)
+ *   9. Modified subjectId in context (step 5)
+ *   10. Modified credentialId in context (step 5)
+ *   11. Happy-path valid proof (all 8 steps pass)
  */
 
 import request from 'supertest';
@@ -24,15 +26,20 @@ import crypto, { createHash } from 'crypto';
 // ---------------------------------------------------------------------------
 
 const redisStore: Record<string, string> = {};
-const redisSortedSets: Record<string, Array<{ score: number; member: string }>> = {};
+const redisSortedSets: Record<
+  string,
+  Array<{ score: number; member: string }>
+> = {};
 const issuedTokenHashes: Record<string, string> = {};
 
 const mockRedis = {
   get: jest.fn(async (key: string) => redisStore[key] ?? null),
-  set: jest.fn(async (key: string, value: string, _mode?: string, _ttl?: number) => {
-    redisStore[key] = value;
-    return 'OK';
-  }),
+  set: jest.fn(
+    async (key: string, value: string, _mode?: string, _ttl?: number) => {
+      redisStore[key] = value;
+      return 'OK';
+    },
+  ),
   del: jest.fn(async (key: string) => {
     delete redisStore[key];
     return 1;
@@ -118,7 +125,13 @@ jest.mock('../src/services/zkproof', () => ({
   zkProofService: {
     generateProof: jest.fn(async () => ({
       proofId: 'proof-mock-id',
-      proof: { pi_a: ['1'], pi_b: [['1']], pi_c: ['1'], protocol: 'groth16', curve: 'bn128' },
+      proof: {
+        pi_a: ['1'],
+        pi_b: [['1']],
+        pi_c: ['1'],
+        protocol: 'groth16',
+        curve: 'bn128',
+      },
       publicSignals: ['1', '2'],
       circuitName: 'ageCheck',
       generatedAt: new Date().toISOString(),
@@ -150,7 +163,11 @@ jest.mock('../src/services/credential', () => ({
     issueCredential: jest.fn(async () => ({ id: 'cred-1' })),
     queryCredentials: jest.fn(async () => ({ credentials: [], total: 0 })),
     revokeCredential: jest.fn(async () => ({})),
-    verifyCredential: jest.fn(async () => ({ valid: true, checks: [], credential: {} })),
+    verifyCredential: jest.fn(async () => ({
+      valid: true,
+      checks: [],
+      credential: {},
+    })),
     exportCredentialEvidence: jest.fn(async () => ({
       formatVersion: 'zeroid.credential_evidence_export.v1',
       exportedAt: new Date().toISOString(),
@@ -230,7 +247,9 @@ import * as jose from 'jose';
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-const JWT_SECRET = new TextEncoder().encode(process.env.JWT_SECRET ?? 'test-secret-that-is-at-least-32-chars!!');
+const JWT_SECRET = new TextEncoder().encode(
+  process.env.JWT_SECRET ?? 'test-secret-that-is-at-least-32-chars!!',
+);
 const JWT_ISSUER = 'zeroid-api';
 const JWT_AUDIENCE = 'zeroid-client';
 
@@ -238,6 +257,33 @@ const VERIFIER_ID = 'verifier-1';
 const VERIFIER_DID = 'did:aethelred:verifier';
 const SUBJECT_ID = 'subject-1';
 const CREDENTIAL_ID = 'cred-abc-123';
+const CREDENTIAL_CLAIMS = { birthYear: 1990, country: 'AE' };
+
+function canonicalizeClaims(value: unknown): string {
+  if (value === null || value === undefined) return JSON.stringify(value);
+  if (typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) {
+    return '[' + value.map((item) => canonicalizeClaims(item)).join(',') + ']';
+  }
+
+  const obj = value as Record<string, unknown>;
+  const keys = Object.keys(obj).sort();
+  const entries = keys.map(
+    (key) => JSON.stringify(key) + ':' + canonicalizeClaims(obj[key]),
+  );
+  return '{' + entries.join(',') + '}';
+}
+
+function computeClaimsHash(claims: Record<string, unknown>): string {
+  return createHash('sha256').update(canonicalizeClaims(claims)).digest('hex');
+}
+
+function digestToFieldElement(hexDigest: string): string {
+  return BigInt('0x' + hexDigest.substring(0, 62)).toString();
+}
+
+const CREDENTIAL_CLAIMS_HASH = computeClaimsHash(CREDENTIAL_CLAIMS);
+const CREDENTIAL_CLAIMS_FIELD = digestToFieldElement(CREDENTIAL_CLAIMS_HASH);
 
 async function makeToken(
   overrides: Partial<{
@@ -268,14 +314,21 @@ async function makeToken(
   }
 
   const token = await builder.sign(JWT_SECRET);
-  issuedTokenHashes[jti] = crypto.createHash('sha256').update(token).digest('hex');
+  issuedTokenHashes[jti] = crypto
+    .createHash('sha256')
+    .update(token)
+    .digest('hex');
   return token;
 }
 
 function stubAuthFor(identityId: string, did: string, sessionId = 'session-1') {
   mockRedis.get.mockImplementation(async (key: string) => {
     if (key === `session:${sessionId}`) {
-      return JSON.stringify({ identityId, did, tokenHash: issuedTokenHashes[sessionId] });
+      return JSON.stringify({
+        identityId,
+        did,
+        tokenHash: issuedTokenHashes[sessionId],
+      });
     }
     if (key.startsWith('revoked:')) return null;
     return redisStore[key] ?? null;
@@ -314,36 +367,54 @@ function seedNonce(
   credentialId: string,
   issuedAt: number,
   contextCommitmentField: string,
+  claimsHashField = CREDENTIAL_CLAIMS_FIELD,
 ) {
   redisStore[`proof:nonce:${nonce}`] = JSON.stringify({
     audience,
     subjectId,
     credentialId,
     issuedAt,
+    claimsHashField,
     contextCommitmentField,
   });
 }
 
 /** Build a valid proof payload that passes all 8 verification steps. */
-function buildValidPayload(overrides: Partial<{
-  nonce: string;
-  audience: string;
-  contextCommitment: string;
-  issuedAt: number;
-  publicSignals: string[];
-}> = {}) {
+function buildValidPayload(
+  overrides: Partial<{
+    nonce: string;
+    audience: string;
+    contextCommitment: string;
+    issuedAt: number;
+    publicSignals: string[];
+  }> = {},
+) {
   const nonce = overrides.nonce ?? 'nonce-1234567890abcdef';
   const audience = overrides.audience ?? VERIFIER_ID;
   const issuedAt = overrides.issuedAt ?? Date.now() - 1000;
-  const ctxField = overrides.contextCommitment ?? computeContextCommitmentField(
-    nonce, audience, SUBJECT_ID, CREDENTIAL_ID, issuedAt,
-  );
-  const publicSignals = overrides.publicSignals ?? ['1', '2', ctxField];
+  const ctxField =
+    overrides.contextCommitment ??
+    computeContextCommitmentField(
+      nonce,
+      audience,
+      SUBJECT_ID,
+      CREDENTIAL_ID,
+      issuedAt,
+    );
+  const publicSignals = overrides.publicSignals ?? [
+    CREDENTIAL_CLAIMS_FIELD,
+    '2',
+    ctxField,
+  ];
 
   return {
     proof: {
       pi_a: ['1', '2', '3'],
-      pi_b: [['1', '2'], ['3', '4'], ['5', '6']],
+      pi_b: [
+        ['1', '2'],
+        ['3', '4'],
+        ['5', '6'],
+      ],
       pi_c: ['1', '2', '3'],
       protocol: 'groth16',
       curve: 'bn128',
@@ -365,6 +436,20 @@ beforeEach(() => {
   for (const k of Object.keys(redisStore)) delete redisStore[k];
   for (const k of Object.keys(redisSortedSets)) delete redisSortedSets[k];
   for (const k of Object.keys(issuedTokenHashes)) delete issuedTokenHashes[k];
+
+  const { credentialService } = require('../src/services/credential');
+  credentialService.getCredential.mockResolvedValue({
+    id: CREDENTIAL_ID,
+    credentialType: 'age_verification',
+    issuerId: 'issuer-1',
+    subjectId: SUBJECT_ID,
+    claims: CREDENTIAL_CLAIMS,
+    claimsHash: CREDENTIAL_CLAIMS_HASH,
+    proof: {},
+    status: 'ACTIVE',
+    issuedAt: new Date(),
+    expiresAt: null,
+  });
 });
 
 // =========================================================================
@@ -380,8 +465,21 @@ describe('ZK-01: Context-tamper verification', () => {
 
     const nonce = 'nonce-ctx-mismatch-test';
     const issuedAt = Date.now() - 2000;
-    const correctField = computeContextCommitmentField(nonce, VERIFIER_ID, SUBJECT_ID, CREDENTIAL_ID, issuedAt);
-    seedNonce(nonce, VERIFIER_ID, SUBJECT_ID, CREDENTIAL_ID, issuedAt, correctField);
+    const correctField = computeContextCommitmentField(
+      nonce,
+      VERIFIER_ID,
+      SUBJECT_ID,
+      CREDENTIAL_ID,
+      issuedAt,
+    );
+    seedNonce(
+      nonce,
+      VERIFIER_ID,
+      SUBJECT_ID,
+      CREDENTIAL_ID,
+      issuedAt,
+      correctField,
+    );
 
     // Supply a wrong contextCommitment
     const wrongField = '999999999999999999999999999999';
@@ -390,7 +488,7 @@ describe('ZK-01: Context-tamper verification', () => {
       audience: VERIFIER_ID,
       contextCommitment: wrongField,
       issuedAt,
-      publicSignals: ['1', '2', wrongField],
+      publicSignals: [CREDENTIAL_CLAIMS_FIELD, '2', wrongField],
     });
 
     const res = await request(app as Express)
@@ -424,7 +522,131 @@ describe('ZK-01: Context-tamper verification', () => {
   });
 
   // -----------------------------------------------------------------------
-  // 3. Context commitment not in publicSignals
+  // 3. Context metadata rebinding
+  // -----------------------------------------------------------------------
+  it('rejects when body audience differs from the audience stored in the nonce record', async () => {
+    const token = await makeToken({ sub: VERIFIER_ID, did: VERIFIER_DID });
+    stubAuthFor(VERIFIER_ID, VERIFIER_DID);
+
+    const nonce = 'nonce-audience-rebind';
+    const issuedAt = Date.now() - 1000;
+    const ctxField = computeContextCommitmentField(
+      nonce,
+      VERIFIER_DID,
+      SUBJECT_ID,
+      CREDENTIAL_ID,
+      issuedAt,
+    );
+    seedNonce(
+      nonce,
+      VERIFIER_DID,
+      SUBJECT_ID,
+      CREDENTIAL_ID,
+      issuedAt,
+      ctxField,
+    );
+
+    const payload = buildValidPayload({
+      nonce,
+      audience: VERIFIER_ID,
+      contextCommitment: ctxField,
+      issuedAt,
+      publicSignals: [CREDENTIAL_CLAIMS_FIELD, '2', ctxField],
+    });
+
+    const res = await request(app as Express)
+      .post('/api/v1/verification/zk-verify')
+      .set('Authorization', `Bearer ${token}`)
+      .send(payload);
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('PROOF_CONTEXT_METADATA_MISMATCH');
+  });
+
+  it('rejects when body issuedAt differs from the issuedAt stored in the nonce record', async () => {
+    const token = await makeToken({ sub: VERIFIER_ID, did: VERIFIER_DID });
+    stubAuthFor(VERIFIER_ID, VERIFIER_DID);
+
+    const nonce = 'nonce-issued-at-rebind';
+    const nonceIssuedAt = Date.now() - 2000;
+    const bodyIssuedAt = Date.now() - 1000;
+    const ctxField = computeContextCommitmentField(
+      nonce,
+      VERIFIER_ID,
+      SUBJECT_ID,
+      CREDENTIAL_ID,
+      nonceIssuedAt,
+    );
+    seedNonce(
+      nonce,
+      VERIFIER_ID,
+      SUBJECT_ID,
+      CREDENTIAL_ID,
+      nonceIssuedAt,
+      ctxField,
+    );
+
+    const payload = buildValidPayload({
+      nonce,
+      audience: VERIFIER_ID,
+      contextCommitment: ctxField,
+      issuedAt: bodyIssuedAt,
+      publicSignals: [CREDENTIAL_CLAIMS_FIELD, '2', ctxField],
+    });
+
+    const res = await request(app as Express)
+      .post('/api/v1/verification/zk-verify')
+      .set('Authorization', `Bearer ${token}`)
+      .send(payload);
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('PROOF_CONTEXT_METADATA_MISMATCH');
+  });
+
+  // -----------------------------------------------------------------------
+  // 4. Claims commitment not in publicSignals
+  // -----------------------------------------------------------------------
+  it('rejects when claimsHash is not the first public signal', async () => {
+    const token = await makeToken({ sub: VERIFIER_ID, did: VERIFIER_DID });
+    stubAuthFor(VERIFIER_ID, VERIFIER_DID);
+
+    const nonce = 'nonce-claims-signal';
+    const issuedAt = Date.now() - 1000;
+    const ctxField = computeContextCommitmentField(
+      nonce,
+      VERIFIER_ID,
+      SUBJECT_ID,
+      CREDENTIAL_ID,
+      issuedAt,
+    );
+    seedNonce(
+      nonce,
+      VERIFIER_ID,
+      SUBJECT_ID,
+      CREDENTIAL_ID,
+      issuedAt,
+      ctxField,
+    );
+
+    const payload = buildValidPayload({
+      nonce,
+      audience: VERIFIER_ID,
+      contextCommitment: ctxField,
+      issuedAt,
+      publicSignals: ['999999', '2', ctxField],
+    });
+
+    const res = await request(app as Express)
+      .post('/api/v1/verification/zk-verify')
+      .set('Authorization', `Bearer ${token}`)
+      .send(payload);
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('PROOF_CLAIMS_HASH_NOT_COMMITTED');
+  });
+
+  // -----------------------------------------------------------------------
+  // 5. Context commitment not in publicSignals
   // -----------------------------------------------------------------------
   it('rejects when contextCommitment is valid but not present in publicSignals array', async () => {
     const token = await makeToken({ sub: VERIFIER_ID, did: VERIFIER_DID });
@@ -432,8 +654,21 @@ describe('ZK-01: Context-tamper verification', () => {
 
     const nonce = 'nonce-not-in-signals';
     const issuedAt = Date.now() - 1000;
-    const ctxField = computeContextCommitmentField(nonce, VERIFIER_ID, SUBJECT_ID, CREDENTIAL_ID, issuedAt);
-    seedNonce(nonce, VERIFIER_ID, SUBJECT_ID, CREDENTIAL_ID, issuedAt, ctxField);
+    const ctxField = computeContextCommitmentField(
+      nonce,
+      VERIFIER_ID,
+      SUBJECT_ID,
+      CREDENTIAL_ID,
+      issuedAt,
+    );
+    seedNonce(
+      nonce,
+      VERIFIER_ID,
+      SUBJECT_ID,
+      CREDENTIAL_ID,
+      issuedAt,
+      ctxField,
+    );
 
     // publicSignals does NOT include ctxField
     const payload = buildValidPayload({
@@ -441,7 +676,7 @@ describe('ZK-01: Context-tamper verification', () => {
       audience: VERIFIER_ID,
       contextCommitment: ctxField,
       issuedAt,
-      publicSignals: ['1', '2', '3'], // missing ctxField
+      publicSignals: [CREDENTIAL_CLAIMS_FIELD, '2', '3'], // missing ctxField
     });
 
     const res = await request(app as Express)
@@ -462,15 +697,28 @@ describe('ZK-01: Context-tamper verification', () => {
 
     const nonce = 'nonce-replay-attempt1';
     const issuedAt = Date.now() - 1000;
-    const ctxField = computeContextCommitmentField(nonce, VERIFIER_ID, SUBJECT_ID, CREDENTIAL_ID, issuedAt);
-    seedNonce(nonce, VERIFIER_ID, SUBJECT_ID, CREDENTIAL_ID, issuedAt, ctxField);
+    const ctxField = computeContextCommitmentField(
+      nonce,
+      VERIFIER_ID,
+      SUBJECT_ID,
+      CREDENTIAL_ID,
+      issuedAt,
+    );
+    seedNonce(
+      nonce,
+      VERIFIER_ID,
+      SUBJECT_ID,
+      CREDENTIAL_ID,
+      issuedAt,
+      ctxField,
+    );
 
     const payload = buildValidPayload({
       nonce,
       audience: VERIFIER_ID,
       contextCommitment: ctxField,
       issuedAt,
-      publicSignals: ['1', '2', ctxField],
+      publicSignals: [CREDENTIAL_CLAIMS_FIELD, '2', ctxField],
     });
 
     // First verification succeeds
@@ -484,7 +732,14 @@ describe('ZK-01: Context-tamper verification', () => {
 
     // Re-seed the nonce so step 4 doesn't reject (the nonce was deleted on first verify).
     // But the replay key proof:used:<nonce> is now set, so step 3 should reject.
-    seedNonce(nonce, VERIFIER_ID, SUBJECT_ID, CREDENTIAL_ID, issuedAt, ctxField);
+    seedNonce(
+      nonce,
+      VERIFIER_ID,
+      SUBJECT_ID,
+      CREDENTIAL_ID,
+      issuedAt,
+      ctxField,
+    );
 
     const res2 = await request(app as Express)
       .post('/api/v1/verification/zk-verify')
@@ -545,11 +800,30 @@ describe('ZK-01: Context-tamper verification', () => {
 
     // Compute commitment with the WRONG subjectId
     const tampered = 'evil-subject-id';
-    const tamperedField = computeContextCommitmentField(nonce, VERIFIER_ID, tampered, CREDENTIAL_ID, issuedAt);
+    const tamperedField = computeContextCommitmentField(
+      nonce,
+      VERIFIER_ID,
+      tampered,
+      CREDENTIAL_ID,
+      issuedAt,
+    );
 
     // But seed the nonce record with the REAL subjectId
-    const realField = computeContextCommitmentField(nonce, VERIFIER_ID, SUBJECT_ID, CREDENTIAL_ID, issuedAt);
-    seedNonce(nonce, VERIFIER_ID, SUBJECT_ID, CREDENTIAL_ID, issuedAt, realField);
+    const realField = computeContextCommitmentField(
+      nonce,
+      VERIFIER_ID,
+      SUBJECT_ID,
+      CREDENTIAL_ID,
+      issuedAt,
+    );
+    seedNonce(
+      nonce,
+      VERIFIER_ID,
+      SUBJECT_ID,
+      CREDENTIAL_ID,
+      issuedAt,
+      realField,
+    );
 
     // Attacker sends the tampered commitment
     const payload = buildValidPayload({
@@ -557,7 +831,7 @@ describe('ZK-01: Context-tamper verification', () => {
       audience: VERIFIER_ID,
       contextCommitment: tamperedField,
       issuedAt,
-      publicSignals: ['1', '2', tamperedField],
+      publicSignals: [CREDENTIAL_CLAIMS_FIELD, '2', tamperedField],
     });
 
     const res = await request(app as Express)
@@ -581,18 +855,37 @@ describe('ZK-01: Context-tamper verification', () => {
 
     // Compute commitment with the WRONG credentialId
     const tampered = 'evil-credential-id';
-    const tamperedField = computeContextCommitmentField(nonce, VERIFIER_ID, SUBJECT_ID, tampered, issuedAt);
+    const tamperedField = computeContextCommitmentField(
+      nonce,
+      VERIFIER_ID,
+      SUBJECT_ID,
+      tampered,
+      issuedAt,
+    );
 
     // But seed the nonce record with the REAL credentialId
-    const realField = computeContextCommitmentField(nonce, VERIFIER_ID, SUBJECT_ID, CREDENTIAL_ID, issuedAt);
-    seedNonce(nonce, VERIFIER_ID, SUBJECT_ID, CREDENTIAL_ID, issuedAt, realField);
+    const realField = computeContextCommitmentField(
+      nonce,
+      VERIFIER_ID,
+      SUBJECT_ID,
+      CREDENTIAL_ID,
+      issuedAt,
+    );
+    seedNonce(
+      nonce,
+      VERIFIER_ID,
+      SUBJECT_ID,
+      CREDENTIAL_ID,
+      issuedAt,
+      realField,
+    );
 
     const payload = buildValidPayload({
       nonce,
       audience: VERIFIER_ID,
       contextCommitment: tamperedField,
       issuedAt,
-      publicSignals: ['1', '2', tamperedField],
+      publicSignals: [CREDENTIAL_CLAIMS_FIELD, '2', tamperedField],
     });
 
     const res = await request(app as Express)
@@ -613,15 +906,28 @@ describe('ZK-01: Context-tamper verification', () => {
 
     const nonce = 'nonce-happy-path-0001';
     const issuedAt = Date.now() - 1000;
-    const ctxField = computeContextCommitmentField(nonce, VERIFIER_ID, SUBJECT_ID, CREDENTIAL_ID, issuedAt);
-    seedNonce(nonce, VERIFIER_ID, SUBJECT_ID, CREDENTIAL_ID, issuedAt, ctxField);
+    const ctxField = computeContextCommitmentField(
+      nonce,
+      VERIFIER_ID,
+      SUBJECT_ID,
+      CREDENTIAL_ID,
+      issuedAt,
+    );
+    seedNonce(
+      nonce,
+      VERIFIER_ID,
+      SUBJECT_ID,
+      CREDENTIAL_ID,
+      issuedAt,
+      ctxField,
+    );
 
     const payload = buildValidPayload({
       nonce,
       audience: VERIFIER_ID,
       contextCommitment: ctxField,
       issuedAt,
-      publicSignals: ['1', '2', ctxField],
+      publicSignals: [CREDENTIAL_CLAIMS_FIELD, '2', ctxField],
     });
 
     const res = await request(app as Express)

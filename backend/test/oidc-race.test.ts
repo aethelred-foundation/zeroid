@@ -15,7 +15,10 @@ const { publicKey, privateKey } = crypto.generateKeyPairSync('rsa', {
   modulusLength: 2048,
 });
 
-const PRIVATE_PEM = privateKey.export({ type: 'pkcs8', format: 'pem' }) as string;
+const PRIVATE_PEM = privateKey.export({
+  type: 'pkcs8',
+  format: 'pem',
+}) as string;
 const PUBLIC_PEM = publicKey.export({ type: 'spki', format: 'pem' }) as string;
 
 process.env.OIDC_SIGNING_PRIVATE_KEY = PRIVATE_PEM;
@@ -23,22 +26,26 @@ process.env.OIDC_SIGNING_PUBLIC_KEY = PUBLIC_PEM;
 process.env.JWT_SECRET = 'test-jwt-secret-that-is-at-least-32-chars!!';
 process.env.NODE_ENV = 'test';
 
-jest.mock('winston', () => ({
-  createLogger: jest.fn(() => ({
-    info: jest.fn(),
-    warn: jest.fn(),
-    error: jest.fn(),
-    debug: jest.fn(),
-  })),
-  format: {
-    combine: jest.fn(),
-    timestamp: jest.fn(),
-    json: jest.fn(),
-  },
-  transports: {
-    Console: jest.fn(),
-  },
-}), { virtual: true });
+jest.mock(
+  'winston',
+  () => ({
+    createLogger: jest.fn(() => ({
+      info: jest.fn(),
+      warn: jest.fn(),
+      error: jest.fn(),
+      debug: jest.fn(),
+    })),
+    format: {
+      combine: jest.fn(),
+      timestamp: jest.fn(),
+      json: jest.fn(),
+    },
+    transports: {
+      Console: jest.fn(),
+    },
+  }),
+  { virtual: true },
+);
 
 // ---------------------------------------------------------------------------
 // Functional Redis mock backed by a shared Map
@@ -48,10 +55,12 @@ const setStore = new Map<string, Set<string>>();
 
 const redisMock = {
   get: jest.fn(async (key: string) => store.get(key) ?? null),
-  set: jest.fn(async (key: string, value: string, _ex?: string, _ttl?: number) => {
-    store.set(key, value);
-    return 'OK';
-  }),
+  set: jest.fn(
+    async (key: string, value: string, _ex?: string, _ttl?: number) => {
+      store.set(key, value);
+      return 'OK';
+    },
+  ),
   del: jest.fn(async (key: string) => {
     const had = store.has(key) || setStore.has(key);
     store.delete(key);
@@ -64,13 +73,26 @@ const redisMock = {
     const s = setStore.get(key)!;
     let added = 0;
     for (const m of members) {
-      if (!s.has(m)) { s.add(m); added++; }
+      if (!s.has(m)) {
+        s.add(m);
+        added++;
+      }
     }
     return added;
   }),
   smembers: jest.fn(async (key: string) => {
     const s = setStore.get(key);
     return s ? [...s] : [];
+  }),
+  srem: jest.fn(async (key: string, ...members: string[]) => {
+    const s = setStore.get(key);
+    if (!s) return 0;
+    let removed = 0;
+    for (const member of members) {
+      if (s.delete(member)) removed++;
+    }
+    if (s.size === 0) setStore.delete(key);
+    return removed;
   }),
   expire: jest.fn(async () => 1),
   ttl: jest.fn(async (key: string) => {
@@ -137,7 +159,11 @@ async function registerTestClient(bridge: OIDCBridge) {
   });
 }
 
-async function authorizeCode(bridge: OIDCBridge, clientId: string, subjectId: string) {
+async function authorizeCode(
+  bridge: OIDCBridge,
+  clientId: string,
+  subjectId: string,
+) {
   return bridge.authorize(
     {
       clientId,
@@ -186,7 +212,11 @@ describe('OIDC race-condition safety', () => {
   // -----------------------------------------------------------------------
   test('concurrent auth code exchange — exactly one wins, other gets invalid_grant', async () => {
     const client = await registerTestClient(bridge);
-    const { code } = await authorizeCode(bridge, client.clientId, 'user-race-1');
+    const { code } = await authorizeCode(
+      bridge,
+      client.clientId,
+      'user-race-1',
+    );
 
     const exchangeRequest = {
       grantType: 'authorization_code' as const,
@@ -223,7 +253,11 @@ describe('OIDC race-condition safety', () => {
   // -----------------------------------------------------------------------
   test('concurrent refresh token rotation — exactly one wins, other gets invalid_grant', async () => {
     const client = await registerTestClient(bridge);
-    const { code } = await authorizeCode(bridge, client.clientId, 'user-race-2');
+    const { code } = await authorizeCode(
+      bridge,
+      client.clientId,
+      'user-race-2',
+    );
 
     // First, obtain a refresh token via normal auth code exchange
     const tokens = await bridge.exchangeToken({
@@ -268,7 +302,11 @@ describe('OIDC race-condition safety', () => {
   // -----------------------------------------------------------------------
   test('auth code replay after successful exchange is rejected', async () => {
     const client = await registerTestClient(bridge);
-    const { code } = await authorizeCode(bridge, client.clientId, 'user-replay-1');
+    const { code } = await authorizeCode(
+      bridge,
+      client.clientId,
+      'user-replay-1',
+    );
 
     const exchangeRequest = {
       grantType: 'authorization_code' as const,
@@ -283,7 +321,9 @@ describe('OIDC race-condition safety', () => {
     expect(tokens.access_token).toBeDefined();
 
     // Second attempt with same code must fail
-    await expect(bridge.exchangeToken(exchangeRequest)).rejects.toThrow(OIDCError);
+    await expect(bridge.exchangeToken(exchangeRequest)).rejects.toThrow(
+      OIDCError,
+    );
 
     try {
       await bridge.exchangeToken(exchangeRequest);
@@ -298,7 +338,11 @@ describe('OIDC race-condition safety', () => {
   // -----------------------------------------------------------------------
   test('old refresh token is rejected after rotation', async () => {
     const client = await registerTestClient(bridge);
-    const { code } = await authorizeCode(bridge, client.clientId, 'user-replay-2');
+    const { code } = await authorizeCode(
+      bridge,
+      client.clientId,
+      'user-replay-2',
+    );
 
     const tokens = await bridge.exchangeToken({
       grantType: 'authorization_code',

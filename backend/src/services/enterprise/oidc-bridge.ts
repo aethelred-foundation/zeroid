@@ -3,11 +3,17 @@ import { createLogger, format, transports } from 'winston';
 import crypto from 'crypto';
 import { redis } from '../../index';
 
-const SUPPORTED_CLIENT_AUTH_METHODS = ['client_secret_basic', 'client_secret_post', 'none'] as const;
+const SUPPORTED_CLIENT_AUTH_METHODS = [
+  'client_secret_basic',
+  'client_secret_post',
+  'none',
+] as const;
 const SUPPORTED_SIGNING_ALGORITHMS = ['RS256', 'PS256'] as const;
-const ALLOW_PUBLIC_OIDC_CLIENTS = process.env.ALLOW_PUBLIC_OIDC_CLIENTS === 'true' && process.env.NODE_ENV !== 'production';
+const ALLOW_PUBLIC_OIDC_CLIENTS =
+  process.env.ALLOW_PUBLIC_OIDC_CLIENTS === 'true' &&
+  process.env.NODE_ENV !== 'production';
 
-type SupportedSigningAlgorithm = typeof SUPPORTED_SIGNING_ALGORITHMS[number];
+type SupportedSigningAlgorithm = (typeof SUPPORTED_SIGNING_ALGORITHMS)[number];
 
 // ---------------------------------------------------------------------------
 // Logger
@@ -26,9 +32,17 @@ export const OIDCClientRegistrationSchema = z.object({
   clientName: z.string().min(1),
   redirectUris: z.array(z.string().url()).min(1),
   postLogoutRedirectUris: z.array(z.string().url()).default([]),
-  grantTypes: z.array(z.enum(['authorization_code', 'client_credentials', 'refresh_token'])).default(['authorization_code']),
-  responseTypes: z.array(z.enum(['code', 'id_token', 'token'])).default(['code']),
-  tokenEndpointAuthMethod: z.enum(SUPPORTED_CLIENT_AUTH_METHODS).default('client_secret_basic'),
+  grantTypes: z
+    .array(
+      z.enum(['authorization_code', 'client_credentials', 'refresh_token']),
+    )
+    .default(['authorization_code']),
+  responseTypes: z
+    .array(z.enum(['code', 'id_token', 'token']))
+    .default(['code']),
+  tokenEndpointAuthMethod: z
+    .enum(SUPPORTED_CLIENT_AUTH_METHODS)
+    .default('client_secret_basic'),
   scopes: z.array(z.string()).default(['openid', 'profile']),
   contacts: z.array(z.string().email()).default([]),
   logoUri: z.string().url().optional(),
@@ -40,7 +54,9 @@ export const OIDCClientRegistrationSchema = z.object({
   requirePkce: z.boolean().default(true),
 });
 
-export type OIDCClientRegistration = z.infer<typeof OIDCClientRegistrationSchema>;
+export type OIDCClientRegistration = z.infer<
+  typeof OIDCClientRegistrationSchema
+>;
 
 export const AuthorizationRequestSchema = z.object({
   clientId: z.string(),
@@ -61,7 +77,11 @@ export const AuthorizationRequestSchema = z.object({
 export type AuthorizationRequest = z.infer<typeof AuthorizationRequestSchema>;
 
 export const TokenRequestSchema = z.object({
-  grantType: z.enum(['authorization_code', 'client_credentials', 'refresh_token']),
+  grantType: z.enum([
+    'authorization_code',
+    'client_credentials',
+    'refresh_token',
+  ]),
   code: z.string().optional(),
   redirectUri: z.string().url().optional(),
   clientId: z.string(),
@@ -89,13 +109,35 @@ export interface OIDCClientRegistrationResult {
 // ---------------------------------------------------------------------------
 const STANDARD_SCOPES: Record<string, string[]> = {
   openid: ['sub', 'iss', 'aud', 'exp', 'iat', 'auth_time', 'nonce'],
-  profile: ['name', 'family_name', 'given_name', 'middle_name', 'preferred_username', 'picture', 'updated_at'],
+  profile: [
+    'name',
+    'family_name',
+    'given_name',
+    'middle_name',
+    'preferred_username',
+    'picture',
+    'updated_at',
+  ],
   email: ['email', 'email_verified'],
   address: ['address'],
   phone: ['phone_number', 'phone_number_verified'],
-  'zeroid:verified_attributes': ['zk_proof_hash', 'credential_types', 'verification_level', 'tee_attestation_id'],
-  'zeroid:kyc_status': ['kyc_level', 'kyc_provider', 'kyc_verified_at', 'kyc_jurisdiction'],
-  'zeroid:age_verified': ['age_over_18', 'age_over_21', 'age_verification_proof'],
+  'zeroid:verified_attributes': [
+    'zk_proof_hash',
+    'credential_types',
+    'verification_level',
+    'tee_attestation_id',
+  ],
+  'zeroid:kyc_status': [
+    'kyc_level',
+    'kyc_provider',
+    'kyc_verified_at',
+    'kyc_jurisdiction',
+  ],
+  'zeroid:age_verified': [
+    'age_over_18',
+    'age_over_21',
+    'age_verification_proof',
+  ],
 };
 
 // ---------------------------------------------------------------------------
@@ -156,11 +198,22 @@ interface IssuedToken {
   revoked: boolean;
 }
 
+interface RefreshTokenRecord {
+  tokenId: string;
+  clientId: string;
+  subjectId: string;
+  scope: string;
+  sessionId?: string;
+}
+
 // ---------------------------------------------------------------------------
 // Redis-backed store (replaces in-memory Maps for multi-instance consistency)
 // ---------------------------------------------------------------------------
 class RedisStore<T> {
-  constructor(private readonly prefix: string, private readonly defaultTtl: number) {}
+  constructor(
+    private readonly prefix: string,
+    private readonly defaultTtl: number,
+  ) {}
 
   private redisKey(key: string): string {
     return `oidc:${this.prefix}:${key}`;
@@ -168,7 +221,12 @@ class RedisStore<T> {
 
   async set(key: string, value: T, ttl?: number): Promise<void> {
     const effectiveTtl = ttl ?? this.defaultTtl;
-    await redis.set(this.redisKey(key), JSON.stringify(value), 'EX', effectiveTtl);
+    await redis.set(
+      this.redisKey(key),
+      JSON.stringify(value),
+      'EX',
+      effectiveTtl,
+    );
   }
 
   async get(key: string): Promise<T | undefined> {
@@ -235,10 +293,10 @@ class RedisStore<T> {
 }
 
 // TTL constants for OIDC state (seconds)
-const OIDC_CLIENT_TTL = 90 * 24 * 3600;       // Registered clients: 90 days
-const OIDC_AUTH_CODE_TTL = 600;                 // Authorization codes: 10 minutes
-const OIDC_SESSION_TTL = 24 * 3600;            // Sessions: 24 hours
-const OIDC_TOKEN_TTL = 3600;                    // Access/ID tokens: 1 hour
+const OIDC_CLIENT_TTL = 90 * 24 * 3600; // Registered clients: 90 days
+const OIDC_AUTH_CODE_TTL = 600; // Authorization codes: 10 minutes
+const OIDC_SESSION_TTL = 24 * 3600; // Sessions: 24 hours
+const OIDC_TOKEN_TTL = 3600; // Access/ID tokens: 1 hour
 const OIDC_REFRESH_TOKEN_TTL = 30 * 24 * 3600; // Refresh tokens: 30 days
 
 // Redis set key for tracking tokens per session (for bulk revocation on logout).
@@ -246,6 +304,8 @@ const OIDC_REFRESH_TOKEN_TTL = 30 * 24 * 3600; // Refresh tokens: 30 days
 // issued under a different session for the same user+client.
 const sessionTokenSetKey = (sessionId: string) =>
   `oidc:session-tokens:${sessionId}`;
+const sessionRefreshTokenSetKey = (sessionId: string) =>
+  `oidc:session-refresh-tokens:${sessionId}`;
 const organizationClientSetKey = (organizationId: string) =>
   `oidc:org-clients:${organizationId}`;
 
@@ -253,11 +313,20 @@ const organizationClientSetKey = (organizationId: string) =>
 // OIDCBridge
 // ---------------------------------------------------------------------------
 export class OIDCBridge {
-  private clients = new RedisStore<RegisteredClient>('clients', OIDC_CLIENT_TTL);
-  private authorizationCodes = new RedisStore<AuthorizationCode>('authcodes', OIDC_AUTH_CODE_TTL);
+  private clients = new RedisStore<RegisteredClient>(
+    'clients',
+    OIDC_CLIENT_TTL,
+  );
+  private authorizationCodes = new RedisStore<AuthorizationCode>(
+    'authcodes',
+    OIDC_AUTH_CODE_TTL,
+  );
   private sessions = new RedisStore<OIDCSession>('sessions', OIDC_SESSION_TTL);
   private issuedTokens = new RedisStore<IssuedToken>('tokens', OIDC_TOKEN_TTL);
-  private refreshTokenMap = new RedisStore<{ tokenId: string; clientId: string; subjectId: string; scope: string; sessionId?: string }>('refresh', OIDC_REFRESH_TOKEN_TTL);
+  private refreshTokenMap = new RedisStore<RefreshTokenRecord>(
+    'refresh',
+    OIDC_REFRESH_TOKEN_TTL,
+  );
 
   private readonly issuer: string;
   private readonly signingAlgorithm: SupportedSigningAlgorithm;
@@ -265,10 +334,16 @@ export class OIDCBridge {
   private signingPrivateKey?: crypto.KeyObject;
   private signingPublicKey?: crypto.KeyObject;
 
-  constructor(issuer = process.env.OIDC_ISSUER_URL ?? 'https://id.zeroid.aethelred.network/enterprise/oidc') {
+  constructor(
+    issuer = process.env.OIDC_ISSUER_URL ??
+      'https://id.zeroid.aethelred.network/enterprise/oidc',
+  ) {
     this.issuer = issuer;
     this.signingAlgorithm = this.resolveSigningAlgorithm();
-    logger.info('OIDCBridge initialized', { issuer, signingAlgorithm: this.signingAlgorithm });
+    logger.info('OIDCBridge initialized', {
+      issuer,
+      signingAlgorithm: this.signingAlgorithm,
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -288,7 +363,11 @@ export class OIDCBridge {
       registration_endpoint: `${this.issuer}/register`,
       scopes_supported: Object.keys(STANDARD_SCOPES),
       response_types_supported: ['code'],
-      grant_types_supported: ['authorization_code', 'client_credentials', 'refresh_token'],
+      grant_types_supported: [
+        'authorization_code',
+        'client_credentials',
+        'refresh_token',
+      ],
       subject_types_supported: ['public', 'pairwise'],
       id_token_signing_alg_values_supported: [this.signingAlgorithm],
       id_token_encryption_alg_values_supported: ['RSA-OAEP', 'A256KW'],
@@ -303,21 +382,28 @@ export class OIDCBridge {
   }
 
   getJWKS(): Record<string, unknown> {
-    const jwk = this.getSigningPublicKey().export({ format: 'jwk' }) as Record<string, unknown>;
+    const jwk = this.getSigningPublicKey().export({ format: 'jwk' }) as Record<
+      string,
+      unknown
+    >;
     return {
-      keys: [{
-        ...jwk,
-        use: 'sig',
-        alg: this.signingAlgorithm,
-        kid: this.getSigningKeyId(),
-      }],
+      keys: [
+        {
+          ...jwk,
+          use: 'sig',
+          alg: this.signingAlgorithm,
+          kid: this.getSigningKeyId(),
+        },
+      ],
     };
   }
 
   // -------------------------------------------------------------------------
   // Dynamic client registration
   // -------------------------------------------------------------------------
-  async registerClient(registration: OIDCClientRegistration): Promise<OIDCClientRegistrationResult>;
+  async registerClient(
+    registration: OIDCClientRegistration,
+  ): Promise<OIDCClientRegistrationResult>;
   async registerClient(
     registration: OIDCClientRegistration,
     ownership: {
@@ -335,7 +421,8 @@ export class OIDCBridge {
     },
   ): Promise<OIDCClientRegistrationResult> {
     const parsed = OIDCClientRegistrationSchema.parse(registration);
-    const requestedSigningAlg = parsed.idTokenSignedResponseAlg ?? this.signingAlgorithm;
+    const requestedSigningAlg =
+      parsed.idTokenSignedResponseAlg ?? this.signingAlgorithm;
     if (requestedSigningAlg !== this.signingAlgorithm) {
       throw new OIDCError(
         'invalid_client_metadata',
@@ -350,7 +437,10 @@ export class OIDCBridge {
           'Public OIDC clients are disabled. Use client_secret_basic or client_secret_post for enterprise integrations.',
         );
       }
-      if (parsed.grantTypes.includes('client_credentials') || parsed.grantTypes.includes('refresh_token')) {
+      if (
+        parsed.grantTypes.includes('client_credentials') ||
+        parsed.grantTypes.includes('refresh_token')
+      ) {
         throw new OIDCError(
           'invalid_client_metadata',
           'Public OIDC clients cannot use client_credentials or refresh_token grants.',
@@ -367,9 +457,12 @@ export class OIDCBridge {
 
     const clientId = `zeroid_${crypto.randomBytes(16).toString('hex')}`;
     const clientSecret = crypto.randomBytes(32).toString('base64url');
-    const autoActivate = !ownership?.organizationId || ownership.registeredByRole === 'admin';
+    const autoActivate =
+      !ownership?.organizationId || ownership.registeredByRole === 'admin';
     const createdAt = new Date().toISOString();
-    const status: OIDCClientStatus = autoActivate ? 'active' : 'pending_approval';
+    const status: OIDCClientStatus = autoActivate
+      ? 'active'
+      : 'pending_approval';
 
     const client: RegisteredClient = {
       clientId,
@@ -385,7 +478,9 @@ export class OIDCBridge {
       registeredByIdentityId: ownership?.registeredByIdentityId,
       registeredByRole: ownership?.registeredByRole,
       approvedAt: autoActivate ? createdAt : undefined,
-      approvedByIdentityId: autoActivate ? ownership?.registeredByIdentityId : undefined,
+      approvedByIdentityId: autoActivate
+        ? ownership?.registeredByIdentityId
+        : undefined,
     };
 
     await this.clients.set(clientId, client);
@@ -418,7 +513,11 @@ export class OIDCBridge {
   // -------------------------------------------------------------------------
   // Authorization endpoint
   // -------------------------------------------------------------------------
-  async authorize(request: AuthorizationRequest, subjectId: string, subjectClaims: Record<string, unknown>): Promise<{
+  async authorize(
+    request: AuthorizationRequest,
+    subjectId: string,
+    subjectClaims: Record<string, unknown>,
+  ): Promise<{
     redirectUrl: string;
     code?: string;
     sessionId: string;
@@ -430,7 +529,10 @@ export class OIDCBridge {
     }
 
     if (!client.registration.redirectUris.includes(parsed.redirectUri)) {
-      throw new OIDCError('invalid_redirect_uri', 'Redirect URI not registered');
+      throw new OIDCError(
+        'invalid_redirect_uri',
+        'Redirect URI not registered',
+      );
     }
 
     // Enforce PKCE if required
@@ -480,12 +582,23 @@ export class OIDCBridge {
       redirectUrl.searchParams.set('code', code);
       redirectUrl.searchParams.set('state', parsed.state);
 
-      logger.info('authorization_code_issued', { clientId: parsed.clientId, sessionId });
+      logger.info('authorization_code_issued', {
+        clientId: parsed.clientId,
+        sessionId,
+      });
       return { redirectUrl: redirectUrl.toString(), code, sessionId };
     }
 
     // Implicit flow (id_token)
-    const idToken = await this.generateToken(parsed.clientId, subjectId, claims, 'id_token', 3600, parsed.scope, sessionId);
+    const idToken = await this.generateToken(
+      parsed.clientId,
+      subjectId,
+      claims,
+      'id_token',
+      3600,
+      parsed.scope,
+      sessionId,
+    );
     const redirectUrl = new URL(parsed.redirectUri);
     redirectUrl.hash = `id_token=${idToken.token}&state=${parsed.state}&token_type=Bearer`;
 
@@ -517,7 +630,10 @@ export class OIDCBridge {
       return this.handleRefreshToken(parsed);
     }
 
-    throw new OIDCError('unsupported_grant_type', `Grant type ${parsed.grantType} not supported`);
+    throw new OIDCError(
+      'unsupported_grant_type',
+      `Grant type ${parsed.grantType} not supported`,
+    );
   }
 
   private async handleAuthCodeExchange(request: TokenRequest): Promise<{
@@ -538,7 +654,10 @@ export class OIDCBridge {
     );
     if (!authCode) {
       // Either the code doesn't exist, is expired, or was already consumed
-      throw new OIDCError('invalid_grant', 'Authorization code not found or already used');
+      throw new OIDCError(
+        'invalid_grant',
+        'Authorization code not found or already used',
+      );
     }
 
     const now = Math.floor(Date.now() / 1000);
@@ -559,7 +678,11 @@ export class OIDCBridge {
       if (!request.codeVerifier) {
         throw new OIDCError('invalid_grant', 'Code verifier required');
       }
-      const verified = this.verifyPKCE(request.codeVerifier, authCode.codeChallenge, authCode.codeChallengeMethod ?? 'S256');
+      const verified = this.verifyPKCE(
+        request.codeVerifier,
+        authCode.codeChallenge,
+        authCode.codeChallengeMethod ?? 'S256',
+      );
       if (!verified) {
         throw new OIDCError('invalid_grant', 'PKCE verification failed');
       }
@@ -568,11 +691,35 @@ export class OIDCBridge {
     // Client authentication
     await this.authenticateClient(request.clientId, request.clientSecret);
 
-    const accessToken = await this.generateToken(authCode.clientId, authCode.subjectId, authCode.claims, 'access_token', 3600, authCode.scope, authCode.sessionId);
-    const idToken = await this.generateToken(authCode.clientId, authCode.subjectId, { ...authCode.claims, nonce: authCode.nonce }, 'id_token', 3600, authCode.scope, authCode.sessionId);
-    const refreshToken = await this.generateRefreshToken(authCode.clientId, authCode.subjectId, authCode.scope, authCode.sessionId);
+    const accessToken = await this.generateToken(
+      authCode.clientId,
+      authCode.subjectId,
+      authCode.claims,
+      'access_token',
+      3600,
+      authCode.scope,
+      authCode.sessionId,
+    );
+    const idToken = await this.generateToken(
+      authCode.clientId,
+      authCode.subjectId,
+      { ...authCode.claims, nonce: authCode.nonce },
+      'id_token',
+      3600,
+      authCode.scope,
+      authCode.sessionId,
+    );
+    const refreshToken = await this.generateRefreshToken(
+      authCode.clientId,
+      authCode.subjectId,
+      authCode.scope,
+      authCode.sessionId,
+    );
 
-    logger.info('tokens_issued', { clientId: authCode.clientId, subjectId: authCode.subjectId });
+    logger.info('tokens_issued', {
+      clientId: authCode.clientId,
+      subjectId: authCode.subjectId,
+    });
 
     return {
       access_token: accessToken.token,
@@ -593,9 +740,18 @@ export class OIDCBridge {
     await this.authenticateClient(request.clientId, request.clientSecret);
 
     const scope = request.scope ?? 'openid';
-    const accessToken = await this.generateToken(request.clientId, request.clientId, {}, 'access_token', 3600, scope);
+    const accessToken = await this.generateToken(
+      request.clientId,
+      request.clientId,
+      {},
+      'access_token',
+      3600,
+      scope,
+    );
 
-    logger.info('client_credentials_token_issued', { clientId: request.clientId });
+    logger.info('client_credentials_token_issued', {
+      clientId: request.clientId,
+    });
 
     return {
       access_token: accessToken.token,
@@ -612,11 +768,13 @@ export class OIDCBridge {
     refresh_token: string;
     scope: string;
   }> {
-    // Atomically consume the refresh token: getAndDelete ensures only one
-    // concurrent caller can redeem it. The loser gets undefined.
-    const refreshData = await this.refreshTokenMap.getAndDelete(request.refreshToken!);
+    const refreshToken = request.refreshToken!;
+    const refreshData = await this.refreshTokenMap.get(refreshToken);
     if (!refreshData) {
-      throw new OIDCError('invalid_grant', 'Refresh token not found or already consumed');
+      throw new OIDCError(
+        'invalid_grant',
+        'Refresh token not found or already consumed',
+      );
     }
 
     if (refreshData.clientId !== request.clientId) {
@@ -624,17 +782,56 @@ export class OIDCBridge {
     }
 
     await this.authenticateClient(request.clientId, request.clientSecret);
-    const newAccessToken = await this.generateToken(refreshData.clientId, refreshData.subjectId, {}, 'access_token', 3600, refreshData.scope, refreshData.sessionId);
-    const newRefreshToken = await this.generateRefreshToken(refreshData.clientId, refreshData.subjectId, refreshData.scope, refreshData.sessionId);
+    await this.assertRefreshSessionActive(refreshData, refreshToken);
 
-    logger.info('token_refreshed', { clientId: refreshData.clientId });
+    // Atomically consume the refresh token: getAndDelete ensures only one
+    // concurrent caller can redeem it. The loser gets undefined.
+    const consumedRefreshData =
+      await this.refreshTokenMap.getAndDelete(refreshToken);
+    if (!consumedRefreshData) {
+      throw new OIDCError(
+        'invalid_grant',
+        'Refresh token not found or already consumed',
+      );
+    }
+
+    if (consumedRefreshData.clientId !== request.clientId) {
+      throw new OIDCError('invalid_grant', 'Client mismatch');
+    }
+
+    if (consumedRefreshData.sessionId) {
+      await redis.srem(
+        sessionRefreshTokenSetKey(consumedRefreshData.sessionId),
+        refreshToken,
+      );
+    }
+
+    await this.assertRefreshSessionActive(consumedRefreshData, refreshToken);
+
+    const newAccessToken = await this.generateToken(
+      consumedRefreshData.clientId,
+      consumedRefreshData.subjectId,
+      {},
+      'access_token',
+      3600,
+      consumedRefreshData.scope,
+      consumedRefreshData.sessionId,
+    );
+    const newRefreshToken = await this.generateRefreshToken(
+      consumedRefreshData.clientId,
+      consumedRefreshData.subjectId,
+      consumedRefreshData.scope,
+      consumedRefreshData.sessionId,
+    );
+
+    logger.info('token_refreshed', { clientId: consumedRefreshData.clientId });
 
     return {
       access_token: newAccessToken.token,
       token_type: 'Bearer',
       expires_in: 3600,
       refresh_token: newRefreshToken,
-      scope: refreshData.scope,
+      scope: consumedRefreshData.scope,
     };
   }
 
@@ -642,7 +839,10 @@ export class OIDCBridge {
   // UserInfo endpoint with selective disclosure
   // -------------------------------------------------------------------------
   async getUserInfo(accessToken: string): Promise<Record<string, unknown>> {
-    const { tokenRecord, payload } = await this.verifyToken(accessToken, 'access_token');
+    const { tokenRecord, payload } = await this.verifyToken(
+      accessToken,
+      'access_token',
+    );
     const scopes = tokenRecord.scope.split(' ');
     const claims: Record<string, unknown> = { sub: tokenRecord.subjectId };
 
@@ -665,7 +865,9 @@ export class OIDCBridge {
   // -------------------------------------------------------------------------
   // Session management
   // -------------------------------------------------------------------------
-  async frontChannelLogout(sessionId: string): Promise<{ logoutUrls: string[] }> {
+  async frontChannelLogout(
+    sessionId: string,
+  ): Promise<{ logoutUrls: string[] }> {
     const session = await this.sessions.get(sessionId);
     if (!session) {
       throw new OIDCError('invalid_session', 'Session not found');
@@ -674,22 +876,15 @@ export class OIDCBridge {
     session.active = false;
     await this.sessions.set(sessionId, session);
 
-    // Revoke only tokens issued under THIS session (not all sessions for the user)
-    const setKey = sessionTokenSetKey(sessionId);
-    const tokenIds = await redis.smembers(setKey);
-    for (const tokenId of tokenIds) {
-      const token = await this.issuedTokens.get(tokenId);
-      if (token) {
-        token.revoked = true;
-        await this.issuedTokens.set(tokenId, token);
-      }
-    }
-    await redis.del(setKey);
+    await this.revokeSessionCredentials(sessionId);
 
     const client = await this.clients.get(session.clientId);
     const logoutUrls = client?.registration.postLogoutRedirectUris ?? [];
 
-    logger.info('front_channel_logout', { sessionId, clientId: session.clientId });
+    logger.info('front_channel_logout', {
+      sessionId,
+      clientId: session.clientId,
+    });
     return { logoutUrls };
   }
 
@@ -699,6 +894,7 @@ export class OIDCBridge {
 
     session.active = false;
     await this.sessions.set(sessionId, session);
+    await this.revokeSessionCredentials(sessionId);
 
     // Generate logout token
     const logoutToken = {
@@ -711,14 +907,72 @@ export class OIDCBridge {
       sid: sessionId,
     };
 
-    logger.info('back_channel_logout', { sessionId, clientId: session.clientId, logoutTokenJti: logoutToken.jti });
+    logger.info('back_channel_logout', {
+      sessionId,
+      clientId: session.clientId,
+      logoutTokenJti: logoutToken.jti,
+    });
     return { notified: true };
   }
 
   // -------------------------------------------------------------------------
   // Internal helpers
   // -------------------------------------------------------------------------
-  private buildClaims(scopes: string[], subjectId: string, subjectClaims: Record<string, unknown>): Record<string, unknown> {
+  private async revokeSessionCredentials(sessionId: string): Promise<void> {
+    // Revoke only tokens issued under THIS session (not all sessions for the user).
+    const tokenSetKey = sessionTokenSetKey(sessionId);
+    const tokenIds = await redis.smembers(tokenSetKey);
+    for (const tokenId of tokenIds) {
+      const token = await this.issuedTokens.get(tokenId);
+      if (token) {
+        token.revoked = true;
+        await this.issuedTokens.set(tokenId, token);
+      }
+    }
+    await redis.del(tokenSetKey);
+
+    // Refresh tokens are bearer credentials too. If they survive logout, an
+    // inactive session can mint fresh access tokens after the user signs out.
+    const refreshSetKey = sessionRefreshTokenSetKey(sessionId);
+    const refreshTokens = await redis.smembers(refreshSetKey);
+    for (const refreshToken of refreshTokens) {
+      await this.refreshTokenMap.delete(refreshToken);
+    }
+    await redis.del(refreshSetKey);
+  }
+
+  private async assertRefreshSessionActive(
+    refreshData: RefreshTokenRecord,
+    refreshToken: string,
+  ): Promise<void> {
+    if (!refreshData.sessionId) {
+      return;
+    }
+
+    const session = await this.sessions.get(refreshData.sessionId);
+    if (
+      !session ||
+      !session.active ||
+      session.clientId !== refreshData.clientId ||
+      session.subjectId !== refreshData.subjectId
+    ) {
+      await this.refreshTokenMap.delete(refreshToken);
+      await redis.srem(
+        sessionRefreshTokenSetKey(refreshData.sessionId),
+        refreshToken,
+      );
+      throw new OIDCError(
+        'invalid_grant',
+        'Refresh token session is no longer active',
+      );
+    }
+  }
+
+  private buildClaims(
+    scopes: string[],
+    subjectId: string,
+    subjectClaims: Record<string, unknown>,
+  ): Record<string, unknown> {
     const claims: Record<string, unknown> = { sub: subjectId };
 
     for (const scope of scopes) {
@@ -759,17 +1013,21 @@ export class OIDCBridge {
       ...claims,
     };
 
-    const header = Buffer.from(JSON.stringify({
-      alg: this.signingAlgorithm,
-      typ: 'JWT',
-      kid: this.getSigningKeyId(),
-    })).toString('base64url');
-    const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
-    const signature = crypto.sign(
-      'sha256',
-      Buffer.from(`${header}.${body}`),
-      this.getSigningKeyInput(),
+    const header = Buffer.from(
+      JSON.stringify({
+        alg: this.signingAlgorithm,
+        typ: 'JWT',
+        kid: this.getSigningKeyId(),
+      }),
     ).toString('base64url');
+    const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
+    const signature = crypto
+      .sign(
+        'sha256',
+        Buffer.from(`${header}.${body}`),
+        this.getSigningKeyInput(),
+      )
+      .toString('base64url');
     const token = `${header}.${body}.${signature}`;
 
     await this.issuedTokens.set(tokenId, {
@@ -795,31 +1053,63 @@ export class OIDCBridge {
     return { token, tokenId };
   }
 
-  private async generateRefreshToken(clientId: string, subjectId: string, scope: string, sessionId?: string): Promise<string> {
+  private async generateRefreshToken(
+    clientId: string,
+    subjectId: string,
+    scope: string,
+    sessionId?: string,
+  ): Promise<string> {
     const refreshToken = crypto.randomBytes(48).toString('base64url');
-    await this.refreshTokenMap.set(refreshToken, { tokenId: refreshToken, clientId, subjectId, scope, sessionId });
+    await this.refreshTokenMap.set(refreshToken, {
+      tokenId: refreshToken,
+      clientId,
+      subjectId,
+      scope,
+      sessionId,
+    });
+    if (sessionId) {
+      const setKey = sessionRefreshTokenSetKey(sessionId);
+      await redis.sadd(setKey, refreshToken);
+      await redis.expire(setKey, OIDC_REFRESH_TOKEN_TTL);
+    }
     return refreshToken;
   }
 
-  private verifyPKCE(codeVerifier: string, codeChallenge: string, method: string): boolean {
+  private verifyPKCE(
+    codeVerifier: string,
+    codeChallenge: string,
+    method: string,
+  ): boolean {
     if (method === 'plain') {
       return codeVerifier === codeChallenge;
     }
     // S256
-    const hash = crypto.createHash('sha256').update(codeVerifier).digest('base64url');
+    const hash = crypto
+      .createHash('sha256')
+      .update(codeVerifier)
+      .digest('base64url');
     return hash === codeChallenge;
   }
 
-  private async authenticateClient(clientId: string, clientSecret?: string): Promise<void> {
+  private async authenticateClient(
+    clientId: string,
+    clientSecret?: string,
+  ): Promise<void> {
     const client = await this.getNormalizedClient(clientId);
     if (!client) {
       throw new OIDCError('invalid_client', 'Client not found');
     }
     if (!this.isClientActive(client)) {
       const lifecycleState = client.status ?? 'pending_approval';
-      throw new OIDCError('invalid_client', `Client is not active (${lifecycleState})`);
+      throw new OIDCError(
+        'invalid_client',
+        `Client is not active (${lifecycleState})`,
+      );
     }
-    if (client.registration.tokenEndpointAuthMethod !== 'none' && clientSecret !== client.clientSecret) {
+    if (
+      client.registration.tokenEndpointAuthMethod !== 'none' &&
+      clientSecret !== client.clientSecret
+    ) {
       throw new OIDCError('invalid_client', 'Client authentication failed');
     }
   }
@@ -837,13 +1127,20 @@ export class OIDCBridge {
     let payload: Record<string, unknown>;
 
     try {
-      header = JSON.parse(Buffer.from(encodedHeader, 'base64url').toString('utf-8')) as Record<string, unknown>;
-      payload = JSON.parse(Buffer.from(encodedPayload, 'base64url').toString('utf-8')) as Record<string, unknown>;
+      header = JSON.parse(
+        Buffer.from(encodedHeader, 'base64url').toString('utf-8'),
+      ) as Record<string, unknown>;
+      payload = JSON.parse(
+        Buffer.from(encodedPayload, 'base64url').toString('utf-8'),
+      ) as Record<string, unknown>;
     } catch {
       throw new OIDCError('invalid_token', 'JWT decoding failed', 401);
     }
 
-    if (header.alg !== this.signingAlgorithm || header.kid !== this.getSigningKeyId()) {
+    if (
+      header.alg !== this.signingAlgorithm ||
+      header.kid !== this.getSigningKeyId()
+    ) {
       throw new OIDCError('invalid_token', 'Unexpected JWT header', 401);
     }
 
@@ -856,7 +1153,11 @@ export class OIDCBridge {
     );
 
     if (!verified) {
-      throw new OIDCError('invalid_token', 'JWT signature verification failed', 401);
+      throw new OIDCError(
+        'invalid_token',
+        'JWT signature verification failed',
+        401,
+      );
     }
 
     const tokenId = payload.jti;
@@ -883,7 +1184,11 @@ export class OIDCBridge {
       throw new OIDCError('invalid_token', 'Token expired', 401);
     }
 
-    if (iss !== this.issuer || sub !== tokenRecord.subjectId || aud !== tokenRecord.clientId) {
+    if (
+      iss !== this.issuer ||
+      sub !== tokenRecord.subjectId ||
+      aud !== tokenRecord.clientId
+    ) {
       throw new OIDCError('invalid_token', 'JWT claims validation failed', 401);
     }
 
@@ -949,8 +1254,15 @@ export class OIDCBridge {
       return configuredKeyId;
     }
 
-    const spki = this.getSigningPublicKey().export({ format: 'der', type: 'spki' });
-    const derivedKeyId = crypto.createHash('sha256').update(spki).digest('base64url').slice(0, 24);
+    const spki = this.getSigningPublicKey().export({
+      format: 'der',
+      type: 'spki',
+    });
+    const derivedKeyId = crypto
+      .createHash('sha256')
+      .update(spki)
+      .digest('base64url')
+      .slice(0, 24);
     this.signingKeyId = derivedKeyId;
     return derivedKeyId;
   }
@@ -967,7 +1279,9 @@ export class OIDCBridge {
     return this.getSigningPrivateKey();
   }
 
-  private getVerificationKeyInput(): crypto.KeyLike | crypto.VerifyKeyObjectInput {
+  private getVerificationKeyInput():
+    | crypto.KeyLike
+    | crypto.VerifyKeyObjectInput {
     if (this.signingAlgorithm === 'PS256') {
       return {
         key: this.getSigningPublicKey(),
@@ -1016,18 +1330,39 @@ export class OIDCBridge {
     return (await this.getNormalizedClient(clientId)) ?? null;
   }
 
-  async listClientsForOrganization(organizationId: string): Promise<RegisteredClient[]> {
-    const clientIds: string[] = await redis.smembers(organizationClientSetKey(organizationId));
-    const clients = await Promise.all(clientIds.map(async (clientId: string) => this.getNormalizedClient(clientId)));
+  async listClientsForOrganization(
+    organizationId: string,
+  ): Promise<RegisteredClient[]> {
+    const clientIds: string[] = await redis.smembers(
+      organizationClientSetKey(organizationId),
+    );
+    const clients = await Promise.all(
+      clientIds.map(async (clientId: string) =>
+        this.getNormalizedClient(clientId),
+      ),
+    );
     return clients
-      .filter((client): client is RegisteredClient => Boolean(client) && client.organizationId === organizationId)
-      .sort((left: RegisteredClient, right: RegisteredClient) => right.createdAt.localeCompare(left.createdAt));
+      .filter(
+        (client): client is RegisteredClient =>
+          client !== undefined && client.organizationId === organizationId,
+      )
+      .sort((left: RegisteredClient, right: RegisteredClient) =>
+        right.createdAt.localeCompare(left.createdAt),
+      );
   }
 
-  async approveClient(clientId: string, organizationId: string, approverIdentityId: string): Promise<RegisteredClient> {
+  async approveClient(
+    clientId: string,
+    organizationId: string,
+    approverIdentityId: string,
+  ): Promise<RegisteredClient> {
     const client = await this.requireOwnedClient(clientId, organizationId);
     if (client.status === 'revoked') {
-      throw new OIDCError('invalid_request', 'Revoked client cannot be reactivated', 409);
+      throw new OIDCError(
+        'invalid_request',
+        'Revoked client cannot be reactivated',
+        409,
+      );
     }
     if (this.isClientActive(client)) {
       return client;
@@ -1044,7 +1379,11 @@ export class OIDCBridge {
       deactivationReason: undefined,
     };
     await this.clients.set(clientId, approvedClient);
-    logger.info('oidc_client_approved', { clientId, organizationId, approverIdentityId });
+    logger.info('oidc_client_approved', {
+      clientId,
+      organizationId,
+      approverIdentityId,
+    });
     return approvedClient;
   }
 
@@ -1068,7 +1407,12 @@ export class OIDCBridge {
       deactivationReason: reason,
     };
     await this.clients.set(clientId, deactivatedClient);
-    logger.info('oidc_client_deactivated', { clientId, organizationId, actorIdentityId, reason });
+    logger.info('oidc_client_deactivated', {
+      clientId,
+      organizationId,
+      actorIdentityId,
+      reason,
+    });
     return deactivatedClient;
   }
 
@@ -1084,7 +1428,9 @@ export class OIDCBridge {
     }
   }
 
-  private async getNormalizedClient(clientId: string): Promise<RegisteredClient | undefined> {
+  private async getNormalizedClient(
+    clientId: string,
+  ): Promise<RegisteredClient | undefined> {
     const client = await this.clients.get(clientId);
     if (!client) {
       return undefined;
@@ -1109,10 +1455,17 @@ export class OIDCBridge {
     return client.active && (client.status ?? 'active') === 'active';
   }
 
-  private async requireOwnedClient(clientId: string, organizationId: string): Promise<RegisteredClient> {
+  private async requireOwnedClient(
+    clientId: string,
+    organizationId: string,
+  ): Promise<RegisteredClient> {
     const client = await this.getNormalizedClient(clientId);
     if (!client || client.organizationId !== organizationId) {
-      throw new OIDCError('invalid_client', 'Client not found for organization', 404);
+      throw new OIDCError(
+        'invalid_client',
+        'Client not found for organization',
+        404,
+      );
     }
 
     return client;

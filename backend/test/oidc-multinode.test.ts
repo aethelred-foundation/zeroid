@@ -15,7 +15,10 @@ const { publicKey, privateKey } = crypto.generateKeyPairSync('rsa', {
   modulusLength: 2048,
 });
 
-const PRIVATE_PEM = privateKey.export({ type: 'pkcs8', format: 'pem' }) as string;
+const PRIVATE_PEM = privateKey.export({
+  type: 'pkcs8',
+  format: 'pem',
+}) as string;
 const PUBLIC_PEM = publicKey.export({ type: 'spki', format: 'pem' }) as string;
 
 process.env.OIDC_SIGNING_PRIVATE_KEY = PRIVATE_PEM;
@@ -23,22 +26,26 @@ process.env.OIDC_SIGNING_PUBLIC_KEY = PUBLIC_PEM;
 process.env.JWT_SECRET = 'test-jwt-secret-that-is-at-least-32-chars!!';
 process.env.NODE_ENV = 'test';
 
-jest.mock('winston', () => ({
-  createLogger: jest.fn(() => ({
-    info: jest.fn(),
-    warn: jest.fn(),
-    error: jest.fn(),
-    debug: jest.fn(),
-  })),
-  format: {
-    combine: jest.fn(),
-    timestamp: jest.fn(),
-    json: jest.fn(),
-  },
-  transports: {
-    Console: jest.fn(),
-  },
-}), { virtual: true });
+jest.mock(
+  'winston',
+  () => ({
+    createLogger: jest.fn(() => ({
+      info: jest.fn(),
+      warn: jest.fn(),
+      error: jest.fn(),
+      debug: jest.fn(),
+    })),
+    format: {
+      combine: jest.fn(),
+      timestamp: jest.fn(),
+      json: jest.fn(),
+    },
+    transports: {
+      Console: jest.fn(),
+    },
+  }),
+  { virtual: true },
+);
 
 // ---------------------------------------------------------------------------
 // Functional Redis mock — backed by a shared Map so both OIDCBridge instances
@@ -49,10 +56,12 @@ const setStore = new Map<string, Set<string>>();
 
 const redisMock = {
   get: jest.fn(async (key: string) => store.get(key) ?? null),
-  set: jest.fn(async (key: string, value: string, _ex?: string, _ttl?: number) => {
-    store.set(key, value);
-    return 'OK';
-  }),
+  set: jest.fn(
+    async (key: string, value: string, _ex?: string, _ttl?: number) => {
+      store.set(key, value);
+      return 'OK';
+    },
+  ),
   del: jest.fn(async (key: string) => {
     const had = store.has(key) || setStore.has(key);
     store.delete(key);
@@ -65,13 +74,26 @@ const redisMock = {
     const s = setStore.get(key)!;
     let added = 0;
     for (const m of members) {
-      if (!s.has(m)) { s.add(m); added++; }
+      if (!s.has(m)) {
+        s.add(m);
+        added++;
+      }
     }
     return added;
   }),
   smembers: jest.fn(async (key: string) => {
     const s = setStore.get(key);
     return s ? [...s] : [];
+  }),
+  srem: jest.fn(async (key: string, ...members: string[]) => {
+    const s = setStore.get(key);
+    if (!s) return 0;
+    let removed = 0;
+    for (const member of members) {
+      if (s.delete(member)) removed++;
+    }
+    if (s.size === 0) setStore.delete(key);
+    return removed;
   }),
   expire: jest.fn(async () => 1),
   ttl: jest.fn(async (key: string) => {
@@ -149,22 +171,28 @@ async function registerOwnedClient(
     registeredByRole: string;
   },
 ) {
-  return bridge.registerClient({
-    clientName: 'Governed Test Client',
-    redirectUris: [REDIRECT_URI],
-    postLogoutRedirectUris: [LOGOUT_URI],
-    grantTypes: ['authorization_code', 'refresh_token'],
-    responseTypes: ['code'],
-    tokenEndpointAuthMethod: 'client_secret_basic',
-    scopes: ['openid', 'profile', 'email'],
-    requirePkce: false,
-  }, ownership);
+  return bridge.registerClient(
+    {
+      clientName: 'Governed Test Client',
+      redirectUris: [REDIRECT_URI],
+      postLogoutRedirectUris: [LOGOUT_URI],
+      grantTypes: ['authorization_code', 'refresh_token'],
+      responseTypes: ['code'],
+      tokenEndpointAuthMethod: 'client_secret_basic',
+      scopes: ['openid', 'profile', 'email'],
+      requirePkce: false,
+    },
+    ownership,
+  );
 }
 
 /** Generate a PKCE pair (S256). */
 function pkce() {
   const verifier = crypto.randomBytes(32).toString('base64url');
-  const challenge = crypto.createHash('sha256').update(verifier).digest('base64url');
+  const challenge = crypto
+    .createHash('sha256')
+    .update(verifier)
+    .digest('base64url');
   return { verifier, challenge };
 }
 
@@ -213,7 +241,11 @@ describe('OIDC multi-node correctness', () => {
   // 1. Cross-instance session access
   test('session created on A is retrievable on B', async () => {
     const client = await registerTestClient(bridgeA);
-    const { sessionId } = await authorizeCode(bridgeA, client.clientId, 'user-1');
+    const { sessionId } = await authorizeCode(
+      bridgeA,
+      client.clientId,
+      'user-1',
+    );
 
     // Instance B should see the session via backChannelLogout (reads session)
     const result = await bridgeB.backChannelLogout(sessionId);
@@ -283,12 +315,54 @@ describe('OIDC multi-node correctness', () => {
     expect(refreshed.refresh_token).not.toBe(tokens.refresh_token);
   });
 
+  test('failed client authentication does not consume refresh token', async () => {
+    const client = await registerTestClient(bridgeA);
+    const { code } = await authorizeCode(
+      bridgeA,
+      client.clientId,
+      'user-refresh-dos',
+    );
+
+    const tokens = await bridgeA.exchangeToken({
+      grantType: 'authorization_code',
+      code: code!,
+      redirectUri: REDIRECT_URI,
+      clientId: client.clientId,
+      clientSecret: client.clientSecret,
+    });
+
+    await expect(
+      bridgeB.exchangeToken({
+        grantType: 'refresh_token',
+        refreshToken: tokens.refresh_token,
+        clientId: client.clientId,
+        clientSecret: 'wrong-secret',
+      }),
+    ).rejects.toMatchObject({
+      errorCode: 'invalid_client',
+    });
+
+    const refreshed = await bridgeB.exchangeToken({
+      grantType: 'refresh_token',
+      refreshToken: tokens.refresh_token,
+      clientId: client.clientId,
+      clientSecret: client.clientSecret,
+    });
+
+    expect(refreshed.access_token).toBeDefined();
+    expect(refreshed.refresh_token).toBeDefined();
+  });
+
   // 5. Cross-instance client registration
   test('client registered on A can authorize on B', async () => {
     const client = await registerTestClient(bridgeA);
 
     // Authorize using instance B with the client registered on A
-    const { code, sessionId } = await authorizeCode(bridgeB, client.clientId, 'user-5');
+    const { code, sessionId } = await authorizeCode(
+      bridgeB,
+      client.clientId,
+      'user-5',
+    );
     expect(code).toBeDefined();
     expect(sessionId).toBeDefined();
 
@@ -312,7 +386,9 @@ describe('OIDC multi-node correctness', () => {
     });
 
     expect(client.status).toBe('pending_approval');
-    await expect(authorizeCode(bridgeB, client.clientId, 'user-pending-1')).rejects.toMatchObject({
+    await expect(
+      authorizeCode(bridgeB, client.clientId, 'user-pending-1'),
+    ).rejects.toMatchObject({
       errorCode: 'invalid_client',
     });
   });
@@ -325,11 +401,19 @@ describe('OIDC multi-node correctness', () => {
       registeredByRole: 'operator',
     });
 
-    const approved = await bridgeA.approveClient(client.clientId, 'org-governed', 'admin-1');
+    const approved = await bridgeA.approveClient(
+      client.clientId,
+      'org-governed',
+      'admin-1',
+    );
     expect(approved.status).toBe('active');
     expect(approved.active).toBe(true);
 
-    const { code } = await authorizeCode(bridgeB, client.clientId, 'user-approved-1');
+    const { code } = await authorizeCode(
+      bridgeB,
+      client.clientId,
+      'user-approved-1',
+    );
     const tokens = await bridgeB.exchangeToken({
       grantType: 'authorization_code',
       code: code!,
@@ -350,7 +434,11 @@ describe('OIDC multi-node correctness', () => {
       registeredByRole: 'admin',
     });
 
-    const { code } = await authorizeCode(bridgeA, client.clientId, 'user-deactivated-1');
+    const { code } = await authorizeCode(
+      bridgeA,
+      client.clientId,
+      'user-deactivated-1',
+    );
     const tokens = await bridgeA.exchangeToken({
       grantType: 'authorization_code',
       code: code!,
@@ -368,16 +456,20 @@ describe('OIDC multi-node correctness', () => {
     expect(deactivated.status).toBe('revoked');
     expect(deactivated.active).toBe(false);
 
-    await expect(authorizeCode(bridgeB, client.clientId, 'user-deactivated-2')).rejects.toMatchObject({
+    await expect(
+      authorizeCode(bridgeB, client.clientId, 'user-deactivated-2'),
+    ).rejects.toMatchObject({
       errorCode: 'invalid_client',
     });
 
-    await expect(bridgeB.exchangeToken({
-      grantType: 'refresh_token',
-      refreshToken: tokens.refresh_token,
-      clientId: client.clientId,
-      clientSecret: client.clientSecret,
-    })).rejects.toMatchObject({
+    await expect(
+      bridgeB.exchangeToken({
+        grantType: 'refresh_token',
+        refreshToken: tokens.refresh_token,
+        clientId: client.clientId,
+        clientSecret: client.clientSecret,
+      }),
+    ).rejects.toMatchObject({
       errorCode: 'invalid_client',
     });
   });
@@ -385,7 +477,11 @@ describe('OIDC multi-node correctness', () => {
   // 9. Cross-instance logout
   test('session created on A, front-channel logout on B terminates it', async () => {
     const client = await registerTestClient(bridgeA);
-    const { sessionId, code } = await authorizeCode(bridgeA, client.clientId, 'user-6');
+    const { sessionId, code } = await authorizeCode(
+      bridgeA,
+      client.clientId,
+      'user-6',
+    );
 
     // Exchange token so there are tokens to revoke
     await bridgeA.exchangeToken({
@@ -413,7 +509,7 @@ describe('OIDC multi-node correctness', () => {
     const jwksB = bridgeB.getJWKS();
 
     expect(jwksA).toEqual(jwksB);
-    expect((jwksA.keys as unknown[])).toHaveLength(1);
+    expect(jwksA.keys as unknown[]).toHaveLength(1);
 
     const keyA = (jwksA.keys as Record<string, unknown>[])[0];
     expect(keyA.use).toBe('sig');
@@ -439,8 +535,16 @@ describe('OIDC multi-node correctness', () => {
     const client = await registerTestClient(bridgeA);
 
     // Same user creates two sessions (e.g., two browser tabs, two devices)
-    const sessionA = await authorizeCode(bridgeA, client.clientId, 'user-multi');
-    const sessionB = await authorizeCode(bridgeB, client.clientId, 'user-multi');
+    const sessionA = await authorizeCode(
+      bridgeA,
+      client.clientId,
+      'user-multi',
+    );
+    const sessionB = await authorizeCode(
+      bridgeB,
+      client.clientId,
+      'user-multi',
+    );
 
     // Exchange both auth codes for tokens
     const tokensA = await bridgeA.exchangeToken({
@@ -470,9 +574,59 @@ describe('OIDC multi-node correctness', () => {
 
     // Session A's token should be revoked
     await expect(bridgeB.getUserInfo(tokensA.access_token)).rejects.toThrow();
+    await expect(
+      bridgeB.exchangeToken({
+        grantType: 'refresh_token',
+        refreshToken: tokensA.refresh_token,
+        clientId: client.clientId,
+        clientSecret: client.clientSecret,
+      }),
+    ).rejects.toMatchObject({
+      errorCode: 'invalid_grant',
+    });
 
     // Session B's token must STILL be valid — this is the regression test
     const userInfoBAfter = await bridgeB.getUserInfo(tokensB.access_token);
     expect(userInfoBAfter.sub).toBe('user-multi');
+
+    const refreshedB = await bridgeB.exchangeToken({
+      grantType: 'refresh_token',
+      refreshToken: tokensB.refresh_token,
+      clientId: client.clientId,
+      clientSecret: client.clientSecret,
+    });
+    expect(refreshedB.access_token).toBeDefined();
+  });
+
+  // 13. Back-channel logout must also invalidate refresh tokens for the session.
+  test('back-channel logout revokes session refresh tokens', async () => {
+    const client = await registerTestClient(bridgeA);
+    const { code, sessionId } = await authorizeCode(
+      bridgeA,
+      client.clientId,
+      'user-backchannel-refresh',
+    );
+
+    const tokens = await bridgeA.exchangeToken({
+      grantType: 'authorization_code',
+      code: code!,
+      redirectUri: REDIRECT_URI,
+      clientId: client.clientId,
+      clientSecret: client.clientSecret,
+    });
+
+    const logout = await bridgeB.backChannelLogout(sessionId);
+    expect(logout.notified).toBe(true);
+
+    await expect(
+      bridgeA.exchangeToken({
+        grantType: 'refresh_token',
+        refreshToken: tokens.refresh_token,
+        clientId: client.clientId,
+        clientSecret: client.clientSecret,
+      }),
+    ).rejects.toMatchObject({
+      errorCode: 'invalid_grant',
+    });
   });
 });

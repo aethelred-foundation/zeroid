@@ -12,9 +12,9 @@ import { z } from 'zod';
 // ---------------------------------------------------------------------------
 // Constants for proof binding
 // ---------------------------------------------------------------------------
-const PROOF_NONCE_TTL_SECONDS = 300;       // Nonces are valid for 5 minutes
+const PROOF_NONCE_TTL_SECONDS = 300; // Nonces are valid for 5 minutes
 const PROOF_REPLAY_WINDOW_SECONDS = 86400; // Track used proofs for 24 hours
-const MAX_PROOF_AGE_MS = 5 * 60 * 1000;   // Proofs expire after 5 minutes
+const MAX_PROOF_AGE_MS = 5 * 60 * 1000; // Proofs expire after 5 minutes
 
 function canonicalizeClaims(value: unknown): string {
   if (value === null || value === undefined) return JSON.stringify(value);
@@ -25,14 +25,22 @@ function canonicalizeClaims(value: unknown): string {
 
   const obj = value as Record<string, unknown>;
   const keys = Object.keys(obj).sort();
-  const entries = keys.map((key) => JSON.stringify(key) + ':' + canonicalizeClaims(obj[key]));
+  const entries = keys.map(
+    (key) => JSON.stringify(key) + ':' + canonicalizeClaims(obj[key]),
+  );
   return '{' + entries.join(',') + '}';
 }
 
 function computeClaimsHash(claims: Record<string, unknown>): string {
-  return createHash('sha256')
-    .update(canonicalizeClaims(claims))
-    .digest('hex');
+  return createHash('sha256').update(canonicalizeClaims(claims)).digest('hex');
+}
+
+function digestToFieldElement(hexDigest: string): string {
+  const normalized = hexDigest.replace(/^0x/i, '');
+  const digest = /^[0-9a-fA-F]+$/.test(normalized)
+    ? normalized
+    : createHash('sha256').update(hexDigest).digest('hex');
+  return BigInt('0x' + digest.substring(0, 62)).toString();
 }
 
 const router = Router();
@@ -47,8 +55,17 @@ const generateZKProofSchema = z.object({
   inputs: z.record(z.union([z.string(), z.number()])),
   selectiveDisclosure: z.array(z.string()).optional(),
   // Context binding fields — required for production proofs
-  audience: z.string().min(1).max(256).describe('Intended verifier DID or identifier'),
-  nonce: z.string().min(16).max(128).optional().describe('Verifier-supplied nonce; auto-generated if omitted'),
+  audience: z
+    .string()
+    .min(1)
+    .max(256)
+    .describe('Intended verifier DID or identifier'),
+  nonce: z
+    .string()
+    .min(16)
+    .max(128)
+    .optional()
+    .describe('Verifier-supplied nonce; auto-generated if omitted'),
 });
 
 router.post(
@@ -58,17 +75,28 @@ router.post(
   async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
       const identity = req.identity!;
-      const { credentialId, circuitName, inputs, selectiveDisclosure, audience } = req.body;
+      const {
+        credentialId,
+        circuitName,
+        inputs,
+        selectiveDisclosure,
+        audience,
+      } = req.body;
       const nonce: string = req.body.nonce ?? randomUUID();
 
       // Verify the credential belongs to the requester
       const credential = await credentialService.getCredential(credentialId);
       if (!credential) {
-        res.status(404).json({ error: 'Credential not found', code: 'CRED_NOT_FOUND' });
+        res
+          .status(404)
+          .json({ error: 'Credential not found', code: 'CRED_NOT_FOUND' });
         return;
       }
       if (credential.subjectId !== identity.id) {
-        res.status(403).json({ error: 'Can only generate proofs for own credentials', code: 'PROOF_ACCESS_DENIED' });
+        res.status(403).json({
+          error: 'Can only generate proofs for own credentials',
+          code: 'PROOF_ACCESS_DENIED',
+        });
         return;
       }
 
@@ -89,15 +117,20 @@ router.post(
       // input budgets of small circuits like age_verification (5 max).
       const issuedAt = Date.now();
       const contextCommitment = createHash('sha256')
-        .update(`${nonce}:${audience}:${identity.id}:${credentialId}:${issuedAt}`)
+        .update(
+          `${nonce}:${audience}:${identity.id}:${credentialId}:${issuedAt}`,
+        )
         .digest('hex');
 
       // Convert to a field element (truncate to 253 bits for BN254 scalar field)
-      const contextCommitmentField = BigInt('0x' + contextCommitment.substring(0, 62)).toString();
+      const contextCommitmentField = BigInt(
+        '0x' + contextCommitment.substring(0, 62),
+      ).toString();
+      const claimsHashField = digestToFieldElement(credential.claimsHash);
 
       const witnessInputs: Record<string, string | number> = {
         // Claims hash as a public commitment for integrity binding
-        claimsHash: credential.claimsHash,
+        claimsHash: claimsHashField,
         // Single context commitment — encodes nonce, audience, subject,
         // credential, and issuedAt. Verified against public signals on
         // the verifier side to ensure proof is bound to this context.
@@ -122,7 +155,13 @@ router.post(
 
       // Merge proof parameters from caller (e.g., ageThreshold, incomeMin)
       // Only allow known parameter keys, not raw witness data
-      const allowedParams = ['threshold', 'ageThreshold', 'incomeMin', 'incomeMax', 'nationalitySet'];
+      const allowedParams = [
+        'threshold',
+        'ageThreshold',
+        'incomeMin',
+        'incomeMax',
+        'nationalitySet',
+      ];
       for (const [key, value] of Object.entries(inputs)) {
         if (allowedParams.includes(key)) {
           witnessInputs[key] = value as string | number;
@@ -145,6 +184,7 @@ router.post(
           subjectId: identity.id,
           credentialId,
           issuedAt,
+          claimsHashField,
           contextCommitmentField,
         }),
         'EX',
@@ -164,6 +204,7 @@ router.post(
             publicSignals: result.publicSignals,
             nonce,
             audience,
+            claimsHash: claimsHashField,
             contextCommitment: contextCommitmentField,
             issuedAt,
           },
@@ -187,6 +228,7 @@ router.post(
           audience,
           issuedAt,
           expiresAt: issuedAt + MAX_PROOF_AGE_MS,
+          claimsHash: claimsHashField,
           contextCommitment: contextCommitmentField,
         },
         message: 'ZK proof generated successfully',
@@ -195,7 +237,9 @@ router.post(
       verificationCounter.inc({ result: 'failed' });
       const error = err as Error & { statusCode?: number; code?: string };
       logger.error('zk_proof_generation_error', { error: error.message });
-      res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code });
+      res
+        .status(error.statusCode ?? 500)
+        .json({ error: error.message, code: error.code });
     }
   },
 );
@@ -215,8 +259,15 @@ const verifyZKProofSchema = z.object({
   circuitName: z.string().min(1).max(100),
   // Context binding — verifier must supply matching values
   nonce: z.string().min(16).max(128).describe('Nonce from proof generation'),
-  audience: z.string().min(1).max(256).describe('Expected audience (must match proof)'),
-  contextCommitment: z.string().min(1).describe('Context commitment field element from proof generation'),
+  audience: z
+    .string()
+    .min(1)
+    .max(256)
+    .describe('Expected audience (must match proof)'),
+  contextCommitment: z
+    .string()
+    .min(1)
+    .describe('Context commitment field element from proof generation'),
   issuedAt: z.number().int().positive().describe('Proof issuance timestamp'),
 });
 
@@ -226,7 +277,15 @@ router.post(
   validate({ body: verifyZKProofSchema }),
   async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
-      const { proof, publicSignals, circuitName, nonce, audience, contextCommitment, issuedAt } = req.body;
+      const {
+        proof,
+        publicSignals,
+        circuitName,
+        nonce,
+        audience,
+        contextCommitment,
+        issuedAt,
+      } = req.body;
       const verifier = req.identity!;
 
       // 1. Check proof age — reject expired proofs
@@ -239,7 +298,10 @@ router.post(
         return;
       }
       if (proofAge < 0) {
-        res.status(400).json({ error: 'Proof issuedAt is in the future', code: 'PROOF_FUTURE_TIMESTAMP' });
+        res.status(400).json({
+          error: 'Proof issuedAt is in the future',
+          code: 'PROOF_FUTURE_TIMESTAMP',
+        });
         return;
       }
 
@@ -262,7 +324,10 @@ router.post(
       const alreadyUsed = await redis.get(replayKey);
       if (alreadyUsed) {
         logger.warn('proof_replay_detected', { nonce, verifier: verifier.id });
-        res.status(409).json({ error: 'Proof has already been verified (replay)', code: 'PROOF_REPLAY' });
+        res.status(409).json({
+          error: 'Proof has already been verified (replay)',
+          code: 'PROOF_REPLAY',
+        });
         return;
       }
 
@@ -270,29 +335,143 @@ router.post(
       const nonceData = await redis.get(`proof:nonce:${nonce}`);
       if (!nonceData) {
         logger.warn('proof_nonce_unknown', { nonce, verifier: verifier.id });
-        res.status(400).json({ error: 'Nonce not recognized or expired', code: 'PROOF_NONCE_INVALID' });
+        res.status(400).json({
+          error: 'Nonce not recognized or expired',
+          code: 'PROOF_NONCE_INVALID',
+        });
         return;
       }
 
-      // 5. Verify context commitment integrity — recompute from the nonce
-      //    record and compare against the caller-supplied value.
-      const nonceRecord = JSON.parse(nonceData);
-      const expectedCommitmentHash = createHash('sha256')
-        .update(`${nonce}:${nonceRecord.audience}:${nonceRecord.subjectId}:${nonceRecord.credentialId}:${nonceRecord.issuedAt}`)
-        .digest('hex');
-      const expectedCommitmentField = BigInt('0x' + expectedCommitmentHash.substring(0, 62)).toString();
+      // 5. Verify context metadata and commitment integrity against the
+      //    server-side nonce record. The HTTP metadata must match the nonce
+      //    record that created the public context commitment; otherwise a
+      //    valid proof for one audience/timestamp could be rebound to another
+      //    verifier request while still passing the public-signal check.
+      const nonceRecord = JSON.parse(nonceData) as {
+        audience?: unknown;
+        subjectId?: unknown;
+        credentialId?: unknown;
+        issuedAt?: unknown;
+        claimsHashField?: unknown;
+        contextCommitmentField?: unknown;
+      };
 
-      if (contextCommitment !== expectedCommitmentField) {
-        res.status(400).json({ error: 'Context commitment mismatch — proof may have been tampered with', code: 'PROOF_CONTEXT_INVALID' });
+      if (
+        typeof nonceRecord.audience !== 'string' ||
+        typeof nonceRecord.subjectId !== 'string' ||
+        typeof nonceRecord.credentialId !== 'string' ||
+        typeof nonceRecord.issuedAt !== 'number' ||
+        typeof nonceRecord.claimsHashField !== 'string' ||
+        typeof nonceRecord.contextCommitmentField !== 'string'
+      ) {
+        res.status(400).json({
+          error: 'Nonce record is malformed',
+          code: 'PROOF_NONCE_RECORD_INVALID',
+        });
+        return;
+      }
+
+      if (
+        nonceRecord.audience !== audience ||
+        nonceRecord.issuedAt !== issuedAt
+      ) {
+        logger.warn('proof_context_metadata_mismatch', {
+          nonce,
+          requestAudience: audience,
+          nonceAudience: nonceRecord.audience,
+          requestIssuedAt: issuedAt,
+          nonceIssuedAt: nonceRecord.issuedAt,
+        });
+        res.status(400).json({
+          error:
+            'Proof context metadata does not match the issued nonce record',
+          code: 'PROOF_CONTEXT_METADATA_MISMATCH',
+        });
+        return;
+      }
+
+      const credential = await credentialService.getCredential(
+        nonceRecord.credentialId,
+      );
+      if (!credential) {
+        res.status(400).json({
+          error: 'Credential referenced by nonce was not found',
+          code: 'PROOF_CREDENTIAL_NOT_FOUND',
+        });
+        return;
+      }
+
+      if (
+        credential.status !== 'ACTIVE' ||
+        credential.subjectId !== nonceRecord.subjectId
+      ) {
+        logger.warn('proof_credential_context_mismatch', {
+          nonce,
+          credentialId: nonceRecord.credentialId,
+          credentialStatus: credential.status,
+          credentialSubjectId: credential.subjectId,
+          nonceSubjectId: nonceRecord.subjectId,
+        });
+        res.status(400).json({
+          error: 'Credential no longer matches the proof issuance context',
+          code: 'PROOF_CREDENTIAL_CONTEXT_INVALID',
+        });
+        return;
+      }
+
+      const currentClaimsHash = computeClaimsHash(credential.claims);
+      if (currentClaimsHash !== credential.claimsHash) {
+        res.status(409).json({
+          error: 'Credential claims integrity mismatch',
+          code: 'PROOF_CREDENTIAL_CLAIMS_HASH_INVALID',
+        });
+        return;
+      }
+
+      const expectedClaimsHashField = digestToFieldElement(
+        credential.claimsHash,
+      );
+      if (nonceRecord.claimsHashField !== expectedClaimsHashField) {
+        res.status(400).json({
+          error: 'Nonce claims commitment does not match the credential',
+          code: 'PROOF_CLAIMS_CONTEXT_INVALID',
+        });
+        return;
+      }
+
+      const expectedCommitmentHash = createHash('sha256')
+        .update(
+          `${nonce}:${nonceRecord.audience}:${nonceRecord.subjectId}:${nonceRecord.credentialId}:${nonceRecord.issuedAt}`,
+        )
+        .digest('hex');
+      const expectedCommitmentField = BigInt(
+        '0x' + expectedCommitmentHash.substring(0, 62),
+      ).toString();
+
+      if (
+        contextCommitment !== expectedCommitmentField ||
+        nonceRecord.contextCommitmentField !== expectedCommitmentField
+      ) {
+        res.status(400).json({
+          error:
+            'Context commitment mismatch — proof may have been tampered with',
+          code: 'PROOF_CONTEXT_INVALID',
+        });
         return;
       }
 
       // 6. Verify the ZK proof cryptographically
-      const result = await zkProofService.verifyProof(proof, publicSignals, circuitName);
+      const result = await zkProofService.verifyProof(
+        proof,
+        publicSignals,
+        circuitName,
+      );
 
       if (!result.valid) {
         verificationCounter.inc({ result: 'failed' });
-        res.json({ data: { valid: false, proofId: result.proofId, circuitName } });
+        res.json({
+          data: { valid: false, proofId: result.proofId, circuitName },
+        });
         return;
       }
 
@@ -309,8 +488,25 @@ router.post(
       //    unrelated signal slot.
       if (!Array.isArray(publicSignals) || publicSignals.length < 2) {
         res.status(400).json({
-          error: 'Public signals array is missing or too short — expected at least claimsHash and contextCommitment',
+          error:
+            'Public signals array is missing or too short — expected at least claimsHash and contextCommitment',
           code: 'PROOF_SIGNALS_SCHEMA_INVALID',
+        });
+        return;
+      }
+
+      const firstSignal = publicSignals[0];
+      if (firstSignal !== expectedClaimsHashField) {
+        logger.warn('proof_claims_hash_not_in_public_signals', {
+          nonce,
+          expectedClaimsHash: expectedClaimsHashField,
+          actualFirstSignal: firstSignal,
+          publicSignalsLength: publicSignals.length,
+        });
+        res.status(400).json({
+          error:
+            'Claims commitment is not the first public signal — proof is not bound to the credential',
+          code: 'PROOF_CLAIMS_HASH_NOT_COMMITTED',
         });
         return;
       }
@@ -324,17 +520,23 @@ router.post(
           publicSignalsLength: publicSignals.length,
         });
         res.status(400).json({
-          error: 'Context commitment is not the last public signal — proof is not bound to this context',
+          error:
+            'Context commitment is not the last public signal — proof is not bound to this context',
           code: 'PROOF_CONTEXT_NOT_COMMITTED',
         });
         return;
       }
 
       // 8. Mark nonce as consumed — prevents replay
-      await redis.set(replayKey, JSON.stringify({
-        verifier: verifier.id,
-        verifiedAt: Date.now(),
-      }), 'EX', PROOF_REPLAY_WINDOW_SECONDS);
+      await redis.set(
+        replayKey,
+        JSON.stringify({
+          verifier: verifier.id,
+          verifiedAt: Date.now(),
+        }),
+        'EX',
+        PROOF_REPLAY_WINDOW_SECONDS,
+      );
 
       // Clean up the issuance nonce
       await redis.del(`proof:nonce:${nonce}`);
@@ -361,7 +563,9 @@ router.post(
       verificationCounter.inc({ result: 'error' });
       const error = err as Error & { statusCode?: number; code?: string };
       logger.error('zk_verify_error', { error: error.message });
-      res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code });
+      res
+        .status(error.statusCode ?? 500)
+        .json({ error: error.message, code: error.code });
     }
   },
 );
@@ -408,7 +612,9 @@ router.post(
     } catch (err) {
       const error = err as Error & { statusCode?: number; code?: string };
       logger.error('tee_attestation_error', { error: error.message });
-      res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code });
+      res
+        .status(error.statusCode ?? 500)
+        .json({ error: error.message, code: error.code });
     }
   },
 );
@@ -437,7 +643,9 @@ router.get(
   async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
       const identity = req.identity!;
-      const { page, limit, type, result } = req.query as unknown as z.infer<typeof historyQuerySchema>;
+      const { page, limit, type, result } = req.query as unknown as z.infer<
+        typeof historyQuerySchema
+      >;
 
       const where: Record<string, unknown> = {
         OR: [{ verifierId: identity.id }, { subjectId: identity.id }],
@@ -476,7 +684,9 @@ router.get(
       });
     } catch (err) {
       const error = err as Error & { statusCode?: number; code?: string };
-      res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code });
+      res
+        .status(error.statusCode ?? 500)
+        .json({ error: error.message, code: error.code });
     }
   },
 );
