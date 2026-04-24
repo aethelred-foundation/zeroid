@@ -3,6 +3,14 @@ import { createLogger, format, transports } from 'winston';
 import crypto from 'crypto';
 import { redis } from '../../index';
 
+const isHttpsUrl = (value: string): boolean => {
+  try {
+    return new URL(value).protocol === 'https:';
+  } catch {
+    return false;
+  }
+};
+
 const SUPPORTED_CLIENT_AUTH_METHODS = [
   'client_secret_basic',
   'client_secret_post',
@@ -32,6 +40,12 @@ export const OIDCClientRegistrationSchema = z.object({
   clientName: z.string().min(1),
   redirectUris: z.array(z.string().url()).min(1),
   postLogoutRedirectUris: z.array(z.string().url()).default([]),
+  backchannelLogoutUri: z
+    .string()
+    .url()
+    .refine(isHttpsUrl, 'Back-channel logout URI must use HTTPS.')
+    .optional(),
+  backchannelLogoutSessionRequired: z.boolean().default(true),
   grantTypes: z
     .array(
       z.enum(['authorization_code', 'client_credentials', 'refresh_token']),
@@ -888,7 +902,9 @@ export class OIDCBridge {
     return { logoutUrls };
   }
 
-  async backChannelLogout(sessionId: string): Promise<{ notified: boolean }> {
+  async backChannelLogout(
+    sessionId: string,
+  ): Promise<{ notified: boolean; deliveryStatus?: number }> {
     const session = await this.sessions.get(sessionId);
     if (!session) return { notified: false };
 
@@ -896,28 +912,87 @@ export class OIDCBridge {
     await this.sessions.set(sessionId, session);
     await this.revokeSessionCredentials(sessionId);
 
-    // Generate logout token
-    const logoutToken = {
+    const client = await this.getNormalizedClient(session.clientId);
+    const logoutUri = client?.registration.backchannelLogoutUri;
+    if (!logoutUri) {
+      logger.warn('back_channel_logout_uri_missing', {
+        sessionId,
+        clientId: session.clientId,
+      });
+      return { notified: false };
+    }
+
+    const logoutToken = this.signJwtPayload({
       iss: this.issuer,
       sub: session.subjectId,
       aud: session.clientId,
       iat: Math.floor(Date.now() / 1000),
       jti: crypto.randomUUID(),
       events: { 'http://schemas.openid.net/event/backchannel-logout': {} },
-      sid: sessionId,
-    };
+      ...(client.registration.backchannelLogoutSessionRequired !== false
+        ? { sid: sessionId }
+        : {}),
+    });
+
+    const delivery = await this.deliverBackChannelLogout(
+      logoutUri,
+      logoutToken,
+      sessionId,
+      session.clientId,
+    );
 
     logger.info('back_channel_logout', {
       sessionId,
       clientId: session.clientId,
-      logoutTokenJti: logoutToken.jti,
+      notified: delivery.notified,
+      deliveryStatus: delivery.status,
     });
-    return { notified: true };
+    return {
+      notified: delivery.notified,
+      ...(delivery.status ? { deliveryStatus: delivery.status } : {}),
+    };
   }
 
   // -------------------------------------------------------------------------
   // Internal helpers
   // -------------------------------------------------------------------------
+  private async deliverBackChannelLogout(
+    logoutUri: string,
+    logoutToken: string,
+    sessionId: string,
+    clientId: string,
+  ): Promise<{ notified: boolean; status?: number }> {
+    try {
+      const response = await fetch(logoutUri, {
+        method: 'POST',
+        headers: {
+          accept: 'application/json, text/plain, */*',
+          'content-type': 'application/x-www-form-urlencoded',
+        },
+        body: new URLSearchParams({ logout_token: logoutToken }).toString(),
+        signal: AbortSignal.timeout(5000),
+      });
+
+      if (!response.ok) {
+        logger.warn('back_channel_logout_delivery_failed', {
+          sessionId,
+          clientId,
+          status: response.status,
+        });
+      }
+
+      return { notified: response.ok, status: response.status };
+    } catch (err) {
+      const error = err as Error;
+      logger.error('back_channel_logout_delivery_error', {
+        sessionId,
+        clientId,
+        error: error.message,
+      });
+      return { notified: false };
+    }
+  }
+
   private async revokeSessionCredentials(sessionId: string): Promise<void> {
     // Revoke only tokens issued under THIS session (not all sessions for the user).
     const tokenSetKey = sessionTokenSetKey(sessionId);
@@ -1013,22 +1088,7 @@ export class OIDCBridge {
       ...claims,
     };
 
-    const header = Buffer.from(
-      JSON.stringify({
-        alg: this.signingAlgorithm,
-        typ: 'JWT',
-        kid: this.getSigningKeyId(),
-      }),
-    ).toString('base64url');
-    const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
-    const signature = crypto
-      .sign(
-        'sha256',
-        Buffer.from(`${header}.${body}`),
-        this.getSigningKeyInput(),
-      )
-      .toString('base64url');
-    const token = `${header}.${body}.${signature}`;
+    const token = this.signJwtPayload(payload);
 
     await this.issuedTokens.set(tokenId, {
       tokenId,
@@ -1051,6 +1111,26 @@ export class OIDCBridge {
     }
 
     return { token, tokenId };
+  }
+
+  private signJwtPayload(payload: Record<string, unknown>): string {
+    const header = Buffer.from(
+      JSON.stringify({
+        alg: this.signingAlgorithm,
+        typ: 'JWT',
+        kid: this.getSigningKeyId(),
+      }),
+    ).toString('base64url');
+    const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
+    const signature = crypto
+      .sign(
+        'sha256',
+        Buffer.from(`${header}.${body}`),
+        this.getSigningKeyInput(),
+      )
+      .toString('base64url');
+
+    return `${header}.${body}.${signature}`;
   }
 
   private async generateRefreshToken(

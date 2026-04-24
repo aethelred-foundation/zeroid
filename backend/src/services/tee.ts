@@ -117,19 +117,24 @@ interface PCCSCollateral {
 interface CachedCollateral {
   collateral: PCCSCollateral;
   fmspc: string;
-  cachedAt: number;      // epoch ms
-  issueDate: number;     // epoch ms from tcbInfo
-  nextUpdate: number;    // epoch ms from tcbInfo
+  cachedAt: number; // epoch ms
+  issueDate: number; // epoch ms from tcbInfo
+  nextUpdate: number; // epoch ms from tcbInfo
   refreshStatus: 'fresh' | 'refreshing' | 'stale';
 }
 
 // ---------------------------------------------------------------------------
 // Intel SGX PCCS / DCAP configuration
 // ---------------------------------------------------------------------------
-const INTEL_PCS_BASE_URL = process.env.INTEL_PCS_URL ?? 'https://api.trustedservices.intel.com/sgx/certification/v4';
+const INTEL_PCS_BASE_URL =
+  process.env.INTEL_PCS_URL ??
+  'https://api.trustedservices.intel.com/sgx/certification/v4';
 const TEE_DCAP_BASE_URL = process.env.TEE_DCAP_API_URL ?? INTEL_PCS_BASE_URL;
 const INTEL_PCS_API_KEY = process.env.INTEL_PCS_API_KEY ?? '';
-const ATTESTATION_VALIDITY_HOURS = parseInt(process.env.TEE_ATTESTATION_VALIDITY_HOURS ?? '24', 10);
+const ATTESTATION_VALIDITY_HOURS = parseInt(
+  process.env.TEE_ATTESTATION_VALIDITY_HOURS ?? '24',
+  10,
+);
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 
 // Maximum age for collateral before it is considered stale (30 days)
@@ -152,9 +157,11 @@ const ALLOWED_TCB_STATUSES = new Set(
     .filter(Boolean),
 );
 const ALLOWED_QE_TCB_STATUSES = new Set(
-  (process.env.TEE_ALLOWED_QE_TCB_STATUSES
-    ?? process.env.TEE_ALLOWED_TCB_STATUSES
-    ?? TCBStatus.UP_TO_DATE)
+  (
+    process.env.TEE_ALLOWED_QE_TCB_STATUSES ??
+    process.env.TEE_ALLOWED_TCB_STATUSES ??
+    TCBStatus.UP_TO_DATE
+  )
     .split(',')
     .map((status) => status.trim())
     .filter(Boolean),
@@ -189,7 +196,9 @@ export class TEEAttestationService {
   // -------------------------------------------------------------------------
   // Verify an SGX/DCAP attestation quote
   // -------------------------------------------------------------------------
-  async verifyAttestation(request: TEEAttestationRequest): Promise<TEEAttestationResult> {
+  async verifyAttestation(
+    request: TEEAttestationRequest,
+  ): Promise<TEEAttestationResult> {
     const attestationId = crypto.randomUUID();
     const startTime = process.hrtime.bigint();
     logger.info('tee_attestation_start', {
@@ -240,7 +249,11 @@ export class TEEAttestationService {
       this.verifyQEReportIdentity(collateral, certResult);
 
       // 6. Check TCB status (compares all 16 SGX component SVNs + pceSvn)
-      const tcbStatus = await this.evaluateTCBStatus(collateral, header, reportBody);
+      const tcbStatus = await this.evaluateTCBStatus(
+        collateral,
+        header,
+        reportBody,
+      );
       this.enforceTCBPolicy(tcbStatus);
 
       // 7. Verify MRSIGNER trust
@@ -256,7 +269,9 @@ export class TEEAttestationService {
 
       // 9. Build result
       const now = new Date();
-      const expiresAt = new Date(now.getTime() + ATTESTATION_VALIDITY_HOURS * 3600_000);
+      const expiresAt = new Date(
+        now.getTime() + ATTESTATION_VALIDITY_HOURS * 3600_000,
+      );
 
       const result: TEEAttestationResult = {
         attestationId,
@@ -313,7 +328,11 @@ export class TEEAttestationService {
       teeFMSPCTotal.inc({ fmspc: certResult.fmspc });
       teeMRSIGNERTotal.inc({ mrsigner: reportBody.mrsigner });
 
-      logger.info('tee_attestation_success', { attestationId, tcbStatus, durationSec });
+      logger.info('tee_attestation_success', {
+        attestationId,
+        tcbStatus,
+        durationSec,
+      });
       return result;
     } catch (err) {
       // Record observability metrics on failure
@@ -366,7 +385,9 @@ export class TEEAttestationService {
   // -------------------------------------------------------------------------
   // Get attestation details
   // -------------------------------------------------------------------------
-  async getAttestation(attestationId: string): Promise<TEEAttestationResult | null> {
+  async getAttestation(
+    attestationId: string,
+  ): Promise<TEEAttestationResult | null> {
     const cached = await redis.get(`tee:attestation:${attestationId}`);
     if (cached) {
       return JSON.parse(cached) as TEEAttestationResult;
@@ -377,7 +398,10 @@ export class TEEAttestationService {
   // -------------------------------------------------------------------------
   // Internal: Parse SGX DCAP quote binary
   // -------------------------------------------------------------------------
-  private parseQuote(quoteBuffer: Buffer): { header: SGXQuoteHeader; reportBody: SGXReportBody } {
+  private parseQuote(quoteBuffer: Buffer): {
+    header: SGXQuoteHeader;
+    reportBody: SGXReportBody;
+  } {
     if (quoteBuffer.length < 436) {
       throw new AttestationError('Quote too short', 'TEE_INVALID_QUOTE');
     }
@@ -393,12 +417,20 @@ export class TEEAttestationService {
 
     const reportOffset = 48;
     const reportBody: SGXReportBody = {
-      cpuSvn: quoteBuffer.subarray(reportOffset, reportOffset + 16).toString('hex'),
-      mrenclave: quoteBuffer.subarray(reportOffset + 64, reportOffset + 96).toString('hex'),
-      mrsigner: quoteBuffer.subarray(reportOffset + 128, reportOffset + 160).toString('hex'),
+      cpuSvn: quoteBuffer
+        .subarray(reportOffset, reportOffset + 16)
+        .toString('hex'),
+      mrenclave: quoteBuffer
+        .subarray(reportOffset + 64, reportOffset + 96)
+        .toString('hex'),
+      mrsigner: quoteBuffer
+        .subarray(reportOffset + 128, reportOffset + 160)
+        .toString('hex'),
       isvProdId: quoteBuffer.readUInt16LE(reportOffset + 256),
       isvSvn: quoteBuffer.readUInt16LE(reportOffset + 258),
-      reportData: quoteBuffer.subarray(reportOffset + 320, reportOffset + 384).toString('hex'),
+      reportData: quoteBuffer
+        .subarray(reportOffset + 320, reportOffset + 384)
+        .toString('hex'),
     };
 
     return { header, reportBody };
@@ -407,7 +439,10 @@ export class TEEAttestationService {
   // -------------------------------------------------------------------------
   // Internal: Validate quote structural integrity
   // -------------------------------------------------------------------------
-  private validateQuoteStructure(header: SGXQuoteHeader, _reportBody: SGXReportBody): void {
+  private validateQuoteStructure(
+    header: SGXQuoteHeader,
+    _reportBody: SGXReportBody,
+  ): void {
     if (header.version !== 3 && header.version !== 4) {
       throw new AttestationError(
         `Unsupported quote version: ${header.version}`,
@@ -432,7 +467,10 @@ export class TEEAttestationService {
   // -------------------------------------------------------------------------
   // Internal: Verify user data is bound to the public key
   // -------------------------------------------------------------------------
-  private verifyUserDataBinding(reportBody: SGXReportBody, publicKey: string): void {
+  private verifyUserDataBinding(
+    reportBody: SGXReportBody,
+    publicKey: string,
+  ): void {
     const keyBuffer = Buffer.from(publicKey, 'base64');
     const expectedHash = this.sha256Hex(keyBuffer).slice(0, 64);
 
@@ -458,7 +496,9 @@ export class TEEAttestationService {
   // This ensures no quote-supplied material is trusted before it has been
   // authenticated through the Intel-rooted certificate chain.
   // -------------------------------------------------------------------------
-  private verifyQuoteCertificationChain(quoteBuffer: Buffer): QuoteCertificationResult {
+  private verifyQuoteCertificationChain(
+    quoteBuffer: Buffer,
+  ): QuoteCertificationResult {
     const quoteBodyEnd = 432; // header (48) + report body (384)
 
     // ── Parse quote signature data section ──────────────────────────────
@@ -471,12 +511,24 @@ export class TEEAttestationService {
 
     // ISV Enclave Report Signature (r || s, 64 bytes)
     const isvSignatureR = quoteBuffer.subarray(quoteBodyEnd, quoteBodyEnd + 32);
-    const isvSignatureS = quoteBuffer.subarray(quoteBodyEnd + 32, quoteBodyEnd + 64);
+    const isvSignatureS = quoteBuffer.subarray(
+      quoteBodyEnd + 32,
+      quoteBodyEnd + 64,
+    );
 
     // Attestation Public Key (x || y, 64 bytes)
-    const attestKeyX = quoteBuffer.subarray(quoteBodyEnd + 64, quoteBodyEnd + 96);
-    const attestKeyY = quoteBuffer.subarray(quoteBodyEnd + 96, quoteBodyEnd + 128);
-    const attestKeyRaw = quoteBuffer.subarray(quoteBodyEnd + 64, quoteBodyEnd + 128);
+    const attestKeyX = quoteBuffer.subarray(
+      quoteBodyEnd + 64,
+      quoteBodyEnd + 96,
+    );
+    const attestKeyY = quoteBuffer.subarray(
+      quoteBodyEnd + 96,
+      quoteBodyEnd + 128,
+    );
+    const attestKeyRaw = quoteBuffer.subarray(
+      quoteBodyEnd + 64,
+      quoteBodyEnd + 128,
+    );
 
     // QE Report Body (384 bytes)
     const qeReportOffset = quoteBodyEnd + 128;
@@ -486,7 +538,10 @@ export class TEEAttestationService {
         'TEE_QUOTE_TRUNCATED',
       );
     }
-    const qeReportBody = quoteBuffer.subarray(qeReportOffset, qeReportOffset + 384);
+    const qeReportBody = quoteBuffer.subarray(
+      qeReportOffset,
+      qeReportOffset + 384,
+    );
 
     // QE Report Signature (r || s, 64 bytes)
     const qeSigOffset = qeReportOffset + 384;
@@ -497,7 +552,10 @@ export class TEEAttestationService {
       );
     }
     const qeSignatureR = quoteBuffer.subarray(qeSigOffset, qeSigOffset + 32);
-    const qeSignatureS = quoteBuffer.subarray(qeSigOffset + 32, qeSigOffset + 64);
+    const qeSignatureS = quoteBuffer.subarray(
+      qeSigOffset + 32,
+      qeSigOffset + 64,
+    );
 
     // QE Auth Data
     const qeAuthLenOffset = qeSigOffset + 64;
@@ -509,7 +567,10 @@ export class TEEAttestationService {
     }
     const qeAuthDataLen = quoteBuffer.readUInt16LE(qeAuthLenOffset);
     const qeAuthDataStart = qeAuthLenOffset + 2;
-    const qeAuthData = quoteBuffer.subarray(qeAuthDataStart, qeAuthDataStart + qeAuthDataLen);
+    const qeAuthData = quoteBuffer.subarray(
+      qeAuthDataStart,
+      qeAuthDataStart + qeAuthDataLen,
+    );
 
     // Certification Data
     const certDataTypeOffset = qeAuthDataStart + qeAuthDataLen;
@@ -537,7 +598,9 @@ export class TEEAttestationService {
       );
     }
 
-    const certChainPem = quoteBuffer.subarray(certDataStart, certDataStart + certDataSize).toString('utf8');
+    const certChainPem = quoteBuffer
+      .subarray(certDataStart, certDataStart + certDataSize)
+      .toString('utf8');
     const certs = this.parsePemChain(certChainPem);
     if (certs.length < 2) {
       throw new AttestationError(
@@ -571,7 +634,10 @@ export class TEEAttestationService {
     const qeReportVerifier = crypto.createVerify('SHA256');
     qeReportVerifier.update(qeReportBody);
     const qeReportDerSig = this.buildDERSignature(qeSignatureR, qeSignatureS);
-    const qeReportSigValid = qeReportVerifier.verify(pckLeafCert.publicKey, qeReportDerSig);
+    const qeReportSigValid = qeReportVerifier.verify(
+      pckLeafCert.publicKey,
+      qeReportDerSig,
+    );
 
     if (!qeReportSigValid) {
       throw new AttestationError(
@@ -583,13 +649,16 @@ export class TEEAttestationService {
 
     // ── Step 3: Verify attestation key binding in QE Report ─────────────
     // QE Report reportData[0:32] must equal SHA-256(attestation_key || QE_auth_data)
-    const bindingHash = crypto.createHash('sha256')
+    const bindingHash = crypto
+      .createHash('sha256')
       .update(attestKeyRaw)
       .update(qeAuthData)
       .digest('hex');
 
     const qeReportDataOffset = 320; // reportData is at offset 320 within report body
-    const qeReportData = qeReportBody.subarray(qeReportDataOffset, qeReportDataOffset + 32).toString('hex');
+    const qeReportData = qeReportBody
+      .subarray(qeReportDataOffset, qeReportDataOffset + 32)
+      .toString('hex');
 
     if (bindingHash !== qeReportData) {
       throw new AttestationError(
@@ -676,7 +745,9 @@ export class TEEAttestationService {
         // OCTET STRING tag found
         const len = derBuffer[offset + 1];
         if (len === 6 && offset + 2 + 6 <= derBuffer.length) {
-          const fmspc = derBuffer.subarray(offset + 2, offset + 2 + 6).toString('hex');
+          const fmspc = derBuffer
+            .subarray(offset + 2, offset + 2 + 6)
+            .toString('hex');
           return fmspc;
         }
       }
@@ -780,17 +851,27 @@ export class TEEAttestationService {
   // -------------------------------------------------------------------------
   private refreshCollateral(fmspc: string, cacheKey: string): void {
     // Mark as refreshing (best-effort, non-blocking)
-    redis.get(cacheKey).then((raw) => {
-      if (raw) {
-        try {
-          const entry = JSON.parse(raw) as CachedCollateral;
-          entry.refreshStatus = 'refreshing';
-          const ttlMs = Math.max(entry.nextUpdate - Date.now(), MAX_COLLATERAL_AGE_MS);
-          const ttlSec = Math.ceil(ttlMs / 1000);
-          redis.set(cacheKey, JSON.stringify(entry), 'EX', ttlSec).catch(() => {});
-        } catch { /* ignore parse errors */ }
-      }
-    }).catch(() => {});
+    redis
+      .get(cacheKey)
+      .then((raw) => {
+        if (raw) {
+          try {
+            const entry = JSON.parse(raw) as CachedCollateral;
+            entry.refreshStatus = 'refreshing';
+            const ttlMs = Math.max(
+              entry.nextUpdate - Date.now(),
+              MAX_COLLATERAL_AGE_MS,
+            );
+            const ttlSec = Math.ceil(ttlMs / 1000);
+            redis
+              .set(cacheKey, JSON.stringify(entry), 'EX', ttlSec)
+              .catch(() => {});
+          } catch {
+            /* ignore parse errors */
+          }
+        }
+      })
+      .catch(() => {});
 
     setImmediate(() => {
       this.fetchCollateralFromPCS(fmspc)
@@ -854,7 +935,12 @@ export class TEEAttestationService {
 
     try {
       await redis.set(cacheKey, JSON.stringify(entry), 'EX', ttlSec);
-      logger.info('collateral_cached', { fmspc, ttlSec, issueDate, nextUpdate });
+      logger.info('collateral_cached', {
+        fmspc,
+        ttlSec,
+        issueDate,
+        nextUpdate,
+      });
     } catch (err) {
       logger.warn('collateral_cache_write_failed', {
         fmspc,
@@ -873,24 +959,29 @@ export class TEEAttestationService {
     };
 
     try {
-      const [pckCrlRes, rootCaCrlRes, tcbInfoRes, qeIdentityRes] = await Promise.all([
-        fetch(`${TEE_DCAP_BASE_URL}/pckcrl?ca=processor`, { headers }),
-        fetch(`${TEE_DCAP_BASE_URL}/rootcacrl`, { headers }),
-        fetch(`${TEE_DCAP_BASE_URL}/tcb?fmspc=${fmspc}`, { headers }),
-        fetch(`${TEE_DCAP_BASE_URL}/qe/identity`, { headers }),
-      ]);
+      const [pckCrlRes, rootCaCrlRes, tcbInfoRes, qeIdentityRes] =
+        await Promise.all([
+          fetch(`${TEE_DCAP_BASE_URL}/pckcrl?ca=processor`, { headers }),
+          fetch(`${TEE_DCAP_BASE_URL}/rootcacrl`, { headers }),
+          fetch(`${TEE_DCAP_BASE_URL}/tcb?fmspc=${fmspc}`, { headers }),
+          fetch(`${TEE_DCAP_BASE_URL}/qe/identity`, { headers }),
+        ]);
 
       if (!pckCrlRes.ok) {
         throw new Error(`PCK CRL fetch returned HTTP ${pckCrlRes.status}`);
       }
       if (!rootCaCrlRes.ok) {
-        throw new Error(`Root CA CRL fetch returned HTTP ${rootCaCrlRes.status}`);
+        throw new Error(
+          `Root CA CRL fetch returned HTTP ${rootCaCrlRes.status}`,
+        );
       }
       if (!tcbInfoRes.ok) {
         throw new Error(`TCB info fetch returned HTTP ${tcbInfoRes.status}`);
       }
       if (!qeIdentityRes.ok) {
-        throw new Error(`QE identity fetch returned HTTP ${qeIdentityRes.status}`);
+        throw new Error(
+          `QE identity fetch returned HTTP ${qeIdentityRes.status}`,
+        );
       }
 
       // Extract PCK CRL issuer chain from response header
@@ -899,14 +990,16 @@ export class TEEAttestationService {
       );
 
       // Extract TCB info signature from response header
-      const tcbInfoSignature = tcbInfoRes.headers.get('SGX-TCB-Info-Signature') ?? '';
+      const tcbInfoSignature =
+        tcbInfoRes.headers.get('SGX-TCB-Info-Signature') ?? '';
       // Extract the TCB signing certificate chain from response header
       const tcbSigningCertChain = decodeURIComponent(
         tcbInfoRes.headers.get('SGX-TCB-Info-Issuer-Chain') ?? '',
       );
 
       // Extract QE identity signature and signing cert chain from response headers
-      const qeIdentitySignature = qeIdentityRes.headers.get('SGX-Enclave-Identity-Signature') ?? '';
+      const qeIdentitySignature =
+        qeIdentityRes.headers.get('SGX-Enclave-Identity-Signature') ?? '';
       const qeIdentitySigningCertChain = decodeURIComponent(
         qeIdentityRes.headers.get('SGX-Enclave-Identity-Issuer-Chain') ?? '',
       );
@@ -925,7 +1018,9 @@ export class TEEAttestationService {
         qeIdentitySigningCertChain,
       };
     } catch (err) {
-      logger.error('pccs_collateral_fetch_failed', { error: (err as Error).message });
+      logger.error('pccs_collateral_fetch_failed', {
+        error: (err as Error).message,
+      });
       throw new AttestationError(
         `Failed to fetch PCCS collateral: ${(err as Error).message}`,
         'TEE_COLLATERAL_UNAVAILABLE',
@@ -936,8 +1031,15 @@ export class TEEAttestationService {
   // -------------------------------------------------------------------------
   // Internal: Verify Intel certificate chain with cryptographic validation
   // -------------------------------------------------------------------------
-  private async verifyCertificateChain(collateral: PCCSCollateral): Promise<void> {
-    if (!collateral.pckCrl || !collateral.rootCaCrl || !collateral.tcbInfo || !collateral.qeIdentity) {
+  private async verifyCertificateChain(
+    collateral: PCCSCollateral,
+  ): Promise<void> {
+    if (
+      !collateral.pckCrl ||
+      !collateral.rootCaCrl ||
+      !collateral.tcbInfo ||
+      !collateral.qeIdentity
+    ) {
       throw new AttestationError(
         'Incomplete collateral: pckCrl, rootCaCrl, tcbInfo, and qeIdentity are all required',
         'TEE_CHAIN_INCOMPLETE',
@@ -989,7 +1091,10 @@ export class TEEAttestationService {
     logger.info('certificate_chain_intermediate_ca_verified');
 
     // Check Intermediate CA validity period
-    this.checkCertificateValidity(intermediateCaCert, 'Intel SGX Intermediate CA');
+    this.checkCertificateValidity(
+      intermediateCaCert,
+      'Intel SGX Intermediate CA',
+    );
 
     // Verify the leaf (PCK / TCB signing) certificate is signed by Intermediate CA
     if (!leafCert.verify(intermediateCaCert.publicKey)) {
@@ -1006,7 +1111,10 @@ export class TEEAttestationService {
     // Validate tcbInfo JSON structure
     try {
       const tcbInfo = JSON.parse(collateral.tcbInfo);
-      if (!tcbInfo.tcbInfo?.tcbLevels || !Array.isArray(tcbInfo.tcbInfo.tcbLevels)) {
+      if (
+        !tcbInfo.tcbInfo?.tcbLevels ||
+        !Array.isArray(tcbInfo.tcbInfo.tcbLevels)
+      ) {
         throw new Error('Missing tcbLevels');
       }
       if (!tcbInfo.tcbInfo?.fmspc) {
@@ -1028,10 +1136,14 @@ export class TEEAttestationService {
         throw new Error('Missing enclaveIdentity');
       }
       if (!qeId.enclaveIdentity.id || !qeId.enclaveIdentity.tcbLevels) {
-        throw new Error('Missing enclaveIdentity.id or enclaveIdentity.tcbLevels');
+        throw new Error(
+          'Missing enclaveIdentity.id or enclaveIdentity.tcbLevels',
+        );
       }
       if (!qeId.enclaveIdentity.issueDate || !qeId.enclaveIdentity.nextUpdate) {
-        throw new Error('Missing enclaveIdentity.issueDate or enclaveIdentity.nextUpdate');
+        throw new Error(
+          'Missing enclaveIdentity.issueDate or enclaveIdentity.nextUpdate',
+        );
       }
     } catch (err) {
       if (err instanceof AttestationError) throw err;
@@ -1047,7 +1159,10 @@ export class TEEAttestationService {
   // -------------------------------------------------------------------------
   // Internal: Check certificate validity period (notBefore / notAfter)
   // -------------------------------------------------------------------------
-  private checkCertificateValidity(cert: crypto.X509Certificate, label: string): void {
+  private checkCertificateValidity(
+    cert: crypto.X509Certificate,
+    label: string,
+  ): void {
     const now = new Date();
     const notBefore = new Date(cert.validFrom);
     const notAfter = new Date(cert.validTo);
@@ -1066,7 +1181,11 @@ export class TEEAttestationService {
       );
     }
 
-    logger.info('certificate_validity_checked', { label, validFrom: cert.validFrom, validTo: cert.validTo });
+    logger.info('certificate_validity_checked', {
+      label,
+      validFrom: cert.validFrom,
+      validTo: cert.validTo,
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -1127,7 +1246,9 @@ export class TEEAttestationService {
       // Verify the PCK CRL signing cert chains to Root CA
       // If chain has 2 certs: [intermediate, root]; if 1: [intermediate] (verify against pinned root)
       if (issuerCerts.length >= 2) {
-        const issuerRoot = new crypto.X509Certificate(issuerCerts[issuerCerts.length - 1]);
+        const issuerRoot = new crypto.X509Certificate(
+          issuerCerts[issuerCerts.length - 1],
+        );
         if (!issuerRoot.verify(rootCaCert.publicKey)) {
           throw new AttestationError(
             'PCK CRL issuer chain root does not match Intel SGX Root CA',
@@ -1149,7 +1270,10 @@ export class TEEAttestationService {
           );
         }
       }
-      this.checkCertificateValidity(pckCrlSigningCert, 'PCK CRL Signing Certificate');
+      this.checkCertificateValidity(
+        pckCrlSigningCert,
+        'PCK CRL Signing Certificate',
+      );
     } else {
       // Fallback: use Root CA as CRL signer (some PCCS implementations)
       pckCrlSigningCert = rootCaCert;
@@ -1183,7 +1307,8 @@ export class TEEAttestationService {
         // Check intermediate CA serial against root CRL
         if (chainCerts.length > 1) {
           const intermediateCert = new crypto.X509Certificate(chainCerts[1]);
-          const intermediateSerial = intermediateCert.serialNumber.toLowerCase();
+          const intermediateSerial =
+            intermediateCert.serialNumber.toLowerCase();
           if (rootRevokedSerials.has(intermediateSerial)) {
             throw new AttestationError(
               `Intermediate CA certificate (serial: ${intermediateSerial}) is revoked in Root CA CRL`,
@@ -1283,9 +1408,11 @@ export class TEEAttestationService {
   // Internal: Parse the top-level CRL DER to extract tbsCertList, algorithm,
   // and signature for verification.
   // -------------------------------------------------------------------------
-  private parseCrlDerStructure(
-    crlDer: Buffer,
-  ): { tbsCertListDer: Buffer; signatureAlgorithmOid: string; signatureBits: Buffer } | null {
+  private parseCrlDerStructure(crlDer: Buffer): {
+    tbsCertListDer: Buffer;
+    signatureAlgorithmOid: string;
+    signatureBits: Buffer;
+  } | null {
     let offset = 0;
 
     // Outer SEQUENCE
@@ -1299,7 +1426,10 @@ export class TEEAttestationService {
     const tbsLen = this.parseDerLength(crlDer, offset + 1);
     if (!tbsLen) return null;
     // tbsCertListDer includes the tag and length bytes
-    const tbsCertListDer = crlDer.subarray(offset, tbsLen.contentStart + tbsLen.length);
+    const tbsCertListDer = crlDer.subarray(
+      offset,
+      tbsLen.contentStart + tbsLen.length,
+    );
     offset = tbsLen.contentStart + tbsLen.length;
 
     // Second element: signatureAlgorithm SEQUENCE
@@ -1311,7 +1441,10 @@ export class TEEAttestationService {
     let signatureAlgorithmOid = '';
     if (crlDer[algContentStart] === 0x06) {
       const oidLen = crlDer[algContentStart + 1];
-      const oidBytes = crlDer.subarray(algContentStart + 2, algContentStart + 2 + oidLen);
+      const oidBytes = crlDer.subarray(
+        algContentStart + 2,
+        algContentStart + 2 + oidLen,
+      );
       signatureAlgorithmOid = this.derOidToString(oidBytes);
     }
     offset = algLen.contentStart + algLen.length;
@@ -1321,7 +1454,10 @@ export class TEEAttestationService {
     const sigLen = this.parseDerLength(crlDer, offset + 1);
     if (!sigLen) return null;
     // BIT STRING has a leading unused-bits byte (should be 0x00)
-    const signatureBits = crlDer.subarray(sigLen.contentStart + 1, sigLen.contentStart + sigLen.length);
+    const signatureBits = crlDer.subarray(
+      sigLen.contentStart + 1,
+      sigLen.contentStart + sigLen.length,
+    );
 
     return { tbsCertListDer, signatureAlgorithmOid, signatureBits };
   }
@@ -1329,7 +1465,10 @@ export class TEEAttestationService {
   // -------------------------------------------------------------------------
   // Internal: Parse DER length encoding, return content start and length
   // -------------------------------------------------------------------------
-  private parseDerLength(buf: Buffer, offset: number): { contentStart: number; length: number } | null {
+  private parseDerLength(
+    buf: Buffer,
+    offset: number,
+  ): { contentStart: number; length: number } | null {
     if (offset >= buf.length) return null;
     const firstByte = buf[offset];
     if (!(firstByte & 0x80)) {
@@ -1369,12 +1508,12 @@ export class TEEAttestationService {
   // -------------------------------------------------------------------------
   private oidToHashAlgorithm(oid: string): string | null {
     const map: Record<string, string> = {
-      '1.2.840.10045.4.3.2': 'SHA256',   // ecdsa-with-SHA256
-      '1.2.840.10045.4.3.3': 'SHA384',   // ecdsa-with-SHA384
-      '1.2.840.10045.4.3.4': 'SHA512',   // ecdsa-with-SHA512
-      '1.2.840.113549.1.1.11': 'SHA256',  // sha256WithRSAEncryption
-      '1.2.840.113549.1.1.12': 'SHA384',  // sha384WithRSAEncryption
-      '1.2.840.113549.1.1.13': 'SHA512',  // sha512WithRSAEncryption
+      '1.2.840.10045.4.3.2': 'SHA256', // ecdsa-with-SHA256
+      '1.2.840.10045.4.3.3': 'SHA384', // ecdsa-with-SHA384
+      '1.2.840.10045.4.3.4': 'SHA512', // ecdsa-with-SHA512
+      '1.2.840.113549.1.1.11': 'SHA256', // sha256WithRSAEncryption
+      '1.2.840.113549.1.1.12': 'SHA384', // sha384WithRSAEncryption
+      '1.2.840.113549.1.1.13': 'SHA512', // sha512WithRSAEncryption
     };
     return map[oid] ?? null;
   }
@@ -1410,7 +1549,9 @@ export class TEEAttestationService {
     }
 
     const ageDays = Math.floor((now - thisUpdate) / (24 * 60 * 60 * 1000));
-    const maxAgeDays = Math.floor(MAX_COLLATERAL_AGE_MS / (24 * 60 * 60 * 1000));
+    const maxAgeDays = Math.floor(
+      MAX_COLLATERAL_AGE_MS / (24 * 60 * 60 * 1000),
+    );
     if (now - thisUpdate > MAX_COLLATERAL_AGE_MS) {
       throw new AttestationError(
         `${label}: CRL is stale (thisUpdate: ${ageDays} days ago, max: ${maxAgeDays} days)`,
@@ -1424,7 +1565,9 @@ export class TEEAttestationService {
   // -------------------------------------------------------------------------
   // Internal: Extract thisUpdate and nextUpdate times from CRL DER
   // -------------------------------------------------------------------------
-  private extractCrlTimes(crlDer: Buffer): { thisUpdate: number; nextUpdate?: number } | null {
+  private extractCrlTimes(
+    crlDer: Buffer,
+  ): { thisUpdate: number; nextUpdate?: number } | null {
     // Navigate: outer SEQUENCE → tbsCertList SEQUENCE → skip version, sigAlg, issuer → times
     let offset = 0;
     if (crlDer[offset] !== 0x30) return null;
@@ -1478,11 +1621,16 @@ export class TEEAttestationService {
   // -------------------------------------------------------------------------
   // Internal: Parse ASN.1 UTCTime (0x17) or GeneralizedTime (0x18)
   // -------------------------------------------------------------------------
-  private parseAsn1Time(buf: Buffer, offset: number): { time: number; nextOffset: number } | null {
+  private parseAsn1Time(
+    buf: Buffer,
+    offset: number,
+  ): { time: number; nextOffset: number } | null {
     const tag = buf[offset];
     if (tag !== 0x17 && tag !== 0x18) return null;
     const len = buf[offset + 1];
-    const timeStr = buf.subarray(offset + 2, offset + 2 + len).toString('ascii');
+    const timeStr = buf
+      .subarray(offset + 2, offset + 2 + len)
+      .toString('ascii');
 
     let dateStr: string;
     if (tag === 0x17) {
@@ -1508,7 +1656,9 @@ export class TEEAttestationService {
     try {
       this.parseDerCrlSerials(crlDer, 0, crlDer.length, serials);
     } catch (err) {
-      logger.warn('crl_serial_extraction_partial', { error: (err as Error).message });
+      logger.warn('crl_serial_extraction_partial', {
+        error: (err as Error).message,
+      });
     }
     return serials;
   }
@@ -1560,7 +1710,10 @@ export class TEEAttestationService {
       // INTEGER (0x02) at depth >= 3 is likely a revoked serial number
       // (depth 0=outer, 1=tbsCertList, 2=revokedCertificates SEQUENCE, 3=per-entry SEQUENCE)
       else if (tag === 0x02 && depth >= 3) {
-        const serial = buf.subarray(offset, contentEnd).toString('hex').toLowerCase();
+        const serial = buf
+          .subarray(offset, contentEnd)
+          .toString('hex')
+          .toLowerCase();
         serials.add(serial);
       }
 
@@ -1662,7 +1815,9 @@ export class TEEAttestationService {
     }
 
     // Parse the signing certificate chain
-    const chainCerts = this.parsePemChain(collateral.qeIdentitySigningCertChain);
+    const chainCerts = this.parsePemChain(
+      collateral.qeIdentitySigningCertChain,
+    );
     if (chainCerts.length < 2) {
       throw new AttestationError(
         `QE identity signing certificate chain too short: expected at least 2 certificates, got ${chainCerts.length}`,
@@ -1690,8 +1845,14 @@ export class TEEAttestationService {
     }
 
     // Check certificate validity
-    this.checkCertificateValidity(signingCert, 'QE Identity Signing Certificate');
-    this.checkCertificateValidity(intermediateCert, 'QE Identity Intermediate CA');
+    this.checkCertificateValidity(
+      signingCert,
+      'QE Identity Signing Certificate',
+    );
+    this.checkCertificateValidity(
+      intermediateCert,
+      'QE Identity Intermediate CA',
+    );
 
     // Verify ECDSA signature over the QE identity JSON body
     const signatureBuffer = Buffer.from(collateral.qeIdentitySignature, 'hex');
@@ -1749,7 +1910,9 @@ export class TEEAttestationService {
 
         if (age > MAX_COLLATERAL_AGE_MS) {
           const ageDays = Math.floor(age / (24 * 60 * 60 * 1000));
-          const maxDays = Math.floor(MAX_COLLATERAL_AGE_MS / (24 * 60 * 60 * 1000));
+          const maxDays = Math.floor(
+            MAX_COLLATERAL_AGE_MS / (24 * 60 * 60 * 1000),
+          );
           throw new AttestationError(
             `TCB info collateral is stale: issued ${ageDays} days ago, max allowed is ${maxDays} days`,
             'TEE_COLLATERAL_STALE',
@@ -1914,7 +2077,8 @@ export class TEEAttestationService {
       }
 
       for (const level of tcbLevels) {
-        const sgxComponents: Array<{ svn: number }> = level.tcb?.sgxtcbcomponents ?? [];
+        const sgxComponents: Array<{ svn: number }> =
+          level.tcb?.sgxtcbcomponents ?? [];
         const pcesvn: number = level.tcb?.pcesvn ?? 0;
 
         // Skip levels without the expected 16 components
@@ -1958,7 +2122,9 @@ export class TEEAttestationService {
     }
   }
 
-  private assertSupportedEnclaveType(enclaveType: TEEAttestationRequest['enclaveType']): void {
+  private assertSupportedEnclaveType(
+    enclaveType: TEEAttestationRequest['enclaveType'],
+  ): void {
     if (enclaveType !== 'SGX') {
       throw new AttestationError(
         `Enclave type ${enclaveType} is not supported by the current verifier. ZeroID currently enforces Intel SGX DCAP verification only.`,
@@ -1994,7 +2160,7 @@ export class TEEAttestationService {
     if (TRUSTED_MRSIGNERS.size === 0) {
       throw new AttestationError(
         'No trusted MRSIGNER values configured. Cannot verify enclave trust. ' +
-        'Set TRUSTED_MRSIGNERS environment variable.',
+          'Set TRUSTED_MRSIGNERS environment variable.',
         'TEE_NO_TRUST_ANCHORS',
       );
     }
@@ -2076,15 +2242,21 @@ export class TEEAttestationService {
 
       const matchingLevel = eligibleLevels.find(
         (level: { tcbStatus?: string }) =>
-          typeof level.tcbStatus === 'string' && ALLOWED_QE_TCB_STATUSES.has(level.tcbStatus),
+          typeof level.tcbStatus === 'string' &&
+          ALLOWED_QE_TCB_STATUSES.has(level.tcbStatus),
       );
 
       if (!matchingLevel) {
-        const statuses = Array.from(new Set(
-          eligibleLevels
-            .map((level: { tcbStatus?: string }) => level.tcbStatus)
-            .filter((status): status is string => typeof status === 'string' && status.length > 0),
-        ));
+        const statuses = Array.from(
+          new Set(
+            eligibleLevels
+              .map((level: { tcbStatus?: string }) => level.tcbStatus)
+              .filter(
+                (status: string | undefined): status is string =>
+                  typeof status === 'string' && status.length > 0,
+              ),
+          ),
+        );
         throw new AttestationError(
           `QE Report matched QE TCB status ${statuses.join(', ') || 'unknown'}, which is not allowed by policy. Allowed statuses: ${Array.from(ALLOWED_QE_TCB_STATUSES).join(', ')}`,
           'TEE_QE_TCB_STATUS_REJECTED',

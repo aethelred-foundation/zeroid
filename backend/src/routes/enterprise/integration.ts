@@ -1,12 +1,29 @@
 import { Router, Request, Response } from 'express';
 import { z } from 'zod';
 import { createLogger, format, transports } from 'winston';
-import { webhookSystem, WebhookRegistrationSchema, WebhookUpdateSchema } from '../../services/enterprise/webhook-system';
-import { apiGateway, CreateAPIKeySchema } from '../../services/enterprise/api-gateway';
-import { oidcBridge, OIDCClientRegistrationSchema, RegisteredClient } from '../../services/enterprise/oidc-bridge';
-import { slaMonitor, SLADefinitionSchema } from '../../services/enterprise/sla-monitor';
+import {
+  webhookSystem,
+  WebhookRegistrationSchema,
+  WebhookUpdateSchema,
+} from '../../services/enterprise/webhook-system';
+import {
+  apiGateway,
+  CreateAPIKeySchema,
+} from '../../services/enterprise/api-gateway';
+import {
+  oidcBridge,
+  OIDCClientRegistrationSchema,
+  RegisteredClient,
+} from '../../services/enterprise/oidc-bridge';
+import {
+  slaMonitor,
+  SLADefinitionSchema,
+} from '../../services/enterprise/sla-monitor';
 import { AuthenticatedRequest } from '../../middleware/auth';
-import { EnterpriseAuthenticatedRequest, requireEnterpriseContext } from '../../middleware/enterprise';
+import {
+  EnterpriseAuthenticatedRequest,
+  requireEnterpriseContext,
+} from '../../middleware/enterprise';
 import { createRateLimiter } from '../../middleware/rateLimit';
 import {
   AddOrganizationMemberSchema,
@@ -91,9 +108,10 @@ router.use((req: Request, _res: Response, next: () => void) => {
     if (req.headers[header]) {
       logger.warn('spoofable_header_stripped', {
         header,
-        value: typeof req.headers[header] === 'string'
-          ? (req.headers[header] as string).substring(0, 32)
-          : '[array]',
+        value:
+          typeof req.headers[header] === 'string'
+            ? (req.headers[header] as string).substring(0, 32)
+            : '[array]',
         ip: req.ip,
         path: req.path,
       });
@@ -127,16 +145,29 @@ function validate<T>(schema: z.ZodSchema<T>) {
 // ---------------------------------------------------------------------------
 function getClientId(req: Request): string {
   const enterpriseReq = req as EnterpriseAuthenticatedRequest;
-  return enterpriseReq.enterpriseContext?.organizationId
-    ?? (req.headers['x-zeroid-client-id'] as string)
-    ?? (req as any).clientId
-    ?? 'anonymous';
+  return (
+    enterpriseReq.enterpriseContext?.organizationId ??
+    (req.headers['x-zeroid-client-id'] as string) ??
+    (req as any).clientId ??
+    'anonymous'
+  );
 }
 
-const ENTERPRISE_READ_ROLES: EnterpriseRole[] = ['viewer', 'operator', 'admin', 'compliance_officer', 'auditor'];
+const ENTERPRISE_READ_ROLES: EnterpriseRole[] = [
+  'viewer',
+  'operator',
+  'admin',
+  'compliance_officer',
+  'auditor',
+];
 const ENTERPRISE_OPERATOR_ROLES: EnterpriseRole[] = ['operator', 'admin'];
 const ENTERPRISE_ADMIN_ROLES: EnterpriseRole[] = ['admin'];
-const ENTERPRISE_AUDIT_ROLES: EnterpriseRole[] = ['operator', 'admin', 'auditor', 'compliance_officer'];
+const ENTERPRISE_AUDIT_ROLES: EnterpriseRole[] = [
+  'operator',
+  'admin',
+  'auditor',
+  'compliance_officer',
+];
 
 function buildTrustedOIDCClaims(subject: {
   displayName: string | null;
@@ -146,9 +177,10 @@ function buildTrustedOIDCClaims(subject: {
   governmentVerified: boolean;
   updatedAt: Date;
 }): Record<string, unknown> {
-  const metadata = (subject.metadata && typeof subject.metadata === 'object')
-    ? subject.metadata as Record<string, unknown>
-    : {};
+  const metadata =
+    subject.metadata && typeof subject.metadata === 'object'
+      ? (subject.metadata as Record<string, unknown>)
+      : {};
 
   const claims: Record<string, unknown> = {
     updated_at: Math.floor(subject.updatedAt.getTime() / 1000),
@@ -158,14 +190,28 @@ function buildTrustedOIDCClaims(subject: {
     claims.name = subject.displayName;
   }
 
-  for (const field of ['given_name', 'family_name', 'middle_name', 'preferred_username', 'picture', 'email', 'address', 'phone_number'] as const) {
+  for (const field of [
+    'given_name',
+    'family_name',
+    'middle_name',
+    'preferred_username',
+    'picture',
+    'email',
+    'address',
+    'phone_number',
+  ] as const) {
     const value = metadata[field];
     if (typeof value === 'string' && value.length > 0) {
       claims[field] = value;
     }
   }
 
-  for (const field of ['email_verified', 'phone_number_verified', 'age_over_18', 'age_over_21'] as const) {
+  for (const field of [
+    'email_verified',
+    'phone_number_verified',
+    'age_over_18',
+    'age_over_21',
+  ] as const) {
     const value = metadata[field];
     if (typeof value === 'boolean') {
       claims[field] = value;
@@ -178,7 +224,9 @@ function buildTrustedOIDCClaims(subject: {
   }
 
   if (subject.teeAttested) {
-    claims.verification_level = subject.governmentVerified ? 'government_and_tee' : 'tee_attested';
+    claims.verification_level = subject.governmentVerified
+      ? 'government_and_tee'
+      : 'tee_attested';
   } else if (subject.governmentVerified) {
     claims.verification_level = 'government_verified';
   }
@@ -190,12 +238,17 @@ function buildTrustedOIDCClaims(subject: {
   return claims;
 }
 
-function serializeOIDCClient(client: RegisteredClient): Record<string, unknown> {
+function serializeOIDCClient(
+  client: RegisteredClient,
+): Record<string, unknown> {
   return {
     clientId: client.clientId,
     clientName: client.registration.clientName,
     redirectUris: client.registration.redirectUris,
     postLogoutRedirectUris: client.registration.postLogoutRedirectUris,
+    backchannelLogoutUri: client.registration.backchannelLogoutUri,
+    backchannelLogoutSessionRequired:
+      client.registration.backchannelLogoutSessionRequired,
     grantTypes: client.registration.grantTypes,
     responseTypes: client.registration.responseTypes,
     tokenEndpointAuthMethod: client.registration.tokenEndpointAuthMethod,
@@ -449,25 +502,39 @@ function buildApprovalQuorumSnapshot(record: {
   classesSatisfied: string[];
   jurisdictionsSatisfied: string[];
 } {
-  const rolesSatisfied = Array.from(new Set(record.approvalTrail.map((entry) => entry.role))).sort();
+  const rolesSatisfied = Array.from(
+    new Set(record.approvalTrail.map((entry) => entry.role)),
+  ).sort();
   const classesSatisfied = Array.from(
-    new Set(record.approvalTrail.flatMap((entry) => entry.matchedApprovalClasses)),
+    new Set(
+      record.approvalTrail.flatMap((entry) => entry.matchedApprovalClasses),
+    ),
   ).sort();
   const jurisdictionsSatisfied = Array.from(
-    new Set(record.approvalTrail.flatMap((entry) => entry.matchedApprovalJurisdictions)),
+    new Set(
+      record.approvalTrail.flatMap(
+        (entry) => entry.matchedApprovalJurisdictions,
+      ),
+    ),
   ).sort();
   const requiredRoles = [...new Set(record.requiredApprovalRoles)].sort();
   const requiredClasses = [...new Set(record.requiredApprovalClasses)].sort();
-  const requiredJurisdictions = [...new Set(record.requiredApprovalJurisdictions)].sort();
+  const requiredJurisdictions = [
+    ...new Set(record.requiredApprovalJurisdictions),
+  ].sort();
 
   return {
     currentApprovals: record.approvalCount,
     requiredApprovals: record.requiredApprovals,
     satisfied:
-      record.approvalCount >= record.requiredApprovals
-      && requiredRoles.every((role) => rolesSatisfied.includes(role))
-      && requiredClasses.every((approvalClass) => classesSatisfied.includes(approvalClass))
-      && requiredJurisdictions.every((jurisdiction) => jurisdictionsSatisfied.includes(jurisdiction)),
+      record.approvalCount >= record.requiredApprovals &&
+      requiredRoles.every((role) => rolesSatisfied.includes(role)) &&
+      requiredClasses.every((approvalClass) =>
+        classesSatisfied.includes(approvalClass),
+      ) &&
+      requiredJurisdictions.every((jurisdiction) =>
+        jurisdictionsSatisfied.includes(jurisdiction),
+      ),
     rolesSatisfied,
     classesSatisfied,
     jurisdictionsSatisfied,
@@ -713,128 +780,212 @@ function buildPolicyExceptionGovernanceEvidence(record: {
 // ORGANIZATION ROUTES
 // ==========================================================================
 
-router.post('/organizations', validate(CreateOrganizationSchema), async (req: Request, res: Response): Promise<void> => {
-  try {
-    const authReq = req as AuthenticatedRequest;
-    const identityId = authReq.identity?.id;
-    if (!identityId) {
-      res.status(401).json({ error: 'Authenticated identity required', code: 'ENTERPRISE_AUTH_REQUIRED' });
-      return;
+router.post(
+  '/organizations',
+  validate(CreateOrganizationSchema),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const identityId = authReq.identity?.id;
+      if (!identityId) {
+        res.status(401).json({
+          error: 'Authenticated identity required',
+          code: 'ENTERPRISE_AUTH_REQUIRED',
+        });
+        return;
+      }
+
+      const result = await enterpriseOrganizationService.createOrganization(
+        identityId,
+        req.body,
+      );
+      res.status(201).json({
+        data: result,
+        message: 'Organization created and caller added as admin',
+      });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('organization_create_error', { error: error.message });
+      res.status(error.statusCode ?? 500).json({
+        error: error.message,
+        code: error.code ?? 'ENTERPRISE_ORG_CREATE_ERROR',
+      });
     }
+  },
+);
 
-    const result = await enterpriseOrganizationService.createOrganization(identityId, req.body);
-    res.status(201).json({
-      data: result,
-      message: 'Organization created and caller added as admin',
-    });
-  } catch (err) {
-    const error = err as Error & { statusCode?: number; code?: string };
-    logger.error('organization_create_error', { error: error.message });
-    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'ENTERPRISE_ORG_CREATE_ERROR' });
-  }
-});
+router.get(
+  '/organizations',
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const identityId = authReq.identity?.id;
+      if (!identityId) {
+        res.status(401).json({
+          error: 'Authenticated identity required',
+          code: 'ENTERPRISE_AUTH_REQUIRED',
+        });
+        return;
+      }
 
-router.get('/organizations', async (req: Request, res: Response): Promise<void> => {
-  try {
-    const authReq = req as AuthenticatedRequest;
-    const identityId = authReq.identity?.id;
-    if (!identityId) {
-      res.status(401).json({ error: 'Authenticated identity required', code: 'ENTERPRISE_AUTH_REQUIRED' });
-      return;
+      const organizations =
+        await enterpriseOrganizationService.listOrganizations(identityId);
+      res.status(200).json({ data: organizations });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('organization_list_error', { error: error.message });
+      res.status(error.statusCode ?? 500).json({
+        error: error.message,
+        code: error.code ?? 'ENTERPRISE_ORG_LIST_ERROR',
+      });
     }
+  },
+);
 
-    const organizations = await enterpriseOrganizationService.listOrganizations(identityId);
-    res.status(200).json({ data: organizations });
-  } catch (err) {
-    const error = err as Error & { statusCode?: number; code?: string };
-    logger.error('organization_list_error', { error: error.message });
-    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'ENTERPRISE_ORG_LIST_ERROR' });
-  }
-});
-
-router.get('/organizations/context', requireEnterpriseContext(ENTERPRISE_READ_ROLES), async (req: Request, res: Response): Promise<void> => {
-  const enterpriseReq = req as EnterpriseAuthenticatedRequest;
-  res.status(200).json({ data: enterpriseReq.enterpriseContext });
-});
+router.get(
+  '/organizations/context',
+  requireEnterpriseContext(ENTERPRISE_READ_ROLES),
+  async (req: Request, res: Response): Promise<void> => {
+    const enterpriseReq = req as EnterpriseAuthenticatedRequest;
+    res.status(200).json({ data: enterpriseReq.enterpriseContext });
+  },
+);
 
 router.post(
   '/organizations/:id/members',
-  requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES, (req) => req.params.id as string),
+  requireEnterpriseContext(
+    ENTERPRISE_ADMIN_ROLES,
+    (req) => req.params.id as string,
+  ),
   validate(AddOrganizationMemberSchema),
   async (req: Request, res: Response): Promise<void> => {
     try {
-      const member = await enterpriseOrganizationService.addMember(req.params.id as string, req.body);
-      res.status(201).json({ data: member, message: 'Organization member added' });
+      const member = await enterpriseOrganizationService.addMember(
+        req.params.id as string,
+        req.body,
+      );
+      res
+        .status(201)
+        .json({ data: member, message: 'Organization member added' });
     } catch (err) {
       const error = err as Error & { statusCode?: number; code?: string };
-      logger.error('organization_member_add_error', { error: error.message, organizationId: req.params.id });
-      res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'ENTERPRISE_MEMBER_ADD_ERROR' });
+      logger.error('organization_member_add_error', {
+        error: error.message,
+        organizationId: req.params.id,
+      });
+      res.status(error.statusCode ?? 500).json({
+        error: error.message,
+        code: error.code ?? 'ENTERPRISE_MEMBER_ADD_ERROR',
+      });
     }
   },
 );
 
 router.get(
   '/organizations/:id/members',
-  requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES, (req) => req.params.id as string),
+  requireEnterpriseContext(
+    ENTERPRISE_AUDIT_ROLES,
+    (req) => req.params.id as string,
+  ),
   async (req: Request, res: Response): Promise<void> => {
     try {
-      const members = await enterpriseOrganizationService.listMembers(req.params.id as string);
+      const members = await enterpriseOrganizationService.listMembers(
+        req.params.id as string,
+      );
       res.status(200).json({ data: members });
     } catch (err) {
       const error = err as Error & { statusCode?: number; code?: string };
-      logger.error('organization_member_list_error', { error: error.message, organizationId: req.params.id });
-      res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'ENTERPRISE_MEMBER_LIST_ERROR' });
+      logger.error('organization_member_list_error', {
+        error: error.message,
+        organizationId: req.params.id,
+      });
+      res.status(error.statusCode ?? 500).json({
+        error: error.message,
+        code: error.code ?? 'ENTERPRISE_MEMBER_LIST_ERROR',
+      });
     }
   },
 );
 
 router.get(
   '/organizations/:id/governance',
-  requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES, (req) => req.params.id as string),
+  requireEnterpriseContext(
+    ENTERPRISE_AUDIT_ROLES,
+    (req) => req.params.id as string,
+  ),
   async (req: Request, res: Response): Promise<void> => {
     try {
-      const governance = await enterpriseOrganizationService.getGovernanceSettings(req.params.id as string);
+      const governance =
+        await enterpriseOrganizationService.getGovernanceSettings(
+          req.params.id as string,
+        );
       res.status(200).json({ data: governance });
     } catch (err) {
       const error = err as Error & { statusCode?: number; code?: string };
-      logger.error('organization_governance_get_error', { error: error.message, organizationId: req.params.id });
-      res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'ENTERPRISE_GOVERNANCE_GET_ERROR' });
+      logger.error('organization_governance_get_error', {
+        error: error.message,
+        organizationId: req.params.id,
+      });
+      res.status(error.statusCode ?? 500).json({
+        error: error.message,
+        code: error.code ?? 'ENTERPRISE_GOVERNANCE_GET_ERROR',
+      });
     }
   },
 );
 
 router.patch(
   '/organizations/:id/governance',
-  requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES, (req) => req.params.id as string),
+  requireEnterpriseContext(
+    ENTERPRISE_ADMIN_ROLES,
+    (req) => req.params.id as string,
+  ),
   validate(UpdateOrganizationGovernanceSchema),
   async (req: Request, res: Response): Promise<void> => {
     try {
       const authReq = req as EnterpriseAuthenticatedRequest;
       const identityId = authReq.identity?.id;
       if (!identityId) {
-        res.status(401).json({ error: 'Authenticated identity required', code: 'ENTERPRISE_AUTH_REQUIRED' });
+        res.status(401).json({
+          error: 'Authenticated identity required',
+          code: 'ENTERPRISE_AUTH_REQUIRED',
+        });
         return;
       }
 
-      const governance = await enterpriseOrganizationService.updateGovernanceSettings(
-        req.params.id as string,
-        identityId,
-        req.body,
-      );
-      res.status(200).json({ data: governance, message: 'Organization governance updated' });
+      const governance =
+        await enterpriseOrganizationService.updateGovernanceSettings(
+          req.params.id as string,
+          identityId,
+          req.body,
+        );
+      res
+        .status(200)
+        .json({ data: governance, message: 'Organization governance updated' });
     } catch (err) {
       const error = err as Error & { statusCode?: number; code?: string };
-      logger.error('organization_governance_update_error', { error: error.message, organizationId: req.params.id });
-      res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'ENTERPRISE_GOVERNANCE_UPDATE_ERROR' });
+      logger.error('organization_governance_update_error', {
+        error: error.message,
+        organizationId: req.params.id,
+      });
+      res.status(error.statusCode ?? 500).json({
+        error: error.message,
+        code: error.code ?? 'ENTERPRISE_GOVERNANCE_UPDATE_ERROR',
+      });
     }
   },
 );
 
 router.get(
   '/organizations/:id/governance/packs',
-  requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES, (req) => req.params.id as string),
+  requireEnterpriseContext(
+    ENTERPRISE_AUDIT_ROLES,
+    (req) => req.params.id as string,
+  ),
   async (_req: Request, res: Response): Promise<void> => {
-    res.status(200).json({ data: policyGovernanceService.listGovernancePacks() });
+    res
+      .status(200)
+      .json({ data: policyGovernanceService.listGovernancePacks() });
   },
 );
 
@@ -845,116 +996,170 @@ router.get(
 // ---------------------------------------------------------------------------
 // POST /enterprise/webhooks — Register webhook
 // ---------------------------------------------------------------------------
-router.post('/webhooks', requireEnterpriseContext(ENTERPRISE_OPERATOR_ROLES), validate(WebhookRegistrationSchema), async (req: Request, res: Response): Promise<void> => {
-  try {
-    const clientId = getClientId(req);
-    const webhook = await webhookSystem.register(clientId, req.body);
-    res.status(201).json({
-      data: {
-        id: webhook.id,
-        url: webhook.url,
-        events: webhook.events,
-        secret: webhook.secret,
-        active: webhook.active,
-        createdAt: webhook.createdAt,
-      },
-      message: 'Webhook registered successfully',
-    });
-  } catch (err) {
-    const error = err as Error & { statusCode?: number; code?: string };
-    logger.error('webhook_register_error', { error: error.message });
-    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'WEBHOOK_ERROR' });
-  }
-});
+router.post(
+  '/webhooks',
+  requireEnterpriseContext(ENTERPRISE_OPERATOR_ROLES),
+  validate(WebhookRegistrationSchema),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const clientId = getClientId(req);
+      const webhook = await webhookSystem.register(clientId, req.body);
+      res.status(201).json({
+        data: {
+          id: webhook.id,
+          url: webhook.url,
+          events: webhook.events,
+          secret: webhook.secret,
+          active: webhook.active,
+          createdAt: webhook.createdAt,
+        },
+        message: 'Webhook registered successfully',
+      });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('webhook_register_error', { error: error.message });
+      res
+        .status(error.statusCode ?? 500)
+        .json({ error: error.message, code: error.code ?? 'WEBHOOK_ERROR' });
+    }
+  },
+);
 
 // ---------------------------------------------------------------------------
 // GET /enterprise/webhooks — List webhooks
 // ---------------------------------------------------------------------------
-router.get('/webhooks', requireEnterpriseContext(ENTERPRISE_READ_ROLES), async (req: Request, res: Response): Promise<void> => {
-  try {
-    const clientId = getClientId(req);
-    const webhooks = await webhookSystem.list(clientId);
-    res.status(200).json({
-      data: webhooks.map((w) => ({
-        id: w.id,
-        url: w.url,
-        events: w.events,
-        active: w.active,
-        health: w.health,
-        createdAt: w.createdAt,
-        updatedAt: w.updatedAt,
-      })),
-    });
-  } catch (err) {
-    const error = err as Error;
-    logger.error('webhook_list_error', { error: error.message });
-    res.status(500).json({ error: error.message, code: 'WEBHOOK_LIST_ERROR' });
-  }
-});
+router.get(
+  '/webhooks',
+  requireEnterpriseContext(ENTERPRISE_READ_ROLES),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const clientId = getClientId(req);
+      const webhooks = await webhookSystem.list(clientId);
+      res.status(200).json({
+        data: webhooks.map((w) => ({
+          id: w.id,
+          url: w.url,
+          events: w.events,
+          active: w.active,
+          health: w.health,
+          createdAt: w.createdAt,
+          updatedAt: w.updatedAt,
+        })),
+      });
+    } catch (err) {
+      const error = err as Error;
+      logger.error('webhook_list_error', { error: error.message });
+      res
+        .status(500)
+        .json({ error: error.message, code: 'WEBHOOK_LIST_ERROR' });
+    }
+  },
+);
 
 // ---------------------------------------------------------------------------
 // PATCH /enterprise/webhooks/:id — Update webhook
 // ---------------------------------------------------------------------------
-router.patch('/webhooks/:id', requireEnterpriseContext(ENTERPRISE_OPERATOR_ROLES), validate(WebhookUpdateSchema), async (req: Request, res: Response): Promise<void> => {
-  try {
-    const clientId = getClientId(req);
-    const webhook = await webhookSystem.update(req.params.id as string, clientId, req.body);
-    res.status(200).json({ data: webhook, message: 'Webhook updated' });
-  } catch (err) {
-    const error = err as Error & { statusCode?: number; code?: string };
-    logger.error('webhook_update_error', { error: error.message });
-    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'WEBHOOK_UPDATE_ERROR' });
-  }
-});
+router.patch(
+  '/webhooks/:id',
+  requireEnterpriseContext(ENTERPRISE_OPERATOR_ROLES),
+  validate(WebhookUpdateSchema),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const clientId = getClientId(req);
+      const webhook = await webhookSystem.update(
+        req.params.id as string,
+        clientId,
+        req.body,
+      );
+      res.status(200).json({ data: webhook, message: 'Webhook updated' });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('webhook_update_error', { error: error.message });
+      res.status(error.statusCode ?? 500).json({
+        error: error.message,
+        code: error.code ?? 'WEBHOOK_UPDATE_ERROR',
+      });
+    }
+  },
+);
 
 // ---------------------------------------------------------------------------
 // DELETE /enterprise/webhooks/:id — Remove webhook
 // ---------------------------------------------------------------------------
-router.delete('/webhooks/:id', requireEnterpriseContext(ENTERPRISE_OPERATOR_ROLES), async (req: Request, res: Response): Promise<void> => {
-  try {
-    const clientId = getClientId(req);
-    await webhookSystem.remove(req.params.id as string, clientId);
-    res.status(204).send();
-  } catch (err) {
-    const error = err as Error & { statusCode?: number; code?: string };
-    logger.error('webhook_delete_error', { error: error.message });
-    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'WEBHOOK_DELETE_ERROR' });
-  }
-});
+router.delete(
+  '/webhooks/:id',
+  requireEnterpriseContext(ENTERPRISE_OPERATOR_ROLES),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const clientId = getClientId(req);
+      await webhookSystem.remove(req.params.id as string, clientId);
+      res.status(204).send();
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('webhook_delete_error', { error: error.message });
+      res.status(error.statusCode ?? 500).json({
+        error: error.message,
+        code: error.code ?? 'WEBHOOK_DELETE_ERROR',
+      });
+    }
+  },
+);
 
 // ---------------------------------------------------------------------------
 // GET /enterprise/webhooks/:id/deliveries — Get delivery logs
 // ---------------------------------------------------------------------------
-router.get('/webhooks/:id/deliveries', requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES), async (req: Request, res: Response): Promise<void> => {
-  try {
-    const limit = parseInt(req.query.limit as string, 10) || 50;
-    const deliveries = webhookSystem.getDeliveries(req.params.id as string, limit);
-    res.status(200).json({ data: deliveries });
-  } catch (err) {
-    const error = err as Error;
-    logger.error('webhook_deliveries_error', { error: error.message });
-    res.status(500).json({ error: error.message, code: 'DELIVERY_LOG_ERROR' });
-  }
-});
+router.get(
+  '/webhooks/:id/deliveries',
+  requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const limit = parseInt(req.query.limit as string, 10) || 50;
+      const deliveries = webhookSystem.getDeliveries(
+        req.params.id as string,
+        limit,
+      );
+      res.status(200).json({ data: deliveries });
+    } catch (err) {
+      const error = err as Error;
+      logger.error('webhook_deliveries_error', { error: error.message });
+      res
+        .status(500)
+        .json({ error: error.message, code: 'DELIVERY_LOG_ERROR' });
+    }
+  },
+);
 
 // ---------------------------------------------------------------------------
 // POST /enterprise/webhooks/:id/replay — Replay events
 // ---------------------------------------------------------------------------
-router.post('/webhooks/:id/replay', requireEnterpriseContext(ENTERPRISE_OPERATOR_ROLES), async (req: Request, res: Response): Promise<void> => {
-  try {
-    const { since, until } = req.body;
-    if (!since) {
-      res.status(400).json({ error: '"since" timestamp is required', code: 'VALIDATION_ERROR' });
-      return;
+router.post(
+  '/webhooks/:id/replay',
+  requireEnterpriseContext(ENTERPRISE_OPERATOR_ROLES),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const { since, until } = req.body;
+      if (!since) {
+        res.status(400).json({
+          error: '"since" timestamp is required',
+          code: 'VALIDATION_ERROR',
+        });
+        return;
+      }
+      const result = await webhookSystem.replayEvents(
+        req.params.id as string,
+        since,
+        until,
+      );
+      res.status(200).json({ data: result, message: 'Events replayed' });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('webhook_replay_error', { error: error.message });
+      res
+        .status(error.statusCode ?? 500)
+        .json({ error: error.message, code: error.code ?? 'REPLAY_ERROR' });
     }
-    const result = await webhookSystem.replayEvents(req.params.id as string, since, until);
-    res.status(200).json({ data: result, message: 'Events replayed' });
-  } catch (err) {
-    const error = err as Error & { statusCode?: number; code?: string };
-    logger.error('webhook_replay_error', { error: error.message });
-    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'REPLAY_ERROR' });
-  }
-});
+  },
+);
 
 // ==========================================================================
 // API KEY ROUTES
@@ -963,65 +1168,92 @@ router.post('/webhooks/:id/replay', requireEnterpriseContext(ENTERPRISE_OPERATOR
 // ---------------------------------------------------------------------------
 // POST /enterprise/api-keys — Generate API key
 // ---------------------------------------------------------------------------
-router.post('/api-keys', requireEnterpriseContext(ENTERPRISE_OPERATOR_ROLES), validate(CreateAPIKeySchema), async (req: Request, res: Response): Promise<void> => {
-  try {
-    const clientId = getClientId(req);
-    const result = await apiGateway.createAPIKey(clientId, req.body);
-    res.status(201).json({
-      data: result,
-      message: 'API key created. Store the key securely — it will not be shown again.',
-    });
-  } catch (err) {
-    const error = err as Error & { statusCode?: number; code?: string };
-    logger.error('api_key_create_error', { error: error.message });
-    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'API_KEY_ERROR' });
-  }
-});
+router.post(
+  '/api-keys',
+  requireEnterpriseContext(ENTERPRISE_OPERATOR_ROLES),
+  validate(CreateAPIKeySchema),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const clientId = getClientId(req);
+      const result = await apiGateway.createAPIKey(clientId, req.body);
+      res.status(201).json({
+        data: result,
+        message:
+          'API key created. Store the key securely — it will not be shown again.',
+      });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('api_key_create_error', { error: error.message });
+      res
+        .status(error.statusCode ?? 500)
+        .json({ error: error.message, code: error.code ?? 'API_KEY_ERROR' });
+    }
+  },
+);
 
 // ---------------------------------------------------------------------------
 // GET /enterprise/api-keys — List API keys
 // ---------------------------------------------------------------------------
-router.get('/api-keys', requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES), async (req: Request, res: Response): Promise<void> => {
-  try {
-    const clientId = getClientId(req);
-    const keys = await apiGateway.listAPIKeys(clientId);
-    res.status(200).json({ data: keys });
-  } catch (err) {
-    const error = err as Error;
-    logger.error('api_key_list_error', { error: error.message });
-    res.status(500).json({ error: error.message, code: 'API_KEY_LIST_ERROR' });
-  }
-});
+router.get(
+  '/api-keys',
+  requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const clientId = getClientId(req);
+      const keys = await apiGateway.listAPIKeys(clientId);
+      res.status(200).json({ data: keys });
+    } catch (err) {
+      const error = err as Error;
+      logger.error('api_key_list_error', { error: error.message });
+      res
+        .status(500)
+        .json({ error: error.message, code: 'API_KEY_LIST_ERROR' });
+    }
+  },
+);
 
 // ---------------------------------------------------------------------------
 // DELETE /enterprise/api-keys/:id — Revoke API key
 // ---------------------------------------------------------------------------
-router.delete('/api-keys/:id', requireEnterpriseContext(ENTERPRISE_OPERATOR_ROLES), async (req: Request, res: Response): Promise<void> => {
-  try {
-    const clientId = getClientId(req);
-    const reason = (req.body?.reason as string) ?? 'Revoked by client';
-    await apiGateway.revokeAPIKey(req.params.id as string, clientId, reason);
-    res.status(200).json({ message: 'API key revoked' });
-  } catch (err) {
-    const error = err as Error & { statusCode?: number; code?: string };
-    logger.error('api_key_revoke_error', { error: error.message });
-    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'API_KEY_REVOKE_ERROR' });
-  }
-});
+router.delete(
+  '/api-keys/:id',
+  requireEnterpriseContext(ENTERPRISE_OPERATOR_ROLES),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const clientId = getClientId(req);
+      const reason = (req.body?.reason as string) ?? 'Revoked by client';
+      await apiGateway.revokeAPIKey(req.params.id as string, clientId, reason);
+      res.status(200).json({ message: 'API key revoked' });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('api_key_revoke_error', { error: error.message });
+      res.status(error.statusCode ?? 500).json({
+        error: error.message,
+        code: error.code ?? 'API_KEY_REVOKE_ERROR',
+      });
+    }
+  },
+);
 
 // ---------------------------------------------------------------------------
 // GET /enterprise/api-keys/:id/quota — Get quota status
 // ---------------------------------------------------------------------------
-router.get('/api-keys/:id/quota', requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES), async (req: Request, res: Response): Promise<void> => {
-  try {
-    const quota = await apiGateway.getQuotaStatus(req.params.id as string);
-    res.status(200).json({ data: quota });
-  } catch (err) {
-    const error = err as Error & { statusCode?: number; code?: string };
-    logger.error('api_key_quota_error', { error: error.message });
-    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'QUOTA_ERROR' });
-  }
-});
+router.get(
+  '/api-keys/:id/quota',
+  requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const quota = await apiGateway.getQuotaStatus(req.params.id as string);
+      res.status(200).json({ data: quota });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('api_key_quota_error', { error: error.message });
+      res
+        .status(error.statusCode ?? 500)
+        .json({ error: error.message, code: error.code ?? 'QUOTA_ERROR' });
+    }
+  },
+);
 
 // ==========================================================================
 // OAUTH2 ROUTES
@@ -1030,28 +1262,36 @@ router.get('/api-keys/:id/quota', requireEnterpriseContext(ENTERPRISE_AUDIT_ROLE
 // ---------------------------------------------------------------------------
 // POST /enterprise/oauth2/token — OAuth2 token exchange
 // ---------------------------------------------------------------------------
-router.post('/oauth2/token', async (req: Request, res: Response): Promise<void> => {
-  try {
-    const grantType = req.body.grantType ?? req.body.grant_type;
+router.post(
+  '/oauth2/token',
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const grantType = req.body.grantType ?? req.body.grant_type;
 
-    if (grantType === 'client_credentials') {
-      const token = apiGateway.issueOAuth2Token({
-        grantType: 'client_credentials',
-        clientId: req.body.clientId ?? req.body.client_id,
-        clientSecret: req.body.clientSecret ?? req.body.client_secret,
-        scope: req.body.scope,
+      if (grantType === 'client_credentials') {
+        const token = apiGateway.issueOAuth2Token({
+          grantType: 'client_credentials',
+          clientId: req.body.clientId ?? req.body.client_id,
+          clientSecret: req.body.clientSecret ?? req.body.client_secret,
+          scope: req.body.scope,
+        });
+        res.status(200).json(token);
+        return;
+      }
+
+      res.status(400).json({
+        error: 'unsupported_grant_type',
+        error_description: 'Only client_credentials supported on this endpoint',
       });
-      res.status(200).json(token);
-      return;
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('oauth2_token_error', { error: error.message });
+      res
+        .status(error.statusCode ?? 500)
+        .json({ error: error.message, code: error.code ?? 'OAUTH2_ERROR' });
     }
-
-    res.status(400).json({ error: 'unsupported_grant_type', error_description: 'Only client_credentials supported on this endpoint' });
-  } catch (err) {
-    const error = err as Error & { statusCode?: number; code?: string };
-    logger.error('oauth2_token_error', { error: error.message });
-    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'OAUTH2_ERROR' });
-  }
-});
+  },
+);
 
 // ==========================================================================
 // OIDC ROUTES
@@ -1061,621 +1301,1130 @@ router.post('/oauth2/token', async (req: Request, res: Response): Promise<void> 
 // ISSUER TRUST REGISTRY ROUTES
 // ==========================================================================
 
-router.post('/policies', requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES), validate(CreatePolicyDefinitionSchema), async (req: Request, res: Response): Promise<void> => {
-  try {
-    const enterpriseReq = req as EnterpriseAuthenticatedRequest;
-    const organizationId = enterpriseReq.enterpriseContext?.organizationId;
-    const actorIdentityId = enterpriseReq.identity?.id;
-    if (!organizationId || !actorIdentityId) {
-      res.status(401).json({ error: 'Authenticated enterprise admin required', code: 'ENTERPRISE_AUTH_REQUIRED' });
-      return;
+router.post(
+  '/policies',
+  requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES),
+  validate(CreatePolicyDefinitionSchema),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const enterpriseReq = req as EnterpriseAuthenticatedRequest;
+      const organizationId = enterpriseReq.enterpriseContext?.organizationId;
+      const actorIdentityId = enterpriseReq.identity?.id;
+      if (!organizationId || !actorIdentityId) {
+        res.status(401).json({
+          error: 'Authenticated enterprise admin required',
+          code: 'ENTERPRISE_AUTH_REQUIRED',
+        });
+        return;
+      }
+
+      const policy = await policyRegistryService.createPolicyDraft(
+        organizationId,
+        actorIdentityId,
+        req.body,
+      );
+      res.status(201).json({
+        data: serializePolicyDefinition(policy),
+        message: 'Policy definition created as draft',
+      });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('policy_create_error', { error: error.message });
+      res.status(error.statusCode ?? 500).json({
+        error: error.message,
+        code: error.code ?? 'POLICY_CREATE_ERROR',
+      });
     }
+  },
+);
 
-    const policy = await policyRegistryService.createPolicyDraft(organizationId, actorIdentityId, req.body);
-    res.status(201).json({
-      data: serializePolicyDefinition(policy),
-      message: 'Policy definition created as draft',
-    });
-  } catch (err) {
-    const error = err as Error & { statusCode?: number; code?: string };
-    logger.error('policy_create_error', { error: error.message });
-    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'POLICY_CREATE_ERROR' });
-  }
-});
+router.get(
+  '/policies',
+  requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const enterpriseReq = req as EnterpriseAuthenticatedRequest;
+      const organizationId = enterpriseReq.enterpriseContext?.organizationId;
+      if (!organizationId) {
+        res.status(401).json({
+          error: 'Authenticated enterprise context required',
+          code: 'ENTERPRISE_AUTH_REQUIRED',
+        });
+        return;
+      }
 
-router.get('/policies', requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES), async (req: Request, res: Response): Promise<void> => {
-  try {
-    const enterpriseReq = req as EnterpriseAuthenticatedRequest;
-    const organizationId = enterpriseReq.enterpriseContext?.organizationId;
-    if (!organizationId) {
-      res.status(401).json({ error: 'Authenticated enterprise context required', code: 'ENTERPRISE_AUTH_REQUIRED' });
-      return;
+      const policies = await policyRegistryService.listPolicies(
+        organizationId,
+        {
+          name: typeof req.query.name === 'string' ? req.query.name : undefined,
+          status:
+            typeof req.query.status === 'string'
+              ? (req.query.status as any)
+              : undefined,
+        },
+      );
+      res.status(200).json({ data: policies.map(serializePolicyDefinition) });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('policy_list_error', { error: error.message });
+      res.status(error.statusCode ?? 500).json({
+        error: error.message,
+        code: error.code ?? 'POLICY_LIST_ERROR',
+      });
     }
+  },
+);
 
-    const policies = await policyRegistryService.listPolicies(organizationId, {
-      name: typeof req.query.name === 'string' ? req.query.name : undefined,
-      status: typeof req.query.status === 'string' ? req.query.status as any : undefined,
-    });
-    res.status(200).json({ data: policies.map(serializePolicyDefinition) });
-  } catch (err) {
-    const error = err as Error & { statusCode?: number; code?: string };
-    logger.error('policy_list_error', { error: error.message });
-    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'POLICY_LIST_ERROR' });
-  }
-});
+router.get(
+  '/policies/:policyId/evidence',
+  requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const enterpriseReq = req as EnterpriseAuthenticatedRequest;
+      const organizationId = enterpriseReq.enterpriseContext?.organizationId;
+      if (!organizationId) {
+        res.status(401).json({
+          error: 'Authenticated enterprise context required',
+          code: 'ENTERPRISE_AUTH_REQUIRED',
+        });
+        return;
+      }
 
-router.get('/policies/:policyId/evidence', requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES), async (req: Request, res: Response): Promise<void> => {
-  try {
-    const enterpriseReq = req as EnterpriseAuthenticatedRequest;
-    const organizationId = enterpriseReq.enterpriseContext?.organizationId;
-    if (!organizationId) {
-      res.status(401).json({ error: 'Authenticated enterprise context required', code: 'ENTERPRISE_AUTH_REQUIRED' });
-      return;
+      const policy = await policyRegistryService.getPolicyById(
+        req.params.policyId as string,
+        organizationId,
+      );
+      res.status(200).json({ data: buildPolicyGovernanceEvidence(policy) });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('policy_evidence_error', {
+        error: error.message,
+        policyId: req.params.policyId,
+      });
+      res.status(error.statusCode ?? 500).json({
+        error: error.message,
+        code: error.code ?? 'POLICY_EVIDENCE_ERROR',
+      });
     }
+  },
+);
 
-    const policy = await policyRegistryService.getPolicyById(req.params.policyId as string, organizationId);
-    res.status(200).json({ data: buildPolicyGovernanceEvidence(policy) });
-  } catch (err) {
-    const error = err as Error & { statusCode?: number; code?: string };
-    logger.error('policy_evidence_error', { error: error.message, policyId: req.params.policyId });
-    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'POLICY_EVIDENCE_ERROR' });
-  }
-});
+router.post(
+  '/policies/:policyId/submit',
+  requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const enterpriseReq = req as EnterpriseAuthenticatedRequest;
+      const organizationId = enterpriseReq.enterpriseContext?.organizationId;
+      const actorIdentityId = enterpriseReq.identity?.id;
+      if (!organizationId || !actorIdentityId) {
+        res.status(401).json({
+          error: 'Authenticated enterprise admin required',
+          code: 'ENTERPRISE_AUTH_REQUIRED',
+        });
+        return;
+      }
 
-router.post('/policies/:policyId/submit', requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES), async (req: Request, res: Response): Promise<void> => {
-  try {
-    const enterpriseReq = req as EnterpriseAuthenticatedRequest;
-    const organizationId = enterpriseReq.enterpriseContext?.organizationId;
-    const actorIdentityId = enterpriseReq.identity?.id;
-    if (!organizationId || !actorIdentityId) {
-      res.status(401).json({ error: 'Authenticated enterprise admin required', code: 'ENTERPRISE_AUTH_REQUIRED' });
-      return;
+      const policy = await policyRegistryService.submitPolicyForReview(
+        req.params.policyId as string,
+        organizationId,
+        actorIdentityId,
+      );
+      res.status(200).json({
+        data: serializePolicyDefinition(policy),
+        message: 'Policy submitted for review',
+      });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('policy_submit_error', {
+        error: error.message,
+        policyId: req.params.policyId,
+      });
+      res.status(error.statusCode ?? 500).json({
+        error: error.message,
+        code: error.code ?? 'POLICY_SUBMIT_ERROR',
+      });
     }
+  },
+);
 
-    const policy = await policyRegistryService.submitPolicyForReview(req.params.policyId as string, organizationId, actorIdentityId);
-    res.status(200).json({ data: serializePolicyDefinition(policy), message: 'Policy submitted for review' });
-  } catch (err) {
-    const error = err as Error & { statusCode?: number; code?: string };
-    logger.error('policy_submit_error', { error: error.message, policyId: req.params.policyId });
-    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'POLICY_SUBMIT_ERROR' });
-  }
-});
+router.post(
+  '/policies/:policyId/approve',
+  requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const enterpriseReq = req as EnterpriseAuthenticatedRequest;
+      const organizationId = enterpriseReq.enterpriseContext?.organizationId;
+      const actorIdentityId = enterpriseReq.identity?.id;
+      if (!organizationId || !actorIdentityId) {
+        res.status(401).json({
+          error: 'Authenticated enterprise admin required',
+          code: 'ENTERPRISE_AUTH_REQUIRED',
+        });
+        return;
+      }
 
-router.post('/policies/:policyId/approve', requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES), async (req: Request, res: Response): Promise<void> => {
-  try {
-    const enterpriseReq = req as EnterpriseAuthenticatedRequest;
-    const organizationId = enterpriseReq.enterpriseContext?.organizationId;
-    const actorIdentityId = enterpriseReq.identity?.id;
-    if (!organizationId || !actorIdentityId) {
-      res.status(401).json({ error: 'Authenticated enterprise admin required', code: 'ENTERPRISE_AUTH_REQUIRED' });
-      return;
+      const effectiveFrom =
+        typeof req.body?.effectiveFrom === 'string'
+          ? req.body.effectiveFrom
+          : undefined;
+      const policy = await policyRegistryService.approvePolicy(
+        req.params.policyId as string,
+        organizationId,
+        actorIdentityId,
+        effectiveFrom,
+      );
+      res.status(200).json({
+        data: serializePolicyDefinition(policy),
+        message:
+          policy.status === 'approved'
+            ? 'Policy approved'
+            : 'Policy approval recorded; additional approvals required',
+      });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('policy_approve_error', {
+        error: error.message,
+        policyId: req.params.policyId,
+      });
+      res.status(error.statusCode ?? 500).json({
+        error: error.message,
+        code: error.code ?? 'POLICY_APPROVE_ERROR',
+      });
     }
+  },
+);
 
-    const effectiveFrom = typeof req.body?.effectiveFrom === 'string' ? req.body.effectiveFrom : undefined;
-    const policy = await policyRegistryService.approvePolicy(req.params.policyId as string, organizationId, actorIdentityId, effectiveFrom);
-    res.status(200).json({
-      data: serializePolicyDefinition(policy),
-      message: policy.status === 'approved'
-        ? 'Policy approved'
-        : 'Policy approval recorded; additional approvals required',
-    });
-  } catch (err) {
-    const error = err as Error & { statusCode?: number; code?: string };
-    logger.error('policy_approve_error', { error: error.message, policyId: req.params.policyId });
-    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'POLICY_APPROVE_ERROR' });
-  }
-});
+router.post(
+  '/policies/:policyId/deprecate',
+  requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES),
+  validate(DeprecatePolicyDefinitionSchema),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const enterpriseReq = req as EnterpriseAuthenticatedRequest;
+      const organizationId = enterpriseReq.enterpriseContext?.organizationId;
+      const actorIdentityId = enterpriseReq.identity?.id;
+      if (!organizationId || !actorIdentityId) {
+        res.status(401).json({
+          error: 'Authenticated enterprise admin required',
+          code: 'ENTERPRISE_AUTH_REQUIRED',
+        });
+        return;
+      }
 
-router.post('/policies/:policyId/deprecate', requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES), validate(DeprecatePolicyDefinitionSchema), async (req: Request, res: Response): Promise<void> => {
-  try {
-    const enterpriseReq = req as EnterpriseAuthenticatedRequest;
-    const organizationId = enterpriseReq.enterpriseContext?.organizationId;
-    const actorIdentityId = enterpriseReq.identity?.id;
-    if (!organizationId || !actorIdentityId) {
-      res.status(401).json({ error: 'Authenticated enterprise admin required', code: 'ENTERPRISE_AUTH_REQUIRED' });
-      return;
+      const policy = await policyRegistryService.deprecatePolicy(
+        req.params.policyId as string,
+        organizationId,
+        actorIdentityId,
+        req.body,
+      );
+      res.status(200).json({
+        data: serializePolicyDefinition(policy),
+        message: 'Policy deprecated',
+      });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('policy_deprecate_error', {
+        error: error.message,
+        policyId: req.params.policyId,
+      });
+      res.status(error.statusCode ?? 500).json({
+        error: error.message,
+        code: error.code ?? 'POLICY_DEPRECATE_ERROR',
+      });
     }
+  },
+);
 
-    const policy = await policyRegistryService.deprecatePolicy(req.params.policyId as string, organizationId, actorIdentityId, req.body);
-    res.status(200).json({ data: serializePolicyDefinition(policy), message: 'Policy deprecated' });
-  } catch (err) {
-    const error = err as Error & { statusCode?: number; code?: string };
-    logger.error('policy_deprecate_error', { error: error.message, policyId: req.params.policyId });
-    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'POLICY_DEPRECATE_ERROR' });
-  }
-});
+router.post(
+  '/policies/:policyId/revoke',
+  requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES),
+  validate(RevokePolicyDefinitionSchema),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const enterpriseReq = req as EnterpriseAuthenticatedRequest;
+      const organizationId = enterpriseReq.enterpriseContext?.organizationId;
+      const actorIdentityId = enterpriseReq.identity?.id;
+      if (!organizationId || !actorIdentityId) {
+        res.status(401).json({
+          error: 'Authenticated enterprise admin required',
+          code: 'ENTERPRISE_AUTH_REQUIRED',
+        });
+        return;
+      }
 
-router.post('/policies/:policyId/revoke', requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES), validate(RevokePolicyDefinitionSchema), async (req: Request, res: Response): Promise<void> => {
-  try {
-    const enterpriseReq = req as EnterpriseAuthenticatedRequest;
-    const organizationId = enterpriseReq.enterpriseContext?.organizationId;
-    const actorIdentityId = enterpriseReq.identity?.id;
-    if (!organizationId || !actorIdentityId) {
-      res.status(401).json({ error: 'Authenticated enterprise admin required', code: 'ENTERPRISE_AUTH_REQUIRED' });
-      return;
+      const policy = await policyRegistryService.revokePolicy(
+        req.params.policyId as string,
+        organizationId,
+        actorIdentityId,
+        req.body,
+      );
+      res.status(200).json({
+        data: serializePolicyDefinition(policy),
+        message: 'Policy revoked',
+      });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('policy_revoke_error', {
+        error: error.message,
+        policyId: req.params.policyId,
+      });
+      res.status(error.statusCode ?? 500).json({
+        error: error.message,
+        code: error.code ?? 'POLICY_REVOKE_ERROR',
+      });
     }
+  },
+);
 
-    const policy = await policyRegistryService.revokePolicy(req.params.policyId as string, organizationId, actorIdentityId, req.body);
-    res.status(200).json({ data: serializePolicyDefinition(policy), message: 'Policy revoked' });
-  } catch (err) {
-    const error = err as Error & { statusCode?: number; code?: string };
-    logger.error('policy_revoke_error', { error: error.message, policyId: req.params.policyId });
-    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'POLICY_REVOKE_ERROR' });
-  }
-});
+router.get(
+  '/policies/:policyName/effective',
+  requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const enterpriseReq = req as EnterpriseAuthenticatedRequest;
+      const organizationId = enterpriseReq.enterpriseContext?.organizationId;
+      if (!organizationId) {
+        res.status(401).json({
+          error: 'Authenticated enterprise context required',
+          code: 'ENTERPRISE_AUTH_REQUIRED',
+        });
+        return;
+      }
 
-router.get('/policies/:policyName/effective', requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES), async (req: Request, res: Response): Promise<void> => {
-  try {
-    const enterpriseReq = req as EnterpriseAuthenticatedRequest;
-    const organizationId = enterpriseReq.enterpriseContext?.organizationId;
-    if (!organizationId) {
-      res.status(401).json({ error: 'Authenticated enterprise context required', code: 'ENTERPRISE_AUTH_REQUIRED' });
-      return;
+      const policy = await policyRegistryService.getEffectivePolicy(
+        organizationId,
+        req.params.policyName as string,
+      );
+      if (!policy) {
+        res.status(404).json({
+          error: 'Effective policy not found',
+          code: 'POLICY_NOT_FOUND',
+        });
+        return;
+      }
+
+      res.status(200).json({ data: serializePolicyDefinition(policy) });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('policy_effective_error', {
+        error: error.message,
+        policyName: req.params.policyName,
+      });
+      res.status(error.statusCode ?? 500).json({
+        error: error.message,
+        code: error.code ?? 'POLICY_EFFECTIVE_ERROR',
+      });
     }
+  },
+);
 
-    const policy = await policyRegistryService.getEffectivePolicy(organizationId, req.params.policyName as string);
-    if (!policy) {
-      res.status(404).json({ error: 'Effective policy not found', code: 'POLICY_NOT_FOUND' });
-      return;
+router.post(
+  '/policies/exceptions',
+  requireEnterpriseContext(['admin', 'compliance_officer']),
+  validate(CreatePolicyExceptionSchema),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const enterpriseReq = req as EnterpriseAuthenticatedRequest;
+      const organizationId = enterpriseReq.enterpriseContext?.organizationId;
+      const actorIdentityId = enterpriseReq.identity?.id;
+      if (!organizationId || !actorIdentityId) {
+        res.status(401).json({
+          error: 'Authenticated enterprise policy reviewer required',
+          code: 'ENTERPRISE_AUTH_REQUIRED',
+        });
+        return;
+      }
+
+      const exception = await policyExceptionService.createExceptionRequest(
+        organizationId,
+        actorIdentityId,
+        req.body,
+      );
+      res.status(201).json({
+        data: serializePolicyException(exception),
+        message: 'Policy exception request created',
+      });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('policy_exception_create_error', { error: error.message });
+      res.status(error.statusCode ?? 500).json({
+        error: error.message,
+        code: error.code ?? 'POLICY_EXCEPTION_CREATE_ERROR',
+      });
     }
+  },
+);
 
-    res.status(200).json({ data: serializePolicyDefinition(policy) });
-  } catch (err) {
-    const error = err as Error & { statusCode?: number; code?: string };
-    logger.error('policy_effective_error', { error: error.message, policyName: req.params.policyName });
-    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'POLICY_EFFECTIVE_ERROR' });
-  }
-});
+router.get(
+  '/policies/exceptions',
+  requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const enterpriseReq = req as EnterpriseAuthenticatedRequest;
+      const organizationId = enterpriseReq.enterpriseContext?.organizationId;
+      if (!organizationId) {
+        res.status(401).json({
+          error: 'Authenticated enterprise context required',
+          code: 'ENTERPRISE_AUTH_REQUIRED',
+        });
+        return;
+      }
 
-router.post('/policies/exceptions', requireEnterpriseContext(['admin', 'compliance_officer']), validate(CreatePolicyExceptionSchema), async (req: Request, res: Response): Promise<void> => {
-  try {
-    const enterpriseReq = req as EnterpriseAuthenticatedRequest;
-    const organizationId = enterpriseReq.enterpriseContext?.organizationId;
-    const actorIdentityId = enterpriseReq.identity?.id;
-    if (!organizationId || !actorIdentityId) {
-      res.status(401).json({ error: 'Authenticated enterprise policy reviewer required', code: 'ENTERPRISE_AUTH_REQUIRED' });
-      return;
+      const exceptions = await policyExceptionService.listExceptions(
+        organizationId,
+        {
+          policyName:
+            typeof req.query.policyName === 'string'
+              ? req.query.policyName
+              : undefined,
+          status:
+            typeof req.query.status === 'string'
+              ? (req.query.status as any)
+              : undefined,
+          subjectEntityId:
+            typeof req.query.subjectEntityId === 'string'
+              ? req.query.subjectEntityId
+              : undefined,
+        },
+      );
+      res.status(200).json({ data: exceptions.map(serializePolicyException) });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('policy_exception_list_error', { error: error.message });
+      res.status(error.statusCode ?? 500).json({
+        error: error.message,
+        code: error.code ?? 'POLICY_EXCEPTION_LIST_ERROR',
+      });
     }
+  },
+);
 
-    const exception = await policyExceptionService.createExceptionRequest(organizationId, actorIdentityId, req.body);
-    res.status(201).json({ data: serializePolicyException(exception), message: 'Policy exception request created' });
-  } catch (err) {
-    const error = err as Error & { statusCode?: number; code?: string };
-    logger.error('policy_exception_create_error', { error: error.message });
-    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'POLICY_EXCEPTION_CREATE_ERROR' });
-  }
-});
+router.get(
+  '/policies/exceptions/:exceptionId/evidence',
+  requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const enterpriseReq = req as EnterpriseAuthenticatedRequest;
+      const organizationId = enterpriseReq.enterpriseContext?.organizationId;
+      if (!organizationId) {
+        res.status(401).json({
+          error: 'Authenticated enterprise context required',
+          code: 'ENTERPRISE_AUTH_REQUIRED',
+        });
+        return;
+      }
 
-router.get('/policies/exceptions', requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES), async (req: Request, res: Response): Promise<void> => {
-  try {
-    const enterpriseReq = req as EnterpriseAuthenticatedRequest;
-    const organizationId = enterpriseReq.enterpriseContext?.organizationId;
-    if (!organizationId) {
-      res.status(401).json({ error: 'Authenticated enterprise context required', code: 'ENTERPRISE_AUTH_REQUIRED' });
-      return;
+      const exception = await policyExceptionService.getExceptionById(
+        req.params.exceptionId as string,
+        organizationId,
+      );
+      res
+        .status(200)
+        .json({ data: buildPolicyExceptionGovernanceEvidence(exception) });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('policy_exception_evidence_error', {
+        error: error.message,
+        exceptionId: req.params.exceptionId,
+      });
+      res.status(error.statusCode ?? 500).json({
+        error: error.message,
+        code: error.code ?? 'POLICY_EXCEPTION_EVIDENCE_ERROR',
+      });
     }
+  },
+);
 
-    const exceptions = await policyExceptionService.listExceptions(organizationId, {
-      policyName: typeof req.query.policyName === 'string' ? req.query.policyName : undefined,
-      status: typeof req.query.status === 'string' ? req.query.status as any : undefined,
-      subjectEntityId: typeof req.query.subjectEntityId === 'string' ? req.query.subjectEntityId : undefined,
-    });
-    res.status(200).json({ data: exceptions.map(serializePolicyException) });
-  } catch (err) {
-    const error = err as Error & { statusCode?: number; code?: string };
-    logger.error('policy_exception_list_error', { error: error.message });
-    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'POLICY_EXCEPTION_LIST_ERROR' });
-  }
-});
+router.post(
+  '/policies/exceptions/:exceptionId/approve',
+  requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const enterpriseReq = req as EnterpriseAuthenticatedRequest;
+      const organizationId = enterpriseReq.enterpriseContext?.organizationId;
+      const actorIdentityId = enterpriseReq.identity?.id;
+      if (!organizationId || !actorIdentityId) {
+        res.status(401).json({
+          error: 'Authenticated enterprise admin required',
+          code: 'ENTERPRISE_AUTH_REQUIRED',
+        });
+        return;
+      }
 
-router.get('/policies/exceptions/:exceptionId/evidence', requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES), async (req: Request, res: Response): Promise<void> => {
-  try {
-    const enterpriseReq = req as EnterpriseAuthenticatedRequest;
-    const organizationId = enterpriseReq.enterpriseContext?.organizationId;
-    if (!organizationId) {
-      res.status(401).json({ error: 'Authenticated enterprise context required', code: 'ENTERPRISE_AUTH_REQUIRED' });
-      return;
+      const effectiveFrom =
+        typeof req.body?.effectiveFrom === 'string'
+          ? req.body.effectiveFrom
+          : undefined;
+      const exception = await policyExceptionService.approveException(
+        req.params.exceptionId as string,
+        organizationId,
+        actorIdentityId,
+        effectiveFrom,
+      );
+      res.status(200).json({
+        data: serializePolicyException(exception),
+        message:
+          exception.status === 'approved'
+            ? 'Policy exception approved'
+            : 'Policy exception approval recorded; additional approvals required',
+      });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('policy_exception_approve_error', {
+        error: error.message,
+        exceptionId: req.params.exceptionId,
+      });
+      res.status(error.statusCode ?? 500).json({
+        error: error.message,
+        code: error.code ?? 'POLICY_EXCEPTION_APPROVE_ERROR',
+      });
     }
+  },
+);
 
-    const exception = await policyExceptionService.getExceptionById(req.params.exceptionId as string, organizationId);
-    res.status(200).json({ data: buildPolicyExceptionGovernanceEvidence(exception) });
-  } catch (err) {
-    const error = err as Error & { statusCode?: number; code?: string };
-    logger.error('policy_exception_evidence_error', { error: error.message, exceptionId: req.params.exceptionId });
-    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'POLICY_EXCEPTION_EVIDENCE_ERROR' });
-  }
-});
+router.post(
+  '/policies/exceptions/:exceptionId/reject',
+  requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const enterpriseReq = req as EnterpriseAuthenticatedRequest;
+      const organizationId = enterpriseReq.enterpriseContext?.organizationId;
+      const actorIdentityId = enterpriseReq.identity?.id;
+      if (!organizationId || !actorIdentityId) {
+        res.status(401).json({
+          error: 'Authenticated enterprise admin required',
+          code: 'ENTERPRISE_AUTH_REQUIRED',
+        });
+        return;
+      }
 
-router.post('/policies/exceptions/:exceptionId/approve', requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES), async (req: Request, res: Response): Promise<void> => {
-  try {
-    const enterpriseReq = req as EnterpriseAuthenticatedRequest;
-    const organizationId = enterpriseReq.enterpriseContext?.organizationId;
-    const actorIdentityId = enterpriseReq.identity?.id;
-    if (!organizationId || !actorIdentityId) {
-      res.status(401).json({ error: 'Authenticated enterprise admin required', code: 'ENTERPRISE_AUTH_REQUIRED' });
-      return;
+      const reason =
+        typeof req.body?.reason === 'string' ? req.body.reason : undefined;
+      const exception = await policyExceptionService.rejectException(
+        req.params.exceptionId as string,
+        organizationId,
+        actorIdentityId,
+        reason,
+      );
+      res.status(200).json({
+        data: serializePolicyException(exception),
+        message: 'Policy exception rejected',
+      });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('policy_exception_reject_error', {
+        error: error.message,
+        exceptionId: req.params.exceptionId,
+      });
+      res.status(error.statusCode ?? 500).json({
+        error: error.message,
+        code: error.code ?? 'POLICY_EXCEPTION_REJECT_ERROR',
+      });
     }
+  },
+);
 
-    const effectiveFrom = typeof req.body?.effectiveFrom === 'string' ? req.body.effectiveFrom : undefined;
-    const exception = await policyExceptionService.approveException(req.params.exceptionId as string, organizationId, actorIdentityId, effectiveFrom);
-    res.status(200).json({
-      data: serializePolicyException(exception),
-      message: exception.status === 'approved'
-        ? 'Policy exception approved'
-        : 'Policy exception approval recorded; additional approvals required',
-    });
-  } catch (err) {
-    const error = err as Error & { statusCode?: number; code?: string };
-    logger.error('policy_exception_approve_error', { error: error.message, exceptionId: req.params.exceptionId });
-    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'POLICY_EXCEPTION_APPROVE_ERROR' });
-  }
-});
+router.post(
+  '/policies/exceptions/:exceptionId/revoke',
+  requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES),
+  validate(RevokePolicyExceptionSchema),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const enterpriseReq = req as EnterpriseAuthenticatedRequest;
+      const organizationId = enterpriseReq.enterpriseContext?.organizationId;
+      const actorIdentityId = enterpriseReq.identity?.id;
+      if (!organizationId || !actorIdentityId) {
+        res.status(401).json({
+          error: 'Authenticated enterprise admin required',
+          code: 'ENTERPRISE_AUTH_REQUIRED',
+        });
+        return;
+      }
 
-router.post('/policies/exceptions/:exceptionId/reject', requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES), async (req: Request, res: Response): Promise<void> => {
-  try {
-    const enterpriseReq = req as EnterpriseAuthenticatedRequest;
-    const organizationId = enterpriseReq.enterpriseContext?.organizationId;
-    const actorIdentityId = enterpriseReq.identity?.id;
-    if (!organizationId || !actorIdentityId) {
-      res.status(401).json({ error: 'Authenticated enterprise admin required', code: 'ENTERPRISE_AUTH_REQUIRED' });
-      return;
+      const exception = await policyExceptionService.revokeException(
+        req.params.exceptionId as string,
+        organizationId,
+        actorIdentityId,
+        req.body,
+      );
+      res.status(200).json({
+        data: serializePolicyException(exception),
+        message: 'Policy exception revoked',
+      });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('policy_exception_revoke_error', {
+        error: error.message,
+        exceptionId: req.params.exceptionId,
+      });
+      res.status(error.statusCode ?? 500).json({
+        error: error.message,
+        code: error.code ?? 'POLICY_EXCEPTION_REVOKE_ERROR',
+      });
     }
+  },
+);
 
-    const reason = typeof req.body?.reason === 'string' ? req.body.reason : undefined;
-    const exception = await policyExceptionService.rejectException(req.params.exceptionId as string, organizationId, actorIdentityId, reason);
-    res.status(200).json({ data: serializePolicyException(exception), message: 'Policy exception rejected' });
-  } catch (err) {
-    const error = err as Error & { statusCode?: number; code?: string };
-    logger.error('policy_exception_reject_error', { error: error.message, exceptionId: req.params.exceptionId });
-    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'POLICY_EXCEPTION_REJECT_ERROR' });
-  }
-});
+router.post(
+  '/trust/issuers',
+  requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES),
+  validate(RegisterIssuerTrustSchema),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const enterpriseReq = req as EnterpriseAuthenticatedRequest;
+      const organizationId = enterpriseReq.enterpriseContext?.organizationId;
+      const actorIdentityId = enterpriseReq.identity?.id;
+      if (!organizationId || !actorIdentityId) {
+        res.status(401).json({
+          error: 'Authenticated enterprise admin required',
+          code: 'ENTERPRISE_AUTH_REQUIRED',
+        });
+        return;
+      }
 
-router.post('/policies/exceptions/:exceptionId/revoke', requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES), validate(RevokePolicyExceptionSchema), async (req: Request, res: Response): Promise<void> => {
-  try {
-    const enterpriseReq = req as EnterpriseAuthenticatedRequest;
-    const organizationId = enterpriseReq.enterpriseContext?.organizationId;
-    const actorIdentityId = enterpriseReq.identity?.id;
-    if (!organizationId || !actorIdentityId) {
-      res.status(401).json({ error: 'Authenticated enterprise admin required', code: 'ENTERPRISE_AUTH_REQUIRED' });
-      return;
+      const record = await issuerTrustRegistryService.registerIssuerTrust(
+        organizationId,
+        actorIdentityId,
+        req.body,
+      );
+      res.status(201).json({
+        data: serializeIssuerTrustRecord(record),
+        message: 'Issuer trust record created and pending review',
+      });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('issuer_trust_register_error', { error: error.message });
+      res.status(error.statusCode ?? 500).json({
+        error: error.message,
+        code: error.code ?? 'ISSUER_TRUST_REGISTER_ERROR',
+      });
     }
+  },
+);
 
-    const exception = await policyExceptionService.revokeException(req.params.exceptionId as string, organizationId, actorIdentityId, req.body);
-    res.status(200).json({ data: serializePolicyException(exception), message: 'Policy exception revoked' });
-  } catch (err) {
-    const error = err as Error & { statusCode?: number; code?: string };
-    logger.error('policy_exception_revoke_error', { error: error.message, exceptionId: req.params.exceptionId });
-    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'POLICY_EXCEPTION_REVOKE_ERROR' });
-  }
-});
+router.get(
+  '/trust/issuers',
+  requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const enterpriseReq = req as EnterpriseAuthenticatedRequest;
+      const organizationId = enterpriseReq.enterpriseContext?.organizationId;
+      if (!organizationId) {
+        res.status(401).json({
+          error: 'Authenticated enterprise context required',
+          code: 'ENTERPRISE_AUTH_REQUIRED',
+        });
+        return;
+      }
 
-router.post('/trust/issuers', requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES), validate(RegisterIssuerTrustSchema), async (req: Request, res: Response): Promise<void> => {
-  try {
-    const enterpriseReq = req as EnterpriseAuthenticatedRequest;
-    const organizationId = enterpriseReq.enterpriseContext?.organizationId;
-    const actorIdentityId = enterpriseReq.identity?.id;
-    if (!organizationId || !actorIdentityId) {
-      res.status(401).json({ error: 'Authenticated enterprise admin required', code: 'ENTERPRISE_AUTH_REQUIRED' });
-      return;
+      const status =
+        typeof req.query.status === 'string' ? req.query.status : undefined;
+      const records = await issuerTrustRegistryService.listIssuerTrustRecords(
+        organizationId,
+        status as any,
+      );
+      res.status(200).json({ data: records.map(serializeIssuerTrustRecord) });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('issuer_trust_list_error', { error: error.message });
+      res.status(error.statusCode ?? 500).json({
+        error: error.message,
+        code: error.code ?? 'ISSUER_TRUST_LIST_ERROR',
+      });
     }
+  },
+);
 
-    const record = await issuerTrustRegistryService.registerIssuerTrust(organizationId, actorIdentityId, req.body);
-    res.status(201).json({
-      data: serializeIssuerTrustRecord(record),
-      message: 'Issuer trust record created and pending review',
-    });
-  } catch (err) {
-    const error = err as Error & { statusCode?: number; code?: string };
-    logger.error('issuer_trust_register_error', { error: error.message });
-    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'ISSUER_TRUST_REGISTER_ERROR' });
-  }
-});
+router.get(
+  '/trust/issuers/:trustId/evidence',
+  requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const enterpriseReq = req as EnterpriseAuthenticatedRequest;
+      const organizationId = enterpriseReq.enterpriseContext?.organizationId;
+      if (!organizationId) {
+        res.status(401).json({
+          error: 'Authenticated enterprise context required',
+          code: 'ENTERPRISE_AUTH_REQUIRED',
+        });
+        return;
+      }
 
-router.get('/trust/issuers', requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES), async (req: Request, res: Response): Promise<void> => {
-  try {
-    const enterpriseReq = req as EnterpriseAuthenticatedRequest;
-    const organizationId = enterpriseReq.enterpriseContext?.organizationId;
-    if (!organizationId) {
-      res.status(401).json({ error: 'Authenticated enterprise context required', code: 'ENTERPRISE_AUTH_REQUIRED' });
-      return;
+      const record = await issuerTrustRegistryService.getIssuerTrustRecordById(
+        req.params.trustId as string,
+        organizationId,
+      );
+      res
+        .status(200)
+        .json({ data: buildIssuerTrustGovernanceEvidence(record) });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('issuer_trust_evidence_error', {
+        error: error.message,
+        trustId: req.params.trustId,
+      });
+      res.status(error.statusCode ?? 500).json({
+        error: error.message,
+        code: error.code ?? 'ISSUER_TRUST_EVIDENCE_ERROR',
+      });
     }
+  },
+);
 
-    const status = typeof req.query.status === 'string' ? req.query.status : undefined;
-    const records = await issuerTrustRegistryService.listIssuerTrustRecords(organizationId, status as any);
-    res.status(200).json({ data: records.map(serializeIssuerTrustRecord) });
-  } catch (err) {
-    const error = err as Error & { statusCode?: number; code?: string };
-    logger.error('issuer_trust_list_error', { error: error.message });
-    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'ISSUER_TRUST_LIST_ERROR' });
-  }
-});
+router.post(
+  '/trust/issuers/:trustId/approve',
+  requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const enterpriseReq = req as EnterpriseAuthenticatedRequest;
+      const organizationId = enterpriseReq.enterpriseContext?.organizationId;
+      const actorIdentityId = enterpriseReq.identity?.id;
+      if (!organizationId || !actorIdentityId) {
+        res.status(401).json({
+          error: 'Authenticated enterprise admin required',
+          code: 'ENTERPRISE_AUTH_REQUIRED',
+        });
+        return;
+      }
 
-router.get('/trust/issuers/:trustId/evidence', requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES), async (req: Request, res: Response): Promise<void> => {
-  try {
-    const enterpriseReq = req as EnterpriseAuthenticatedRequest;
-    const organizationId = enterpriseReq.enterpriseContext?.organizationId;
-    if (!organizationId) {
-      res.status(401).json({ error: 'Authenticated enterprise context required', code: 'ENTERPRISE_AUTH_REQUIRED' });
-      return;
+      const record = await issuerTrustRegistryService.accreditIssuer(
+        req.params.trustId as string,
+        organizationId,
+        actorIdentityId,
+      );
+      res.status(200).json({
+        data: serializeIssuerTrustRecord(record),
+        message: 'Issuer accredited',
+      });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('issuer_trust_approve_error', {
+        error: error.message,
+        trustId: req.params.trustId,
+      });
+      res.status(error.statusCode ?? 500).json({
+        error: error.message,
+        code: error.code ?? 'ISSUER_TRUST_APPROVE_ERROR',
+      });
     }
+  },
+);
 
-    const record = await issuerTrustRegistryService.getIssuerTrustRecordById(req.params.trustId as string, organizationId);
-    res.status(200).json({ data: buildIssuerTrustGovernanceEvidence(record) });
-  } catch (err) {
-    const error = err as Error & { statusCode?: number; code?: string };
-    logger.error('issuer_trust_evidence_error', { error: error.message, trustId: req.params.trustId });
-    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'ISSUER_TRUST_EVIDENCE_ERROR' });
-  }
-});
+router.post(
+  '/trust/issuers/:trustId/suspend',
+  requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const enterpriseReq = req as EnterpriseAuthenticatedRequest;
+      const organizationId = enterpriseReq.enterpriseContext?.organizationId;
+      const actorIdentityId = enterpriseReq.identity?.id;
+      if (!organizationId || !actorIdentityId) {
+        res.status(401).json({
+          error: 'Authenticated enterprise admin required',
+          code: 'ENTERPRISE_AUTH_REQUIRED',
+        });
+        return;
+      }
 
-router.post('/trust/issuers/:trustId/approve', requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES), async (req: Request, res: Response): Promise<void> => {
-  try {
-    const enterpriseReq = req as EnterpriseAuthenticatedRequest;
-    const organizationId = enterpriseReq.enterpriseContext?.organizationId;
-    const actorIdentityId = enterpriseReq.identity?.id;
-    if (!organizationId || !actorIdentityId) {
-      res.status(401).json({ error: 'Authenticated enterprise admin required', code: 'ENTERPRISE_AUTH_REQUIRED' });
-      return;
+      const reason =
+        typeof req.body?.reason === 'string' && req.body.reason.length > 0
+          ? req.body.reason
+          : 'Suspended by enterprise administrator';
+      const record = await issuerTrustRegistryService.suspendIssuer(
+        req.params.trustId as string,
+        organizationId,
+        actorIdentityId,
+        reason,
+      );
+      res.status(200).json({
+        data: serializeIssuerTrustRecord(record),
+        message: 'Issuer trust suspended',
+      });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('issuer_trust_suspend_error', {
+        error: error.message,
+        trustId: req.params.trustId,
+      });
+      res.status(error.statusCode ?? 500).json({
+        error: error.message,
+        code: error.code ?? 'ISSUER_TRUST_SUSPEND_ERROR',
+      });
     }
+  },
+);
 
-    const record = await issuerTrustRegistryService.accreditIssuer(req.params.trustId as string, organizationId, actorIdentityId);
-    res.status(200).json({ data: serializeIssuerTrustRecord(record), message: 'Issuer accredited' });
-  } catch (err) {
-    const error = err as Error & { statusCode?: number; code?: string };
-    logger.error('issuer_trust_approve_error', { error: error.message, trustId: req.params.trustId });
-    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'ISSUER_TRUST_APPROVE_ERROR' });
-  }
-});
+router.post(
+  '/trust/issuers/:issuerIdentityId/keys',
+  requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES),
+  validate(RecordIssuerKeySchema),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const enterpriseReq = req as EnterpriseAuthenticatedRequest;
+      const actorIdentityId = enterpriseReq.identity?.id;
+      if (!actorIdentityId) {
+        res.status(401).json({
+          error: 'Authenticated enterprise admin required',
+          code: 'ENTERPRISE_AUTH_REQUIRED',
+        });
+        return;
+      }
 
-router.post('/trust/issuers/:trustId/suspend', requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES), async (req: Request, res: Response): Promise<void> => {
-  try {
-    const enterpriseReq = req as EnterpriseAuthenticatedRequest;
-    const organizationId = enterpriseReq.enterpriseContext?.organizationId;
-    const actorIdentityId = enterpriseReq.identity?.id;
-    if (!organizationId || !actorIdentityId) {
-      res.status(401).json({ error: 'Authenticated enterprise admin required', code: 'ENTERPRISE_AUTH_REQUIRED' });
-      return;
+      const record = await issuerTrustRegistryService.recordIssuerKeyVersion(
+        req.params.issuerIdentityId as string,
+        actorIdentityId,
+        req.body,
+      );
+      res.status(201).json({
+        data: serializeIssuerKeyHistory(record),
+        message: 'Issuer key version recorded',
+      });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('issuer_key_record_error', {
+        error: error.message,
+        issuerIdentityId: req.params.issuerIdentityId,
+      });
+      res.status(error.statusCode ?? 500).json({
+        error: error.message,
+        code: error.code ?? 'ISSUER_KEY_RECORD_ERROR',
+      });
     }
+  },
+);
 
-    const reason = typeof req.body?.reason === 'string' && req.body.reason.length > 0
-      ? req.body.reason
-      : 'Suspended by enterprise administrator';
-    const record = await issuerTrustRegistryService.suspendIssuer(req.params.trustId as string, organizationId, actorIdentityId, reason);
-    res.status(200).json({ data: serializeIssuerTrustRecord(record), message: 'Issuer trust suspended' });
-  } catch (err) {
-    const error = err as Error & { statusCode?: number; code?: string };
-    logger.error('issuer_trust_suspend_error', { error: error.message, trustId: req.params.trustId });
-    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'ISSUER_TRUST_SUSPEND_ERROR' });
-  }
-});
+router.get(
+  '/trust/issuers/:issuerIdentityId/keys',
+  requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const enterpriseReq = req as EnterpriseAuthenticatedRequest;
+      const organizationId = enterpriseReq.enterpriseContext?.organizationId;
+      if (!organizationId) {
+        res.status(401).json({
+          error: 'Authenticated enterprise context required',
+          code: 'ENTERPRISE_AUTH_REQUIRED',
+        });
+        return;
+      }
 
-router.post('/trust/issuers/:issuerIdentityId/keys', requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES), validate(RecordIssuerKeySchema), async (req: Request, res: Response): Promise<void> => {
-  try {
-    const enterpriseReq = req as EnterpriseAuthenticatedRequest;
-    const actorIdentityId = enterpriseReq.identity?.id;
-    if (!actorIdentityId) {
-      res.status(401).json({ error: 'Authenticated enterprise admin required', code: 'ENTERPRISE_AUTH_REQUIRED' });
-      return;
+      const records = await issuerTrustRegistryService.listIssuerKeyHistory(
+        organizationId,
+        req.params.issuerIdentityId as string,
+      );
+      res.status(200).json({ data: records.map(serializeIssuerKeyHistory) });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('issuer_key_list_error', {
+        error: error.message,
+        issuerIdentityId: req.params.issuerIdentityId,
+      });
+      res.status(error.statusCode ?? 500).json({
+        error: error.message,
+        code: error.code ?? 'ISSUER_KEY_LIST_ERROR',
+      });
     }
+  },
+);
 
-    const record = await issuerTrustRegistryService.recordIssuerKeyVersion(req.params.issuerIdentityId as string, actorIdentityId, req.body);
-    res.status(201).json({ data: serializeIssuerKeyHistory(record), message: 'Issuer key version recorded' });
-  } catch (err) {
-    const error = err as Error & { statusCode?: number; code?: string };
-    logger.error('issuer_key_record_error', { error: error.message, issuerIdentityId: req.params.issuerIdentityId });
-    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'ISSUER_KEY_RECORD_ERROR' });
-  }
-});
+router.get(
+  '/trust/issuers/:issuerIdentityId/keys/:keyHistoryId/evidence',
+  requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const enterpriseReq = req as EnterpriseAuthenticatedRequest;
+      const organizationId = enterpriseReq.enterpriseContext?.organizationId;
+      if (!organizationId) {
+        res.status(401).json({
+          error: 'Authenticated enterprise context required',
+          code: 'ENTERPRISE_AUTH_REQUIRED',
+        });
+        return;
+      }
 
-router.get('/trust/issuers/:issuerIdentityId/keys', requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES), async (req: Request, res: Response): Promise<void> => {
-  try {
-    const enterpriseReq = req as EnterpriseAuthenticatedRequest;
-    const organizationId = enterpriseReq.enterpriseContext?.organizationId;
-    if (!organizationId) {
-      res.status(401).json({ error: 'Authenticated enterprise context required', code: 'ENTERPRISE_AUTH_REQUIRED' });
-      return;
+      const issuerIdentityId = req.params.issuerIdentityId as string;
+      const keyHistoryId = req.params.keyHistoryId as string;
+      const [record, history] = await Promise.all([
+        issuerTrustRegistryService.getIssuerKeyHistoryRecord(
+          organizationId,
+          issuerIdentityId,
+          keyHistoryId,
+        ),
+        issuerTrustRegistryService.listIssuerKeyHistory(
+          organizationId,
+          issuerIdentityId,
+        ),
+      ]);
+      res
+        .status(200)
+        .json({ data: buildIssuerKeyHistoryEvidence(record, history) });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('issuer_key_evidence_error', {
+        error: error.message,
+        issuerIdentityId: req.params.issuerIdentityId,
+        keyHistoryId: req.params.keyHistoryId,
+      });
+      res.status(error.statusCode ?? 500).json({
+        error: error.message,
+        code: error.code ?? 'ISSUER_KEY_EVIDENCE_ERROR',
+      });
     }
-
-    const records = await issuerTrustRegistryService.listIssuerKeyHistory(organizationId, req.params.issuerIdentityId as string);
-    res.status(200).json({ data: records.map(serializeIssuerKeyHistory) });
-  } catch (err) {
-    const error = err as Error & { statusCode?: number; code?: string };
-    logger.error('issuer_key_list_error', { error: error.message, issuerIdentityId: req.params.issuerIdentityId });
-    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'ISSUER_KEY_LIST_ERROR' });
-  }
-});
-
-router.get('/trust/issuers/:issuerIdentityId/keys/:keyHistoryId/evidence', requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES), async (req: Request, res: Response): Promise<void> => {
-  try {
-    const enterpriseReq = req as EnterpriseAuthenticatedRequest;
-    const organizationId = enterpriseReq.enterpriseContext?.organizationId;
-    if (!organizationId) {
-      res.status(401).json({ error: 'Authenticated enterprise context required', code: 'ENTERPRISE_AUTH_REQUIRED' });
-      return;
-    }
-
-    const issuerIdentityId = req.params.issuerIdentityId as string;
-    const keyHistoryId = req.params.keyHistoryId as string;
-    const [record, history] = await Promise.all([
-      issuerTrustRegistryService.getIssuerKeyHistoryRecord(organizationId, issuerIdentityId, keyHistoryId),
-      issuerTrustRegistryService.listIssuerKeyHistory(organizationId, issuerIdentityId),
-    ]);
-    res.status(200).json({ data: buildIssuerKeyHistoryEvidence(record, history) });
-  } catch (err) {
-    const error = err as Error & { statusCode?: number; code?: string };
-    logger.error('issuer_key_evidence_error', {
-      error: error.message,
-      issuerIdentityId: req.params.issuerIdentityId,
-      keyHistoryId: req.params.keyHistoryId,
-    });
-    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'ISSUER_KEY_EVIDENCE_ERROR' });
-  }
-});
+  },
+);
 
 // ---------------------------------------------------------------------------
 // GET /enterprise/oidc/.well-known/openid-configuration  [PUBLIC]
 // ---------------------------------------------------------------------------
-oidcPublicRouter.get('/oidc/.well-known/openid-configuration', (_req: Request, res: Response): void => {
-  res.status(200).json(oidcBridge.getDiscoveryDocument());
-});
+oidcPublicRouter.get(
+  '/oidc/.well-known/openid-configuration',
+  (_req: Request, res: Response): void => {
+    res.status(200).json(oidcBridge.getDiscoveryDocument());
+  },
+);
 
 // ---------------------------------------------------------------------------
 // GET /enterprise/oidc/.well-known/jwks.json  [PUBLIC]
 // ---------------------------------------------------------------------------
-oidcPublicRouter.get('/oidc/.well-known/jwks.json', (_req: Request, res: Response): void => {
-  try {
-    res.status(200).json(oidcBridge.getJWKS());
-  } catch (err) {
-    const error = err as Error & { statusCode?: number; errorCode?: string };
-    logger.error('oidc_jwks_error', { error: error.message });
-    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.errorCode ?? 'OIDC_JWKS_ERROR' });
-  }
-});
+oidcPublicRouter.get(
+  '/oidc/.well-known/jwks.json',
+  (_req: Request, res: Response): void => {
+    try {
+      res.status(200).json(oidcBridge.getJWKS());
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; errorCode?: string };
+      logger.error('oidc_jwks_error', { error: error.message });
+      res.status(error.statusCode ?? 500).json({
+        error: error.message,
+        code: error.errorCode ?? 'OIDC_JWKS_ERROR',
+      });
+    }
+  },
+);
 
 // ---------------------------------------------------------------------------
 // POST /enterprise/oidc/register — Dynamic client registration
 // ---------------------------------------------------------------------------
-router.post('/oidc/register', requireEnterpriseContext(ENTERPRISE_OPERATOR_ROLES), validate(OIDCClientRegistrationSchema), async (req: Request, res: Response): Promise<void> => {
-  try {
-    const enterpriseReq = req as EnterpriseAuthenticatedRequest;
-    const identityId = enterpriseReq.identity?.id;
-    const enterpriseContext = enterpriseReq.enterpriseContext;
-    if (!identityId || !enterpriseContext) {
-      res.status(401).json({ error: 'Authenticated enterprise operator required', code: 'ENTERPRISE_AUTH_REQUIRED' });
-      return;
-    }
+router.post(
+  '/oidc/register',
+  requireEnterpriseContext(ENTERPRISE_OPERATOR_ROLES),
+  validate(OIDCClientRegistrationSchema),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const enterpriseReq = req as EnterpriseAuthenticatedRequest;
+      const identityId = enterpriseReq.identity?.id;
+      const enterpriseContext = enterpriseReq.enterpriseContext;
+      if (!identityId || !enterpriseContext) {
+        res.status(401).json({
+          error: 'Authenticated enterprise operator required',
+          code: 'ENTERPRISE_AUTH_REQUIRED',
+        });
+        return;
+      }
 
-    const result = await oidcBridge.registerClient(req.body, {
-      organizationId: enterpriseContext.organizationId,
-      registeredByIdentityId: identityId,
-      registeredByRole: enterpriseContext.role,
-    });
-    const message = result.approvalRequired
-      ? 'OIDC client registered and pending admin approval'
-      : 'OIDC client registered and activated';
-    res.status(201).json({ data: result, message });
-  } catch (err) {
-    const error = err as Error & { statusCode?: number; code?: string };
-    logger.error('oidc_register_error', { error: error.message });
-    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'OIDC_REGISTER_ERROR' });
-  }
-});
+      const result = await oidcBridge.registerClient(req.body, {
+        organizationId: enterpriseContext.organizationId,
+        registeredByIdentityId: identityId,
+        registeredByRole: enterpriseContext.role,
+      });
+      const message = result.approvalRequired
+        ? 'OIDC client registered and pending admin approval'
+        : 'OIDC client registered and activated';
+      res.status(201).json({ data: result, message });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('oidc_register_error', { error: error.message });
+      res.status(error.statusCode ?? 500).json({
+        error: error.message,
+        code: error.code ?? 'OIDC_REGISTER_ERROR',
+      });
+    }
+  },
+);
 
 // ---------------------------------------------------------------------------
 // GET /enterprise/oidc/clients — List organization-owned OIDC clients
 // ---------------------------------------------------------------------------
-router.get('/oidc/clients', requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES), async (req: Request, res: Response): Promise<void> => {
-  try {
-    const enterpriseReq = req as EnterpriseAuthenticatedRequest;
-    const organizationId = enterpriseReq.enterpriseContext?.organizationId;
-    if (!organizationId) {
-      res.status(401).json({ error: 'Authenticated enterprise context required', code: 'ENTERPRISE_AUTH_REQUIRED' });
-      return;
-    }
+router.get(
+  '/oidc/clients',
+  requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const enterpriseReq = req as EnterpriseAuthenticatedRequest;
+      const organizationId = enterpriseReq.enterpriseContext?.organizationId;
+      if (!organizationId) {
+        res.status(401).json({
+          error: 'Authenticated enterprise context required',
+          code: 'ENTERPRISE_AUTH_REQUIRED',
+        });
+        return;
+      }
 
-    const clients = await oidcBridge.listClientsForOrganization(organizationId);
-    res.status(200).json({ data: clients.map(serializeOIDCClient) });
-  } catch (err) {
-    const error = err as Error & { statusCode?: number; code?: string };
-    logger.error('oidc_client_list_error', { error: error.message });
-    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'OIDC_CLIENT_LIST_ERROR' });
-  }
-});
+      const clients =
+        await oidcBridge.listClientsForOrganization(organizationId);
+      res.status(200).json({ data: clients.map(serializeOIDCClient) });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('oidc_client_list_error', { error: error.message });
+      res.status(error.statusCode ?? 500).json({
+        error: error.message,
+        code: error.code ?? 'OIDC_CLIENT_LIST_ERROR',
+      });
+    }
+  },
+);
 
 // ---------------------------------------------------------------------------
 // POST /enterprise/oidc/clients/:clientId/approve — Activate pending OIDC client
 // ---------------------------------------------------------------------------
-router.post('/oidc/clients/:clientId/approve', requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES), async (req: Request, res: Response): Promise<void> => {
-  try {
-    const enterpriseReq = req as EnterpriseAuthenticatedRequest;
-    const organizationId = enterpriseReq.enterpriseContext?.organizationId;
-    const approverIdentityId = enterpriseReq.identity?.id;
-    if (!organizationId || !approverIdentityId) {
-      res.status(401).json({ error: 'Authenticated enterprise admin required', code: 'ENTERPRISE_AUTH_REQUIRED' });
-      return;
-    }
+router.post(
+  '/oidc/clients/:clientId/approve',
+  requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const enterpriseReq = req as EnterpriseAuthenticatedRequest;
+      const organizationId = enterpriseReq.enterpriseContext?.organizationId;
+      const approverIdentityId = enterpriseReq.identity?.id;
+      if (!organizationId || !approverIdentityId) {
+        res.status(401).json({
+          error: 'Authenticated enterprise admin required',
+          code: 'ENTERPRISE_AUTH_REQUIRED',
+        });
+        return;
+      }
 
-    const client = await oidcBridge.approveClient(req.params.clientId as string, organizationId, approverIdentityId);
-    res.status(200).json({ data: serializeOIDCClient(client), message: 'OIDC client approved and activated' });
-  } catch (err) {
-    const error = err as Error & { statusCode?: number; code?: string };
-    logger.error('oidc_client_approve_error', { error: error.message, clientId: req.params.clientId });
-    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'OIDC_CLIENT_APPROVE_ERROR' });
-  }
-});
+      const client = await oidcBridge.approveClient(
+        req.params.clientId as string,
+        organizationId,
+        approverIdentityId,
+      );
+      res.status(200).json({
+        data: serializeOIDCClient(client),
+        message: 'OIDC client approved and activated',
+      });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('oidc_client_approve_error', {
+        error: error.message,
+        clientId: req.params.clientId,
+      });
+      res.status(error.statusCode ?? 500).json({
+        error: error.message,
+        code: error.code ?? 'OIDC_CLIENT_APPROVE_ERROR',
+      });
+    }
+  },
+);
 
 // ---------------------------------------------------------------------------
 // POST /enterprise/oidc/clients/:clientId/deactivate — Deactivate OIDC client
 // ---------------------------------------------------------------------------
-router.post('/oidc/clients/:clientId/deactivate', requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES), async (req: Request, res: Response): Promise<void> => {
-  try {
-    const enterpriseReq = req as EnterpriseAuthenticatedRequest;
-    const organizationId = enterpriseReq.enterpriseContext?.organizationId;
-    const actorIdentityId = enterpriseReq.identity?.id;
-    if (!organizationId || !actorIdentityId) {
-      res.status(401).json({ error: 'Authenticated enterprise admin required', code: 'ENTERPRISE_AUTH_REQUIRED' });
-      return;
-    }
+router.post(
+  '/oidc/clients/:clientId/deactivate',
+  requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const enterpriseReq = req as EnterpriseAuthenticatedRequest;
+      const organizationId = enterpriseReq.enterpriseContext?.organizationId;
+      const actorIdentityId = enterpriseReq.identity?.id;
+      if (!organizationId || !actorIdentityId) {
+        res.status(401).json({
+          error: 'Authenticated enterprise admin required',
+          code: 'ENTERPRISE_AUTH_REQUIRED',
+        });
+        return;
+      }
 
-    const reason = typeof req.body?.reason === 'string' && req.body.reason.length > 0
-      ? req.body.reason
-      : 'Deactivated by organization administrator';
-    const client = await oidcBridge.deactivateClient(req.params.clientId as string, organizationId, actorIdentityId, reason);
-    res.status(200).json({ data: serializeOIDCClient(client), message: 'OIDC client deactivated' });
-  } catch (err) {
-    const error = err as Error & { statusCode?: number; code?: string };
-    logger.error('oidc_client_deactivate_error', { error: error.message, clientId: req.params.clientId });
-    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'OIDC_CLIENT_DEACTIVATE_ERROR' });
-  }
-});
+      const reason =
+        typeof req.body?.reason === 'string' && req.body.reason.length > 0
+          ? req.body.reason
+          : 'Deactivated by organization administrator';
+      const client = await oidcBridge.deactivateClient(
+        req.params.clientId as string,
+        organizationId,
+        actorIdentityId,
+        reason,
+      );
+      res.status(200).json({
+        data: serializeOIDCClient(client),
+        message: 'OIDC client deactivated',
+      });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('oidc_client_deactivate_error', {
+        error: error.message,
+        clientId: req.params.clientId,
+      });
+      res.status(error.statusCode ?? 500).json({
+        error: error.message,
+        code: error.code ?? 'OIDC_CLIENT_DEACTIVATE_ERROR',
+      });
+    }
+  },
+);
 
 // ---------------------------------------------------------------------------
 // POST /enterprise/oidc/authorize — OIDC authorization
 // ---------------------------------------------------------------------------
 // NOTE: This route MUST be mounted behind authMiddleware in index.ts.
 // The authenticated identity is sourced from the JWT — never from raw headers.
-router.post('/oidc/authorize', async (req: Request, res: Response): Promise<void> => {
-  try {
-    const authReq = req as AuthenticatedRequest;
-    const subjectId = authReq.identity?.id;
-    if (!subjectId || authReq.identity?.status !== 'ACTIVE') {
-      // authMiddleware already validates the JWT and identity status,
-      // so this is a defence-in-depth check.
-      res.status(401).json({ error: 'Subject not authenticated', code: 'UNAUTHENTICATED' });
-      return;
+router.post(
+  '/oidc/authorize',
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const subjectId = authReq.identity?.id;
+      if (!subjectId || authReq.identity?.status !== 'ACTIVE') {
+        // authMiddleware already validates the JWT and identity status,
+        // so this is a defence-in-depth check.
+        res.status(401).json({
+          error: 'Subject not authenticated',
+          code: 'UNAUTHENTICATED',
+        });
+        return;
+      }
+
+      // Spoofable headers are already stripped by the router-level middleware.
+
+      const subject = await prisma.identity.findUnique({
+        where: { id: subjectId },
+        select: {
+          displayName: true,
+          metadata: true,
+          status: true,
+          teeAttested: true,
+          teeAttestationId: true,
+          governmentVerified: true,
+          updatedAt: true,
+        },
+      });
+
+      if (!subject || subject.status !== 'ACTIVE') {
+        res.status(403).json({
+          error: 'Subject not found or inactive',
+          code: 'OIDC_SUBJECT_INVALID',
+        });
+        return;
+      }
+
+      const subjectClaims = buildTrustedOIDCClaims(subject);
+      const result = await oidcBridge.authorize(
+        req.body,
+        subjectId,
+        subjectClaims,
+      );
+      res.status(200).json({ data: result });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; errorCode?: string };
+      logger.error('oidc_authorize_error', { error: error.message });
+      const errorCode = (error as any).errorCode ?? 'OIDC_AUTH_ERROR';
+      res
+        .status(error.statusCode ?? 500)
+        .json({ error: errorCode, error_description: error.message });
     }
-
-    // Spoofable headers are already stripped by the router-level middleware.
-
-    const subject = await prisma.identity.findUnique({
-      where: { id: subjectId },
-      select: {
-        displayName: true,
-        metadata: true,
-        status: true,
-        teeAttested: true,
-        teeAttestationId: true,
-        governmentVerified: true,
-        updatedAt: true,
-      },
-    });
-
-    if (!subject || subject.status !== 'ACTIVE') {
-      res.status(403).json({ error: 'Subject not found or inactive', code: 'OIDC_SUBJECT_INVALID' });
-      return;
-    }
-
-    const subjectClaims = buildTrustedOIDCClaims(subject);
-    const result = await oidcBridge.authorize(req.body, subjectId, subjectClaims);
-    res.status(200).json({ data: result });
-  } catch (err) {
-    const error = err as Error & { statusCode?: number; errorCode?: string };
-    logger.error('oidc_authorize_error', { error: error.message });
-    const errorCode = (error as any).errorCode ?? 'OIDC_AUTH_ERROR';
-    res.status(error.statusCode ?? 500).json({ error: errorCode, error_description: error.message });
-  }
-});
+  },
+);
 
 // ---------------------------------------------------------------------------
 // POST /enterprise/oidc/token — OIDC token exchange  [PUBLIC]
@@ -1683,29 +2432,34 @@ router.post('/oidc/authorize', async (req: Request, res: Response): Promise<void
 // The token endpoint is unauthenticated per OAuth 2.0 / OIDC spec — the
 // relying party authenticates via client_secret or PKCE, not a user JWT.
 // ---------------------------------------------------------------------------
-oidcPublicRouter.post('/oidc/token', async (req: Request, res: Response): Promise<void> => {
-  try {
-    // Map snake_case from standard OIDC to camelCase
-    const tokenRequest = {
-      grantType: req.body.grant_type ?? req.body.grantType,
-      code: req.body.code,
-      redirectUri: req.body.redirect_uri ?? req.body.redirectUri,
-      clientId: req.body.client_id ?? req.body.clientId,
-      clientSecret: req.body.client_secret ?? req.body.clientSecret,
-      codeVerifier: req.body.code_verifier ?? req.body.codeVerifier,
-      refreshToken: req.body.refresh_token ?? req.body.refreshToken,
-      scope: req.body.scope,
-    };
+oidcPublicRouter.post(
+  '/oidc/token',
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      // Map snake_case from standard OIDC to camelCase
+      const tokenRequest = {
+        grantType: req.body.grant_type ?? req.body.grantType,
+        code: req.body.code,
+        redirectUri: req.body.redirect_uri ?? req.body.redirectUri,
+        clientId: req.body.client_id ?? req.body.clientId,
+        clientSecret: req.body.client_secret ?? req.body.clientSecret,
+        codeVerifier: req.body.code_verifier ?? req.body.codeVerifier,
+        refreshToken: req.body.refresh_token ?? req.body.refreshToken,
+        scope: req.body.scope,
+      };
 
-    const result = await oidcBridge.exchangeToken(tokenRequest);
-    res.status(200).json(result);
-  } catch (err) {
-    const error = err as Error & { statusCode?: number; errorCode?: string };
-    logger.error('oidc_token_error', { error: error.message });
-    const errorCode = (error as any).errorCode ?? 'OIDC_TOKEN_ERROR';
-    res.status(error.statusCode ?? 500).json({ error: errorCode, error_description: error.message });
-  }
-});
+      const result = await oidcBridge.exchangeToken(tokenRequest);
+      res.status(200).json(result);
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; errorCode?: string };
+      logger.error('oidc_token_error', { error: error.message });
+      const errorCode = (error as any).errorCode ?? 'OIDC_TOKEN_ERROR';
+      res
+        .status(error.statusCode ?? 500)
+        .json({ error: errorCode, error_description: error.message });
+    }
+  },
+);
 
 // ---------------------------------------------------------------------------
 // GET /enterprise/oidc/userinfo — UserInfo endpoint  [PUBLIC]
@@ -1714,22 +2468,31 @@ oidcPublicRouter.post('/oidc/token', async (req: Request, res: Response): Promis
 // caller using the OIDC-issued access token (Bearer), NOT the platform JWT.
 // A standards-compliant relying party will present only the OIDC token.
 // ---------------------------------------------------------------------------
-oidcPublicRouter.get('/oidc/userinfo', async (req: Request, res: Response): Promise<void> => {
-  try {
-    const authHeader = req.headers.authorization;
-    if (!authHeader?.startsWith('Bearer ')) {
-      res.status(401).json({ error: 'invalid_token', error_description: 'Bearer token required' });
-      return;
+oidcPublicRouter.get(
+  '/oidc/userinfo',
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const authHeader = req.headers.authorization;
+      if (!authHeader?.startsWith('Bearer ')) {
+        res.status(401).json({
+          error: 'invalid_token',
+          error_description: 'Bearer token required',
+        });
+        return;
+      }
+      const token = authHeader.slice(7);
+      const userInfo = await oidcBridge.getUserInfo(token);
+      res.status(200).json(userInfo);
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; errorCode?: string };
+      logger.error('oidc_userinfo_error', { error: error.message });
+      res.status(error.statusCode ?? 500).json({
+        error: (error as any).errorCode ?? 'USERINFO_ERROR',
+        error_description: error.message,
+      });
     }
-    const token = authHeader.slice(7);
-    const userInfo = await oidcBridge.getUserInfo(token);
-    res.status(200).json(userInfo);
-  } catch (err) {
-    const error = err as Error & { statusCode?: number; errorCode?: string };
-    logger.error('oidc_userinfo_error', { error: error.message });
-    res.status(error.statusCode ?? 500).json({ error: (error as any).errorCode ?? 'USERINFO_ERROR', error_description: error.message });
-  }
-});
+  },
+);
 
 // ---------------------------------------------------------------------------
 // POST /enterprise/oidc/saml — SAML bridge  [DISABLED]
@@ -1741,7 +2504,8 @@ oidcPublicRouter.get('/oidc/userinfo', async (req: Request, res: Response): Prom
 // ---------------------------------------------------------------------------
 router.post('/oidc/saml', (_req: Request, res: Response): void => {
   res.status(501).json({
-    error: 'SAML bridge is disabled for launch — unsigned assertions are not production-safe',
+    error:
+      'SAML bridge is disabled for launch — unsigned assertions are not production-safe',
     code: 'SAML_NOT_IMPLEMENTED',
   });
 });
@@ -1753,64 +2517,86 @@ router.post('/oidc/saml', (_req: Request, res: Response): void => {
 // ---------------------------------------------------------------------------
 // POST /enterprise/sla/register — Register SLA definition
 // ---------------------------------------------------------------------------
-router.post('/sla/register', requireEnterpriseContext(['admin', 'compliance_officer']), validate(SLADefinitionSchema), async (req: Request, res: Response): Promise<void> => {
-  try {
-    slaMonitor.registerSLA(req.body);
-    res.status(201).json({ message: 'SLA definition registered' });
-  } catch (err) {
-    const error = err as Error & { statusCode?: number; code?: string };
-    logger.error('sla_register_error', { error: error.message });
-    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'SLA_REGISTER_ERROR' });
-  }
-});
+router.post(
+  '/sla/register',
+  requireEnterpriseContext(['admin', 'compliance_officer']),
+  validate(SLADefinitionSchema),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      slaMonitor.registerSLA(req.body);
+      res.status(201).json({ message: 'SLA definition registered' });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('sla_register_error', { error: error.message });
+      res.status(error.statusCode ?? 500).json({
+        error: error.message,
+        code: error.code ?? 'SLA_REGISTER_ERROR',
+      });
+    }
+  },
+);
 
 // ---------------------------------------------------------------------------
 // GET /enterprise/sla/report — SLA report
 // ---------------------------------------------------------------------------
-router.get('/sla/report', requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES), async (req: Request, res: Response): Promise<void> => {
-  try {
-    const clientId = getClientId(req);
-    const periodDays = parseInt(req.query.period as string, 10) || undefined;
-    const report = slaMonitor.generateReport(clientId, periodDays);
-    res.status(200).json({ data: report });
-  } catch (err) {
-    const error = err as Error & { statusCode?: number; code?: string };
-    logger.error('sla_report_error', { error: error.message });
-    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'SLA_REPORT_ERROR' });
-  }
-});
+router.get(
+  '/sla/report',
+  requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const clientId = getClientId(req);
+      const periodDays = parseInt(req.query.period as string, 10) || undefined;
+      const report = slaMonitor.generateReport(clientId, periodDays);
+      res.status(200).json({ data: report });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('sla_report_error', { error: error.message });
+      res
+        .status(error.statusCode ?? 500)
+        .json({ error: error.message, code: error.code ?? 'SLA_REPORT_ERROR' });
+    }
+  },
+);
 
 // ---------------------------------------------------------------------------
 // GET /enterprise/sla/violations — Get SLA violations
 // ---------------------------------------------------------------------------
-router.get('/sla/violations', async (req: Request, res: Response): Promise<void> => {
-  try {
-    const clientId = getClientId(req);
-    const since = req.query.since as string | undefined;
-    const violations = slaMonitor.getViolations(clientId, since);
-    res.status(200).json({ data: violations });
-  } catch (err) {
-    const error = err as Error;
-    logger.error('sla_violations_error', { error: error.message });
-    res.status(500).json({ error: error.message, code: 'SLA_VIOLATIONS_ERROR' });
-  }
-});
+router.get(
+  '/sla/violations',
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const clientId = getClientId(req);
+      const since = req.query.since as string | undefined;
+      const violations = slaMonitor.getViolations(clientId, since);
+      res.status(200).json({ data: violations });
+    } catch (err) {
+      const error = err as Error;
+      logger.error('sla_violations_error', { error: error.message });
+      res
+        .status(500)
+        .json({ error: error.message, code: 'SLA_VIOLATIONS_ERROR' });
+    }
+  },
+);
 
 // ---------------------------------------------------------------------------
 // GET /enterprise/sla/alerts — Get SLA alerts
 // ---------------------------------------------------------------------------
-router.get('/sla/alerts', async (req: Request, res: Response): Promise<void> => {
-  try {
-    const clientId = getClientId(req);
-    const limit = parseInt(req.query.limit as string, 10) || 50;
-    const alerts = slaMonitor.getAlerts(clientId, limit);
-    res.status(200).json({ data: alerts });
-  } catch (err) {
-    const error = err as Error;
-    logger.error('sla_alerts_error', { error: error.message });
-    res.status(500).json({ error: error.message, code: 'SLA_ALERTS_ERROR' });
-  }
-});
+router.get(
+  '/sla/alerts',
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const clientId = getClientId(req);
+      const limit = parseInt(req.query.limit as string, 10) || 50;
+      const alerts = slaMonitor.getAlerts(clientId, limit);
+      res.status(200).json({ data: alerts });
+    } catch (err) {
+      const error = err as Error;
+      logger.error('sla_alerts_error', { error: error.message });
+      res.status(500).json({ error: error.message, code: 'SLA_ALERTS_ERROR' });
+    }
+  },
+);
 
 // ==========================================================================
 // USAGE / ANALYTICS

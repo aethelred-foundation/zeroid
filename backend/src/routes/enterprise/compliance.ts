@@ -2,8 +2,19 @@ import crypto from 'crypto';
 import { Router, Request, Response } from 'express';
 import { z } from 'zod';
 import { createLogger, format, transports } from 'winston';
-import { jurisdictionEngine, ComplianceEvaluationRequestSchema, CrossBorderAssessmentSchema, JurisdictionCodeSchema, CrossBorderResult } from '../../services/compliance/jurisdiction-engine';
-import { sanctionsScreeningService, ScreeningRequestSchema, BatchScreeningRequestSchema, FalsePositiveDecisionSchema } from '../../services/compliance/sanctions-screening';
+import {
+  jurisdictionEngine,
+  ComplianceEvaluationRequestSchema,
+  CrossBorderAssessmentSchema,
+  JurisdictionCodeSchema,
+  CrossBorderResult,
+} from '../../services/compliance/jurisdiction-engine';
+import {
+  sanctionsScreeningService,
+  ScreeningRequestSchema,
+  BatchScreeningRequestSchema,
+  FalsePositiveDecisionSchema,
+} from '../../services/compliance/sanctions-screening';
 import {
   regulatoryReportingService,
   ReportTypeSchema,
@@ -13,12 +24,37 @@ import {
   ReportAuthorityManifest,
   ReportAuthorityManifestEvent,
 } from '../../services/compliance/regulatory-reporting';
-import { dataSovereigntyService, CrossBorderTransferSchema, PIASchema, BreachNotificationSchema, ConsentRecordSchema, TransferAssessmentResult, PIAResult, BreachTimeline } from '../../services/compliance/data-sovereignty';
-import { EnterpriseAuthenticatedRequest, requireEnterpriseContext } from '../../middleware/enterprise';
-import { EnterpriseRole, OrganizationGovernanceSettings } from '../../services/enterprise/organization-service';
-import { policyDecisionReceiptService, PolicyDecisionReceipt } from '../../services/enterprise/policy-receipt-service';
-import { policyContextService, PolicyExecutionContext } from '../../services/enterprise/policy-context-service';
-import { policyExecutionService, PolicyExecutionTrace } from '../../services/enterprise/policy-execution-service';
+import {
+  dataSovereigntyService,
+  CrossBorderTransferSchema,
+  PIASchema,
+  BreachNotificationSchema,
+  ConsentRecordSchema,
+  TransferAssessmentResult,
+  PIAResult,
+  BreachTimeline,
+} from '../../services/compliance/data-sovereignty';
+import {
+  EnterpriseAuthenticatedRequest,
+  requireEnterpriseContext,
+} from '../../middleware/enterprise';
+import {
+  EnterpriseRole,
+  OrganizationGovernanceSettings,
+} from '../../services/enterprise/organization-service';
+import {
+  policyDecisionReceiptService,
+  PolicyDecisionReceipt,
+  PolicyDecisionReceiptExport,
+} from '../../services/enterprise/policy-receipt-service';
+import {
+  policyContextService,
+  PolicyExecutionContext,
+} from '../../services/enterprise/policy-context-service';
+import {
+  policyExecutionService,
+  PolicyExecutionTrace,
+} from '../../services/enterprise/policy-execution-service';
 import {
   createRegulatorySubmissionBundleSignature,
   verifyRegulatorySubmissionBundleSignature,
@@ -35,9 +71,23 @@ const logger = createLogger({
 });
 
 const router = Router();
-const ENTERPRISE_COMPLIANCE_READ_ROLES: EnterpriseRole[] = ['viewer', 'operator', 'admin', 'compliance_officer', 'auditor'];
-const ENTERPRISE_COMPLIANCE_WRITE_ROLES: EnterpriseRole[] = ['operator', 'admin', 'compliance_officer'];
-const ENTERPRISE_COMPLIANCE_REVIEW_ROLES: EnterpriseRole[] = ['admin', 'compliance_officer', 'auditor'];
+const ENTERPRISE_COMPLIANCE_READ_ROLES: EnterpriseRole[] = [
+  'viewer',
+  'operator',
+  'admin',
+  'compliance_officer',
+  'auditor',
+];
+const ENTERPRISE_COMPLIANCE_WRITE_ROLES: EnterpriseRole[] = [
+  'operator',
+  'admin',
+  'compliance_officer',
+];
+const ENTERPRISE_COMPLIANCE_REVIEW_ROLES: EnterpriseRole[] = [
+  'admin',
+  'compliance_officer',
+  'auditor',
+];
 const ReportAmendmentRequestSchema = z.object({
   reason: z.string().min(5),
   changes: z.record(z.unknown()),
@@ -77,9 +127,7 @@ function validate<T>(schema: z.ZodSchema<T>) {
   };
 }
 
-function getEnterpriseReceiptContext(
-  req: Request,
-): {
+function getEnterpriseReceiptContext(req: Request): {
   organizationId: string;
   actorIdentityId: string;
   governanceSettings?: OrganizationGovernanceSettings;
@@ -97,7 +145,9 @@ function getEnterpriseReceiptContext(
   };
 }
 
-function summarizeReceipt(receipt: PolicyDecisionReceipt): Record<string, unknown> {
+function summarizeReceipt(
+  receipt: PolicyDecisionReceipt,
+): Record<string, unknown> {
   return {
     id: receipt.receiptId,
     receiptType: receipt.receiptType,
@@ -115,7 +165,11 @@ function summarizeReceipt(receipt: PolicyDecisionReceipt): Record<string, unknow
 function buildCredentialEvidenceUsage(
   jurisdictions: string[],
   operationType: string,
-  credentials: Array<{ credentialId?: string; issuerId: string; credentialType: string }>,
+  credentials: Array<{
+    credentialId?: string;
+    issuerId: string;
+    credentialType: string;
+  }>,
 ): Array<{
   credentialId: string;
   issuerId: string;
@@ -128,7 +182,11 @@ function buildCredentialEvidenceUsage(
   }>;
 }> {
   return credentials
-    .filter((credential) => typeof credential.credentialId === 'string' && credential.credentialId.length > 0)
+    .filter(
+      (credential) =>
+        typeof credential.credentialId === 'string' &&
+        credential.credentialId.length > 0,
+    )
     .map((credential) => ({
       credentialId: credential.credentialId!,
       issuerId: credential.issuerId,
@@ -137,12 +195,16 @@ function buildCredentialEvidenceUsage(
       rulePaths: jurisdictions.map((jurisdiction) => {
         const requiredCredentials = jurisdictionEngine.getRequiredCredentials(
           jurisdiction as z.infer<typeof JurisdictionCodeSchema>,
-          operationType as z.infer<typeof ComplianceEvaluationRequestSchema>['operationType'],
+          operationType as z.infer<
+            typeof ComplianceEvaluationRequestSchema
+          >['operationType'],
         );
         return {
           jurisdiction,
           rulePath: `required_credential:${credential.credentialType}`,
-          status: requiredCredentials.includes(credential.credentialType) ? 'satisfied' as const : 'supplemental' as const,
+          status: requiredCredentials.includes(credential.credentialType)
+            ? ('satisfied' as const)
+            : ('supplemental' as const),
         };
       }),
     }));
@@ -197,7 +259,11 @@ type RegulatoryAuthorityProfileSnapshot = {
     | 'data_protection_authority'
     | 'audit_supervisor'
     | 'general_regulator';
-  packageProfile: 'aml_filing' | 'privacy_rights' | 'audit_package' | 'general_reporting';
+  packageProfile:
+    | 'aml_filing'
+    | 'privacy_rights'
+    | 'audit_package'
+    | 'general_reporting';
   jurisdiction: string;
   reportType: string;
   preferredDeliveryChannels: Array<'portal_upload' | 'api' | 'sftp' | 'email'>;
@@ -254,7 +320,9 @@ type ReportFilingPackageSnapshot = {
     currentVersion: number;
     submittedAt?: string | null;
     supportedExportFormats: string[];
-    preferredDeliveryChannels: Array<'portal_upload' | 'api' | 'sftp' | 'email'>;
+    preferredDeliveryChannels: Array<
+      'portal_upload' | 'api' | 'sftp' | 'email'
+    >;
     acknowledgementExpected: boolean;
     latestAmendment?: {
       version: number;
@@ -343,7 +411,9 @@ type RegulatorySubmissionBundle = {
     jurisdiction: string;
     preferredPrimaryFormat: string;
     requiredArtifacts: string[];
-    recommendedDeliveryChannels: Array<'portal_upload' | 'api' | 'sftp' | 'email'>;
+    recommendedDeliveryChannels: Array<
+      'portal_upload' | 'api' | 'sftp' | 'email'
+    >;
     acknowledgementExpected: boolean;
     includesAuthorityManifest: boolean;
     includesReceiptEvidence: boolean;
@@ -399,7 +469,11 @@ type SubmissionBundleVerificationResult = {
   packageVersion?: string;
   profileId?: string;
   signingKeyId?: string;
-  signingScope?: 'organization_authority' | 'authority' | 'jurisdiction' | 'global';
+  signingScope?:
+    | 'organization_authority'
+    | 'authority'
+    | 'jurisdiction'
+    | 'global';
   signingAlgorithm?: 'hmac-sha256' | 'RS256' | 'PS256' | 'ES256' | 'EdDSA';
   signingKeyVersion?: string;
   signingVerificationMethod?: string;
@@ -428,17 +502,22 @@ function pushUniqueObligation(
     obligation.reportType ?? '',
     obligation.detail ?? '',
   ].join('::');
-  if (!obligations.some((entry) => [
-    entry.domain,
-    entry.obligationType,
-    entry.rulePath,
-    entry.status,
-    entry.sourceJurisdiction ?? '',
-    entry.targetJurisdiction ?? '',
-    entry.jurisdiction ?? '',
-    entry.reportType ?? '',
-    entry.detail ?? '',
-  ].join('::') === key)) {
+  if (
+    !obligations.some(
+      (entry) =>
+        [
+          entry.domain,
+          entry.obligationType,
+          entry.rulePath,
+          entry.status,
+          entry.sourceJurisdiction ?? '',
+          entry.targetJurisdiction ?? '',
+          entry.jurisdiction ?? '',
+          entry.reportType ?? '',
+          entry.detail ?? '',
+        ].join('::') === key,
+    )
+  ) {
     obligations.push(obligation);
   }
 }
@@ -446,26 +525,42 @@ function pushUniqueObligation(
 function isTransferAssessmentResult(
   result: CrossBorderResult | TransferAssessmentResult,
 ): result is TransferAssessmentResult {
-  return 'requiredSafeguards' in result && 'conditions' in result && 'regulatoryNotifications' in result;
+  return (
+    'requiredSafeguards' in result &&
+    'conditions' in result &&
+    'regulatoryNotifications' in result
+  );
 }
 
 function isJurisdictionCrossBorderResult(
   result: CrossBorderResult | TransferAssessmentResult,
 ): result is CrossBorderResult {
-  return 'acceptedCredentials' in result && 'additionalRequired' in result && 'restrictions' in result;
+  return (
+    'acceptedCredentials' in result &&
+    'additionalRequired' in result &&
+    'restrictions' in result
+  );
 }
 
 function buildCrossBorderObligationUsage(
   sourceJurisdiction: string,
   targetJurisdiction: string,
   baseResult: CrossBorderResult | TransferAssessmentResult,
-  adjustedResult: (CrossBorderResult | TransferAssessmentResult) & { policyDecision?: string },
+  adjustedResult: (CrossBorderResult | TransferAssessmentResult) & {
+    policyDecision?: string;
+  },
   trace?: PolicyExecutionTrace,
 ): ObligationEvidenceUsageSnapshot[] {
   const obligations: ObligationEvidenceUsageSnapshot[] = [];
 
-  if (isTransferAssessmentResult(adjustedResult) && isTransferAssessmentResult(baseResult)) {
-    if (typeof adjustedResult.legalBasis === 'string' && adjustedResult.legalBasis.length > 0) {
+  if (
+    isTransferAssessmentResult(adjustedResult) &&
+    isTransferAssessmentResult(baseResult)
+  ) {
+    if (
+      typeof adjustedResult.legalBasis === 'string' &&
+      adjustedResult.legalBasis.length > 0
+    ) {
       pushUniqueObligation(obligations, {
         domain: 'cross_border',
         obligationType: 'legal_basis',
@@ -517,7 +612,10 @@ function buildCrossBorderObligationUsage(
     }
   }
 
-  if (isJurisdictionCrossBorderResult(adjustedResult) && isJurisdictionCrossBorderResult(baseResult)) {
+  if (
+    isJurisdictionCrossBorderResult(adjustedResult) &&
+    isJurisdictionCrossBorderResult(baseResult)
+  ) {
     pushUniqueObligation(obligations, {
       domain: 'cross_border',
       obligationType: 'transfer_mechanism',
@@ -547,7 +645,9 @@ function buildCrossBorderObligationUsage(
         domain: 'cross_border',
         obligationType: 'required_credential',
         rulePath: `required_credential:${credentialType}`,
-        status: baseAdditionalRequired.has(credentialType) ? 'satisfied' : 'escalated',
+        status: baseAdditionalRequired.has(credentialType)
+          ? 'satisfied'
+          : 'escalated',
         detail: credentialType,
         sourceJurisdiction,
         targetJurisdiction,
@@ -555,10 +655,14 @@ function buildCrossBorderObligationUsage(
     }
   }
 
-  const crossBorderChanges = trace?.crossBorderAdjustments
-    ?.filter((adjustment) => adjustment.source === sourceJurisdiction && adjustment.target === targetJurisdiction)
-    .flatMap((adjustment) => adjustment.changes)
-    ?? [];
+  const crossBorderChanges =
+    trace?.crossBorderAdjustments
+      ?.filter(
+        (adjustment) =>
+          adjustment.source === sourceJurisdiction &&
+          adjustment.target === targetJurisdiction,
+      )
+      .flatMap((adjustment) => adjustment.changes) ?? [];
 
   for (const change of crossBorderChanges) {
     const [prefix, rawValue] = change.split(':', 2);
@@ -579,7 +683,9 @@ function buildCrossBorderObligationUsage(
         });
         break;
       case 'disallowed_categories':
-        for (const category of rawValue.split('|').filter((value) => value.length > 0)) {
+        for (const category of rawValue
+          .split('|')
+          .filter((value) => value.length > 0)) {
           pushUniqueObligation(obligations, {
             domain: 'cross_border',
             obligationType: 'data_category_restriction',
@@ -625,7 +731,9 @@ function buildCrossBorderObligationUsage(
         });
         break;
       case 'required_safeguards':
-        for (const safeguard of rawValue.split('|').filter((value) => value.length > 0)) {
+        for (const safeguard of rawValue
+          .split('|')
+          .filter((value) => value.length > 0)) {
           pushUniqueObligation(obligations, {
             domain: 'cross_border',
             obligationType: 'required_safeguard',
@@ -640,7 +748,10 @@ function buildCrossBorderObligationUsage(
     }
   }
 
-  if (typeof adjustedResult.policyDecision === 'string' && adjustedResult.policyDecision !== 'allow') {
+  if (
+    typeof adjustedResult.policyDecision === 'string' &&
+    adjustedResult.policyDecision !== 'allow'
+  ) {
     pushUniqueObligation(obligations, {
       domain: 'cross_border',
       obligationType: 'policy_decision',
@@ -655,15 +766,23 @@ function buildCrossBorderObligationUsage(
   return obligations;
 }
 
-function extractReportDeadline(report: GeneratedReport): { field: 'filingDeadline' | 'responseDeadline'; value: string } | undefined {
+function extractReportDeadline(
+  report: GeneratedReport,
+): { field: 'filingDeadline' | 'responseDeadline'; value: string } | undefined {
   const content = asRecord(report.content);
-  if (typeof content.filingDeadline === 'string' && content.filingDeadline.length > 0) {
+  if (
+    typeof content.filingDeadline === 'string' &&
+    content.filingDeadline.length > 0
+  ) {
     return {
       field: 'filingDeadline',
       value: content.filingDeadline,
     };
   }
-  if (typeof content.responseDeadline === 'string' && content.responseDeadline.length > 0) {
+  if (
+    typeof content.responseDeadline === 'string' &&
+    content.responseDeadline.length > 0
+  ) {
     return {
       field: 'responseDeadline',
       value: content.responseDeadline,
@@ -678,8 +797,12 @@ function buildReportingObligationUsage(
   trace?: PolicyExecutionTrace,
 ): ObligationEvidenceUsageSnapshot[] {
   const obligations: ObligationEvidenceUsageSnapshot[] = [];
-  const reportType = String(adjustedReport.reportType ?? baseReport.reportType ?? 'UNKNOWN');
-  const jurisdiction = String(adjustedReport.filingJurisdiction ?? baseReport.filingJurisdiction ?? '');
+  const reportType = String(
+    adjustedReport.reportType ?? baseReport.reportType ?? 'UNKNOWN',
+  );
+  const jurisdiction = String(
+    adjustedReport.filingJurisdiction ?? baseReport.filingJurisdiction ?? '',
+  );
   const authority = resolveRegulatoryAuthority(reportType, jurisdiction);
 
   if (jurisdiction.length > 0) {
@@ -706,7 +829,8 @@ function buildReportingObligationUsage(
     });
   }
 
-  const deadline = extractReportDeadline(adjustedReport) ?? extractReportDeadline(baseReport);
+  const deadline =
+    extractReportDeadline(adjustedReport) ?? extractReportDeadline(baseReport);
   if (deadline) {
     pushUniqueObligation(obligations, {
       domain: 'reporting',
@@ -719,10 +843,10 @@ function buildReportingObligationUsage(
     });
   }
 
-  const reportingChanges = trace?.reportingAdjustments
-    ?.filter((adjustment) => adjustment.reportType === reportType)
-    .flatMap((adjustment) => adjustment.changes)
-    ?? [];
+  const reportingChanges =
+    trace?.reportingAdjustments
+      ?.filter((adjustment) => adjustment.reportType === reportType)
+      .flatMap((adjustment) => adjustment.changes) ?? [];
 
   for (const change of reportingChanges) {
     const [prefix, rawValue] = change.split(':', 2);
@@ -743,7 +867,9 @@ function buildReportingObligationUsage(
         });
         break;
       case 'missing_fields':
-        for (const field of rawValue.split('|').filter((value) => value.length > 0)) {
+        for (const field of rawValue
+          .split('|')
+          .filter((value) => value.length > 0)) {
           pushUniqueObligation(obligations, {
             domain: 'reporting',
             obligationType: 'required_field',
@@ -769,7 +895,10 @@ function buildReportingObligationUsage(
     }
   }
 
-  if (typeof adjustedReport.policyDecision === 'string' && adjustedReport.policyDecision !== 'allow') {
+  if (
+    typeof adjustedReport.policyDecision === 'string' &&
+    adjustedReport.policyDecision !== 'allow'
+  ) {
     pushUniqueObligation(obligations, {
       domain: 'reporting',
       obligationType: 'policy_decision',
@@ -796,7 +925,10 @@ function buildReportingObligationUsage(
   return obligations;
 }
 
-function resolveRegulatoryAuthority(reportType: string, jurisdiction: string): string | null {
+function resolveRegulatoryAuthority(
+  reportType: string,
+  jurisdiction: string,
+): string | null {
   if (reportType === 'STR' && jurisdiction.startsWith('AE-')) {
     return 'UAE FIU';
   }
@@ -837,7 +969,10 @@ function buildRegulatoryAuthorityProfile(
   if (reportType === 'SAR' || reportType === 'CTR' || reportType === 'STR') {
     return {
       authority,
-      authorityClass: reportType === 'STR' ? 'financial_intelligence_unit' : 'market_regulator',
+      authorityClass:
+        reportType === 'STR'
+          ? 'financial_intelligence_unit'
+          : 'market_regulator',
       packageProfile: 'aml_filing',
       jurisdiction,
       reportType,
@@ -893,40 +1028,61 @@ function normalizeReportEvidenceEvent(
   event: ReportEvidenceEvent | ReportEvidenceEventSnapshot,
 ): ReportEvidenceEventSnapshot {
   return {
-    ...(typeof event.eventId === 'string' && event.eventId.length > 0 ? { eventId: event.eventId } : {}),
+    ...(typeof event.eventId === 'string' && event.eventId.length > 0
+      ? { eventId: event.eventId }
+      : {}),
     action: event.action,
     recordedAt: event.recordedAt,
-    ...(typeof event.receiptId === 'string' && event.receiptId.length > 0 ? { receiptId: event.receiptId } : {}),
-    ...(typeof event.actorIdentityId === 'string' && event.actorIdentityId.length > 0
+    ...(typeof event.receiptId === 'string' && event.receiptId.length > 0
+      ? { receiptId: event.receiptId }
+      : {}),
+    ...(typeof event.actorIdentityId === 'string' &&
+    event.actorIdentityId.length > 0
       ? { actorIdentityId: event.actorIdentityId }
       : {}),
     policyName: event.policyName,
-    ...(typeof event.policyVersion === 'string' && event.policyVersion.length > 0 ? { policyVersion: event.policyVersion } : {}),
-    ...(typeof event.decisionSummary === 'string' && event.decisionSummary.length > 0
+    ...(typeof event.policyVersion === 'string' &&
+    event.policyVersion.length > 0
+      ? { policyVersion: event.policyVersion }
+      : {}),
+    ...(typeof event.decisionSummary === 'string' &&
+    event.decisionSummary.length > 0
       ? { decisionSummary: event.decisionSummary }
       : {}),
-    ...(typeof event.authority === 'string' && event.authority.length > 0 ? { authority: event.authority } : {}),
-    ...(event.filingReference === null || (typeof event.filingReference === 'string' && event.filingReference.length > 0)
+    ...(typeof event.authority === 'string' && event.authority.length > 0
+      ? { authority: event.authority }
+      : {}),
+    ...(event.filingReference === null ||
+    (typeof event.filingReference === 'string' &&
+      event.filingReference.length > 0)
       ? { filingReference: event.filingReference as string | null }
       : {}),
     version: event.version,
-    ...(typeof event.amendmentReason === 'string' && event.amendmentReason.length > 0
+    ...(typeof event.amendmentReason === 'string' &&
+    event.amendmentReason.length > 0
       ? { amendmentReason: event.amendmentReason }
       : {}),
-    ...(typeof event.exportFormat === 'string' && event.exportFormat.length > 0 ? { exportFormat: event.exportFormat } : {}),
-    ...(typeof event.exportFilename === 'string' && event.exportFilename.length > 0
+    ...(typeof event.exportFormat === 'string' && event.exportFormat.length > 0
+      ? { exportFormat: event.exportFormat }
+      : {}),
+    ...(typeof event.exportFilename === 'string' &&
+    event.exportFilename.length > 0
       ? { exportFilename: event.exportFilename }
       : {}),
-    ...(typeof event.deliveryChannel === 'string' && event.deliveryChannel.length > 0
+    ...(typeof event.deliveryChannel === 'string' &&
+    event.deliveryChannel.length > 0
       ? { deliveryChannel: event.deliveryChannel }
       : {}),
-    ...(typeof event.deliveryDestination === 'string' && event.deliveryDestination.length > 0
+    ...(typeof event.deliveryDestination === 'string' &&
+    event.deliveryDestination.length > 0
       ? { deliveryDestination: event.deliveryDestination }
       : {}),
-    ...(typeof event.deliveryAcknowledgementId === 'string' && event.deliveryAcknowledgementId.length > 0
+    ...(typeof event.deliveryAcknowledgementId === 'string' &&
+    event.deliveryAcknowledgementId.length > 0
       ? { deliveryAcknowledgementId: event.deliveryAcknowledgementId }
       : {}),
-    ...(typeof event.deliveryAcknowledgedAt === 'string' && event.deliveryAcknowledgedAt.length > 0
+    ...(typeof event.deliveryAcknowledgedAt === 'string' &&
+    event.deliveryAcknowledgedAt.length > 0
       ? { deliveryAcknowledgedAt: event.deliveryAcknowledgedAt }
       : {}),
   };
@@ -943,7 +1099,9 @@ function buildReportFilingDeadline(
 
   const deadlineTime = new Date(deadline.value).getTime();
   const evaluatedTime = new Date(evaluatedAt).getTime();
-  const submittedTime = report.submittedAt ? new Date(report.submittedAt).getTime() : null;
+  const submittedTime = report.submittedAt
+    ? new Date(report.submittedAt).getTime()
+    : null;
 
   if (submittedTime !== null) {
     return {
@@ -960,7 +1118,9 @@ function buildReportFilingDeadline(
     value: deadline.value,
     status: evaluatedTime <= deadlineTime ? 'pending' : 'overdue',
     evaluatedAt,
-    remainingHours: Math.ceil((deadlineTime - evaluatedTime) / (1000 * 60 * 60)),
+    remainingHours: Math.ceil(
+      (deadlineTime - evaluatedTime) / (1000 * 60 * 60),
+    ),
   };
 }
 
@@ -969,12 +1129,21 @@ function buildReportFilingPackage(
   evidenceTrail: Array<ReportEvidenceEvent | ReportEvidenceEventSnapshot>,
   evaluatedAt: string,
 ): ReportFilingPackageSnapshot {
-  const authorityProfile = buildRegulatoryAuthorityProfile(report.reportType, report.filingJurisdiction);
+  const authorityProfile = buildRegulatoryAuthorityProfile(
+    report.reportType,
+    report.filingJurisdiction,
+  );
   const deadline = buildReportFilingDeadline(report, evaluatedAt);
   const normalizedTrail = evidenceTrail
     .map((event) => normalizeReportEvidenceEvent(event))
-    .sort((left, right) => new Date(left.recordedAt).getTime() - new Date(right.recordedAt).getTime());
-  const latestExport = [...normalizedTrail].reverse().find((event) => event.action === 'exported');
+    .sort(
+      (left, right) =>
+        new Date(left.recordedAt).getTime() -
+        new Date(right.recordedAt).getTime(),
+    );
+  const latestExport = [...normalizedTrail]
+    .reverse()
+    .find((event) => event.action === 'exported');
   const latestAmendment = report.amendments[report.amendments.length - 1];
 
   return {
@@ -985,29 +1154,52 @@ function buildReportFilingPackage(
     status: report.status,
     filingJurisdiction: report.filingJurisdiction,
     ...(authorityProfile ? { authorityProfile } : {}),
-    ...(report.authorityManifest ? { authorityManifest: normalizeAuthorityManifest(report.authorityManifest) } : {}),
+    ...(report.authorityManifest
+      ? {
+          authorityManifest: normalizeAuthorityManifest(
+            report.authorityManifest,
+          ),
+        }
+      : {}),
     ...(deadline ? { deadline } : {}),
     lifecycle: {
       generatedAt: report.generatedAt,
-      ...(report.submittedAt !== undefined ? { submittedAt: report.submittedAt } : {}),
-      ...(report.filingReference !== undefined ? { filingReference: report.filingReference } : {}),
+      ...(report.submittedAt !== undefined
+        ? { submittedAt: report.submittedAt }
+        : {}),
+      ...(report.filingReference !== undefined
+        ? { filingReference: report.filingReference }
+        : {}),
       amendmentCount: report.amendments.length,
       ...(latestAmendment
         ? {
-          latestAmendment: {
-            version: latestAmendment.version,
-            amendedAt: latestAmendment.amendedAt,
-            reason: latestAmendment.reason,
-          },
-        }
+            latestAmendment: {
+              version: latestAmendment.version,
+              amendedAt: latestAmendment.amendedAt,
+              reason: latestAmendment.reason,
+            },
+          }
         : {}),
-      ...(latestExport?.recordedAt ? { lastExportedAt: latestExport.recordedAt } : {}),
-      ...(latestExport?.exportFormat ? { lastExportFormat: latestExport.exportFormat } : {}),
-      ...(latestExport?.exportFilename ? { lastExportFilename: latestExport.exportFilename } : {}),
-      ...(latestExport?.deliveryChannel ? { lastDeliveryChannel: latestExport.deliveryChannel } : {}),
-      ...(latestExport?.deliveryDestination ? { lastDeliveryDestination: latestExport.deliveryDestination } : {}),
+      ...(latestExport?.recordedAt
+        ? { lastExportedAt: latestExport.recordedAt }
+        : {}),
+      ...(latestExport?.exportFormat
+        ? { lastExportFormat: latestExport.exportFormat }
+        : {}),
+      ...(latestExport?.exportFilename
+        ? { lastExportFilename: latestExport.exportFilename }
+        : {}),
+      ...(latestExport?.deliveryChannel
+        ? { lastDeliveryChannel: latestExport.deliveryChannel }
+        : {}),
+      ...(latestExport?.deliveryDestination
+        ? { lastDeliveryDestination: latestExport.deliveryDestination }
+        : {}),
       ...(latestExport?.deliveryAcknowledgementId
-        ? { lastDeliveryAcknowledgementId: latestExport.deliveryAcknowledgementId }
+        ? {
+            lastDeliveryAcknowledgementId:
+              latestExport.deliveryAcknowledgementId,
+          }
         : {}),
       ...(latestExport?.deliveryAcknowledgedAt
         ? { lastDeliveryAcknowledgedAt: latestExport.deliveryAcknowledgedAt }
@@ -1025,18 +1217,26 @@ function normalizeAuthorityManifest(
     reportId: manifest.reportId,
     reportType: manifest.reportType,
     filingJurisdiction: manifest.filingJurisdiction,
-    ...(typeof manifest.authority === 'string' && manifest.authority.length > 0 ? { authority: manifest.authority } : {}),
-    ...(manifest.filingReference === null || (typeof manifest.filingReference === 'string' && manifest.filingReference.length > 0)
+    ...(typeof manifest.authority === 'string' && manifest.authority.length > 0
+      ? { authority: manifest.authority }
+      : {}),
+    ...(manifest.filingReference === null ||
+    (typeof manifest.filingReference === 'string' &&
+      manifest.filingReference.length > 0)
       ? { filingReference: manifest.filingReference as string | null }
       : {}),
     currentVersion: manifest.currentVersion,
-    ...(manifest.submittedAt === null || (typeof manifest.submittedAt === 'string' && manifest.submittedAt.length > 0)
+    ...(manifest.submittedAt === null ||
+    (typeof manifest.submittedAt === 'string' &&
+      manifest.submittedAt.length > 0)
       ? { submittedAt: manifest.submittedAt as string | null }
       : {}),
     supportedExportFormats: manifest.supportedExportFormats,
     preferredDeliveryChannels: manifest.preferredDeliveryChannels,
     acknowledgementExpected: manifest.acknowledgementExpected,
-    ...(manifest.latestAmendment ? { latestAmendment: manifest.latestAmendment } : {}),
+    ...(manifest.latestAmendment
+      ? { latestAmendment: manifest.latestAmendment }
+      : {}),
     ...(manifest.latestExport ? { latestExport: manifest.latestExport } : {}),
     acknowledgements: manifest.acknowledgements,
     handoffTrail: manifest.handoffTrail,
@@ -1055,19 +1255,33 @@ function canonicalizePayload(value: unknown): string {
   if (value === null || value === undefined) return JSON.stringify(value);
   if (typeof value !== 'object') return JSON.stringify(value);
   if (Array.isArray(value)) {
-    return '[' + value.map((entry) => canonicalizePayload(entry)).join(',') + ']';
+    return (
+      '[' + value.map((entry) => canonicalizePayload(entry)).join(',') + ']'
+    );
   }
   const obj = value as Record<string, unknown>;
   const keys = Object.keys(obj).sort();
-  return '{' + keys.map((key) => `${JSON.stringify(key)}:${canonicalizePayload(obj[key])}`).join(',') + '}';
+  return (
+    '{' +
+    keys
+      .map((key) => `${JSON.stringify(key)}:${canonicalizePayload(obj[key])}`)
+      .join(',') +
+    '}'
+  );
 }
 
 function sha256(value: unknown): string {
-  return crypto.createHash('sha256').update(canonicalizePayload(value)).digest('hex');
+  return crypto
+    .createHash('sha256')
+    .update(canonicalizePayload(value))
+    .digest('hex');
 }
 
 function sanitizeSigningSegment(value: string): string {
-  return value.toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+  return value
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
 }
 
 function resolveSubmissionPackageProfile(
@@ -1075,11 +1289,17 @@ function resolveSubmissionPackageProfile(
   filingPackage: ReportFilingPackageSnapshot,
 ): RegulatorySubmissionBundle['packageProfile'] {
   const authority = filingPackage.authorityProfile?.authority;
-  const recommendedDeliveryChannels = filingPackage.authorityProfile?.preferredDeliveryChannels ?? ['portal_upload', 'api'];
-  const acknowledgementExpected = filingPackage.authorityProfile?.acknowledgementExpected ?? true;
+  const recommendedDeliveryChannels = filingPackage.authorityProfile
+    ?.preferredDeliveryChannels ?? ['portal_upload', 'api'];
+  const acknowledgementExpected =
+    filingPackage.authorityProfile?.acknowledgementExpected ?? true;
   const availableFormats = report.exportFormats;
 
-  if (report.reportType === 'SAR' || report.reportType === 'CTR' || report.reportType === 'STR') {
+  if (
+    report.reportType === 'SAR' ||
+    report.reportType === 'CTR' ||
+    report.reportType === 'STR'
+  ) {
     return {
       profileId: `regulator.aml.${sanitizeSigningSegment(authority ?? report.filingJurisdiction).toLowerCase()}.v1`,
       schemaVersion: '2026.04.1',
@@ -1087,7 +1307,9 @@ function resolveSubmissionPackageProfile(
       regulatorClass: 'aml',
       reportType: report.reportType,
       jurisdiction: report.filingJurisdiction,
-      preferredPrimaryFormat: availableFormats.includes('xml') ? 'xml' : availableFormats[0] ?? 'json',
+      preferredPrimaryFormat: availableFormats.includes('xml')
+        ? 'xml'
+        : (availableFormats[0] ?? 'json'),
       requiredArtifacts: ['json', 'xml', 'pdf'],
       recommendedDeliveryChannels,
       acknowledgementExpected,
@@ -1098,9 +1320,8 @@ function resolveSubmissionPackageProfile(
   }
 
   if (report.reportType === 'DSAR' || report.reportType === 'ERASURE') {
-    const requiredArtifacts = report.reportType === 'DSAR'
-      ? ['json', 'pdf', 'csv']
-      : ['json', 'pdf'];
+    const requiredArtifacts =
+      report.reportType === 'DSAR' ? ['json', 'pdf', 'csv'] : ['json', 'pdf'];
     return {
       profileId: `regulator.privacy.${sanitizeSigningSegment(authority ?? report.filingJurisdiction).toLowerCase()}.v1`,
       schemaVersion: '2026.04.1',
@@ -1108,7 +1329,9 @@ function resolveSubmissionPackageProfile(
       regulatorClass: 'privacy',
       reportType: report.reportType,
       jurisdiction: report.filingJurisdiction,
-      preferredPrimaryFormat: availableFormats.includes('pdf') ? 'pdf' : availableFormats[0] ?? 'json',
+      preferredPrimaryFormat: availableFormats.includes('pdf')
+        ? 'pdf'
+        : (availableFormats[0] ?? 'json'),
       requiredArtifacts,
       recommendedDeliveryChannels,
       acknowledgementExpected,
@@ -1126,7 +1349,9 @@ function resolveSubmissionPackageProfile(
       regulatorClass: 'audit',
       reportType: report.reportType,
       jurisdiction: report.filingJurisdiction,
-      preferredPrimaryFormat: availableFormats.includes('pdf') ? 'pdf' : availableFormats[0] ?? 'json',
+      preferredPrimaryFormat: availableFormats.includes('pdf')
+        ? 'pdf'
+        : (availableFormats[0] ?? 'json'),
       requiredArtifacts: ['json', 'pdf', 'csv'],
       recommendedDeliveryChannels,
       acknowledgementExpected,
@@ -1144,7 +1369,9 @@ function resolveSubmissionPackageProfile(
     reportType: report.reportType,
     jurisdiction: report.filingJurisdiction,
     preferredPrimaryFormat: availableFormats[0] ?? 'json',
-    requiredArtifacts: Array.from(new Set(['json', ...(availableFormats.includes('pdf') ? ['pdf'] : [])])),
+    requiredArtifacts: Array.from(
+      new Set(['json', ...(availableFormats.includes('pdf') ? ['pdf'] : [])]),
+    ),
     recommendedDeliveryChannels,
     acknowledgementExpected,
     includesAuthorityManifest: true,
@@ -1159,10 +1386,17 @@ function buildSubmissionProfileConformance(
   artifacts: RegulatorySubmissionBundle['artifacts'],
   relatedReceipts: RegulatorySubmissionBundle['relatedReceipts'],
 ): RegulatorySubmissionBundle['profileConformance'] {
-  const availableArtifacts = artifacts.map((artifact) => artifact.format).sort((left, right) => left.localeCompare(right));
-  const requiredArtifacts = [...packageProfile.requiredArtifacts].sort((left, right) => left.localeCompare(right));
-  const missingArtifacts = requiredArtifacts.filter((format) => !availableArtifacts.includes(format));
-  const authorityManifestPresent = filingPackage.authorityManifest !== undefined;
+  const availableArtifacts = artifacts
+    .map((artifact) => artifact.format)
+    .sort((left, right) => left.localeCompare(right));
+  const requiredArtifacts = [...packageProfile.requiredArtifacts].sort(
+    (left, right) => left.localeCompare(right),
+  );
+  const missingArtifacts = requiredArtifacts.filter(
+    (format) => !availableArtifacts.includes(format),
+  );
+  const authorityManifestPresent =
+    filingPackage.authorityManifest !== undefined;
   const receiptEvidencePresent = relatedReceipts.length > 0;
 
   return {
@@ -1173,9 +1407,10 @@ function buildSubmissionProfileConformance(
     authorityManifestPresent,
     receiptEvidenceRequired: packageProfile.includesReceiptEvidence,
     receiptEvidencePresent,
-    satisfied: missingArtifacts.length === 0
-      && (!packageProfile.includesAuthorityManifest || authorityManifestPresent)
-      && (!packageProfile.includesReceiptEvidence || receiptEvidencePresent),
+    satisfied:
+      missingArtifacts.length === 0 &&
+      (!packageProfile.includesAuthorityManifest || authorityManifestPresent) &&
+      (!packageProfile.includesReceiptEvidence || receiptEvidencePresent),
   };
 }
 
@@ -1189,17 +1424,27 @@ function assertSubmissionProfileConformance(
 
   const issues: string[] = [];
   if (profileConformance.missingArtifacts.length > 0) {
-    issues.push(`missing required artifacts: ${profileConformance.missingArtifacts.join(', ')}`);
+    issues.push(
+      `missing required artifacts: ${profileConformance.missingArtifacts.join(', ')}`,
+    );
   }
-  if (packageProfile.includesAuthorityManifest && !profileConformance.authorityManifestPresent) {
+  if (
+    packageProfile.includesAuthorityManifest &&
+    !profileConformance.authorityManifestPresent
+  ) {
     issues.push('authority manifest missing');
   }
-  if (packageProfile.includesReceiptEvidence && !profileConformance.receiptEvidencePresent) {
+  if (
+    packageProfile.includesReceiptEvidence &&
+    !profileConformance.receiptEvidencePresent
+  ) {
     issues.push('receipt evidence missing');
   }
 
   const error = Object.assign(
-    new Error(`Submission package does not satisfy ${packageProfile.profileId}: ${issues.join('; ')}`),
+    new Error(
+      `Submission package does not satisfy ${packageProfile.profileId}: ${issues.join('; ')}`,
+    ),
     {
       statusCode: 409,
       code: 'REPORT_SUBMISSION_PACKAGE_INCOMPLETE',
@@ -1211,23 +1456,35 @@ function assertSubmissionProfileConformance(
 async function buildSubmissionArtifacts(
   report: GeneratedReport,
 ): Promise<RegulatorySubmissionBundle['artifacts']> {
-  const artifacts = await Promise.all(report.exportFormats.map(async (format) => {
-    const exported = await regulatoryReportingService.exportReport(report.reportId, format);
-    const encoding = format === 'pdf' ? 'base64' as const : 'utf8' as const;
-    const payloadBuffer = encoding === 'base64'
-      ? Buffer.from(exported.data, 'base64')
-      : Buffer.from(exported.data, 'utf8');
-    return {
-      format,
-      filename: exported.filename,
-      contentType: exported.contentType,
-      payloadDigest: crypto.createHash('sha256').update(payloadBuffer).digest('hex'),
-      byteLength: payloadBuffer.byteLength,
-      encoding,
-    };
-  }));
+  const artifacts = await Promise.all(
+    report.exportFormats.map(async (format) => {
+      const exported = await regulatoryReportingService.exportReport(
+        report.reportId,
+        format,
+      );
+      const encoding =
+        format === 'pdf' ? ('base64' as const) : ('utf8' as const);
+      const payloadBuffer =
+        encoding === 'base64'
+          ? Buffer.from(exported.data, 'base64')
+          : Buffer.from(exported.data, 'utf8');
+      return {
+        format,
+        filename: exported.filename,
+        contentType: exported.contentType,
+        payloadDigest: crypto
+          .createHash('sha256')
+          .update(payloadBuffer)
+          .digest('hex'),
+        byteLength: payloadBuffer.byteLength,
+        encoding,
+      };
+    }),
+  );
 
-  return artifacts.sort((left, right) => left.format.localeCompare(right.format));
+  return artifacts.sort((left, right) =>
+    left.format.localeCompare(right.format),
+  );
 }
 
 async function buildRegulatorySubmissionBundle(
@@ -1236,29 +1493,58 @@ async function buildRegulatorySubmissionBundle(
   organizationId: string,
 ): Promise<RegulatorySubmissionBundle> {
   const exportedAt = new Date().toISOString();
-  const filingPackage = buildReportFilingPackage(report, evidenceTrail, exportedAt);
+  const filingPackage = buildReportFilingPackage(
+    report,
+    evidenceTrail,
+    exportedAt,
+  );
   const packageProfile = resolveSubmissionPackageProfile(report, filingPackage);
   const artifacts = await buildSubmissionArtifacts(report);
   const receiptLinks = evidenceTrail
-    .filter((event) => typeof event.receiptId === 'string' && event.receiptId.length > 0)
+    .filter(
+      (event) =>
+        typeof event.receiptId === 'string' && event.receiptId.length > 0,
+    )
     .map((event) => ({
       receiptId: event.receiptId as string,
       action: event.action,
     }));
-  const dedupedLinks = receiptLinks.filter((link, index, all) =>
-    all.findIndex((candidate) => candidate.receiptId === link.receiptId) === index);
-  const relatedReceipts = (await Promise.all(dedupedLinks.map(async (link) => {
-    const exported = await policyDecisionReceiptService.exportReceipt(link.receiptId);
-    if (!exported) {
-      return null;
-    }
-    return {
-      receiptId: link.receiptId,
-      action: link.action,
-      exported,
-    };
-  }))).filter((entry): entry is { receiptId: string; action: ReportEvidenceEventSnapshot['action']; exported: unknown } => entry !== null);
-  const profileConformance = buildSubmissionProfileConformance(packageProfile, filingPackage, artifacts, relatedReceipts);
+  const dedupedLinks = receiptLinks.filter(
+    (link, index, all) =>
+      all.findIndex((candidate) => candidate.receiptId === link.receiptId) ===
+      index,
+  );
+  const relatedReceipts = (
+    await Promise.all(
+      dedupedLinks.map(async (link) => {
+        const exported = await policyDecisionReceiptService.exportReceipt(
+          link.receiptId,
+        );
+        if (!exported) {
+          return null;
+        }
+        return {
+          receiptId: link.receiptId,
+          action: link.action,
+          exported,
+        };
+      }),
+    )
+  ).filter(
+    (
+      entry,
+    ): entry is {
+      receiptId: string;
+      action: ReportEvidenceEventSnapshot['action'];
+      exported: PolicyDecisionReceiptExport;
+    } => entry !== null,
+  );
+  const profileConformance = buildSubmissionProfileConformance(
+    packageProfile,
+    filingPackage,
+    artifacts,
+    relatedReceipts,
+  );
   assertSubmissionProfileConformance(packageProfile, profileConformance);
 
   const bundleWithoutDigest = {
@@ -1270,10 +1556,14 @@ async function buildRegulatorySubmissionBundle(
       version: report.version,
       status: report.status,
       filingJurisdiction: report.filingJurisdiction,
-      ...(report.filingReference !== undefined ? { filingReference: report.filingReference } : {}),
+      ...(report.filingReference !== undefined
+        ? { filingReference: report.filingReference }
+        : {}),
     },
     filingPackage,
-    ...(filingPackage.authorityManifest ? { authorityManifest: filingPackage.authorityManifest } : {}),
+    ...(filingPackage.authorityManifest
+      ? { authorityManifest: filingPackage.authorityManifest }
+      : {}),
     packageProfile,
     profileConformance,
     artifacts,
@@ -1285,11 +1575,14 @@ async function buildRegulatorySubmissionBundle(
   return {
     ...bundleWithoutDigest,
     bundleDigest,
-    bundleSignature: await createRegulatorySubmissionBundleSignature(bundleDigest, {
-      organizationId,
-      authority: filingPackage.authorityProfile?.authority,
-      filingJurisdiction: filingPackage.filingJurisdiction,
-    }),
+    bundleSignature: await createRegulatorySubmissionBundleSignature(
+      bundleDigest,
+      {
+        organizationId,
+        authority: filingPackage.authorityProfile?.authority,
+        filingJurisdiction: filingPackage.filingJurisdiction,
+      },
+    ),
   };
 }
 
@@ -1300,14 +1593,20 @@ async function verifyRegulatorySubmissionBundle(
   const verifiedAt = new Date().toISOString();
   const record = asRecord(bundle);
   const issues: string[] = [];
-  const packageVersion = typeof record.packageVersion === 'string' ? record.packageVersion : undefined;
-  const bundleDigest = typeof record.bundleDigest === 'string' ? record.bundleDigest : '';
+  const packageVersion =
+    typeof record.packageVersion === 'string'
+      ? record.packageVersion
+      : undefined;
+  const bundleDigest =
+    typeof record.bundleDigest === 'string' ? record.bundleDigest : '';
   const bundleSignature = asRecord(record.bundleSignature);
   const packageProfile = asRecord(record.packageProfile);
   const filingPackage = asRecord(record.filingPackage);
   const profileConformance = asRecord(record.profileConformance);
   const artifacts = Array.isArray(record.artifacts) ? record.artifacts : [];
-  const relatedReceipts = Array.isArray(record.relatedReceipts) ? record.relatedReceipts : [];
+  const relatedReceipts = Array.isArray(record.relatedReceipts)
+    ? record.relatedReceipts
+    : [];
 
   if (packageVersion !== 'zeroid.regulatory_submission_bundle.v1') {
     issues.push('unsupported packageVersion');
@@ -1315,15 +1614,18 @@ async function verifyRegulatorySubmissionBundle(
   if (bundleDigest.length !== 64) {
     issues.push('bundleDigest missing or malformed');
   }
-  if (typeof bundleSignature.signedAt !== 'string' || bundleSignature.signedAt.length === 0) {
+  if (
+    typeof bundleSignature.signedAt !== 'string' ||
+    bundleSignature.signedAt.length === 0
+  ) {
     issues.push('bundleSignature.signedAt missing');
   }
   if (
-    bundleSignature.algorithm !== 'hmac-sha256'
-    && bundleSignature.algorithm !== 'RS256'
-    && bundleSignature.algorithm !== 'PS256'
-    && bundleSignature.algorithm !== 'ES256'
-    && bundleSignature.algorithm !== 'EdDSA'
+    bundleSignature.algorithm !== 'hmac-sha256' &&
+    bundleSignature.algorithm !== 'RS256' &&
+    bundleSignature.algorithm !== 'PS256' &&
+    bundleSignature.algorithm !== 'ES256' &&
+    bundleSignature.algorithm !== 'EdDSA'
   ) {
     issues.push('unsupported bundleSignature.algorithm');
   }
@@ -1333,29 +1635,38 @@ async function verifyRegulatorySubmissionBundle(
     exportedAt: record.exportedAt,
     report: record.report,
     filingPackage: record.filingPackage,
-    ...(record.authorityManifest ? { authorityManifest: record.authorityManifest } : {}),
+    ...(record.authorityManifest
+      ? { authorityManifest: record.authorityManifest }
+      : {}),
     packageProfile: record.packageProfile,
     profileConformance: record.profileConformance,
     artifacts: record.artifacts,
     relatedReceipts: record.relatedReceipts,
   };
   const computedDigest = sha256(bundleWithoutDigest);
-  const digestValid = bundleDigest.length === 64 && bundleDigest === computedDigest;
+  const digestValid =
+    bundleDigest.length === 64 && bundleDigest === computedDigest;
   if (!digestValid) {
     issues.push('bundleDigest does not match bundle contents');
   }
 
-  const normalizedFilingPackage = filingPackage as unknown as ReportFilingPackageSnapshot;
-  const normalizedPackageProfile = packageProfile as unknown as RegulatorySubmissionBundle['packageProfile'];
-  const normalizedArtifacts = artifacts as RegulatorySubmissionBundle['artifacts'];
-  const normalizedRelatedReceipts = relatedReceipts as RegulatorySubmissionBundle['relatedReceipts'];
+  const normalizedFilingPackage =
+    filingPackage as unknown as ReportFilingPackageSnapshot;
+  const normalizedPackageProfile =
+    packageProfile as unknown as RegulatorySubmissionBundle['packageProfile'];
+  const normalizedArtifacts =
+    artifacts as RegulatorySubmissionBundle['artifacts'];
+  const normalizedRelatedReceipts =
+    relatedReceipts as RegulatorySubmissionBundle['relatedReceipts'];
   const recomputedConformance = buildSubmissionProfileConformance(
     normalizedPackageProfile,
     normalizedFilingPackage,
     normalizedArtifacts,
     normalizedRelatedReceipts,
   );
-  const profileConformanceValid = JSON.stringify(profileConformance) === JSON.stringify(recomputedConformance);
+  const profileConformanceValid =
+    JSON.stringify(profileConformance) ===
+    JSON.stringify(recomputedConformance);
   if (!profileConformanceValid) {
     issues.push('profileConformance does not match bundle contents');
   }
@@ -1369,19 +1680,20 @@ async function verifyRegulatorySubmissionBundle(
   let signingKeyVersion: string | undefined;
   let signingVerificationMethod: string | undefined;
   if (
-    typeof filingPackage.filingJurisdiction === 'string'
-    && filingPackage.filingJurisdiction.length > 0
+    typeof filingPackage.filingJurisdiction === 'string' &&
+    filingPackage.filingJurisdiction.length > 0
   ) {
     try {
-      const signatureVerification = await verifyRegulatorySubmissionBundleSignature(
-        bundleDigest,
-        record.bundleSignature,
-        {
-          organizationId,
-          authority: normalizedFilingPackage.authorityProfile?.authority,
-          filingJurisdiction: normalizedFilingPackage.filingJurisdiction,
-        },
-      );
+      const signatureVerification =
+        await verifyRegulatorySubmissionBundleSignature(
+          bundleDigest,
+          record.bundleSignature,
+          {
+            organizationId,
+            authority: normalizedFilingPackage.authorityProfile?.authority,
+            filingJurisdiction: normalizedFilingPackage.filingJurisdiction,
+          },
+        );
       signingScopeMatched = signatureVerification.signingScopeMatched;
       verificationKeyMatched = signatureVerification.verificationKeyMatched;
       signatureValid = signatureVerification.signatureValid;
@@ -1389,7 +1701,8 @@ async function verifyRegulatorySubmissionBundle(
       signingKeyId = signatureVerification.signingKeyId;
       signingScope = signatureVerification.signingScope;
       signingKeyVersion = signatureVerification.signingKeyVersion;
-      signingVerificationMethod = signatureVerification.signingVerificationMethod;
+      signingVerificationMethod =
+        signatureVerification.signingVerificationMethod;
       issues.push(...signatureVerification.issues);
     } catch (error) {
       issues.push((error as Error).message);
@@ -1400,7 +1713,13 @@ async function verifyRegulatorySubmissionBundle(
 
   return {
     verifiedAt,
-    valid: digestValid && signatureValid && signingScopeMatched && verificationKeyMatched && profileConformanceValid && issues.length === 0,
+    valid:
+      digestValid &&
+      signatureValid &&
+      signingScopeMatched &&
+      verificationKeyMatched &&
+      profileConformanceValid &&
+      issues.length === 0,
     digestValid,
     signatureValid,
     signingScopeMatched,
@@ -1408,7 +1727,8 @@ async function verifyRegulatorySubmissionBundle(
     profileConformanceValid,
     issues,
     ...(packageVersion ? { packageVersion } : {}),
-    ...(typeof packageProfile.profileId === 'string' && packageProfile.profileId.length > 0
+    ...(typeof packageProfile.profileId === 'string' &&
+    packageProfile.profileId.length > 0
       ? { profileId: packageProfile.profileId }
       : {}),
     ...(typeof signingKeyId === 'string' && signingKeyId.length > 0
@@ -1419,7 +1739,8 @@ async function verifyRegulatorySubmissionBundle(
     ...(typeof signingKeyVersion === 'string' && signingKeyVersion.length > 0
       ? { signingKeyVersion }
       : {}),
-    ...(typeof signingVerificationMethod === 'string' && signingVerificationMethod.length > 0
+    ...(typeof signingVerificationMethod === 'string' &&
+    signingVerificationMethod.length > 0
       ? { signingVerificationMethod }
       : {}),
   };
@@ -1429,7 +1750,10 @@ function recordAuthorityManifestEvent(
   reportId: string,
   event: Omit<ReportAuthorityManifestEvent, 'eventId' | 'recordedAt'>,
 ): ReportAuthorityManifest {
-  return regulatoryReportingService.recordAuthorityManifestEvent(reportId, event);
+  return regulatoryReportingService.recordAuthorityManifestEvent(
+    reportId,
+    event,
+  );
 }
 
 function buildReportSubmissionObligationUsage(
@@ -1437,7 +1761,10 @@ function buildReportSubmissionObligationUsage(
   submission: { filingReference: string; submittedAt: string },
 ): ObligationEvidenceUsageSnapshot[] {
   const obligations = buildReportingObligationUsage(report, report);
-  const authority = resolveRegulatoryAuthority(report.reportType, report.filingJurisdiction);
+  const authority = resolveRegulatoryAuthority(
+    report.reportType,
+    report.filingJurisdiction,
+  );
   const deadline = extractReportDeadline(report);
 
   if (authority) {
@@ -1473,7 +1800,9 @@ function buildReportSubmissionObligationUsage(
   });
 
   if (deadline) {
-    const submittedOnTime = new Date(submission.submittedAt).getTime() <= new Date(deadline.value).getTime();
+    const submittedOnTime =
+      new Date(submission.submittedAt).getTime() <=
+      new Date(deadline.value).getTime();
     pushUniqueObligation(obligations, {
       domain: 'reporting',
       obligationType: 'submission_sla',
@@ -1491,9 +1820,22 @@ function buildReportSubmissionObligationUsage(
 function buildReportLifecycleSnapshot(
   action: ReportLifecycleSnapshot['action'],
   report: GeneratedReport,
-  extras: Partial<Omit<ReportLifecycleSnapshot, 'action' | 'reportId' | 'reportType' | 'version' | 'status' | 'filingJurisdiction'>> = {},
+  extras: Partial<
+    Omit<
+      ReportLifecycleSnapshot,
+      | 'action'
+      | 'reportId'
+      | 'reportType'
+      | 'version'
+      | 'status'
+      | 'filingJurisdiction'
+    >
+  > = {},
 ): ReportLifecycleSnapshot {
-  const authority = resolveRegulatoryAuthority(report.reportType, report.filingJurisdiction);
+  const authority = resolveRegulatoryAuthority(
+    report.reportType,
+    report.filingJurisdiction,
+  );
   const deadline = extractReportDeadline(report);
 
   return {
@@ -1504,18 +1846,24 @@ function buildReportLifecycleSnapshot(
     status: report.status,
     filingJurisdiction: report.filingJurisdiction,
     ...(authority ? { authority } : {}),
-    ...(report.filingReference !== undefined ? { filingReference: report.filingReference } : {}),
-    ...(deadline ? { deadlineField: deadline.field, deadline: deadline.value } : {}),
-    ...(report.submittedAt !== undefined ? { submittedAt: report.submittedAt } : {}),
+    ...(report.filingReference !== undefined
+      ? { filingReference: report.filingReference }
+      : {}),
+    ...(deadline
+      ? { deadlineField: deadline.field, deadline: deadline.value }
+      : {}),
+    ...(report.submittedAt !== undefined
+      ? { submittedAt: report.submittedAt }
+      : {}),
     ...(report.amendments ? { amendmentCount: report.amendments.length } : {}),
     ...(Array.isArray(report.amendments) && report.amendments.length > 0
       ? {
-        amendmentHistory: report.amendments.map((amendment) => ({
-          version: amendment.version,
-          amendedAt: amendment.amendedAt,
-          reason: amendment.reason,
-        })),
-      }
+          amendmentHistory: report.amendments.map((amendment) => ({
+            version: amendment.version,
+            amendedAt: amendment.amendedAt,
+            reason: amendment.reason,
+          })),
+        }
       : {}),
     ...extras,
   };
@@ -1525,9 +1873,16 @@ function buildReportAmendmentObligationUsage(
   amendedReport: GeneratedReport,
   amendment: { reason: string; changes: Record<string, unknown> },
 ): ObligationEvidenceUsageSnapshot[] {
-  const obligations = buildReportingObligationUsage(amendedReport, amendedReport);
-  const authority = resolveRegulatoryAuthority(amendedReport.reportType, amendedReport.filingJurisdiction);
-  const latestAmendment = amendedReport.amendments[amendedReport.amendments.length - 1];
+  const obligations = buildReportingObligationUsage(
+    amendedReport,
+    amendedReport,
+  );
+  const authority = resolveRegulatoryAuthority(
+    amendedReport.reportType,
+    amendedReport.filingJurisdiction,
+  );
+  const latestAmendment =
+    amendedReport.amendments[amendedReport.amendments.length - 1];
 
   if (authority) {
     pushUniqueObligation(obligations, {
@@ -1622,7 +1977,10 @@ function buildReportExportObligationUsage(
   },
 ): ObligationEvidenceUsageSnapshot[] {
   const obligations = buildReportingObligationUsage(report, report);
-  const authority = resolveRegulatoryAuthority(report.reportType, report.filingJurisdiction);
+  const authority = resolveRegulatoryAuthority(
+    report.reportType,
+    report.filingJurisdiction,
+  );
 
   if (authority) {
     pushUniqueObligation(obligations, {
@@ -1728,7 +2086,10 @@ function buildReportAcknowledgementObligationUsage(
   },
 ): ObligationEvidenceUsageSnapshot[] {
   const obligations = buildReportingObligationUsage(report, report);
-  const authority = resolveRegulatoryAuthority(report.reportType, report.filingJurisdiction);
+  const authority = resolveRegulatoryAuthority(
+    report.reportType,
+    report.filingJurisdiction,
+  );
 
   if (authority) {
     pushUniqueObligation(obligations, {
@@ -1800,26 +2161,42 @@ function buildReportAcknowledgementObligationUsage(
 }
 
 function isPiaResult(value: unknown): value is PIAResult {
-  return Boolean(value) && typeof value === 'object' && 'riskScore' in (value as Record<string, unknown>);
+  return (
+    Boolean(value) &&
+    typeof value === 'object' &&
+    'riskScore' in (value as Record<string, unknown>)
+  );
 }
 
 function isBreachTimeline(value: unknown): value is BreachTimeline {
-  return Boolean(value) && typeof value === 'object' && 'regulatoryDeadlines' in (value as Record<string, unknown>);
+  return (
+    Boolean(value) &&
+    typeof value === 'object' &&
+    'regulatoryDeadlines' in (value as Record<string, unknown>)
+  );
 }
 
 function buildPrivacyObligationUsage(
   operation: 'dsar' | 'erasure' | 'pia' | 'breach',
   jurisdictionCodes: string[],
   baseResult: GeneratedReport | PIAResult | BreachTimeline,
-  adjustedResult: (GeneratedReport | PIAResult | BreachTimeline) & { policyDecision?: string },
+  adjustedResult: (GeneratedReport | PIAResult | BreachTimeline) & {
+    policyDecision?: string;
+  },
   trace?: PolicyExecutionTrace,
 ): ObligationEvidenceUsageSnapshot[] {
   const obligations: ObligationEvidenceUsageSnapshot[] = [];
   const primaryJurisdiction = jurisdictionCodes[0];
 
-  if ((operation === 'dsar' || operation === 'erasure') && !isPiaResult(adjustedResult) && !isBreachTimeline(adjustedResult)) {
+  if (
+    (operation === 'dsar' || operation === 'erasure') &&
+    !isPiaResult(adjustedResult) &&
+    !isBreachTimeline(adjustedResult)
+  ) {
     const baseReport = baseResult as GeneratedReport;
-    const report = adjustedResult as GeneratedReport & { policyDecision?: string };
+    const report = adjustedResult as GeneratedReport & {
+      policyDecision?: string;
+    };
 
     if (primaryJurisdiction) {
       pushUniqueObligation(obligations, {
@@ -1833,7 +2210,8 @@ function buildPrivacyObligationUsage(
       });
     }
 
-    const deadline = extractReportDeadline(report) ?? extractReportDeadline(baseReport);
+    const deadline =
+      extractReportDeadline(report) ?? extractReportDeadline(baseReport);
     if (deadline) {
       pushUniqueObligation(obligations, {
         domain: 'privacy',
@@ -1846,10 +2224,10 @@ function buildPrivacyObligationUsage(
       });
     }
 
-    const privacyChanges = trace?.privacyAdjustments
-      ?.filter((adjustment) => adjustment.operation === operation)
-      .flatMap((adjustment) => adjustment.changes)
-      ?? [];
+    const privacyChanges =
+      trace?.privacyAdjustments
+        ?.filter((adjustment) => adjustment.operation === operation)
+        .flatMap((adjustment) => adjustment.changes) ?? [];
 
     for (const change of privacyChanges) {
       const [prefix, rawValue] = change.split(':', 2);
@@ -1870,7 +2248,9 @@ function buildPrivacyObligationUsage(
           });
           break;
         case 'missing_categories':
-          for (const category of rawValue.split('|').filter((value) => value.length > 0)) {
+          for (const category of rawValue
+            .split('|')
+            .filter((value) => value.length > 0)) {
             pushUniqueObligation(obligations, {
               domain: 'privacy',
               obligationType: 'required_data_category',
@@ -1883,7 +2263,9 @@ function buildPrivacyObligationUsage(
           }
           break;
         case 'missing_retention_overrides':
-          for (const category of rawValue.split('|').filter((value) => value.length > 0)) {
+          for (const category of rawValue
+            .split('|')
+            .filter((value) => value.length > 0)) {
             pushUniqueObligation(obligations, {
               domain: 'privacy',
               obligationType: 'retention_override',
@@ -1898,7 +2280,10 @@ function buildPrivacyObligationUsage(
       }
     }
 
-    if (typeof report.policyDecision === 'string' && report.policyDecision !== 'allow') {
+    if (
+      typeof report.policyDecision === 'string' &&
+      report.policyDecision !== 'allow'
+    ) {
       pushUniqueObligation(obligations, {
         domain: 'privacy',
         obligationType: 'policy_decision',
@@ -1925,7 +2310,11 @@ function buildPrivacyObligationUsage(
     return obligations;
   }
 
-  if (operation === 'pia' && isPiaResult(baseResult) && isPiaResult(adjustedResult)) {
+  if (
+    operation === 'pia' &&
+    isPiaResult(baseResult) &&
+    isPiaResult(adjustedResult)
+  ) {
     if (adjustedResult.dpiaRequired) {
       pushUniqueObligation(obligations, {
         domain: 'privacy',
@@ -1953,16 +2342,18 @@ function buildPrivacyObligationUsage(
         domain: 'privacy',
         obligationType: 'supervisory_consultation',
         rulePath: `supervisory_consultation:${adjustedResult.riskLevel}`,
-        status: baseResult.supervisoryConsultationRequired ? 'satisfied' : 'escalated',
+        status: baseResult.supervisoryConsultationRequired
+          ? 'satisfied'
+          : 'escalated',
         detail: adjustedResult.riskLevel,
         jurisdiction: primaryJurisdiction,
       });
     }
 
-    const privacyChanges = trace?.privacyAdjustments
-      ?.filter((adjustment) => adjustment.operation === 'pia')
-      .flatMap((adjustment) => adjustment.changes)
-      ?? [];
+    const privacyChanges =
+      trace?.privacyAdjustments
+        ?.filter((adjustment) => adjustment.operation === 'pia')
+        .flatMap((adjustment) => adjustment.changes) ?? [];
 
     for (const change of privacyChanges) {
       const [prefix, rawValue] = change.split(':', 2);
@@ -2004,7 +2395,10 @@ function buildPrivacyObligationUsage(
       }
     }
 
-    if (typeof adjustedResult.policyDecision === 'string' && adjustedResult.policyDecision !== 'allow') {
+    if (
+      typeof adjustedResult.policyDecision === 'string' &&
+      adjustedResult.policyDecision !== 'allow'
+    ) {
       pushUniqueObligation(obligations, {
         domain: 'privacy',
         obligationType: 'policy_decision',
@@ -2018,15 +2412,27 @@ function buildPrivacyObligationUsage(
     return obligations;
   }
 
-  if (operation === 'breach' && isBreachTimeline(baseResult) && isBreachTimeline(adjustedResult)) {
-    const baseDeadlines = new Map(baseResult.regulatoryDeadlines.map((deadline) => [deadline.jurisdiction, deadline]));
+  if (
+    operation === 'breach' &&
+    isBreachTimeline(baseResult) &&
+    isBreachTimeline(adjustedResult)
+  ) {
+    const baseDeadlines = new Map(
+      baseResult.regulatoryDeadlines.map((deadline) => [
+        deadline.jurisdiction,
+        deadline,
+      ]),
+    );
     for (const deadline of adjustedResult.regulatoryDeadlines) {
       const baseDeadline = baseDeadlines.get(deadline.jurisdiction);
       pushUniqueObligation(obligations, {
         domain: 'privacy',
         obligationType: 'regulatory_deadline',
         rulePath: `regulatory_deadline:${deadline.jurisdiction}`,
-        status: baseDeadline && baseDeadline.deadlineHours === deadline.deadlineHours ? 'satisfied' : 'escalated',
+        status:
+          baseDeadline && baseDeadline.deadlineHours === deadline.deadlineHours
+            ? 'satisfied'
+            : 'escalated',
         detail: deadline.deadline,
         jurisdiction: deadline.jurisdiction,
       });
@@ -2037,16 +2443,18 @@ function buildPrivacyObligationUsage(
         domain: 'privacy',
         obligationType: 'subject_notification',
         rulePath: `subject_notification:${adjustedResult.dataSubjectDeadlineHours}`,
-        status: baseResult.dataSubjectNotificationRequired ? 'satisfied' : 'escalated',
+        status: baseResult.dataSubjectNotificationRequired
+          ? 'satisfied'
+          : 'escalated',
         detail: String(adjustedResult.dataSubjectDeadlineHours),
         jurisdiction: primaryJurisdiction,
       });
     }
 
-    const privacyChanges = trace?.privacyAdjustments
-      ?.filter((adjustment) => adjustment.operation === 'breach')
-      .flatMap((adjustment) => adjustment.changes)
-      ?? [];
+    const privacyChanges =
+      trace?.privacyAdjustments
+        ?.filter((adjustment) => adjustment.operation === 'breach')
+        .flatMap((adjustment) => adjustment.changes) ?? [];
 
     for (const change of privacyChanges) {
       const [prefix, rawValue] = change.split(':', 2);
@@ -2078,7 +2486,10 @@ function buildPrivacyObligationUsage(
       }
     }
 
-    if (typeof adjustedResult.policyDecision === 'string' && adjustedResult.policyDecision !== 'allow') {
+    if (
+      typeof adjustedResult.policyDecision === 'string' &&
+      adjustedResult.policyDecision !== 'allow'
+    ) {
       pushUniqueObligation(obligations, {
         domain: 'privacy',
         obligationType: 'policy_decision',
@@ -2093,18 +2504,23 @@ function buildPrivacyObligationUsage(
   return obligations;
 }
 
-function parseReportExportHandoff(
-  query: Record<string, unknown>,
-): {
+function parseReportExportHandoff(query: Record<string, unknown>): {
   destination?: string;
   deliveryChannel?: 'portal_upload' | 'sftp' | 'api' | 'email';
   acknowledgementId?: string;
   acknowledgedAt?: string;
 } | null {
   const parsed = ReportExportHandoffQuerySchema.safeParse({
-    destination: typeof query.destination === 'string' ? query.destination : undefined,
-    deliveryChannel: typeof query.deliveryChannel === 'string' ? query.deliveryChannel : undefined,
-    acknowledgementId: typeof query.acknowledgementId === 'string' ? query.acknowledgementId : undefined,
+    destination:
+      typeof query.destination === 'string' ? query.destination : undefined,
+    deliveryChannel:
+      typeof query.deliveryChannel === 'string'
+        ? query.deliveryChannel
+        : undefined,
+    acknowledgementId:
+      typeof query.acknowledgementId === 'string'
+        ? query.acknowledgementId
+        : undefined,
   });
 
   if (!parsed.success) {
@@ -2112,29 +2528,39 @@ function parseReportExportHandoff(
   }
 
   if (
-    parsed.data.destination === undefined
-    && parsed.data.deliveryChannel === undefined
-    && parsed.data.acknowledgementId === undefined
+    parsed.data.destination === undefined &&
+    parsed.data.deliveryChannel === undefined &&
+    parsed.data.acknowledgementId === undefined
   ) {
     return {};
   }
 
   return {
-    ...(parsed.data.destination ? { destination: parsed.data.destination } : {}),
-    ...(parsed.data.deliveryChannel ? { deliveryChannel: parsed.data.deliveryChannel } : {}),
+    ...(parsed.data.destination
+      ? { destination: parsed.data.destination }
+      : {}),
+    ...(parsed.data.deliveryChannel
+      ? { deliveryChannel: parsed.data.deliveryChannel }
+      : {}),
     ...(parsed.data.acknowledgementId
       ? {
-        acknowledgementId: parsed.data.acknowledgementId,
-        acknowledgedAt: new Date().toISOString(),
-      }
+          acknowledgementId: parsed.data.acknowledgementId,
+          acknowledgedAt: new Date().toISOString(),
+        }
       : {}),
   };
 }
 
-async function requireReceiptContext(req: Request, res: Response): Promise<{ organizationId: string; actorIdentityId: string } | null> {
+async function requireReceiptContext(
+  req: Request,
+  res: Response,
+): Promise<{ organizationId: string; actorIdentityId: string } | null> {
   const context = getEnterpriseReceiptContext(req);
   if (!context) {
-    res.status(401).json({ error: 'Authenticated enterprise context required', code: 'ENTERPRISE_AUTH_REQUIRED' });
+    res.status(401).json({
+      error: 'Authenticated enterprise context required',
+      code: 'ENTERPRISE_AUTH_REQUIRED',
+    });
     return null;
   }
   return context;
@@ -2156,19 +2582,25 @@ async function createPolicyAnchoredReceipt(
     result: unknown;
     evidence?: unknown;
     metadata?: Record<string, unknown>;
-    credentials?: Array<{ credentialId?: string; issuerId: string; credentialType: string }>;
+    credentials?: Array<{
+      credentialId?: string;
+      issuerId: string;
+      credentialType: string;
+    }>;
     policyContextOverride?: PolicyExecutionContext;
   },
 ): Promise<PolicyDecisionReceipt> {
-  const policyContext = input.policyContextOverride ?? await policyContextService.resolvePolicyContext(
-    input.policyName,
-    context.organizationId,
-    {
-      jurisdictionCodes: input.jurisdictionCodes ?? [],
-      credentials: input.credentials,
-      subjectEntityId: input.subjectEntityId,
-    },
-  );
+  const policyContext =
+    input.policyContextOverride ??
+    (await policyContextService.resolvePolicyContext(
+      input.policyName,
+      context.organizationId,
+      {
+        jurisdictionCodes: input.jurisdictionCodes ?? [],
+        credentials: input.credentials,
+        subjectEntityId: input.subjectEntityId,
+      },
+    ));
 
   return policyDecisionReceiptService.createReceipt({
     organizationId: context.organizationId,
@@ -2178,17 +2610,27 @@ async function createPolicyAnchoredReceipt(
     policyVersion: policyContext.policyVersion,
     policyDefinitionId: policyContext.policyDefinitionId,
     policyReference: policyContext.policyReference,
-    policyApprovedByIdentityId: policyContext.policyApprovalContext?.approvedByIdentityId ?? undefined,
+    policyApprovedByIdentityId:
+      policyContext.policyApprovalContext?.approvedByIdentityId ?? undefined,
     policyEffectiveFrom: policyContext.policyApprovalContext?.effectiveFrom,
     policyExpiresAt: policyContext.policyApprovalContext?.expiresAt,
-    policyGovernancePackId: policyContext.policyApprovalContext?.governancePackId,
-    policyGovernancePackVersion: policyContext.policyApprovalContext?.governancePackVersion,
-    policyGovernancePackLabel: policyContext.policyApprovalContext?.governancePackLabel,
-    policyGovernanceProfileId: policyContext.policyApprovalContext?.governanceProfileId,
-    policyGovernanceProfileLabel: policyContext.policyApprovalContext?.governanceProfileLabel,
-    policyGovernanceRationale: policyContext.policyApprovalContext?.governanceProfileRationale,
+    policyGovernancePackId:
+      policyContext.policyApprovalContext?.governancePackId,
+    policyGovernancePackVersion:
+      policyContext.policyApprovalContext?.governancePackVersion,
+    policyGovernancePackLabel:
+      policyContext.policyApprovalContext?.governancePackLabel,
+    policyGovernanceProfileId:
+      policyContext.policyApprovalContext?.governanceProfileId,
+    policyGovernanceProfileLabel:
+      policyContext.policyApprovalContext?.governanceProfileLabel,
+    policyGovernanceRationale:
+      policyContext.policyApprovalContext?.governanceProfileRationale,
     subjectEntityId: input.subjectEntityId,
-    policyExceptionIds: policyContext.exceptionContext?.exceptions.map((exception) => exception.exceptionId) ?? [],
+    policyExceptionIds:
+      policyContext.exceptionContext?.exceptions.map(
+        (exception) => exception.exceptionId,
+      ) ?? [],
     jurisdictionCodes: input.jurisdictionCodes ?? [],
     decisionSummary: input.decisionSummary,
     input: input.payload,
@@ -2196,48 +2638,74 @@ async function createPolicyAnchoredReceipt(
     evidence: input.evidence,
     metadata: {
       policyFamily: policyContext.policyFamily,
-      ...(policyContext.policyApprovalContext ? { policyApprovalContext: policyContext.policyApprovalContext } : {}),
-      ...(policyContext.policyLifecycleContext ? { policyLifecycleContext: policyContext.policyLifecycleContext } : {}),
-      ...(context.governanceSettings ? {
-        organizationGovernanceContext: {
-          ...(context.governanceSettings.defaultPack
-            ? { defaultPack: context.governanceSettings.defaultPack }
-            : {}),
-          ...(context.governanceSettings.familyPacks
-            ? { familyPacks: context.governanceSettings.familyPacks }
-            : {}),
-          ...(context.governanceSettings.lastUpdatedAt
-            ? { lastUpdatedAt: context.governanceSettings.lastUpdatedAt }
-            : {}),
-          ...(context.governanceSettings.lastUpdatedByIdentityId
-            ? { lastUpdatedByIdentityId: context.governanceSettings.lastUpdatedByIdentityId }
-            : {}),
-          ...(context.governanceSettings.changeHistory && context.governanceSettings.changeHistory.length > 0
-            ? { changeHistory: context.governanceSettings.changeHistory.slice(-5) }
-            : {}),
-          ...(policyContext.policyApprovalContext?.governancePackId
-            ? {
-              activePack: {
-                id: policyContext.policyApprovalContext.governancePackId,
-                version: policyContext.policyApprovalContext.governancePackVersion,
-                label: policyContext.policyApprovalContext.governancePackLabel,
-                policyFamily: policyContext.policyFamily,
-              },
-            }
-            : {}),
-        },
-      } : {}),
-      ...(policyContext.trustContext ? { trustContext: policyContext.trustContext } : {}),
-      ...(input.credentials && input.credentials.length > 0 ? {
-        credentialEvidenceRefs: input.credentials
-          .filter((credential) => typeof credential.credentialId === 'string' && credential.credentialId.length > 0)
-          .map((credential) => ({
-            credentialId: credential.credentialId,
-            issuerId: credential.issuerId,
-            credentialType: credential.credentialType,
-          })),
-      } : {}),
-      ...(policyContext.exceptionContext ? { exceptionContext: policyContext.exceptionContext } : {}),
+      ...(policyContext.policyApprovalContext
+        ? { policyApprovalContext: policyContext.policyApprovalContext }
+        : {}),
+      ...(policyContext.policyLifecycleContext
+        ? { policyLifecycleContext: policyContext.policyLifecycleContext }
+        : {}),
+      ...(context.governanceSettings
+        ? {
+            organizationGovernanceContext: {
+              ...(context.governanceSettings.defaultPack
+                ? { defaultPack: context.governanceSettings.defaultPack }
+                : {}),
+              ...(context.governanceSettings.familyPacks
+                ? { familyPacks: context.governanceSettings.familyPacks }
+                : {}),
+              ...(context.governanceSettings.lastUpdatedAt
+                ? { lastUpdatedAt: context.governanceSettings.lastUpdatedAt }
+                : {}),
+              ...(context.governanceSettings.lastUpdatedByIdentityId
+                ? {
+                    lastUpdatedByIdentityId:
+                      context.governanceSettings.lastUpdatedByIdentityId,
+                  }
+                : {}),
+              ...(context.governanceSettings.changeHistory &&
+              context.governanceSettings.changeHistory.length > 0
+                ? {
+                    changeHistory:
+                      context.governanceSettings.changeHistory.slice(-5),
+                  }
+                : {}),
+              ...(policyContext.policyApprovalContext?.governancePackId
+                ? {
+                    activePack: {
+                      id: policyContext.policyApprovalContext.governancePackId,
+                      version:
+                        policyContext.policyApprovalContext
+                          .governancePackVersion,
+                      label:
+                        policyContext.policyApprovalContext.governancePackLabel,
+                      policyFamily: policyContext.policyFamily,
+                    },
+                  }
+                : {}),
+            },
+          }
+        : {}),
+      ...(policyContext.trustContext
+        ? { trustContext: policyContext.trustContext }
+        : {}),
+      ...(input.credentials && input.credentials.length > 0
+        ? {
+            credentialEvidenceRefs: input.credentials
+              .filter(
+                (credential) =>
+                  typeof credential.credentialId === 'string' &&
+                  credential.credentialId.length > 0,
+              )
+              .map((credential) => ({
+                credentialId: credential.credentialId,
+                issuerId: credential.issuerId,
+                credentialType: credential.credentialType,
+              })),
+          }
+        : {}),
+      ...(policyContext.exceptionContext
+        ? { exceptionContext: policyContext.exceptionContext }
+        : {}),
       ...(input.metadata ?? {}),
     },
   });
@@ -2246,537 +2714,735 @@ async function createPolicyAnchoredReceipt(
 // ---------------------------------------------------------------------------
 // GET /enterprise/compliance/receipts — List compliance decision receipts
 // ---------------------------------------------------------------------------
-router.get('/receipts', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_READ_ROLES), async (req: Request, res: Response): Promise<void> => {
-  const context = await requireReceiptContext(req, res);
-  if (!context) return;
+router.get(
+  '/receipts',
+  requireEnterpriseContext(ENTERPRISE_COMPLIANCE_READ_ROLES),
+  async (req: Request, res: Response): Promise<void> => {
+    const context = await requireReceiptContext(req, res);
+    if (!context) return;
 
-  const limit = Number(req.query.limit ?? 25);
-  const receipts = await policyDecisionReceiptService.listReceipts(context.organizationId, limit);
-  res.status(200).json({ data: receipts });
-});
+    const limit = Number(req.query.limit ?? 25);
+    const receipts = await policyDecisionReceiptService.listReceipts(
+      context.organizationId,
+      limit,
+    );
+    res.status(200).json({ data: receipts });
+  },
+);
 
 // ---------------------------------------------------------------------------
 // GET /enterprise/compliance/receipts/:receiptId — Fetch compliance decision receipt
 // ---------------------------------------------------------------------------
-router.get('/receipts/:receiptId', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_READ_ROLES), async (req: Request, res: Response): Promise<void> => {
-  const context = await requireReceiptContext(req, res);
-  if (!context) return;
+router.get(
+  '/receipts/:receiptId',
+  requireEnterpriseContext(ENTERPRISE_COMPLIANCE_READ_ROLES),
+  async (req: Request, res: Response): Promise<void> => {
+    const context = await requireReceiptContext(req, res);
+    if (!context) return;
 
-  const receipt = await policyDecisionReceiptService.getReceipt(req.params.receiptId as string);
-  if (!receipt || receipt.organizationId !== context.organizationId) {
-    res.status(404).json({ error: 'Receipt not found', code: 'COMPLIANCE_RECEIPT_NOT_FOUND' });
-    return;
-  }
+    const receipt = await policyDecisionReceiptService.getReceipt(
+      req.params.receiptId as string,
+    );
+    if (!receipt || receipt.organizationId !== context.organizationId) {
+      res.status(404).json({
+        error: 'Receipt not found',
+        code: 'COMPLIANCE_RECEIPT_NOT_FOUND',
+      });
+      return;
+    }
 
-  res.status(200).json({ data: receipt });
-});
+    res.status(200).json({ data: receipt });
+  },
+);
 
 // ---------------------------------------------------------------------------
 // GET /enterprise/compliance/receipts/:receiptId/verify — Verify receipt integrity
 // ---------------------------------------------------------------------------
-router.get('/receipts/:receiptId/verify', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_READ_ROLES), async (req: Request, res: Response): Promise<void> => {
-  const context = await requireReceiptContext(req, res);
-  if (!context) return;
+router.get(
+  '/receipts/:receiptId/verify',
+  requireEnterpriseContext(ENTERPRISE_COMPLIANCE_READ_ROLES),
+  async (req: Request, res: Response): Promise<void> => {
+    const context = await requireReceiptContext(req, res);
+    if (!context) return;
 
-  const verification = await policyDecisionReceiptService.verifyReceipt(req.params.receiptId as string);
-  if (!verification.receipt || verification.receipt.organizationId !== context.organizationId) {
-    res.status(404).json({ error: 'Receipt not found', code: 'COMPLIANCE_RECEIPT_NOT_FOUND' });
-    return;
-  }
+    const verification = await policyDecisionReceiptService.verifyReceipt(
+      req.params.receiptId as string,
+    );
+    if (
+      !verification.receipt ||
+      verification.receipt.organizationId !== context.organizationId
+    ) {
+      res.status(404).json({
+        error: 'Receipt not found',
+        code: 'COMPLIANCE_RECEIPT_NOT_FOUND',
+      });
+      return;
+    }
 
-  res.status(200).json({ data: verification });
-});
+    res.status(200).json({ data: verification });
+  },
+);
 
 // ---------------------------------------------------------------------------
 // GET /enterprise/compliance/receipts/:receiptId/export — Export receipt evidence bundle
 // ---------------------------------------------------------------------------
-router.get('/receipts/:receiptId/export', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_READ_ROLES), async (req: Request, res: Response): Promise<void> => {
-  const context = await requireReceiptContext(req, res);
-  if (!context) return;
+router.get(
+  '/receipts/:receiptId/export',
+  requireEnterpriseContext(ENTERPRISE_COMPLIANCE_READ_ROLES),
+  async (req: Request, res: Response): Promise<void> => {
+    const context = await requireReceiptContext(req, res);
+    if (!context) return;
 
-  const exported = await policyDecisionReceiptService.exportReceipt(req.params.receiptId as string);
-  if (!exported || exported.receipt.organizationId !== context.organizationId) {
-    res.status(404).json({ error: 'Receipt not found', code: 'COMPLIANCE_RECEIPT_NOT_FOUND' });
-    return;
-  }
+    const exported = await policyDecisionReceiptService.exportReceipt(
+      req.params.receiptId as string,
+    );
+    if (
+      !exported ||
+      exported.receipt.organizationId !== context.organizationId
+    ) {
+      res.status(404).json({
+        error: 'Receipt not found',
+        code: 'COMPLIANCE_RECEIPT_NOT_FOUND',
+      });
+      return;
+    }
 
-  res.status(200).json({ data: exported });
-});
+    res.status(200).json({ data: exported });
+  },
+);
 
 // ---------------------------------------------------------------------------
 // POST /enterprise/compliance/screen — Sanctions screening
 // ---------------------------------------------------------------------------
-router.post('/screen', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_ROLES), validate(ScreeningRequestSchema), async (req: Request, res: Response): Promise<void> => {
-  try {
-    const context = await requireReceiptContext(req, res);
-    if (!context) return;
+router.post(
+  '/screen',
+  requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_ROLES),
+  validate(ScreeningRequestSchema),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const context = await requireReceiptContext(req, res);
+      if (!context) return;
 
-    const policyContext = await policyContextService.resolvePolicyContext(
-      'sanctions_screening',
-      context.organizationId,
-      {
+      const policyContext = await policyContextService.resolvePolicyContext(
+        'sanctions_screening',
+        context.organizationId,
+        {
+          subjectEntityId: req.body.entityId,
+        },
+      );
+      const baseResult = await sanctionsScreeningService.screenEntity(req.body);
+      const policyExecution = await policyExecutionService.applyScreeningPolicy(
+        context.organizationId,
+        policyContext,
+        req.body,
+        baseResult,
+      );
+      const result = policyExecution.result;
+      const receipt = await createPolicyAnchoredReceipt(context, {
+        receiptType: 'sanctions_screening',
+        policyName: 'sanctions_screening',
         subjectEntityId: req.body.entityId,
-      },
-    );
-    const baseResult = await sanctionsScreeningService.screenEntity(req.body);
-    const policyExecution = await policyExecutionService.applyScreeningPolicy(
-      context.organizationId,
-      policyContext,
-      req.body,
-      baseResult,
-    );
-    const result = policyExecution.result;
-    const receipt = await createPolicyAnchoredReceipt(context, {
-      receiptType: 'sanctions_screening',
-      policyName: 'sanctions_screening',
-      subjectEntityId: req.body.entityId,
-      decisionSummary: `screening_result:${result.overallRisk}`,
-      payload: req.body,
-      result,
-      evidence: {
-        listsScreened: result.listsScreened,
-        matchCount: result.matches.length,
-        confirmedMatches: result.matches.filter((match) => match.status === 'confirmed_match').length,
-        potentialMatches: result.matches.filter((match) => match.status === 'pending_review').length,
-      },
-      metadata: {
-        route: '/enterprise/compliance/screen',
-        ...(policyExecution.trace ? { policyExecutionTrace: policyExecution.trace } : {}),
-      },
-      policyContextOverride: policyContext,
-    });
+        decisionSummary: `screening_result:${result.overallRisk}`,
+        payload: req.body,
+        result,
+        evidence: {
+          listsScreened: result.listsScreened,
+          matchCount: result.matches.length,
+          confirmedMatches: result.matches.filter(
+            (match) => match.status === 'confirmed_match',
+          ).length,
+          potentialMatches: result.matches.filter(
+            (match) => match.status === 'pending_review',
+          ).length,
+        },
+        metadata: {
+          route: '/enterprise/compliance/screen',
+          ...(policyExecution.trace
+            ? { policyExecutionTrace: policyExecution.trace }
+            : {}),
+        },
+        policyContextOverride: policyContext,
+      });
 
-    res.status(200).json({
-      data: result,
-      receipt: summarizeReceipt(receipt),
-      ...(policyExecution.trace ? { policyTrace: policyExecution.trace } : {}),
-      message: 'Screening completed',
-    });
-  } catch (err) {
-    const error = err as Error & { statusCode?: number; code?: string };
-    logger.error('screening_error', { error: error.message });
-    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'SCREENING_ERROR' });
-  }
-});
+      res.status(200).json({
+        data: result,
+        receipt: summarizeReceipt(receipt),
+        ...(policyExecution.trace
+          ? { policyTrace: policyExecution.trace }
+          : {}),
+        message: 'Screening completed',
+      });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('screening_error', { error: error.message });
+      res
+        .status(error.statusCode ?? 500)
+        .json({ error: error.message, code: error.code ?? 'SCREENING_ERROR' });
+    }
+  },
+);
 
 // ---------------------------------------------------------------------------
 // POST /enterprise/compliance/screen/batch — Batch screening
 // ---------------------------------------------------------------------------
-router.post('/screen/batch', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_ROLES), validate(BatchScreeningRequestSchema), async (req: Request, res: Response): Promise<void> => {
-  try {
-    const context = await requireReceiptContext(req, res);
-    if (!context) return;
+router.post(
+  '/screen/batch',
+  requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_ROLES),
+  validate(BatchScreeningRequestSchema),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const context = await requireReceiptContext(req, res);
+      if (!context) return;
 
-    const policyContext = await policyContextService.resolvePolicyContext(
-      'batch_sanctions_screening',
-      context.organizationId,
-    );
-    const baseResult = await sanctionsScreeningService.screenBatch(req.body);
-    const policyExecution = await policyExecutionService.applyBatchScreeningPolicy(
-      context.organizationId,
-      policyContext,
-      req.body,
-      baseResult,
-    );
-    const result = policyExecution.result;
-    const receipt = await createPolicyAnchoredReceipt(context, {
-      receiptType: 'sanctions_screening',
-      policyName: 'batch_sanctions_screening',
-      decisionSummary: `batch_screening:${result.totalEntities}:${result.summary.confirmedMatch}:${result.summary.potentialMatch}`,
-      payload: req.body,
-      result,
-      evidence: {
-        totalEntities: result.totalEntities,
-        summary: result.summary,
-      },
-      metadata: {
-        route: '/enterprise/compliance/screen/batch',
-        clientId: req.body.clientId,
-        ...(policyExecution.trace ? { policyExecutionTrace: policyExecution.trace } : {}),
-      },
-      policyContextOverride: policyContext,
-    });
-    res.status(200).json({
-      data: result,
-      receipt: summarizeReceipt(receipt),
-      ...(policyExecution.trace ? { policyTrace: policyExecution.trace } : {}),
-      message: 'Batch screening completed',
-    });
-  } catch (err) {
-    const error = err as Error & { statusCode?: number; code?: string };
-    logger.error('batch_screening_error', { error: error.message });
-    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'BATCH_SCREENING_ERROR' });
-  }
-});
+      const policyContext = await policyContextService.resolvePolicyContext(
+        'batch_sanctions_screening',
+        context.organizationId,
+      );
+      const baseResult = await sanctionsScreeningService.screenBatch(req.body);
+      const policyExecution =
+        await policyExecutionService.applyBatchScreeningPolicy(
+          context.organizationId,
+          policyContext,
+          req.body,
+          baseResult,
+        );
+      const result = policyExecution.result;
+      const receipt = await createPolicyAnchoredReceipt(context, {
+        receiptType: 'sanctions_screening',
+        policyName: 'batch_sanctions_screening',
+        decisionSummary: `batch_screening:${result.totalEntities}:${result.summary.confirmedMatch}:${result.summary.potentialMatch}`,
+        payload: req.body,
+        result,
+        evidence: {
+          totalEntities: result.totalEntities,
+          summary: result.summary,
+        },
+        metadata: {
+          route: '/enterprise/compliance/screen/batch',
+          clientId: req.body.clientId,
+          ...(policyExecution.trace
+            ? { policyExecutionTrace: policyExecution.trace }
+            : {}),
+        },
+        policyContextOverride: policyContext,
+      });
+      res.status(200).json({
+        data: result,
+        receipt: summarizeReceipt(receipt),
+        ...(policyExecution.trace
+          ? { policyTrace: policyExecution.trace }
+          : {}),
+        message: 'Batch screening completed',
+      });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('batch_screening_error', { error: error.message });
+      res.status(error.statusCode ?? 500).json({
+        error: error.message,
+        code: error.code ?? 'BATCH_SCREENING_ERROR',
+      });
+    }
+  },
+);
 
 // ---------------------------------------------------------------------------
 // POST /enterprise/compliance/screen/resolve — Resolve false positive
 // ---------------------------------------------------------------------------
-router.post('/screen/resolve', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_REVIEW_ROLES), validate(FalsePositiveDecisionSchema), async (req: Request, res: Response): Promise<void> => {
-  try {
-    await sanctionsScreeningService.resolveMatch(req.body);
-    res.status(200).json({ message: 'Match resolution recorded' });
-  } catch (err) {
-    const error = err as Error & { statusCode?: number; code?: string };
-    logger.error('resolve_match_error', { error: error.message });
-    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'RESOLVE_ERROR' });
-  }
-});
+router.post(
+  '/screen/resolve',
+  requireEnterpriseContext(ENTERPRISE_COMPLIANCE_REVIEW_ROLES),
+  validate(FalsePositiveDecisionSchema),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      await sanctionsScreeningService.resolveMatch(req.body);
+      res.status(200).json({ message: 'Match resolution recorded' });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('resolve_match_error', { error: error.message });
+      res
+        .status(error.statusCode ?? 500)
+        .json({ error: error.message, code: error.code ?? 'RESOLVE_ERROR' });
+    }
+  },
+);
 
 // ---------------------------------------------------------------------------
 // GET /enterprise/compliance/status/:entityId — Compliance status
 // ---------------------------------------------------------------------------
-router.get('/status/:entityId', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_READ_ROLES), async (req: Request, res: Response): Promise<void> => {
-  try {
-    const { entityId } = req.params;
-    const jurisdiction = req.query.jurisdiction as string | undefined;
+router.get(
+  '/status/:entityId',
+  requireEnterpriseContext(ENTERPRISE_COMPLIANCE_READ_ROLES),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const { entityId } = req.params;
+      const jurisdiction = req.query.jurisdiction as string | undefined;
 
-    if (jurisdiction) {
-      const parsed = JurisdictionCodeSchema.safeParse(jurisdiction);
-      if (!parsed.success) {
-        res.status(400).json({ error: 'Invalid jurisdiction code', code: 'INVALID_JURISDICTION' });
+      if (jurisdiction) {
+        const parsed = JurisdictionCodeSchema.safeParse(jurisdiction);
+        if (!parsed.success) {
+          res.status(400).json({
+            error: 'Invalid jurisdiction code',
+            code: 'INVALID_JURISDICTION',
+          });
+          return;
+        }
+        const status = jurisdictionEngine.getComplianceStatus(
+          entityId as string,
+          parsed.data,
+        );
+        if (!status) {
+          res
+            .status(404)
+            .json({ error: 'No compliance status found', code: 'NOT_FOUND' });
+          return;
+        }
+        res.status(200).json({ data: status });
         return;
       }
-      const status = jurisdictionEngine.getComplianceStatus(entityId as string, parsed.data);
-      if (!status) {
-        res.status(404).json({ error: 'No compliance status found', code: 'NOT_FOUND' });
-        return;
-      }
-      res.status(200).json({ data: status });
-      return;
+
+      // Return screening history
+      const screenings = sanctionsScreeningService.getEntityScreenings(
+        entityId as string,
+      );
+      res.status(200).json({ data: { entityId, screenings } });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('compliance_status_error', { error: error.message });
+      res
+        .status(error.statusCode ?? 500)
+        .json({ error: error.message, code: error.code ?? 'STATUS_ERROR' });
     }
-
-    // Return screening history
-    const screenings = sanctionsScreeningService.getEntityScreenings(entityId as string);
-    res.status(200).json({ data: { entityId, screenings } });
-  } catch (err) {
-    const error = err as Error & { statusCode?: number; code?: string };
-    logger.error('compliance_status_error', { error: error.message });
-    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'STATUS_ERROR' });
-  }
-});
+  },
+);
 
 // ---------------------------------------------------------------------------
 // POST /enterprise/compliance/evaluate — Evaluate compliance for entity
 // ---------------------------------------------------------------------------
-router.post('/evaluate', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_ROLES), validate(ComplianceEvaluationRequestSchema), async (req: Request, res: Response): Promise<void> => {
-  try {
-    const context = await requireReceiptContext(req, res);
-    if (!context) return;
+router.post(
+  '/evaluate',
+  requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_ROLES),
+  validate(ComplianceEvaluationRequestSchema),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const context = await requireReceiptContext(req, res);
+      if (!context) return;
 
-    const credentialInputs = (req.body.credentials ?? []).map((credential: Record<string, unknown>) => ({
-      credentialId: typeof credential.credentialId === 'string' ? credential.credentialId : undefined,
-      issuerId: String(credential.issuerId ?? ''),
-      credentialType: String(credential.credentialType ?? ''),
-    }));
-    const policyContext = await policyContextService.resolvePolicyContext(
-      'jurisdiction_compliance',
-      context.organizationId,
-      {
-        jurisdictionCodes: req.body.jurisdictions ?? [],
-        credentials: credentialInputs,
+      const credentialInputs = (req.body.credentials ?? []).map(
+        (credential: Record<string, unknown>) => ({
+          credentialId:
+            typeof credential.credentialId === 'string'
+              ? credential.credentialId
+              : undefined,
+          issuerId: String(credential.issuerId ?? ''),
+          credentialType: String(credential.credentialType ?? ''),
+        }),
+      );
+      const policyContext = await policyContextService.resolvePolicyContext(
+        'jurisdiction_compliance',
+        context.organizationId,
+        {
+          jurisdictionCodes: req.body.jurisdictions ?? [],
+          credentials: credentialInputs,
+          subjectEntityId: req.body.entityId,
+        },
+      );
+
+      const baseResults = await jurisdictionEngine.evaluateCompliance(req.body);
+      const policyExecution =
+        await policyExecutionService.applyCompliancePolicy(
+          context.organizationId,
+          policyContext,
+          req.body,
+          baseResults,
+        );
+      const results = policyExecution.results;
+      const receipt = await createPolicyAnchoredReceipt(context, {
+        receiptType: 'compliance_evaluation',
+        policyName: 'jurisdiction_compliance',
         subjectEntityId: req.body.entityId,
-      },
-    );
-
-    const baseResults = await jurisdictionEngine.evaluateCompliance(req.body);
-    const policyExecution = await policyExecutionService.applyCompliancePolicy(
-      context.organizationId,
-      policyContext,
-      req.body,
-      baseResults,
-    );
-    const results = policyExecution.results;
-    const receipt = await createPolicyAnchoredReceipt(context, {
-      receiptType: 'compliance_evaluation',
-      policyName: 'jurisdiction_compliance',
-      subjectEntityId: req.body.entityId,
-      jurisdictionCodes: req.body.jurisdictions ?? [],
-      decisionSummary: results.map((result) => `${result.jurisdiction}:${result.overallStatus}`).join(','),
-      payload: req.body,
-      result: results,
-      evidence: results.map((result) => ({
-        jurisdiction: result.jurisdiction,
-        overallStatus: result.overallStatus,
-        missingCredentials: result.missingCredentials,
-        ruleOutcomes: result.rules.map((rule) => ({ name: rule.name, status: rule.status })),
-      })),
-      credentials: credentialInputs,
-      metadata: {
-        route: '/enterprise/compliance/evaluate',
-        operationType: req.body.operationType,
-        ...(credentialInputs.length > 0 ? {
-          credentialEvidenceUsage: buildCredentialEvidenceUsage(
-            req.body.jurisdictions ?? [],
-            req.body.operationType,
-            credentialInputs,
-          ),
-        } : {}),
-        ...(policyExecution.trace ? { policyExecutionTrace: policyExecution.trace } : {}),
-      },
-      policyContextOverride: policyContext,
-    });
-    res.status(200).json({
-      data: results,
-      receipt: summarizeReceipt(receipt),
-      ...(policyExecution.trace ? { policyTrace: policyExecution.trace } : {}),
-      message: 'Compliance evaluation completed',
-    });
-  } catch (err) {
-    const error = err as Error & { statusCode?: number; code?: string };
-    logger.error('compliance_evaluation_error', { error: error.message });
-    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'EVALUATION_ERROR' });
-  }
-});
+        jurisdictionCodes: req.body.jurisdictions ?? [],
+        decisionSummary: results
+          .map((result) => `${result.jurisdiction}:${result.overallStatus}`)
+          .join(','),
+        payload: req.body,
+        result: results,
+        evidence: results.map((result) => ({
+          jurisdiction: result.jurisdiction,
+          overallStatus: result.overallStatus,
+          missingCredentials: result.missingCredentials,
+          ruleOutcomes: result.rules.map((rule) => ({
+            name: rule.name,
+            status: rule.status,
+          })),
+        })),
+        credentials: credentialInputs,
+        metadata: {
+          route: '/enterprise/compliance/evaluate',
+          operationType: req.body.operationType,
+          ...(credentialInputs.length > 0
+            ? {
+                credentialEvidenceUsage: buildCredentialEvidenceUsage(
+                  req.body.jurisdictions ?? [],
+                  req.body.operationType,
+                  credentialInputs,
+                ),
+              }
+            : {}),
+          ...(policyExecution.trace
+            ? { policyExecutionTrace: policyExecution.trace }
+            : {}),
+        },
+        policyContextOverride: policyContext,
+      });
+      res.status(200).json({
+        data: results,
+        receipt: summarizeReceipt(receipt),
+        ...(policyExecution.trace
+          ? { policyTrace: policyExecution.trace }
+          : {}),
+        message: 'Compliance evaluation completed',
+      });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('compliance_evaluation_error', { error: error.message });
+      res
+        .status(error.statusCode ?? 500)
+        .json({ error: error.message, code: error.code ?? 'EVALUATION_ERROR' });
+    }
+  },
+);
 
 // ---------------------------------------------------------------------------
 // POST /enterprise/compliance/report — Generate regulatory report
 // ---------------------------------------------------------------------------
-router.post('/report', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_ROLES), async (req: Request, res: Response): Promise<void> => {
-  try {
-    const context = await requireReceiptContext(req, res);
-    if (!context) return;
+router.post(
+  '/report',
+  requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_ROLES),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const context = await requireReceiptContext(req, res);
+      if (!context) return;
 
-    const { reportType } = req.body;
-    const parsed = ReportTypeSchema.safeParse(reportType);
-    if (!parsed.success) {
-      res.status(400).json({ error: 'Invalid report type', code: 'INVALID_REPORT_TYPE' });
-      return;
-    }
-
-    let report: GeneratedReport;
-    switch (parsed.data) {
-      case 'SAR':
-        report = await regulatoryReportingService.generateSAR(req.body);
-        break;
-      case 'CTR':
-        report = await regulatoryReportingService.generateCTR(req.body);
-        break;
-      case 'STR':
-        report = await regulatoryReportingService.generateSTR(req.body);
-        break;
-      case 'DSAR':
-        report = await regulatoryReportingService.fulfillDSAR(req.body);
-        break;
-      case 'ERASURE':
-        report = await regulatoryReportingService.processErasure(req.body);
-        break;
-      case 'AUDIT':
-        report = await regulatoryReportingService.generateAuditPackage(
-          req.body.jurisdiction ?? 'all',
-          req.body.dateRange ?? { start: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString(), end: new Date().toISOString() },
-        );
-        break;
-      case 'DASHBOARD': {
-        const dashboard = regulatoryReportingService.getDashboardData();
-        const policyContext = await policyContextService.resolvePolicyContext(
-          'regulatory_dashboard',
-          context.organizationId,
-          {
-            jurisdictionCodes: req.body.jurisdiction ? [req.body.jurisdiction] : [],
-          },
-        );
-        const receipt = await createPolicyAnchoredReceipt(context, {
-          receiptType: 'regulatory_report',
-          policyName: 'regulatory_dashboard',
-          jurisdictionCodes: req.body.jurisdiction ? [req.body.jurisdiction] : [],
-          decisionSummary: 'dashboard_generated',
-          payload: req.body,
-          result: dashboard,
-          evidence: { reportType: 'DASHBOARD' },
-          metadata: {
-            route: '/enterprise/compliance/report',
-          },
-          policyContextOverride: policyContext,
-        });
-        res.status(200).json({ data: dashboard, receipt: summarizeReceipt(receipt) });
+      const { reportType } = req.body;
+      const parsed = ReportTypeSchema.safeParse(reportType);
+      if (!parsed.success) {
+        res
+          .status(400)
+          .json({ error: 'Invalid report type', code: 'INVALID_REPORT_TYPE' });
         return;
       }
-      default:
-        res.status(400).json({ error: 'Unsupported report type', code: 'UNSUPPORTED_REPORT_TYPE' });
-        return;
-    }
 
-    const policyContext = await policyContextService.resolvePolicyContext(
-      'regulatory_reporting',
-      context.organizationId,
-      {
+      let report: GeneratedReport;
+      switch (parsed.data) {
+        case 'SAR':
+          report = await regulatoryReportingService.generateSAR(req.body);
+          break;
+        case 'CTR':
+          report = await regulatoryReportingService.generateCTR(req.body);
+          break;
+        case 'STR':
+          report = await regulatoryReportingService.generateSTR(req.body);
+          break;
+        case 'DSAR':
+          report = await regulatoryReportingService.fulfillDSAR(req.body);
+          break;
+        case 'ERASURE':
+          report = await regulatoryReportingService.processErasure(req.body);
+          break;
+        case 'AUDIT':
+          report = await regulatoryReportingService.generateAuditPackage(
+            req.body.jurisdiction ?? 'all',
+            req.body.dateRange ?? {
+              start: new Date(
+                Date.now() - 30 * 24 * 60 * 60 * 1000,
+              ).toISOString(),
+              end: new Date().toISOString(),
+            },
+          );
+          break;
+        case 'DASHBOARD': {
+          const dashboard = regulatoryReportingService.getDashboardData();
+          const policyContext = await policyContextService.resolvePolicyContext(
+            'regulatory_dashboard',
+            context.organizationId,
+            {
+              jurisdictionCodes: req.body.jurisdiction
+                ? [req.body.jurisdiction]
+                : [],
+            },
+          );
+          const receipt = await createPolicyAnchoredReceipt(context, {
+            receiptType: 'regulatory_report',
+            policyName: 'regulatory_dashboard',
+            jurisdictionCodes: req.body.jurisdiction
+              ? [req.body.jurisdiction]
+              : [],
+            decisionSummary: 'dashboard_generated',
+            payload: req.body,
+            result: dashboard,
+            evidence: { reportType: 'DASHBOARD' },
+            metadata: {
+              route: '/enterprise/compliance/report',
+            },
+            policyContextOverride: policyContext,
+          });
+          res
+            .status(200)
+            .json({ data: dashboard, receipt: summarizeReceipt(receipt) });
+          return;
+        }
+        default:
+          res.status(400).json({
+            error: 'Unsupported report type',
+            code: 'UNSUPPORTED_REPORT_TYPE',
+          });
+          return;
+      }
+
+      const policyContext = await policyContextService.resolvePolicyContext(
+        'regulatory_reporting',
+        context.organizationId,
+        {
+          jurisdictionCodes: [
+            req.body.jurisdiction,
+            req.body.filingInstitution?.jurisdiction,
+          ].filter(
+            (value): value is string =>
+              typeof value === 'string' && value.length > 0,
+          ),
+          subjectEntityId:
+            req.body.entityId ??
+            req.body.subject?.entityId ??
+            req.body.dataSubject?.entityId,
+        },
+      );
+      const baseReport = report;
+      const policyExecution = await policyExecutionService.applyReportingPolicy(
+        context.organizationId,
+        policyContext,
+        req.body,
+        baseReport,
+      );
+      report = policyExecution.result;
+      const reportEventRecordedAt = new Date().toISOString();
+      const reportAuthority = resolveRegulatoryAuthority(
+        report.reportType,
+        report.filingJurisdiction,
+      );
+      const generatedEventPreview: ReportEvidenceEventSnapshot = {
+        action: 'generated',
+        recordedAt: reportEventRecordedAt,
+        policyName: 'regulatory_reporting',
+        decisionSummary: `report_generated:${parsed.data}`,
+        ...(reportAuthority ? { authority: reportAuthority } : {}),
+        ...(report.filingReference !== undefined
+          ? { filingReference: report.filingReference }
+          : {}),
+        version: report.version,
+      };
+      const receipt = await createPolicyAnchoredReceipt(context, {
+        receiptType: 'regulatory_report',
+        policyName: 'regulatory_reporting',
+        subjectEntityId:
+          req.body.entityId ??
+          req.body.subject?.entityId ??
+          req.body.dataSubject?.entityId,
         jurisdictionCodes: [
           req.body.jurisdiction,
           req.body.filingInstitution?.jurisdiction,
-        ].filter((value): value is string => typeof value === 'string' && value.length > 0),
-        subjectEntityId: req.body.entityId ?? req.body.subject?.entityId ?? req.body.dataSubject?.entityId,
-      },
-    );
-    const baseReport = report;
-    const policyExecution = await policyExecutionService.applyReportingPolicy(
-      context.organizationId,
-      policyContext,
-      req.body,
-      baseReport,
-    );
-    report = policyExecution.result;
-    const reportEventRecordedAt = new Date().toISOString();
-    const reportAuthority = resolveRegulatoryAuthority(report.reportType, report.filingJurisdiction);
-    const generatedEventPreview: ReportEvidenceEventSnapshot = {
-      action: 'generated',
-      recordedAt: reportEventRecordedAt,
-      policyName: 'regulatory_reporting',
-      decisionSummary: `report_generated:${parsed.data}`,
-      ...(reportAuthority ? { authority: reportAuthority } : {}),
-      ...(report.filingReference !== undefined ? { filingReference: report.filingReference } : {}),
-      version: report.version,
-    };
-    const receipt = await createPolicyAnchoredReceipt(context, {
-      receiptType: 'regulatory_report',
-      policyName: 'regulatory_reporting',
-      subjectEntityId: req.body.entityId ?? req.body.subject?.entityId ?? req.body.dataSubject?.entityId,
-      jurisdictionCodes: [
-        req.body.jurisdiction,
-        req.body.filingInstitution?.jurisdiction,
-      ].filter((value): value is string => typeof value === 'string' && value.length > 0),
-      decisionSummary: `report_generated:${parsed.data}`,
-      payload: req.body,
-      result: report,
-      evidence: {
-        reportType: parsed.data,
-        reportId: (report as any)?.reportId ?? null,
-      },
-      metadata: {
-        route: '/enterprise/compliance/report',
-        reportLifecycle: buildReportLifecycleSnapshot('generated', report),
-        reportFilingPackage: buildReportFilingPackage(
-          report,
-          [...(report.evidenceTrail ?? []), generatedEventPreview],
-          reportEventRecordedAt,
+        ].filter(
+          (value): value is string =>
+            typeof value === 'string' && value.length > 0,
         ),
-        obligationEvidenceUsage: buildReportingObligationUsage(
-          baseReport,
-          report,
-          policyExecution.trace,
-        ),
-        ...(policyExecution.trace ? { policyExecutionTrace: policyExecution.trace } : {}),
-      },
-      policyContextOverride: policyContext,
-    });
-    await recordReportEvidenceEvent(report, {
-      action: 'generated',
-      receiptId: receipt.receiptId,
-      actorIdentityId: context.actorIdentityId,
-      policyName: receipt.policyName,
-      policyVersion: receipt.policyVersion,
-      decisionSummary: receipt.decisionSummary,
-      ...(reportAuthority ? { authority: reportAuthority } : {}),
-      ...(report.filingReference !== undefined ? { filingReference: report.filingReference } : {}),
-      version: report.version,
-    });
-
-    res.status(201).json({
-      data: report,
-      receipt: summarizeReceipt(receipt),
-      ...(policyExecution.trace ? { policyTrace: policyExecution.trace } : {}),
-      message: `${parsed.data} report generated`,
-    });
-  } catch (err) {
-    const error = err as Error & { statusCode?: number; code?: string };
-    logger.error('report_generation_error', { error: error.message });
-    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'REPORT_ERROR' });
-  }
-});
-
-// ---------------------------------------------------------------------------
-// POST /enterprise/compliance/report/:reportId/submit — Submit report
-// ---------------------------------------------------------------------------
-router.post('/report/:reportId/submit', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_REVIEW_ROLES), async (req: Request, res: Response): Promise<void> => {
-  try {
-    const context = await requireReceiptContext(req, res);
-    if (!context) return;
-
-    const result = await regulatoryReportingService.submitReport(req.params.reportId as string);
-    const submittedReport = regulatoryReportingService.getReport(req.params.reportId as string);
-    const submissionRecordedAt = new Date().toISOString();
-    const submissionAuthority = submittedReport
-      ? resolveRegulatoryAuthority(submittedReport.reportType, submittedReport.filingJurisdiction)
-      : null;
-    if (submittedReport) {
-      submittedReport.authorityManifest = recordAuthorityManifestEvent(submittedReport.reportId, {
-        stage: 'submitted',
-        actorIdentityId: context.actorIdentityId,
-        policyName: 'regulatory_submission',
-        policyVersion: '2026.04.1',
-        ...(submissionAuthority ? { authority: submissionAuthority } : {}),
-        filingReference: result.filingReference,
-        version: submittedReport.version,
-      });
-    }
-    const submittedEventPreview: ReportEvidenceEventSnapshot | undefined = submittedReport
-      ? {
-        action: 'submitted',
-        recordedAt: submissionRecordedAt,
-        policyName: 'regulatory_submission',
-        decisionSummary: `report_submitted:${req.params.reportId}`,
-        ...(submissionAuthority ? { authority: submissionAuthority } : {}),
-        filingReference: result.filingReference,
-        version: submittedReport.version,
-      }
-      : undefined;
-    const receipt = await createPolicyAnchoredReceipt(context, {
-      receiptType: 'regulatory_report',
-      policyName: 'regulatory_submission',
-      jurisdictionCodes: submittedReport?.filingJurisdiction ? [submittedReport.filingJurisdiction] : [],
-      decisionSummary: `report_submitted:${req.params.reportId}`,
-      payload: {
-        reportId: req.params.reportId,
-      },
-      result,
-      evidence: {
-        reportId: req.params.reportId,
-        filingReference: result.filingReference,
-        submittedAt: result.submittedAt,
-      },
-      metadata: {
-        route: '/enterprise/compliance/report/:reportId/submit',
-        ...(submittedReport ? {
-          reportLifecycle: buildReportLifecycleSnapshot('submitted', submittedReport, {
-            filingReference: result.filingReference,
-            submittedAt: result.submittedAt,
-          }),
-        } : {}),
-        ...(submittedReport && submittedEventPreview ? {
+        decisionSummary: `report_generated:${parsed.data}`,
+        payload: req.body,
+        result: report,
+        evidence: {
+          reportType: parsed.data,
+          reportId: (report as any)?.reportId ?? null,
+        },
+        metadata: {
+          route: '/enterprise/compliance/report',
+          reportLifecycle: buildReportLifecycleSnapshot('generated', report),
           reportFilingPackage: buildReportFilingPackage(
-            submittedReport,
-            [...(submittedReport.evidenceTrail ?? []), submittedEventPreview],
-            submissionRecordedAt,
+            report,
+            [...(report.evidenceTrail ?? []), generatedEventPreview],
+            reportEventRecordedAt,
           ),
-        } : {}),
-        ...(submittedReport ? {
-          obligationEvidenceUsage: buildReportSubmissionObligationUsage(
-            submittedReport,
-            result,
+          obligationEvidenceUsage: buildReportingObligationUsage(
+            baseReport,
+            report,
+            policyExecution.trace,
           ),
-        } : {}),
-      },
-    });
-    if (submittedReport) {
-      await recordReportEvidenceEvent(submittedReport, {
-        action: 'submitted',
+          ...(policyExecution.trace
+            ? { policyExecutionTrace: policyExecution.trace }
+            : {}),
+        },
+        policyContextOverride: policyContext,
+      });
+      await recordReportEvidenceEvent(report, {
+        action: 'generated',
         receiptId: receipt.receiptId,
         actorIdentityId: context.actorIdentityId,
         policyName: receipt.policyName,
         policyVersion: receipt.policyVersion,
         decisionSummary: receipt.decisionSummary,
-        ...(submissionAuthority ? { authority: submissionAuthority } : {}),
-        filingReference: result.filingReference,
-        version: submittedReport.version,
+        ...(reportAuthority ? { authority: reportAuthority } : {}),
+        ...(report.filingReference !== undefined
+          ? { filingReference: report.filingReference }
+          : {}),
+        version: report.version,
       });
+
+      res.status(201).json({
+        data: report,
+        receipt: summarizeReceipt(receipt),
+        ...(policyExecution.trace
+          ? { policyTrace: policyExecution.trace }
+          : {}),
+        message: `${parsed.data} report generated`,
+      });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('report_generation_error', { error: error.message });
+      res
+        .status(error.statusCode ?? 500)
+        .json({ error: error.message, code: error.code ?? 'REPORT_ERROR' });
     }
-    res.status(200).json({ data: result, receipt: summarizeReceipt(receipt), message: 'Report submitted to regulatory authority' });
-  } catch (err) {
-    const error = err as Error & { statusCode?: number; code?: string };
-    logger.error('report_submit_error', { error: error.message });
-    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'SUBMIT_ERROR' });
-  }
-});
+  },
+);
+
+// ---------------------------------------------------------------------------
+// POST /enterprise/compliance/report/:reportId/submit — Submit report
+// ---------------------------------------------------------------------------
+router.post(
+  '/report/:reportId/submit',
+  requireEnterpriseContext(ENTERPRISE_COMPLIANCE_REVIEW_ROLES),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const context = await requireReceiptContext(req, res);
+      if (!context) return;
+
+      const result = await regulatoryReportingService.submitReport(
+        req.params.reportId as string,
+      );
+      const submittedReport = regulatoryReportingService.getReport(
+        req.params.reportId as string,
+      );
+      const submissionRecordedAt = new Date().toISOString();
+      const submissionAuthority = submittedReport
+        ? resolveRegulatoryAuthority(
+            submittedReport.reportType,
+            submittedReport.filingJurisdiction,
+          )
+        : null;
+      if (submittedReport) {
+        submittedReport.authorityManifest = recordAuthorityManifestEvent(
+          submittedReport.reportId,
+          {
+            stage: 'submitted',
+            actorIdentityId: context.actorIdentityId,
+            policyName: 'regulatory_submission',
+            policyVersion: '2026.04.1',
+            ...(submissionAuthority ? { authority: submissionAuthority } : {}),
+            filingReference: result.filingReference,
+            version: submittedReport.version,
+          },
+        );
+      }
+      const submittedEventPreview: ReportEvidenceEventSnapshot | undefined =
+        submittedReport
+          ? {
+              action: 'submitted',
+              recordedAt: submissionRecordedAt,
+              policyName: 'regulatory_submission',
+              decisionSummary: `report_submitted:${req.params.reportId}`,
+              ...(submissionAuthority
+                ? { authority: submissionAuthority }
+                : {}),
+              filingReference: result.filingReference,
+              version: submittedReport.version,
+            }
+          : undefined;
+      const receipt = await createPolicyAnchoredReceipt(context, {
+        receiptType: 'regulatory_report',
+        policyName: 'regulatory_submission',
+        jurisdictionCodes: submittedReport?.filingJurisdiction
+          ? [submittedReport.filingJurisdiction]
+          : [],
+        decisionSummary: `report_submitted:${req.params.reportId}`,
+        payload: {
+          reportId: req.params.reportId,
+        },
+        result,
+        evidence: {
+          reportId: req.params.reportId,
+          filingReference: result.filingReference,
+          submittedAt: result.submittedAt,
+        },
+        metadata: {
+          route: '/enterprise/compliance/report/:reportId/submit',
+          ...(submittedReport
+            ? {
+                reportLifecycle: buildReportLifecycleSnapshot(
+                  'submitted',
+                  submittedReport,
+                  {
+                    filingReference: result.filingReference,
+                    submittedAt: result.submittedAt,
+                  },
+                ),
+              }
+            : {}),
+          ...(submittedReport && submittedEventPreview
+            ? {
+                reportFilingPackage: buildReportFilingPackage(
+                  submittedReport,
+                  [
+                    ...(submittedReport.evidenceTrail ?? []),
+                    submittedEventPreview,
+                  ],
+                  submissionRecordedAt,
+                ),
+              }
+            : {}),
+          ...(submittedReport
+            ? {
+                obligationEvidenceUsage: buildReportSubmissionObligationUsage(
+                  submittedReport,
+                  result,
+                ),
+              }
+            : {}),
+        },
+      });
+      if (submittedReport) {
+        await recordReportEvidenceEvent(submittedReport, {
+          action: 'submitted',
+          receiptId: receipt.receiptId,
+          actorIdentityId: context.actorIdentityId,
+          policyName: receipt.policyName,
+          policyVersion: receipt.policyVersion,
+          decisionSummary: receipt.decisionSummary,
+          ...(submissionAuthority ? { authority: submissionAuthority } : {}),
+          filingReference: result.filingReference,
+          version: submittedReport.version,
+        });
+      }
+      res.status(200).json({
+        data: result,
+        receipt: summarizeReceipt(receipt),
+        message: 'Report submitted to regulatory authority',
+      });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('report_submit_error', { error: error.message });
+      res
+        .status(error.statusCode ?? 500)
+        .json({ error: error.message, code: error.code ?? 'SUBMIT_ERROR' });
+    }
+  },
+);
 
 // ---------------------------------------------------------------------------
 // POST /enterprise/compliance/report/:reportId/amend — Amend report
@@ -2796,24 +3462,34 @@ router.post(
         req.body.changes,
       );
       const amendmentRecordedAt = new Date().toISOString();
-      const amendmentAuthority = resolveRegulatoryAuthority(amendedReport.reportType, amendedReport.filingJurisdiction);
-      amendedReport.authorityManifest = recordAuthorityManifestEvent(amendedReport.reportId, {
-        stage: 'amended',
-        actorIdentityId: context.actorIdentityId,
-        policyName: 'regulatory_amendment',
-        policyVersion: '2026.04.1',
-        ...(amendmentAuthority ? { authority: amendmentAuthority } : {}),
-        ...(amendedReport.filingReference !== undefined ? { filingReference: amendedReport.filingReference } : {}),
-        version: amendedReport.version,
-        amendmentReason: req.body.reason,
-      });
+      const amendmentAuthority = resolveRegulatoryAuthority(
+        amendedReport.reportType,
+        amendedReport.filingJurisdiction,
+      );
+      amendedReport.authorityManifest = recordAuthorityManifestEvent(
+        amendedReport.reportId,
+        {
+          stage: 'amended',
+          actorIdentityId: context.actorIdentityId,
+          policyName: 'regulatory_amendment',
+          policyVersion: '2026.04.1',
+          ...(amendmentAuthority ? { authority: amendmentAuthority } : {}),
+          ...(amendedReport.filingReference !== undefined
+            ? { filingReference: amendedReport.filingReference }
+            : {}),
+          version: amendedReport.version,
+          amendmentReason: req.body.reason,
+        },
+      );
       const amendedEventPreview: ReportEvidenceEventSnapshot = {
         action: 'amended',
         recordedAt: amendmentRecordedAt,
         policyName: 'regulatory_amendment',
         decisionSummary: `report_amended:${req.params.reportId}:v${amendedReport.version}`,
         ...(amendmentAuthority ? { authority: amendmentAuthority } : {}),
-        ...(amendedReport.filingReference !== undefined ? { filingReference: amendedReport.filingReference } : {}),
+        ...(amendedReport.filingReference !== undefined
+          ? { filingReference: amendedReport.filingReference }
+          : {}),
         version: amendedReport.version,
         amendmentReason: req.body.reason,
       };
@@ -2821,7 +3497,9 @@ router.post(
       const receipt = await createPolicyAnchoredReceipt(context, {
         receiptType: 'regulatory_report',
         policyName: 'regulatory_amendment',
-        jurisdictionCodes: amendedReport.filingJurisdiction ? [amendedReport.filingJurisdiction] : [],
+        jurisdictionCodes: amendedReport.filingJurisdiction
+          ? [amendedReport.filingJurisdiction]
+          : [],
         decisionSummary: `report_amended:${req.params.reportId}:v${amendedReport.version}`,
         payload: {
           reportId: req.params.reportId,
@@ -2837,11 +3515,17 @@ router.post(
         },
         metadata: {
           route: '/enterprise/compliance/report/:reportId/amend',
-          reportLifecycle: buildReportLifecycleSnapshot('amended', amendedReport, {
-            filingReference: amendedReport.filingReference,
-            amendmentReason: req.body.reason,
-            amendedAt: amendedReport.amendments[amendedReport.amendments.length - 1]?.amendedAt,
-          }),
+          reportLifecycle: buildReportLifecycleSnapshot(
+            'amended',
+            amendedReport,
+            {
+              filingReference: amendedReport.filingReference,
+              amendmentReason: req.body.reason,
+              amendedAt:
+                amendedReport.amendments[amendedReport.amendments.length - 1]
+                  ?.amendedAt,
+            },
+          ),
           reportFilingPackage: buildReportFilingPackage(
             amendedReport,
             [...(amendedReport.evidenceTrail ?? []), amendedEventPreview],
@@ -2864,7 +3548,9 @@ router.post(
         policyVersion: receipt.policyVersion,
         decisionSummary: receipt.decisionSummary,
         ...(amendmentAuthority ? { authority: amendmentAuthority } : {}),
-        ...(amendedReport.filingReference !== undefined ? { filingReference: amendedReport.filingReference } : {}),
+        ...(amendedReport.filingReference !== undefined
+          ? { filingReference: amendedReport.filingReference }
+          : {}),
         version: amendedReport.version,
         amendmentReason: req.body.reason,
       });
@@ -2877,7 +3563,9 @@ router.post(
     } catch (err) {
       const error = err as Error & { statusCode?: number; code?: string };
       logger.error('report_amend_error', { error: error.message });
-      res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'AMEND_ERROR' });
+      res
+        .status(error.statusCode ?? 500)
+        .json({ error: error.message, code: error.code ?? 'AMEND_ERROR' });
     }
   },
 );
@@ -2885,197 +3573,303 @@ router.post(
 // ---------------------------------------------------------------------------
 // GET /enterprise/compliance/report/:reportId/export — Export report
 // ---------------------------------------------------------------------------
-router.get('/report/:reportId/export', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_READ_ROLES), async (req: Request, res: Response): Promise<void> => {
-  try {
-    const context = await requireReceiptContext(req, res);
-    if (!context) return;
+router.get(
+  '/report/:reportId/export',
+  requireEnterpriseContext(ENTERPRISE_COMPLIANCE_READ_ROLES),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const context = await requireReceiptContext(req, res);
+      if (!context) return;
 
-    const fmt = ExportFormatSchema.safeParse(req.query.format ?? 'json');
-    if (!fmt.success) {
-      res.status(400).json({ error: 'Invalid export format', code: 'INVALID_FORMAT' });
-      return;
-    }
-    const handoff = parseReportExportHandoff(req.query as Record<string, unknown>);
-    if (handoff === null) {
-      res.status(400).json({ error: 'Invalid export handoff parameters', code: 'INVALID_EXPORT_HANDOFF' });
-      return;
-    }
-    const exported = await regulatoryReportingService.exportReport(req.params.reportId as string, fmt.data);
-    const report = regulatoryReportingService.getReport(req.params.reportId as string);
-    const exportedAt = new Date().toISOString();
-    const exportAuthority = report ? resolveRegulatoryAuthority(report.reportType, report.filingJurisdiction) : null;
-    if (report) {
-      report.authorityManifest = recordAuthorityManifestEvent(report.reportId, {
-        stage: 'exported',
-        actorIdentityId: context.actorIdentityId,
-        policyName: 'regulatory_export',
-        policyVersion: '2026.04.1',
-        ...(exportAuthority ? { authority: exportAuthority } : {}),
-        ...(report.filingReference !== undefined ? { filingReference: report.filingReference } : {}),
-        version: report.version,
-        exportFormat: fmt.data,
-        exportFilename: exported.filename,
-        ...(handoff?.deliveryChannel ? { deliveryChannel: handoff.deliveryChannel } : {}),
-        ...(handoff?.destination ? { deliveryDestination: handoff.destination } : {}),
-        ...(handoff?.acknowledgementId ? { acknowledgementId: handoff.acknowledgementId } : {}),
-        ...(handoff?.acknowledgedAt ? { acknowledgedAt: handoff.acknowledgedAt } : {}),
-      });
-    }
-    const exportedEventPreview: ReportEvidenceEventSnapshot | undefined = report
-      ? {
-        action: 'exported',
-        recordedAt: exportedAt,
-        policyName: 'regulatory_export',
-        decisionSummary: `report_exported:${req.params.reportId}:${fmt.data}`,
-        ...(exportAuthority ? { authority: exportAuthority } : {}),
-        ...(report.filingReference !== undefined ? { filingReference: report.filingReference } : {}),
-        version: report.version,
-        exportFormat: fmt.data,
-        exportFilename: exported.filename,
-        ...(handoff?.deliveryChannel ? { deliveryChannel: handoff.deliveryChannel } : {}),
-        ...(handoff?.destination ? { deliveryDestination: handoff.destination } : {}),
-        ...(handoff?.acknowledgementId ? { deliveryAcknowledgementId: handoff.acknowledgementId } : {}),
-        ...(handoff?.acknowledgedAt ? { deliveryAcknowledgedAt: handoff.acknowledgedAt } : {}),
+      const fmt = ExportFormatSchema.safeParse(req.query.format ?? 'json');
+      if (!fmt.success) {
+        res
+          .status(400)
+          .json({ error: 'Invalid export format', code: 'INVALID_FORMAT' });
+        return;
       }
-      : undefined;
-    const receipt = report
-      ? await createPolicyAnchoredReceipt(context, {
-        receiptType: 'regulatory_report',
-        policyName: 'regulatory_export',
-        jurisdictionCodes: report.filingJurisdiction ? [report.filingJurisdiction] : [],
-        decisionSummary: `report_exported:${req.params.reportId}:${fmt.data}`,
-        payload: {
-          reportId: req.params.reportId,
-          format: fmt.data,
-        },
-        result: {
-          filename: exported.filename,
-          contentType: exported.contentType,
-        },
-        evidence: {
-          reportId: req.params.reportId,
-          reportType: report.reportType,
-          version: report.version,
-          format: fmt.data,
-          filename: exported.filename,
-          filingReference: report.filingReference,
-          exportedAt,
-        },
-        metadata: {
-          route: '/enterprise/compliance/report/:reportId/export',
-          reportLifecycle: buildReportLifecycleSnapshot('exported', report, {
+      const handoff = parseReportExportHandoff(
+        req.query as Record<string, unknown>,
+      );
+      if (handoff === null) {
+        res.status(400).json({
+          error: 'Invalid export handoff parameters',
+          code: 'INVALID_EXPORT_HANDOFF',
+        });
+        return;
+      }
+      const exported = await regulatoryReportingService.exportReport(
+        req.params.reportId as string,
+        fmt.data,
+      );
+      const report = regulatoryReportingService.getReport(
+        req.params.reportId as string,
+      );
+      const exportedAt = new Date().toISOString();
+      const exportAuthority = report
+        ? resolveRegulatoryAuthority(
+            report.reportType,
+            report.filingJurisdiction,
+          )
+        : null;
+      if (report) {
+        report.authorityManifest = recordAuthorityManifestEvent(
+          report.reportId,
+          {
+            stage: 'exported',
+            actorIdentityId: context.actorIdentityId,
+            policyName: 'regulatory_export',
+            policyVersion: '2026.04.1',
+            ...(exportAuthority ? { authority: exportAuthority } : {}),
+            ...(report.filingReference !== undefined
+              ? { filingReference: report.filingReference }
+              : {}),
+            version: report.version,
             exportFormat: fmt.data,
             exportFilename: exported.filename,
-            exportRequestedAt: exportedAt,
-            ...(handoff?.deliveryChannel ? { deliveryChannel: handoff.deliveryChannel } : {}),
-            ...(handoff?.destination ? { deliveryDestination: handoff.destination } : {}),
-            ...(handoff?.acknowledgementId ? { deliveryAcknowledgementId: handoff.acknowledgementId } : {}),
-            ...(handoff?.acknowledgedAt ? { deliveryAcknowledgedAt: handoff.acknowledgedAt } : {}),
-          }),
-          ...(exportedEventPreview ? {
-            reportFilingPackage: buildReportFilingPackage(
-              report,
-              [...(report.evidenceTrail ?? []), exportedEventPreview],
+            ...(handoff?.deliveryChannel
+              ? { deliveryChannel: handoff.deliveryChannel }
+              : {}),
+            ...(handoff?.destination
+              ? { deliveryDestination: handoff.destination }
+              : {}),
+            ...(handoff?.acknowledgementId
+              ? { acknowledgementId: handoff.acknowledgementId }
+              : {}),
+            ...(handoff?.acknowledgedAt
+              ? { acknowledgedAt: handoff.acknowledgedAt }
+              : {}),
+          },
+        );
+      }
+      const exportedEventPreview: ReportEvidenceEventSnapshot | undefined =
+        report
+          ? {
+              action: 'exported',
+              recordedAt: exportedAt,
+              policyName: 'regulatory_export',
+              decisionSummary: `report_exported:${req.params.reportId}:${fmt.data}`,
+              ...(exportAuthority ? { authority: exportAuthority } : {}),
+              ...(report.filingReference !== undefined
+                ? { filingReference: report.filingReference }
+                : {}),
+              version: report.version,
+              exportFormat: fmt.data,
+              exportFilename: exported.filename,
+              ...(handoff?.deliveryChannel
+                ? { deliveryChannel: handoff.deliveryChannel }
+                : {}),
+              ...(handoff?.destination
+                ? { deliveryDestination: handoff.destination }
+                : {}),
+              ...(handoff?.acknowledgementId
+                ? { deliveryAcknowledgementId: handoff.acknowledgementId }
+                : {}),
+              ...(handoff?.acknowledgedAt
+                ? { deliveryAcknowledgedAt: handoff.acknowledgedAt }
+                : {}),
+            }
+          : undefined;
+      const receipt = report
+        ? await createPolicyAnchoredReceipt(context, {
+            receiptType: 'regulatory_report',
+            policyName: 'regulatory_export',
+            jurisdictionCodes: report.filingJurisdiction
+              ? [report.filingJurisdiction]
+              : [],
+            decisionSummary: `report_exported:${req.params.reportId}:${fmt.data}`,
+            payload: {
+              reportId: req.params.reportId,
+              format: fmt.data,
+            },
+            result: {
+              filename: exported.filename,
+              contentType: exported.contentType,
+            },
+            evidence: {
+              reportId: req.params.reportId,
+              reportType: report.reportType,
+              version: report.version,
+              format: fmt.data,
+              filename: exported.filename,
+              filingReference: report.filingReference,
               exportedAt,
-            ),
-          } : {}),
-          obligationEvidenceUsage: buildReportExportObligationUsage(
-            report,
-            fmt.data,
-            exported.filename,
-            exportedAt,
-            handoff ?? undefined,
-          ),
-        },
-      })
-      : null;
-    if (report && receipt) {
-      await recordReportEvidenceEvent(report, {
-        action: 'exported',
-        receiptId: receipt.receiptId,
-        actorIdentityId: context.actorIdentityId,
-        policyName: receipt.policyName,
-        policyVersion: receipt.policyVersion,
-        decisionSummary: receipt.decisionSummary,
-        ...(exportAuthority ? { authority: exportAuthority } : {}),
-        ...(report.filingReference !== undefined ? { filingReference: report.filingReference } : {}),
-        version: report.version,
-        exportFormat: fmt.data,
-        exportFilename: exported.filename,
-        ...(handoff?.deliveryChannel ? { deliveryChannel: handoff.deliveryChannel } : {}),
-        ...(handoff?.destination ? { deliveryDestination: handoff.destination } : {}),
-        ...(handoff?.acknowledgementId ? { deliveryAcknowledgementId: handoff.acknowledgementId } : {}),
-        ...(handoff?.acknowledgedAt ? { deliveryAcknowledgedAt: handoff.acknowledgedAt } : {}),
-      });
+            },
+            metadata: {
+              route: '/enterprise/compliance/report/:reportId/export',
+              reportLifecycle: buildReportLifecycleSnapshot(
+                'exported',
+                report,
+                {
+                  exportFormat: fmt.data,
+                  exportFilename: exported.filename,
+                  exportRequestedAt: exportedAt,
+                  ...(handoff?.deliveryChannel
+                    ? { deliveryChannel: handoff.deliveryChannel }
+                    : {}),
+                  ...(handoff?.destination
+                    ? { deliveryDestination: handoff.destination }
+                    : {}),
+                  ...(handoff?.acknowledgementId
+                    ? { deliveryAcknowledgementId: handoff.acknowledgementId }
+                    : {}),
+                  ...(handoff?.acknowledgedAt
+                    ? { deliveryAcknowledgedAt: handoff.acknowledgedAt }
+                    : {}),
+                },
+              ),
+              ...(exportedEventPreview
+                ? {
+                    reportFilingPackage: buildReportFilingPackage(
+                      report,
+                      [...(report.evidenceTrail ?? []), exportedEventPreview],
+                      exportedAt,
+                    ),
+                  }
+                : {}),
+              obligationEvidenceUsage: buildReportExportObligationUsage(
+                report,
+                fmt.data,
+                exported.filename,
+                exportedAt,
+                handoff ?? undefined,
+              ),
+            },
+          })
+        : null;
+      if (report && receipt) {
+        await recordReportEvidenceEvent(report, {
+          action: 'exported',
+          receiptId: receipt.receiptId,
+          actorIdentityId: context.actorIdentityId,
+          policyName: receipt.policyName,
+          policyVersion: receipt.policyVersion,
+          decisionSummary: receipt.decisionSummary,
+          ...(exportAuthority ? { authority: exportAuthority } : {}),
+          ...(report.filingReference !== undefined
+            ? { filingReference: report.filingReference }
+            : {}),
+          version: report.version,
+          exportFormat: fmt.data,
+          exportFilename: exported.filename,
+          ...(handoff?.deliveryChannel
+            ? { deliveryChannel: handoff.deliveryChannel }
+            : {}),
+          ...(handoff?.destination
+            ? { deliveryDestination: handoff.destination }
+            : {}),
+          ...(handoff?.acknowledgementId
+            ? { deliveryAcknowledgementId: handoff.acknowledgementId }
+            : {}),
+          ...(handoff?.acknowledgedAt
+            ? { deliveryAcknowledgedAt: handoff.acknowledgedAt }
+            : {}),
+        });
+      }
+      res.setHeader('Content-Type', exported.contentType);
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="${exported.filename}"`,
+      );
+      if (receipt) {
+        res.setHeader('X-ZeroID-Receipt-Id', receipt.receiptId);
+        res.setHeader('X-ZeroID-Receipt-Hash', receipt.integrityHash);
+      }
+      res.status(200).send(exported.data);
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('report_export_error', { error: error.message });
+      res
+        .status(error.statusCode ?? 500)
+        .json({ error: error.message, code: error.code ?? 'EXPORT_ERROR' });
     }
-    res.setHeader('Content-Type', exported.contentType);
-    res.setHeader('Content-Disposition', `attachment; filename="${exported.filename}"`);
-    if (receipt) {
-      res.setHeader('X-ZeroID-Receipt-Id', receipt.receiptId);
-      res.setHeader('X-ZeroID-Receipt-Hash', receipt.integrityHash);
-    }
-    res.status(200).send(exported.data);
-  } catch (err) {
-    const error = err as Error & { statusCode?: number; code?: string };
-    logger.error('report_export_error', { error: error.message });
-    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'EXPORT_ERROR' });
-  }
-});
+  },
+);
 
 // ---------------------------------------------------------------------------
 // GET /enterprise/compliance/report/:reportId/manifest — Export authority submission manifest
 // ---------------------------------------------------------------------------
-router.get('/report/:reportId/manifest', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_READ_ROLES), async (req: Request, res: Response): Promise<void> => {
-  try {
-    const report = regulatoryReportingService.getReport(req.params.reportId as string);
-    if (!report) {
-      res.status(404).json({ error: 'Report not found', code: 'REPORT_NOT_FOUND' });
-      return;
-    }
+router.get(
+  '/report/:reportId/manifest',
+  requireEnterpriseContext(ENTERPRISE_COMPLIANCE_READ_ROLES),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const report = regulatoryReportingService.getReport(
+        req.params.reportId as string,
+      );
+      if (!report) {
+        res
+          .status(404)
+          .json({ error: 'Report not found', code: 'REPORT_NOT_FOUND' });
+        return;
+      }
 
-    const manifest = regulatoryReportingService.getAuthorityManifest(req.params.reportId as string);
-    res.status(200).json({
-      data: {
-        reportId: report.reportId,
-        reportType: report.reportType,
-        version: report.version,
-        filingJurisdiction: report.filingJurisdiction,
-        manifest,
-      },
-    });
-  } catch (err) {
-    const error = err as Error & { statusCode?: number; code?: string };
-    logger.error('report_manifest_error', { error: error.message });
-    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'REPORT_MANIFEST_ERROR' });
-  }
-});
+      const manifest = regulatoryReportingService.getAuthorityManifest(
+        req.params.reportId as string,
+      );
+      res.status(200).json({
+        data: {
+          reportId: report.reportId,
+          reportType: report.reportType,
+          version: report.version,
+          filingJurisdiction: report.filingJurisdiction,
+          manifest,
+        },
+      });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('report_manifest_error', { error: error.message });
+      res.status(error.statusCode ?? 500).json({
+        error: error.message,
+        code: error.code ?? 'REPORT_MANIFEST_ERROR',
+      });
+    }
+  },
+);
 
 // ---------------------------------------------------------------------------
 // GET /enterprise/compliance/report/:reportId/submission-package — Export a sealed regulator submission bundle
 // ---------------------------------------------------------------------------
-router.get('/report/:reportId/submission-package', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_READ_ROLES), async (req: Request, res: Response): Promise<void> => {
-  try {
-    const context = await requireReceiptContext(req, res);
-    if (!context) return;
+router.get(
+  '/report/:reportId/submission-package',
+  requireEnterpriseContext(ENTERPRISE_COMPLIANCE_READ_ROLES),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const context = await requireReceiptContext(req, res);
+      if (!context) return;
 
-    const report = regulatoryReportingService.getReport(req.params.reportId as string);
-    if (!report) {
-      res.status(404).json({ error: 'Report not found', code: 'REPORT_NOT_FOUND' });
-      return;
+      const report = regulatoryReportingService.getReport(
+        req.params.reportId as string,
+      );
+      if (!report) {
+        res
+          .status(404)
+          .json({ error: 'Report not found', code: 'REPORT_NOT_FOUND' });
+        return;
+      }
+
+      const evidenceTrail = regulatoryReportingService.getEvidenceTrail(
+        req.params.reportId as string,
+      );
+      const submissionBundle = await buildRegulatorySubmissionBundle(
+        report,
+        evidenceTrail,
+        context.organizationId,
+      );
+
+      res.status(200).json({
+        data: submissionBundle,
+      });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('report_submission_package_error', { error: error.message });
+      res.status(error.statusCode ?? 500).json({
+        error: error.message,
+        code: error.code ?? 'REPORT_SUBMISSION_PACKAGE_ERROR',
+      });
     }
-
-    const evidenceTrail = regulatoryReportingService.getEvidenceTrail(req.params.reportId as string);
-    const submissionBundle = await buildRegulatorySubmissionBundle(report, evidenceTrail, context.organizationId);
-
-    res.status(200).json({
-      data: submissionBundle,
-    });
-  } catch (err) {
-    const error = err as Error & { statusCode?: number; code?: string };
-    logger.error('report_submission_package_error', { error: error.message });
-    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'REPORT_SUBMISSION_PACKAGE_ERROR' });
-  }
-});
+  },
+);
 
 // ---------------------------------------------------------------------------
 // POST /enterprise/compliance/report/submission-package/verify — Verify a sealed regulator submission bundle
@@ -3089,14 +3883,22 @@ router.post(
       const context = await requireReceiptContext(req, res);
       if (!context) return;
 
-      const verification = await verifyRegulatorySubmissionBundle(req.body.bundle, context.organizationId);
+      const verification = await verifyRegulatorySubmissionBundle(
+        req.body.bundle,
+        context.organizationId,
+      );
       res.status(200).json({
         data: verification,
       });
     } catch (err) {
       const error = err as Error & { statusCode?: number; code?: string };
-      logger.error('report_submission_package_verify_error', { error: error.message });
-      res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'REPORT_SUBMISSION_PACKAGE_VERIFY_ERROR' });
+      logger.error('report_submission_package_verify_error', {
+        error: error.message,
+      });
+      res.status(error.statusCode ?? 500).json({
+        error: error.message,
+        code: error.code ?? 'REPORT_SUBMISSION_PACKAGE_VERIFY_ERROR',
+      });
     }
   },
 );
@@ -3113,14 +3915,22 @@ router.post(
       const context = await requireReceiptContext(req, res);
       if (!context) return;
 
-      const report = regulatoryReportingService.getReport(req.params.reportId as string);
+      const report = regulatoryReportingService.getReport(
+        req.params.reportId as string,
+      );
       if (!report) {
-        res.status(404).json({ error: 'Report not found', code: 'REPORT_NOT_FOUND' });
+        res
+          .status(404)
+          .json({ error: 'Report not found', code: 'REPORT_NOT_FOUND' });
         return;
       }
 
-      const authority = resolveRegulatoryAuthority(report.reportType, report.filingJurisdiction);
-      const acknowledgedAt = req.body.acknowledgedAt ?? new Date().toISOString();
+      const authority = resolveRegulatoryAuthority(
+        report.reportType,
+        report.filingJurisdiction,
+      );
+      const acknowledgedAt =
+        req.body.acknowledgedAt ?? new Date().toISOString();
       const manifest = recordAuthorityManifestEvent(report.reportId, {
         stage: 'acknowledged',
         acknowledgementStage: req.body.stage,
@@ -3128,12 +3938,18 @@ router.post(
         policyName: 'regulatory_acknowledgement',
         policyVersion: '2026.04.1',
         ...(authority ? { authority } : {}),
-        ...(report.filingReference !== undefined ? { filingReference: report.filingReference } : {}),
+        ...(report.filingReference !== undefined
+          ? { filingReference: report.filingReference }
+          : {}),
         version: report.version,
         acknowledgementId: req.body.acknowledgementId,
         acknowledgedAt,
-        ...(req.body.deliveryChannel ? { deliveryChannel: req.body.deliveryChannel } : {}),
-        ...(req.body.destination ? { deliveryDestination: req.body.destination } : {}),
+        ...(req.body.deliveryChannel
+          ? { deliveryChannel: req.body.deliveryChannel }
+          : {}),
+        ...(req.body.destination
+          ? { deliveryDestination: req.body.destination }
+          : {}),
       });
       report.authorityManifest = manifest;
       const acknowledgedEventPreview: ReportEvidenceEventSnapshot = {
@@ -3142,7 +3958,9 @@ router.post(
         policyName: 'regulatory_acknowledgement',
         decisionSummary: `report_acknowledged:${req.params.reportId}:${req.body.stage}`,
         ...(authority ? { authority } : {}),
-        ...(report.filingReference !== undefined ? { filingReference: report.filingReference } : {}),
+        ...(report.filingReference !== undefined
+          ? { filingReference: report.filingReference }
+          : {}),
         version: report.version,
         deliveryChannel: req.body.deliveryChannel,
         deliveryDestination: req.body.destination,
@@ -3153,7 +3971,9 @@ router.post(
       const receipt = await createPolicyAnchoredReceipt(context, {
         receiptType: 'regulatory_report',
         policyName: 'regulatory_acknowledgement',
-        jurisdictionCodes: report.filingJurisdiction ? [report.filingJurisdiction] : [],
+        jurisdictionCodes: report.filingJurisdiction
+          ? [report.filingJurisdiction]
+          : [],
         decisionSummary: `report_acknowledged:${req.params.reportId}:${req.body.stage}`,
         payload: {
           reportId: req.params.reportId,
@@ -3184,13 +4004,20 @@ router.post(
             [...(report.evidenceTrail ?? []), acknowledgedEventPreview],
             acknowledgedAt,
           ),
-          obligationEvidenceUsage: buildReportAcknowledgementObligationUsage(report, {
-            stage: req.body.stage,
-            acknowledgementId: req.body.acknowledgementId,
-            acknowledgedAt,
-            ...(req.body.deliveryChannel ? { deliveryChannel: req.body.deliveryChannel } : {}),
-            ...(req.body.destination ? { destination: req.body.destination } : {}),
-          }),
+          obligationEvidenceUsage: buildReportAcknowledgementObligationUsage(
+            report,
+            {
+              stage: req.body.stage,
+              acknowledgementId: req.body.acknowledgementId,
+              acknowledgedAt,
+              ...(req.body.deliveryChannel
+                ? { deliveryChannel: req.body.deliveryChannel }
+                : {}),
+              ...(req.body.destination
+                ? { destination: req.body.destination }
+                : {}),
+            },
+          ),
         },
       });
       await recordReportEvidenceEvent(report, {
@@ -3201,7 +4028,9 @@ router.post(
         policyVersion: receipt.policyVersion,
         decisionSummary: receipt.decisionSummary,
         ...(authority ? { authority } : {}),
-        ...(report.filingReference !== undefined ? { filingReference: report.filingReference } : {}),
+        ...(report.filingReference !== undefined
+          ? { filingReference: report.filingReference }
+          : {}),
         version: report.version,
         deliveryChannel: req.body.deliveryChannel,
         deliveryDestination: req.body.destination,
@@ -3220,7 +4049,10 @@ router.post(
     } catch (err) {
       const error = err as Error & { statusCode?: number; code?: string };
       logger.error('report_acknowledgement_error', { error: error.message });
-      res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'ACKNOWLEDGEMENT_ERROR' });
+      res.status(error.statusCode ?? 500).json({
+        error: error.message,
+        code: error.code ?? 'ACKNOWLEDGEMENT_ERROR',
+      });
     }
   },
 );
@@ -3228,440 +4060,549 @@ router.post(
 // ---------------------------------------------------------------------------
 // GET /enterprise/compliance/report/:reportId/evidence — Export regulator-ready filing package
 // ---------------------------------------------------------------------------
-router.get('/report/:reportId/evidence', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_READ_ROLES), async (req: Request, res: Response): Promise<void> => {
-  try {
-    const report = regulatoryReportingService.getReport(req.params.reportId as string);
-    if (!report) {
-      res.status(404).json({ error: 'Report not found', code: 'REPORT_NOT_FOUND' });
-      return;
+router.get(
+  '/report/:reportId/evidence',
+  requireEnterpriseContext(ENTERPRISE_COMPLIANCE_READ_ROLES),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const report = regulatoryReportingService.getReport(
+        req.params.reportId as string,
+      );
+      if (!report) {
+        res
+          .status(404)
+          .json({ error: 'Report not found', code: 'REPORT_NOT_FOUND' });
+        return;
+      }
+
+      const evidenceTrail = regulatoryReportingService.getEvidenceTrail(
+        req.params.reportId as string,
+      );
+      const evaluatedAt = new Date().toISOString();
+
+      res.status(200).json({
+        data: {
+          report,
+          filingPackage: buildReportFilingPackage(
+            report,
+            evidenceTrail,
+            evaluatedAt,
+          ),
+        },
+      });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('report_evidence_error', { error: error.message });
+      res.status(error.statusCode ?? 500).json({
+        error: error.message,
+        code: error.code ?? 'REPORT_EVIDENCE_ERROR',
+      });
     }
-
-    const evidenceTrail = regulatoryReportingService.getEvidenceTrail(req.params.reportId as string);
-    const evaluatedAt = new Date().toISOString();
-
-    res.status(200).json({
-      data: {
-        report,
-        filingPackage: buildReportFilingPackage(report, evidenceTrail, evaluatedAt),
-      },
-    });
-  } catch (err) {
-    const error = err as Error & { statusCode?: number; code?: string };
-    logger.error('report_evidence_error', { error: error.message });
-    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'REPORT_EVIDENCE_ERROR' });
-  }
-});
+  },
+);
 
 // ---------------------------------------------------------------------------
 // GET /enterprise/compliance/jurisdictions — List supported jurisdictions
 // ---------------------------------------------------------------------------
-router.get('/jurisdictions', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_READ_ROLES), (_req: Request, res: Response): void => {
-  try {
-    const jurisdictions = jurisdictionEngine.listJurisdictions();
-    res.status(200).json({ data: jurisdictions });
-  } catch (err) {
-    const error = err as Error;
-    logger.error('jurisdictions_list_error', { error: error.message });
-    res.status(500).json({ error: error.message, code: 'JURISDICTION_ERROR' });
-  }
-});
+router.get(
+  '/jurisdictions',
+  requireEnterpriseContext(ENTERPRISE_COMPLIANCE_READ_ROLES),
+  (_req: Request, res: Response): void => {
+    try {
+      const jurisdictions = jurisdictionEngine.listJurisdictions();
+      res.status(200).json({ data: jurisdictions });
+    } catch (err) {
+      const error = err as Error;
+      logger.error('jurisdictions_list_error', { error: error.message });
+      res
+        .status(500)
+        .json({ error: error.message, code: 'JURISDICTION_ERROR' });
+    }
+  },
+);
 
 // ---------------------------------------------------------------------------
 // POST /enterprise/compliance/cross-border — Cross-border transfer assessment
 // ---------------------------------------------------------------------------
-router.post('/cross-border', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_ROLES), async (req: Request, res: Response): Promise<void> => {
-  try {
-    const context = await requireReceiptContext(req, res);
-    if (!context) return;
+router.post(
+  '/cross-border',
+  requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_ROLES),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const context = await requireReceiptContext(req, res);
+      if (!context) return;
 
-    // Compliance cross-border assessment (jurisdiction level)
-    const jurisdictionAssessment = CrossBorderAssessmentSchema.safeParse(req.body);
-    if (jurisdictionAssessment.success) {
-      const policyContext = await policyContextService.resolvePolicyContext(
-        'jurisdiction_cross_border',
-        context.organizationId,
-        {
-          jurisdictionCodes: [
-            jurisdictionAssessment.data.sourceJurisdiction,
-            jurisdictionAssessment.data.targetJurisdiction,
-          ],
+      // Compliance cross-border assessment (jurisdiction level)
+      const jurisdictionAssessment = CrossBorderAssessmentSchema.safeParse(
+        req.body,
+      );
+      if (jurisdictionAssessment.success) {
+        const policyContext = await policyContextService.resolvePolicyContext(
+          'jurisdiction_cross_border',
+          context.organizationId,
+          {
+            jurisdictionCodes: [
+              jurisdictionAssessment.data.sourceJurisdiction,
+              jurisdictionAssessment.data.targetJurisdiction,
+            ],
+            subjectEntityId: req.body.entityId,
+          },
+        );
+        const baseResult = jurisdictionEngine.assessCrossBorder(
+          jurisdictionAssessment.data,
+        );
+        const policyExecution =
+          await policyExecutionService.applyCrossBorderPolicy(
+            context.organizationId,
+            policyContext,
+            jurisdictionAssessment.data,
+            baseResult,
+          );
+        const result = policyExecution.result as CrossBorderResult;
+        const receipt = await createPolicyAnchoredReceipt(context, {
+          receiptType: 'cross_border_assessment',
+          policyName: 'jurisdiction_cross_border',
           subjectEntityId: req.body.entityId,
-        },
-      );
-      const baseResult = jurisdictionEngine.assessCrossBorder(jurisdictionAssessment.data);
-      const policyExecution = await policyExecutionService.applyCrossBorderPolicy(
-        context.organizationId,
-        policyContext,
-        jurisdictionAssessment.data,
-        baseResult,
-      );
-      const result = policyExecution.result;
-      const receipt = await createPolicyAnchoredReceipt(context, {
-        receiptType: 'cross_border_assessment',
-        policyName: 'jurisdiction_cross_border',
-        subjectEntityId: req.body.entityId,
-        jurisdictionCodes: [
-          jurisdictionAssessment.data.sourceJurisdiction,
-          jurisdictionAssessment.data.targetJurisdiction,
-        ],
-        decisionSummary: `transfer_allowed:${result.allowed}`,
-        payload: req.body,
-        result,
-        evidence: {
-          restrictions: result.restrictions,
-          transferMechanism: result.dataTransferMechanism,
-        },
-        metadata: {
-          route: '/enterprise/compliance/cross-border',
-          assessmentKind: 'jurisdiction',
-          obligationEvidenceUsage: buildCrossBorderObligationUsage(
+          jurisdictionCodes: [
             jurisdictionAssessment.data.sourceJurisdiction,
             jurisdictionAssessment.data.targetJurisdiction,
-            baseResult,
-            result,
-            policyExecution.trace,
-          ),
-          ...(policyExecution.trace ? { policyExecutionTrace: policyExecution.trace } : {}),
-        },
-        policyContextOverride: policyContext,
-      });
-      res.status(200).json({
-        data: result,
-        receipt: summarizeReceipt(receipt),
-        ...(policyExecution.trace ? { policyTrace: policyExecution.trace } : {}),
-        message: 'Cross-border assessment completed',
-      });
-      return;
-    }
+          ],
+          decisionSummary: `transfer_allowed:${result.allowed}`,
+          payload: req.body,
+          result,
+          evidence: {
+            restrictions: result.restrictions,
+            transferMechanism: result.dataTransferMechanism,
+          },
+          metadata: {
+            route: '/enterprise/compliance/cross-border',
+            assessmentKind: 'jurisdiction',
+            obligationEvidenceUsage: buildCrossBorderObligationUsage(
+              jurisdictionAssessment.data.sourceJurisdiction,
+              jurisdictionAssessment.data.targetJurisdiction,
+              baseResult,
+              result,
+              policyExecution.trace,
+            ),
+            ...(policyExecution.trace
+              ? { policyExecutionTrace: policyExecution.trace }
+              : {}),
+          },
+          policyContextOverride: policyContext,
+        });
+        res.status(200).json({
+          data: result,
+          receipt: summarizeReceipt(receipt),
+          ...(policyExecution.trace
+            ? { policyTrace: policyExecution.trace }
+            : {}),
+          message: 'Cross-border assessment completed',
+        });
+        return;
+      }
 
-    // Data sovereignty cross-border assessment
-    const transferAssessment = CrossBorderTransferSchema.safeParse(req.body);
-    if (transferAssessment.success) {
-      const policyContext = await policyContextService.resolvePolicyContext(
-        'data_sovereignty_cross_border',
-        context.organizationId,
-        {
+      // Data sovereignty cross-border assessment
+      const transferAssessment = CrossBorderTransferSchema.safeParse(req.body);
+      if (transferAssessment.success) {
+        const policyContext = await policyContextService.resolvePolicyContext(
+          'data_sovereignty_cross_border',
+          context.organizationId,
+          {
+            jurisdictionCodes: [
+              transferAssessment.data.sourceJurisdiction,
+              transferAssessment.data.targetJurisdiction,
+            ],
+            subjectEntityId: req.body.dataSubjectId,
+          },
+        );
+        const baseResult = dataSovereigntyService.assessCrossBorderTransfer(
+          transferAssessment.data,
+        );
+        const policyExecution =
+          await policyExecutionService.applyCrossBorderPolicy(
+            context.organizationId,
+            policyContext,
+            transferAssessment.data,
+            baseResult,
+          );
+        const result = policyExecution.result as TransferAssessmentResult;
+        const receipt = await createPolicyAnchoredReceipt(context, {
+          receiptType: 'cross_border_assessment',
+          policyName: 'data_sovereignty_cross_border',
+          subjectEntityId: req.body.dataSubjectId,
           jurisdictionCodes: [
             transferAssessment.data.sourceJurisdiction,
             transferAssessment.data.targetJurisdiction,
           ],
-          subjectEntityId: req.body.dataSubjectId,
-        },
-      );
-      const baseResult = dataSovereigntyService.assessCrossBorderTransfer(transferAssessment.data);
-      const policyExecution = await policyExecutionService.applyCrossBorderPolicy(
-        context.organizationId,
-        policyContext,
-        transferAssessment.data,
-        baseResult,
-      );
-      const result = policyExecution.result;
-      const receipt = await createPolicyAnchoredReceipt(context, {
-        receiptType: 'cross_border_assessment',
-        policyName: 'data_sovereignty_cross_border',
-        subjectEntityId: req.body.dataSubjectId,
-        jurisdictionCodes: [
-          transferAssessment.data.sourceJurisdiction,
-          transferAssessment.data.targetJurisdiction,
-        ],
-        decisionSummary: `transfer_allowed:${result.allowed}`,
-        payload: req.body,
-        result,
-        evidence: {
-          legalBasis: result.legalBasis,
-          riskLevel: result.riskLevel,
-        },
-        metadata: {
-          route: '/enterprise/compliance/cross-border',
-          assessmentKind: 'data_transfer',
-          obligationEvidenceUsage: buildCrossBorderObligationUsage(
-            transferAssessment.data.sourceJurisdiction,
-            transferAssessment.data.targetJurisdiction,
-            baseResult,
-            result,
-            policyExecution.trace,
-          ),
-          ...(policyExecution.trace ? { policyExecutionTrace: policyExecution.trace } : {}),
-        },
-        policyContextOverride: policyContext,
-      });
-      res.status(200).json({
-        data: result,
-        receipt: summarizeReceipt(receipt),
-        ...(policyExecution.trace ? { policyTrace: policyExecution.trace } : {}),
-        message: 'Data transfer assessment completed',
-      });
-      return;
-    }
+          decisionSummary: `transfer_allowed:${result.allowed}`,
+          payload: req.body,
+          result,
+          evidence: {
+            legalBasis: result.legalBasis,
+            riskLevel: result.riskLevel,
+          },
+          metadata: {
+            route: '/enterprise/compliance/cross-border',
+            assessmentKind: 'data_transfer',
+            obligationEvidenceUsage: buildCrossBorderObligationUsage(
+              transferAssessment.data.sourceJurisdiction,
+              transferAssessment.data.targetJurisdiction,
+              baseResult,
+              result,
+              policyExecution.trace,
+            ),
+            ...(policyExecution.trace
+              ? { policyExecutionTrace: policyExecution.trace }
+              : {}),
+          },
+          policyContextOverride: policyContext,
+        });
+        res.status(200).json({
+          data: result,
+          receipt: summarizeReceipt(receipt),
+          ...(policyExecution.trace
+            ? { policyTrace: policyExecution.trace }
+            : {}),
+          message: 'Data transfer assessment completed',
+        });
+        return;
+      }
 
-    res.status(400).json({
-      error: 'Invalid request body',
-      code: 'VALIDATION_ERROR',
-      details: jurisdictionAssessment.error.flatten(),
-    });
-  } catch (err) {
-    const error = err as Error & { statusCode?: number; code?: string };
-    logger.error('cross_border_error', { error: error.message });
-    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'CROSS_BORDER_ERROR' });
-  }
-});
+      res.status(400).json({
+        error: 'Invalid request body',
+        code: 'VALIDATION_ERROR',
+        details: jurisdictionAssessment.error.flatten(),
+      });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('cross_border_error', { error: error.message });
+      res.status(error.statusCode ?? 500).json({
+        error: error.message,
+        code: error.code ?? 'CROSS_BORDER_ERROR',
+      });
+    }
+  },
+);
 
 // ---------------------------------------------------------------------------
 // POST /enterprise/compliance/dsar — Data subject access request
 // ---------------------------------------------------------------------------
-router.post('/dsar', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_ROLES), async (req: Request, res: Response): Promise<void> => {
-  try {
-    const context = await requireReceiptContext(req, res);
-    if (!context) return;
+router.post(
+  '/dsar',
+  requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_ROLES),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const context = await requireReceiptContext(req, res);
+      if (!context) return;
 
-    const { requestType } = req.body;
+      const { requestType } = req.body;
 
-    if (requestType === 'erasure' || req.body.reportType === 'ERASURE') {
+      if (requestType === 'erasure' || req.body.reportType === 'ERASURE') {
+        const policyContext = await policyContextService.resolvePolicyContext(
+          'data_subject_erasure',
+          context.organizationId,
+          {
+            jurisdictionCodes: req.body.jurisdiction
+              ? [req.body.jurisdiction]
+              : [],
+            subjectEntityId: req.body.requestorId,
+          },
+        );
+        const baseReport = await regulatoryReportingService.processErasure({
+          ...req.body,
+          reportType: 'ERASURE',
+        });
+        const policyExecution =
+          await policyExecutionService.applyPrivacyWorkflowPolicy(
+            context.organizationId,
+            policyContext,
+            'erasure',
+            req.body,
+            baseReport,
+          );
+        const report = policyExecution.result;
+        const receipt = await createPolicyAnchoredReceipt(context, {
+          receiptType: 'regulatory_report',
+          policyName: 'data_subject_erasure',
+          subjectEntityId: req.body.requestorId,
+          jurisdictionCodes: req.body.jurisdiction
+            ? [req.body.jurisdiction]
+            : [],
+          decisionSummary: 'erasure_request_processed',
+          payload: req.body,
+          result: report,
+          evidence: {
+            requestType: 'erasure',
+            reportId: (report as any).reportId ?? null,
+          },
+          metadata: {
+            route: '/enterprise/compliance/dsar',
+            obligationEvidenceUsage: buildPrivacyObligationUsage(
+              'erasure',
+              req.body.jurisdiction ? [req.body.jurisdiction] : [],
+              baseReport,
+              report,
+              policyExecution.trace,
+            ),
+            ...(policyExecution.trace
+              ? { policyExecutionTrace: policyExecution.trace }
+              : {}),
+          },
+          policyContextOverride: policyContext,
+        });
+        res.status(200).json({
+          data: report,
+          receipt: summarizeReceipt(receipt),
+          ...(policyExecution.trace
+            ? { policyTrace: policyExecution.trace }
+            : {}),
+          message: 'Erasure request processed',
+        });
+        return;
+      }
+
       const policyContext = await policyContextService.resolvePolicyContext(
-        'data_subject_erasure',
+        'data_subject_access',
         context.organizationId,
         {
-          jurisdictionCodes: req.body.jurisdiction ? [req.body.jurisdiction] : [],
+          jurisdictionCodes: req.body.jurisdiction
+            ? [req.body.jurisdiction]
+            : [],
           subjectEntityId: req.body.requestorId,
         },
       );
-      const baseReport = await regulatoryReportingService.processErasure({ ...req.body, reportType: 'ERASURE' });
-      const policyExecution = await policyExecutionService.applyPrivacyWorkflowPolicy(
-        context.organizationId,
-        policyContext,
-        'erasure',
-        req.body,
-        baseReport,
-      );
-      const report = policyExecution.result;
+      const baseReport = await regulatoryReportingService.fulfillDSAR({
+        ...req.body,
+        reportType: 'DSAR',
+      });
+      const policyExecution =
+        await policyExecutionService.applyPrivacyWorkflowPolicy(
+          context.organizationId,
+          policyContext,
+          'dsar',
+          req.body,
+          baseReport,
+        );
+      const report = policyExecution.result as GeneratedReport;
       const receipt = await createPolicyAnchoredReceipt(context, {
         receiptType: 'regulatory_report',
-        policyName: 'data_subject_erasure',
+        policyName: 'data_subject_access',
         subjectEntityId: req.body.requestorId,
         jurisdictionCodes: req.body.jurisdiction ? [req.body.jurisdiction] : [],
-        decisionSummary: 'erasure_request_processed',
+        decisionSummary: 'dsar_fulfilled',
         payload: req.body,
         result: report,
         evidence: {
-          requestType: 'erasure',
+          requestType: requestType ?? 'access',
           reportId: (report as any).reportId ?? null,
         },
         metadata: {
           route: '/enterprise/compliance/dsar',
           obligationEvidenceUsage: buildPrivacyObligationUsage(
-            'erasure',
+            'dsar',
             req.body.jurisdiction ? [req.body.jurisdiction] : [],
             baseReport,
             report,
             policyExecution.trace,
           ),
-          ...(policyExecution.trace ? { policyExecutionTrace: policyExecution.trace } : {}),
+          ...(policyExecution.trace
+            ? { policyExecutionTrace: policyExecution.trace }
+            : {}),
         },
         policyContextOverride: policyContext,
       });
       res.status(200).json({
         data: report,
         receipt: summarizeReceipt(receipt),
-        ...(policyExecution.trace ? { policyTrace: policyExecution.trace } : {}),
-        message: 'Erasure request processed',
+        ...(policyExecution.trace
+          ? { policyTrace: policyExecution.trace }
+          : {}),
+        message: 'DSAR fulfilled',
       });
-      return;
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('dsar_error', { error: error.message });
+      res
+        .status(error.statusCode ?? 500)
+        .json({ error: error.message, code: error.code ?? 'DSAR_ERROR' });
     }
-
-    const policyContext = await policyContextService.resolvePolicyContext(
-      'data_subject_access',
-      context.organizationId,
-      {
-        jurisdictionCodes: req.body.jurisdiction ? [req.body.jurisdiction] : [],
-        subjectEntityId: req.body.requestorId,
-      },
-    );
-    const baseReport = await regulatoryReportingService.fulfillDSAR({ ...req.body, reportType: 'DSAR' });
-    const policyExecution = await policyExecutionService.applyPrivacyWorkflowPolicy(
-      context.organizationId,
-      policyContext,
-      'dsar',
-      req.body,
-      baseReport,
-    );
-    const report = policyExecution.result;
-    const receipt = await createPolicyAnchoredReceipt(context, {
-      receiptType: 'regulatory_report',
-      policyName: 'data_subject_access',
-      subjectEntityId: req.body.requestorId,
-      jurisdictionCodes: req.body.jurisdiction ? [req.body.jurisdiction] : [],
-      decisionSummary: 'dsar_fulfilled',
-      payload: req.body,
-      result: report,
-      evidence: {
-        requestType: requestType ?? 'access',
-        reportId: (report as any).reportId ?? null,
-      },
-      metadata: {
-        route: '/enterprise/compliance/dsar',
-        obligationEvidenceUsage: buildPrivacyObligationUsage(
-          'dsar',
-          req.body.jurisdiction ? [req.body.jurisdiction] : [],
-          baseReport,
-          report,
-          policyExecution.trace,
-        ),
-        ...(policyExecution.trace ? { policyExecutionTrace: policyExecution.trace } : {}),
-      },
-      policyContextOverride: policyContext,
-    });
-    res.status(200).json({
-      data: report,
-      receipt: summarizeReceipt(receipt),
-      ...(policyExecution.trace ? { policyTrace: policyExecution.trace } : {}),
-      message: 'DSAR fulfilled',
-    });
-  } catch (err) {
-    const error = err as Error & { statusCode?: number; code?: string };
-    logger.error('dsar_error', { error: error.message });
-    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'DSAR_ERROR' });
-  }
-});
+  },
+);
 
 // ---------------------------------------------------------------------------
 // POST /enterprise/compliance/consent — Record consent
 // ---------------------------------------------------------------------------
-router.post('/consent', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_ROLES), validate(ConsentRecordSchema), async (req: Request, res: Response): Promise<void> => {
-  try {
-    const result = dataSovereigntyService.recordConsent(req.body);
-    res.status(201).json({ data: result, message: 'Consent recorded' });
-  } catch (err) {
-    const error = err as Error & { statusCode?: number; code?: string };
-    logger.error('consent_error', { error: error.message });
-    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'CONSENT_ERROR' });
-  }
-});
+router.post(
+  '/consent',
+  requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_ROLES),
+  validate(ConsentRecordSchema),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const result = dataSovereigntyService.recordConsent(req.body);
+      res.status(201).json({ data: result, message: 'Consent recorded' });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('consent_error', { error: error.message });
+      res
+        .status(error.statusCode ?? 500)
+        .json({ error: error.message, code: error.code ?? 'CONSENT_ERROR' });
+    }
+  },
+);
 
 // ---------------------------------------------------------------------------
 // POST /enterprise/compliance/pia — Privacy impact assessment
 // ---------------------------------------------------------------------------
-router.post('/pia', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_ROLES), validate(PIASchema), async (req: Request, res: Response): Promise<void> => {
-  try {
-    const context = await requireReceiptContext(req, res);
-    if (!context) return;
+router.post(
+  '/pia',
+  requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_ROLES),
+  validate(PIASchema),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const context = await requireReceiptContext(req, res);
+      if (!context) return;
 
-    const policyContext = await policyContextService.resolvePolicyContext(
-      'privacy_impact_assessment',
-      context.organizationId,
-      {
-        jurisdictionCodes: req.body.jurisdictions ?? [],
-        subjectEntityId: req.body.dataSubjectId,
-      },
-    );
-    const baseResult = dataSovereigntyService.conductPIA(req.body);
-    const policyExecution = await policyExecutionService.applyPrivacyWorkflowPolicy(
-      context.organizationId,
-      policyContext,
-      'pia',
-      req.body,
-      baseResult,
-    );
-    const result = policyExecution.result;
-    const receipt = await createPolicyAnchoredReceipt(context, {
-      receiptType: 'privacy_impact_assessment',
-      policyName: 'privacy_impact_assessment',
-      subjectEntityId: req.body.dataSubjectId,
-      jurisdictionCodes: req.body.jurisdictions ?? [],
-      decisionSummary: `pia_risk:${result.riskLevel}`,
-      payload: req.body,
-      result,
-      evidence: {
-        riskScore: result.riskScore,
-        dpiaRequired: result.dpiaRequired,
-        supervisoryConsultationRequired: result.supervisoryConsultationRequired,
-      },
-      metadata: {
-        route: '/enterprise/compliance/pia',
-        obligationEvidenceUsage: buildPrivacyObligationUsage(
+      const policyContext = await policyContextService.resolvePolicyContext(
+        'privacy_impact_assessment',
+        context.organizationId,
+        {
+          jurisdictionCodes: req.body.jurisdictions ?? [],
+          subjectEntityId: req.body.dataSubjectId,
+        },
+      );
+      const baseResult = dataSovereigntyService.conductPIA(req.body);
+      const policyExecution =
+        await policyExecutionService.applyPrivacyWorkflowPolicy(
+          context.organizationId,
+          policyContext,
           'pia',
-          req.body.jurisdictions ?? [],
+          req.body,
           baseResult,
-          result,
-          policyExecution.trace,
-        ),
-        ...(policyExecution.trace ? { policyExecutionTrace: policyExecution.trace } : {}),
-      },
-      policyContextOverride: policyContext,
-    });
-    res.status(200).json({
-      data: result,
-      receipt: summarizeReceipt(receipt),
-      ...(policyExecution.trace ? { policyTrace: policyExecution.trace } : {}),
-      message: 'Privacy impact assessment completed',
-    });
-  } catch (err) {
-    const error = err as Error & { statusCode?: number; code?: string };
-    logger.error('pia_error', { error: error.message });
-    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'PIA_ERROR' });
-  }
-});
+        );
+      const result = policyExecution.result as PIAResult;
+      const receipt = await createPolicyAnchoredReceipt(context, {
+        receiptType: 'privacy_impact_assessment',
+        policyName: 'privacy_impact_assessment',
+        subjectEntityId: req.body.dataSubjectId,
+        jurisdictionCodes: req.body.jurisdictions ?? [],
+        decisionSummary: `pia_risk:${result.riskLevel}`,
+        payload: req.body,
+        result,
+        evidence: {
+          riskScore: result.riskScore,
+          dpiaRequired: result.dpiaRequired,
+          supervisoryConsultationRequired:
+            result.supervisoryConsultationRequired,
+        },
+        metadata: {
+          route: '/enterprise/compliance/pia',
+          obligationEvidenceUsage: buildPrivacyObligationUsage(
+            'pia',
+            req.body.jurisdictions ?? [],
+            baseResult,
+            result,
+            policyExecution.trace,
+          ),
+          ...(policyExecution.trace
+            ? { policyExecutionTrace: policyExecution.trace }
+            : {}),
+        },
+        policyContextOverride: policyContext,
+      });
+      res.status(200).json({
+        data: result,
+        receipt: summarizeReceipt(receipt),
+        ...(policyExecution.trace
+          ? { policyTrace: policyExecution.trace }
+          : {}),
+        message: 'Privacy impact assessment completed',
+      });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('pia_error', { error: error.message });
+      res
+        .status(error.statusCode ?? 500)
+        .json({ error: error.message, code: error.code ?? 'PIA_ERROR' });
+    }
+  },
+);
 
 // ---------------------------------------------------------------------------
 // POST /enterprise/compliance/breach — Breach notification
 // ---------------------------------------------------------------------------
-router.post('/breach', requireEnterpriseContext(ENTERPRISE_COMPLIANCE_REVIEW_ROLES), validate(BreachNotificationSchema), async (req: Request, res: Response): Promise<void> => {
-  try {
-    const context = await requireReceiptContext(req, res);
-    if (!context) return;
+router.post(
+  '/breach',
+  requireEnterpriseContext(ENTERPRISE_COMPLIANCE_REVIEW_ROLES),
+  validate(BreachNotificationSchema),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const context = await requireReceiptContext(req, res);
+      if (!context) return;
 
-    const policyContext = await policyContextService.resolvePolicyContext(
-      'data_breach_notification',
-      context.organizationId,
-      {
-        jurisdictionCodes: req.body.jurisdictions ?? [],
-      },
-    );
-    const baseTimeline = dataSovereigntyService.initiateBreachNotification(req.body);
-    const policyExecution = await policyExecutionService.applyPrivacyWorkflowPolicy(
-      context.organizationId,
-      policyContext,
-      'breach',
-      req.body,
-      baseTimeline,
-    );
-    const timeline = policyExecution.result;
-    const receipt = await createPolicyAnchoredReceipt(context, {
-      receiptType: 'breach_notification',
-      policyName: 'data_breach_notification',
-      jurisdictionCodes: req.body.jurisdictions ?? [],
-      decisionSummary: `breach_workflow:${req.body.severity}:${timeline.dataSubjectNotificationRequired}`,
-      payload: req.body,
-      result: timeline,
-      evidence: {
-        breachId: timeline.breachId,
-        regulatoryDeadlineCount: timeline.regulatoryDeadlines.length,
-        dataSubjectNotificationRequired: timeline.dataSubjectNotificationRequired,
-        dataSubjectDeadlineHours: timeline.dataSubjectDeadlineHours,
-      },
-      metadata: {
-        route: '/enterprise/compliance/breach',
-        obligationEvidenceUsage: buildPrivacyObligationUsage(
+      const policyContext = await policyContextService.resolvePolicyContext(
+        'data_breach_notification',
+        context.organizationId,
+        {
+          jurisdictionCodes: req.body.jurisdictions ?? [],
+        },
+      );
+      const baseTimeline = dataSovereigntyService.initiateBreachNotification(
+        req.body,
+      );
+      const policyExecution =
+        await policyExecutionService.applyPrivacyWorkflowPolicy(
+          context.organizationId,
+          policyContext,
           'breach',
-          req.body.jurisdictions ?? [],
+          req.body,
           baseTimeline,
-          timeline,
-          policyExecution.trace,
-        ),
-        ...(policyExecution.trace ? { policyExecutionTrace: policyExecution.trace } : {}),
-      },
-      policyContextOverride: policyContext,
-    });
-    res.status(201).json({
-      data: timeline,
-      receipt: summarizeReceipt(receipt),
-      ...(policyExecution.trace ? { policyTrace: policyExecution.trace } : {}),
-      message: 'Breach notification workflow initiated',
-    });
-  } catch (err) {
-    const error = err as Error & { statusCode?: number; code?: string };
-    logger.error('breach_error', { error: error.message });
-    res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code ?? 'BREACH_ERROR' });
-  }
-});
+        );
+      const timeline = policyExecution.result as BreachTimeline;
+      const receipt = await createPolicyAnchoredReceipt(context, {
+        receiptType: 'breach_notification',
+        policyName: 'data_breach_notification',
+        jurisdictionCodes: req.body.jurisdictions ?? [],
+        decisionSummary: `breach_workflow:${req.body.severity}:${timeline.dataSubjectNotificationRequired}`,
+        payload: req.body,
+        result: timeline,
+        evidence: {
+          breachId: timeline.breachId,
+          regulatoryDeadlineCount: timeline.regulatoryDeadlines.length,
+          dataSubjectNotificationRequired:
+            timeline.dataSubjectNotificationRequired,
+          dataSubjectDeadlineHours: timeline.dataSubjectDeadlineHours,
+        },
+        metadata: {
+          route: '/enterprise/compliance/breach',
+          obligationEvidenceUsage: buildPrivacyObligationUsage(
+            'breach',
+            req.body.jurisdictions ?? [],
+            baseTimeline,
+            timeline,
+            policyExecution.trace,
+          ),
+          ...(policyExecution.trace
+            ? { policyExecutionTrace: policyExecution.trace }
+            : {}),
+        },
+        policyContextOverride: policyContext,
+      });
+      res.status(201).json({
+        data: timeline,
+        receipt: summarizeReceipt(receipt),
+        ...(policyExecution.trace
+          ? { policyTrace: policyExecution.trace }
+          : {}),
+        message: 'Breach notification workflow initiated',
+      });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('breach_error', { error: error.message });
+      res
+        .status(error.statusCode ?? 500)
+        .json({ error: error.message, code: error.code ?? 'BREACH_ERROR' });
+    }
+  },
+);
 
 export default router;

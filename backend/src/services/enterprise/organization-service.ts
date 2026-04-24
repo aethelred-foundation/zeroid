@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../../index';
 import { policyGovernanceService } from './policy-governance-service';
 
@@ -10,7 +11,7 @@ export const ENTERPRISE_ROLES = [
   'auditor',
 ] as const;
 
-export type EnterpriseRole = typeof ENTERPRISE_ROLES[number];
+export type EnterpriseRole = (typeof ENTERPRISE_ROLES)[number];
 
 export const ENTERPRISE_APPROVAL_CLASSES = [
   'admin',
@@ -23,7 +24,8 @@ export const ENTERPRISE_APPROVAL_CLASSES = [
   'sovereign_operator',
 ] as const;
 
-export type EnterpriseApprovalClass = typeof ENTERPRISE_APPROVAL_CLASSES[number];
+export type EnterpriseApprovalClass =
+  (typeof ENTERPRISE_APPROVAL_CLASSES)[number];
 
 export const ENTERPRISE_GOVERNANCE_FAMILIES = [
   'compliance',
@@ -32,7 +34,8 @@ export const ENTERPRISE_GOVERNANCE_FAMILIES = [
   'screening',
 ] as const;
 
-export type EnterpriseGovernanceFamily = typeof ENTERPRISE_GOVERNANCE_FAMILIES[number];
+export type EnterpriseGovernanceFamily =
+  (typeof ENTERPRISE_GOVERNANCE_FAMILIES)[number];
 
 const GovernancePackSelectionSchema = z.object({
   packId: z.string().min(1).max(120),
@@ -44,22 +47,28 @@ const GovernanceChangeRecordSchema = z.object({
   changedByIdentityId: z.string().min(1),
   changeReason: z.string().min(1).max(240).optional(),
   defaultPack: GovernancePackSelectionSchema.optional(),
-  familyPacks: z.object({
-    compliance: GovernancePackSelectionSchema.optional(),
-    reporting: GovernancePackSelectionSchema.optional(),
-    privacy: GovernancePackSelectionSchema.optional(),
-    screening: GovernancePackSelectionSchema.optional(),
-  }).partial().optional(),
+  familyPacks: z
+    .object({
+      compliance: GovernancePackSelectionSchema.optional(),
+      reporting: GovernancePackSelectionSchema.optional(),
+      privacy: GovernancePackSelectionSchema.optional(),
+      screening: GovernancePackSelectionSchema.optional(),
+    })
+    .partial()
+    .optional(),
 });
 
 export const UpdateOrganizationGovernanceSchema = z.object({
   defaultPack: GovernancePackSelectionSchema.optional(),
-  familyPacks: z.object({
-    compliance: GovernancePackSelectionSchema.optional(),
-    reporting: GovernancePackSelectionSchema.optional(),
-    privacy: GovernancePackSelectionSchema.optional(),
-    screening: GovernancePackSelectionSchema.optional(),
-  }).partial().optional(),
+  familyPacks: z
+    .object({
+      compliance: GovernancePackSelectionSchema.optional(),
+      reporting: GovernancePackSelectionSchema.optional(),
+      privacy: GovernancePackSelectionSchema.optional(),
+      screening: GovernancePackSelectionSchema.optional(),
+    })
+    .partial()
+    .optional(),
   changeReason: z.string().min(1).max(240).optional(),
 });
 
@@ -73,12 +82,16 @@ export interface GovernanceChangeRecord {
   changedByIdentityId: string;
   changeReason?: string;
   defaultPack?: GovernancePackSelection;
-  familyPacks?: Partial<Record<EnterpriseGovernanceFamily, GovernancePackSelection>>;
+  familyPacks?: Partial<
+    Record<EnterpriseGovernanceFamily, GovernancePackSelection>
+  >;
 }
 
 export interface OrganizationGovernanceSettings {
   defaultPack?: GovernancePackSelection;
-  familyPacks?: Partial<Record<EnterpriseGovernanceFamily, GovernancePackSelection>>;
+  familyPacks?: Partial<
+    Record<EnterpriseGovernanceFamily, GovernancePackSelection>
+  >;
   lastUpdatedAt?: string;
   lastUpdatedByIdentityId?: string;
   changeHistory?: GovernanceChangeRecord[];
@@ -101,8 +114,12 @@ export const AddOrganizationMemberSchema = z.object({
   permissions: z.array(z.string()).default([]),
 });
 
-export type AddOrganizationMemberInput = z.infer<typeof AddOrganizationMemberSchema>;
-export type UpdateOrganizationGovernanceInput = z.infer<typeof UpdateOrganizationGovernanceSchema>;
+export type AddOrganizationMemberInput = z.infer<
+  typeof AddOrganizationMemberSchema
+>;
+export type UpdateOrganizationGovernanceInput = z.infer<
+  typeof UpdateOrganizationGovernanceSchema
+>;
 
 export interface EnterpriseContext {
   organizationId: string;
@@ -120,7 +137,9 @@ export interface EnterpriseApprovalAuthority extends EnterpriseContext {
 }
 
 const ALL_ENTERPRISE_ROLES = new Set<EnterpriseRole>(ENTERPRISE_ROLES);
-const ALL_ENTERPRISE_APPROVAL_CLASSES = new Set<EnterpriseApprovalClass>(ENTERPRISE_APPROVAL_CLASSES);
+const ALL_ENTERPRISE_APPROVAL_CLASSES = new Set<EnterpriseApprovalClass>(
+  ENTERPRISE_APPROVAL_CLASSES,
+);
 
 export class EnterpriseOrganizationError extends Error {
   constructor(
@@ -138,16 +157,16 @@ export class EnterpriseOrganizationService {
     ownerIdentityId: string,
     input: CreateOrganizationInput,
   ): Promise<{
-      organization: {
-        id: string;
-        name: string;
-        domain: string | null;
-        plan: string;
-        jurisdictions: string[];
-        governanceSettings: OrganizationGovernanceSettings;
-        billingEmail: string | null;
-        createdAt: Date;
-      };
+    organization: {
+      id: string;
+      name: string;
+      domain: string | null;
+      plan: string;
+      jurisdictions: string[];
+      governanceSettings: OrganizationGovernanceSettings;
+      billingEmail: string | null;
+      createdAt: Date;
+    };
     membership: {
       role: EnterpriseRole;
       permissions: string[];
@@ -163,16 +182,18 @@ export class EnterpriseOrganizationService {
       parsed.jurisdictions,
     );
 
+    const organizationSettings = {
+      ...(parsed.settings ?? {}),
+      governance: governanceSettings,
+    } as unknown as Prisma.InputJsonObject;
+
     const organization = await prisma.organization.create({
       data: {
         name: parsed.name,
         domain: parsed.domain,
         plan: parsed.plan,
         jurisdictions: parsed.jurisdictions,
-        settings: {
-          ...(parsed.settings ?? {}),
-          governance: governanceSettings,
-        },
+        settings: organizationSettings,
         billingEmail: parsed.billingEmail,
       },
     });
@@ -182,7 +203,12 @@ export class EnterpriseOrganizationService {
         organizationId: organization.id,
         identityId: ownerIdentityId,
         role: 'admin',
-        permissions: ['org:manage', 'members:manage', 'oidc:manage', 'api_keys:manage'],
+        permissions: [
+          'org:manage',
+          'members:manage',
+          'oidc:manage',
+          'api_keys:manage',
+        ],
         joinedAt: new Date(),
       },
     });
@@ -194,7 +220,9 @@ export class EnterpriseOrganizationService {
         domain: organization.domain,
         plan: organization.plan,
         jurisdictions: organization.jurisdictions,
-        governanceSettings: this.extractGovernanceSettings(organization.settings),
+        governanceSettings: this.extractGovernanceSettings(
+          organization.settings,
+        ),
         billingEmail: organization.billingEmail,
         createdAt: organization.createdAt,
       },
@@ -206,17 +234,19 @@ export class EnterpriseOrganizationService {
     };
   }
 
-  async listOrganizations(identityId: string): Promise<Array<{
-    organizationId: string;
-    organizationName: string;
-    domain: string | null;
-    plan: string;
-    jurisdictions: string[];
-    governanceSettings: OrganizationGovernanceSettings;
-    role: EnterpriseRole;
-    permissions: string[];
-    joinedAt: Date | null;
-  }>> {
+  async listOrganizations(identityId: string): Promise<
+    Array<{
+      organizationId: string;
+      organizationName: string;
+      domain: string | null;
+      plan: string;
+      jurisdictions: string[];
+      governanceSettings: OrganizationGovernanceSettings;
+      role: EnterpriseRole;
+      permissions: string[];
+      joinedAt: Date | null;
+    }>
+  > {
     const memberships = await prisma.organizationMember.findMany({
       where: { identityId },
       include: {
@@ -242,7 +272,9 @@ export class EnterpriseOrganizationService {
       domain: membership.organization.domain,
       plan: membership.organization.plan,
       jurisdictions: membership.organization.jurisdictions,
-      governanceSettings: this.extractGovernanceSettings(membership.organization.settings),
+      governanceSettings: this.extractGovernanceSettings(
+        membership.organization.settings,
+      ),
       role: membership.role as EnterpriseRole,
       permissions: membership.permissions,
       joinedAt: membership.joinedAt,
@@ -306,14 +338,16 @@ export class EnterpriseOrganizationService {
     };
   }
 
-  async listMembers(organizationId: string): Promise<Array<{
-    organizationId: string;
-    identityId: string;
-    role: EnterpriseRole;
-    permissions: string[];
-    invitedAt: Date;
-    joinedAt: Date | null;
-  }>> {
+  async listMembers(organizationId: string): Promise<
+    Array<{
+      organizationId: string;
+      identityId: string;
+      role: EnterpriseRole;
+      permissions: string[];
+      invitedAt: Date;
+      joinedAt: Date | null;
+    }>
+  > {
     const memberships = await prisma.organizationMember.findMany({
       where: { organizationId },
       orderBy: {
@@ -331,7 +365,9 @@ export class EnterpriseOrganizationService {
     }));
   }
 
-  async getGovernanceSettings(organizationId: string): Promise<OrganizationGovernanceSettings> {
+  async getGovernanceSettings(
+    organizationId: string,
+  ): Promise<OrganizationGovernanceSettings> {
     const organization = await prisma.organization.findUnique({
       where: { id: organizationId },
       select: { id: true, plan: true, jurisdictions: true, settings: true },
@@ -356,7 +392,7 @@ export class EnterpriseOrganizationService {
     const parsed = UpdateOrganizationGovernanceSchema.parse(input);
     const organization = await prisma.organization.findUnique({
       where: { id: organizationId },
-      select: { id: true, settings: true },
+      select: { id: true, plan: true, jurisdictions: true, settings: true },
     });
 
     if (!organization) {
@@ -367,48 +403,63 @@ export class EnterpriseOrganizationService {
       );
     }
 
-    const currentGovernance = this.extractGovernanceSettings(organization.settings);
+    const currentGovernance = this.extractGovernanceSettings(
+      organization.settings,
+    );
     const changedAt = new Date().toISOString();
-    const hydratedGovernance = this.enforceGovernanceSelections(this.normalizeGovernanceSettings({
-      defaultPack: parsed.defaultPack ?? currentGovernance.defaultPack,
-      familyPacks: {
-        ...(currentGovernance.familyPacks ?? {}),
-        ...(parsed.familyPacks ?? {}),
-      },
-    }), organization.plan, organization.jurisdictions);
+    const hydratedGovernance = this.enforceGovernanceSelections(
+      this.normalizeGovernanceSettings({
+        defaultPack: parsed.defaultPack ?? currentGovernance.defaultPack,
+        familyPacks: {
+          ...(currentGovernance.familyPacks ?? {}),
+          ...(parsed.familyPacks ?? {}),
+        },
+      }),
+      organization.plan,
+      organization.jurisdictions,
+    );
     const nextGovernance = {
       ...hydratedGovernance,
       lastUpdatedAt: changedAt,
       lastUpdatedByIdentityId: actorIdentityId,
-      changeHistory: this.nextGovernanceHistory(currentGovernance.changeHistory, {
-        changedAt,
-        changedByIdentityId: actorIdentityId,
-        ...(parsed.changeReason ? { changeReason: parsed.changeReason } : {}),
-        ...(parsed.defaultPack && hydratedGovernance.defaultPack
-          ? { defaultPack: hydratedGovernance.defaultPack }
-          : {}),
-        ...(parsed.familyPacks && Object.keys(parsed.familyPacks).length > 0
-          ? {
-            familyPacks: Object.entries(parsed.familyPacks).reduce<Partial<Record<EnterpriseGovernanceFamily, GovernancePackSelection>>>((acc, [family]) => {
-              const normalizedFamily = family as EnterpriseGovernanceFamily;
-              const selection = hydratedGovernance.familyPacks?.[normalizedFamily];
-              if (selection) {
-                acc[normalizedFamily] = selection;
+      changeHistory: this.nextGovernanceHistory(
+        currentGovernance.changeHistory,
+        {
+          changedAt,
+          changedByIdentityId: actorIdentityId,
+          ...(parsed.changeReason ? { changeReason: parsed.changeReason } : {}),
+          ...(parsed.defaultPack && hydratedGovernance.defaultPack
+            ? { defaultPack: hydratedGovernance.defaultPack }
+            : {}),
+          ...(parsed.familyPacks && Object.keys(parsed.familyPacks).length > 0
+            ? {
+                familyPacks: Object.entries(parsed.familyPacks).reduce<
+                  Partial<
+                    Record<EnterpriseGovernanceFamily, GovernancePackSelection>
+                  >
+                >((acc, [family]) => {
+                  const normalizedFamily = family as EnterpriseGovernanceFamily;
+                  const selection =
+                    hydratedGovernance.familyPacks?.[normalizedFamily];
+                  if (selection) {
+                    acc[normalizedFamily] = selection;
+                  }
+                  return acc;
+                }, {}),
               }
-              return acc;
-            }, {}),
-          }
-          : {}),
-      }),
+            : {}),
+        },
+      ),
     };
     const currentSettings = this.asSettingsRecord(organization.settings);
+    const updatedSettings = {
+      ...currentSettings,
+      governance: nextGovernance,
+    } as unknown as Prisma.InputJsonObject;
     const updated = await prisma.organization.update({
       where: { id: organizationId },
       data: {
-        settings: {
-          ...currentSettings,
-          governance: nextGovernance,
-        },
+        settings: updatedSettings,
       },
       select: {
         settings: true,
@@ -424,7 +475,7 @@ export class EnterpriseOrganizationService {
         details: {
           organizationId,
           governance: nextGovernance,
-        },
+        } as unknown as Prisma.InputJsonObject,
       },
     });
 
@@ -475,7 +526,9 @@ export class EnterpriseOrganizationService {
     let membership = memberships[0];
 
     if (requestedOrganizationId) {
-      const matching = memberships.find((entry: any) => entry.organizationId === requestedOrganizationId);
+      const matching = memberships.find(
+        (entry: any) => entry.organizationId === requestedOrganizationId,
+      );
       if (!matching) {
         throw new EnterpriseOrganizationError(
           'Requested organization is not associated with this identity',
@@ -508,7 +561,9 @@ export class EnterpriseOrganizationService {
       permissions: membership.permissions,
       plan: membership.organization.plan,
       jurisdictions: membership.organization.jurisdictions,
-      governanceSettings: this.extractGovernanceSettings(membership.organization.settings),
+      governanceSettings: this.extractGovernanceSettings(
+        membership.organization.settings,
+      ),
     };
   }
 
@@ -524,11 +579,21 @@ export class EnterpriseOrganizationService {
     identityId: string,
     organizationId?: string,
   ): Promise<EnterpriseApprovalAuthority> {
-    const context = await this.resolveContext(identityId, organizationId, ENTERPRISE_ROLES.slice());
+    const context = await this.resolveContext(
+      identityId,
+      organizationId,
+      ENTERPRISE_ROLES.slice(),
+    );
     return {
       ...context,
-      approvalClasses: this.deriveApprovalClasses(context.role, context.permissions),
-      approvalJurisdictions: this.deriveApprovalJurisdictions(context.permissions, context.jurisdictions),
+      approvalClasses: this.deriveApprovalClasses(
+        context.role,
+        context.permissions,
+      ),
+      approvalJurisdictions: this.deriveApprovalJurisdictions(
+        context.permissions,
+        context.jurisdictions,
+      ),
     };
   }
 
@@ -561,7 +626,9 @@ export class EnterpriseOrganizationService {
         continue;
       }
 
-      const approvalClass = permission.slice('approval:class:'.length) as EnterpriseApprovalClass;
+      const approvalClass = permission.slice(
+        'approval:class:'.length,
+      ) as EnterpriseApprovalClass;
       if (ALL_ENTERPRISE_APPROVAL_CLASSES.has(approvalClass)) {
         classes.add(approvalClass);
       }
@@ -586,11 +653,17 @@ export class EnterpriseOrganizationService {
     return [...new Set(defaultJurisdictions)];
   }
 
-  private extractGovernanceSettings(settings: unknown): OrganizationGovernanceSettings {
-    return this.normalizeGovernanceSettings(this.asSettingsRecord(settings).governance);
+  private extractGovernanceSettings(
+    settings: unknown,
+  ): OrganizationGovernanceSettings {
+    return this.normalizeGovernanceSettings(
+      this.asSettingsRecord(settings).governance,
+    );
   }
 
-  private normalizeGovernanceSettings(value: unknown): OrganizationGovernanceSettings {
+  private normalizeGovernanceSettings(
+    value: unknown,
+  ): OrganizationGovernanceSettings {
     const record = this.asSettingsRecord(value);
     const result = UpdateOrganizationGovernanceSchema.safeParse(record ?? {});
     const history = this.normalizeGovernanceHistory(record.changeHistory);
@@ -599,10 +672,12 @@ export class EnterpriseOrganizationService {
       const { changeReason: _changeReason, ...normalized } = result.data;
       return {
         ...normalized,
-        ...(typeof record.lastUpdatedAt === 'string' && record.lastUpdatedAt.length > 0
+        ...(typeof record.lastUpdatedAt === 'string' &&
+        record.lastUpdatedAt.length > 0
           ? { lastUpdatedAt: record.lastUpdatedAt }
           : {}),
-        ...(typeof record.lastUpdatedByIdentityId === 'string' && record.lastUpdatedByIdentityId.length > 0
+        ...(typeof record.lastUpdatedByIdentityId === 'string' &&
+        record.lastUpdatedByIdentityId.length > 0
           ? { lastUpdatedByIdentityId: record.lastUpdatedByIdentityId }
           : {}),
         ...(history.length > 0 ? { changeHistory: history } : {}),
@@ -636,7 +711,9 @@ export class EnterpriseOrganizationService {
     organizationJurisdictions: string[],
   ): OrganizationGovernanceSettings {
     const availablePacks = new Map(
-      policyGovernanceService.listGovernancePacks().map((pack) => [pack.id, pack]),
+      policyGovernanceService
+        .listGovernancePacks()
+        .map((pack) => [pack.id, pack]),
     );
 
     const hydrateSelection = (
@@ -670,7 +747,9 @@ export class EnterpriseOrganizationService {
     };
 
     const defaultPack = hydrateSelection(settings.defaultPack);
-    const familyPacks = Object.entries(settings.familyPacks ?? {}).reduce<Partial<Record<EnterpriseGovernanceFamily, GovernancePackSelection>>>((acc, [family, selection]) => {
+    const familyPacks = Object.entries(settings.familyPacks ?? {}).reduce<
+      Partial<Record<EnterpriseGovernanceFamily, GovernancePackSelection>>
+    >((acc, [family, selection]) => {
       const normalizedFamily = family as EnterpriseGovernanceFamily;
       const hydrated = hydrateSelection(selection);
       if (hydrated) {
@@ -682,21 +761,27 @@ export class EnterpriseOrganizationService {
     const normalizedSettings: OrganizationGovernanceSettings = {
       ...(defaultPack ? { defaultPack } : {}),
       ...(Object.keys(familyPacks).length > 0 ? { familyPacks } : {}),
-      ...(settings.lastUpdatedAt ? { lastUpdatedAt: settings.lastUpdatedAt } : {}),
-      ...(settings.lastUpdatedByIdentityId ? { lastUpdatedByIdentityId: settings.lastUpdatedByIdentityId } : {}),
+      ...(settings.lastUpdatedAt
+        ? { lastUpdatedAt: settings.lastUpdatedAt }
+        : {}),
+      ...(settings.lastUpdatedByIdentityId
+        ? { lastUpdatedByIdentityId: settings.lastUpdatedByIdentityId }
+        : {}),
       ...(settings.changeHistory && settings.changeHistory.length > 0
         ? { changeHistory: settings.changeHistory }
         : {}),
     };
 
-    const compatibilityIssues = policyGovernanceService.validateGovernanceSettings({
-      organizationPlan,
-      organizationJurisdictions,
-      settings: normalizedSettings,
-    });
+    const compatibilityIssues =
+      policyGovernanceService.validateGovernanceSettings({
+        organizationPlan,
+        organizationJurisdictions,
+        settings: normalizedSettings,
+      });
     if (compatibilityIssues.length > 0) {
       throw new EnterpriseOrganizationError(
-        compatibilityIssues[0]?.reason ?? 'Organization governance settings are not compatible with this tenant.',
+        compatibilityIssues[0]?.reason ??
+          'Organization governance settings are not compatible with this tenant.',
         'ENTERPRISE_GOVERNANCE_PACK_INVALID',
         400,
       );
@@ -713,4 +798,5 @@ export class EnterpriseOrganizationService {
   }
 }
 
-export const enterpriseOrganizationService = new EnterpriseOrganizationService();
+export const enterpriseOrganizationService =
+  new EnterpriseOrganizationService();

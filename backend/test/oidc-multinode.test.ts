@@ -148,6 +148,13 @@ import { OIDCBridge, OIDCError } from '../src/services/enterprise/oidc-bridge';
 // ---------------------------------------------------------------------------
 const REDIRECT_URI = 'https://app.example.com/callback';
 const LOGOUT_URI = 'https://app.example.com/logout';
+const BACKCHANNEL_LOGOUT_URI = 'https://app.example.com/backchannel-logout';
+const fetchMock = jest.fn();
+
+Object.defineProperty(globalThis, 'fetch', {
+  value: fetchMock,
+  writable: true,
+});
 
 /** Register a client on the given bridge instance and return credentials. */
 async function registerTestClient(bridge: OIDCBridge) {
@@ -155,6 +162,7 @@ async function registerTestClient(bridge: OIDCBridge) {
     clientName: 'Test Client',
     redirectUris: [REDIRECT_URI],
     postLogoutRedirectUris: [LOGOUT_URI],
+    backchannelLogoutUri: BACKCHANNEL_LOGOUT_URI,
     grantTypes: ['authorization_code', 'refresh_token'],
     responseTypes: ['code'],
     tokenEndpointAuthMethod: 'client_secret_basic',
@@ -176,6 +184,7 @@ async function registerOwnedClient(
       clientName: 'Governed Test Client',
       redirectUris: [REDIRECT_URI],
       postLogoutRedirectUris: [LOGOUT_URI],
+      backchannelLogoutUri: BACKCHANNEL_LOGOUT_URI,
       grantTypes: ['authorization_code', 'refresh_token'],
       responseTypes: ['code'],
       tokenEndpointAuthMethod: 'client_secret_basic',
@@ -236,6 +245,7 @@ describe('OIDC multi-node correctness', () => {
     store.clear();
     setStore.clear();
     jest.clearAllMocks();
+    fetchMock.mockResolvedValue({ ok: true, status: 200 });
   });
 
   // 1. Cross-instance session access
@@ -247,9 +257,47 @@ describe('OIDC multi-node correctness', () => {
       'user-1',
     );
 
-    // Instance B should see the session via backChannelLogout (reads session)
+    // Instance B should see the session and deliver a signed logout token.
     const result = await bridgeB.backChannelLogout(sessionId);
     expect(result.notified).toBe(true);
+    expect(fetchMock).toHaveBeenCalledWith(
+      BACKCHANNEL_LOGOUT_URI,
+      expect.objectContaining({
+        method: 'POST',
+        body: expect.any(String),
+      }),
+    );
+
+    const requestBody = fetchMock.mock.calls[0]?.[1]?.body as string;
+    const logoutToken = new URLSearchParams(requestBody).get('logout_token');
+    expect(logoutToken).toBeTruthy();
+    const [encodedHeader, encodedPayload, encodedSignature] =
+      logoutToken!.split('.');
+    const header = JSON.parse(
+      Buffer.from(encodedHeader, 'base64url').toString('utf-8'),
+    );
+    const payload = JSON.parse(
+      Buffer.from(encodedPayload, 'base64url').toString('utf-8'),
+    );
+
+    expect(header.alg).toBe('RS256');
+    expect(header.typ).toBe('JWT');
+    expect(payload).toMatchObject({
+      iss: 'https://id.zeroid.test/oidc',
+      aud: client.clientId,
+      sub: 'user-1',
+      sid: sessionId,
+      events: { 'http://schemas.openid.net/event/backchannel-logout': {} },
+    });
+    expect(payload.nonce).toBeUndefined();
+    expect(
+      crypto.verify(
+        'sha256',
+        Buffer.from(`${encodedHeader}.${encodedPayload}`),
+        publicKey,
+        Buffer.from(encodedSignature, 'base64url'),
+      ),
+    ).toBe(true);
   });
 
   // 2. Cross-instance auth code exchange
