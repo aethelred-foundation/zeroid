@@ -45,7 +45,6 @@ import "./interfaces/IZeroID.sol";
  *     disclosure context.
  */
 contract SelectiveDisclosure is ISelectiveDisclosure, AccessControl, Pausable, ReentrancyGuard {
-
     // ──────────────────────────────────────────────────────────────
     // Roles
     // ──────────────────────────────────────────────────────────────
@@ -142,6 +141,7 @@ contract SelectiveDisclosure is ISelectiveDisclosure, AccessControl, Pausable, R
     error NullifierAlreadyUsed(bytes32 contextHash, bytes32 nullifier);
     error NoAttributesRequested();
     error AttributeCountMismatch(uint256 expected, uint256 actual);
+    error CredentialSubjectMismatch(bytes32 credentialHash, bytes32 requestedSubjectDid, bytes32 credentialSubjectDid);
 
     // ──────────────────────────────────────────────────────────────
     // Modifiers
@@ -205,12 +205,16 @@ contract SelectiveDisclosure is ISelectiveDisclosure, AccessControl, Pausable, R
         if (!credentialRegistry.isCredentialValid(credentialHash)) {
             revert CredentialNotValid(credentialHash);
         }
+        Credential memory credential = credentialRegistry.getCredential(credentialHash);
+        if (credential.subjectDid != subjectDid) {
+            revert CredentialSubjectMismatch(credentialHash, subjectDid, credential.subjectDid);
+        }
 
         // Generate deterministic request ID
-        unchecked { _requestNonce++; }
-        requestId = keccak256(abi.encodePacked(
-            msg.sender, subjectDid, credentialHash, _requestNonce, block.timestamp
-        ));
+        unchecked {
+            _requestNonce++;
+        }
+        requestId = keccak256(abi.encodePacked(msg.sender, subjectDid, credentialHash, _requestNonce, block.timestamp));
 
         // Copy attribute hashes into storage
         DisclosureRequest storage req = _requests[requestId];
@@ -221,24 +225,26 @@ contract SelectiveDisclosure is ISelectiveDisclosure, AccessControl, Pausable, R
         req.createdAt = now64;
         req.expiresAt = expiresAt;
 
-        for (uint256 i = 0; i < attributeHashes.length; ) {
+        for (uint256 i = 0; i < attributeHashes.length;) {
             req.attributeHashes.push(attributeHashes[i]);
-            unchecked { i++; }
+            unchecked {
+                i++;
+            }
         }
 
         _verifierRequests[msg.sender].push(requestId);
         _subjectDisclosures[subjectDid].push(requestId);
 
-        unchecked { totalRequests++; }
+        unchecked {
+            totalRequests++;
+        }
 
         emit DisclosureRequested(requestId, subjectDid, attributeHashes);
     }
 
     /// @notice Cancel an open disclosure request (only by the requesting verifier)
     /// @param requestId The request to cancel
-    function cancelDisclosureRequest(bytes32 requestId)
-        external requestExists(requestId)
-    {
+    function cancelDisclosureRequest(bytes32 requestId) external requestExists(requestId) {
         DisclosureRequest storage req = _requests[requestId];
         if (req.verifier != msg.sender) revert NotRequestVerifier(requestId, msg.sender);
 
@@ -258,13 +264,7 @@ contract SelectiveDisclosure is ISelectiveDisclosure, AccessControl, Pausable, R
         Groth16Proof calldata proof,
         uint256[] calldata publicInputs,
         bytes32[] calldata merkleProof
-    ) external override
-        requestExists(requestId)
-        requestOpen(requestId)
-        whenNotPaused
-        nonReentrant
-        returns (bool)
-    {
+    ) external override requestExists(requestId) requestOpen(requestId) whenNotPaused nonReentrant returns (bool) {
         DisclosureRequest storage req = _requests[requestId];
 
         if (merkleProof.length > MAX_MERKLE_PROOF_DEPTH) {
@@ -291,11 +291,7 @@ contract SelectiveDisclosure is ISelectiveDisclosure, AccessControl, Pausable, R
         // Step 1: Verify Merkle inclusion — the disclosed attribute leaves
         //         must be present in the credential's Merkle tree
         Credential memory cred = credentialRegistry.getCredential(req.credentialHash);
-        bool merkleValid = _verifyMerkleInclusion(
-            req.attributeHashes,
-            merkleProof,
-            cred.merkleRoot
-        );
+        bool merkleValid = _verifyMerkleInclusion(req.attributeHashes, merkleProof, cred.merkleRoot);
 
         if (!merkleValid) {
             revert MerkleProofInvalid(req.attributeHashes[0], cred.merkleRoot);
@@ -303,15 +299,9 @@ contract SelectiveDisclosure is ISelectiveDisclosure, AccessControl, Pausable, R
 
         // ZID-010: Bind ZK proof public inputs to request context
         // publicInputs[0] must commit to the credential's merkle root
-        require(
-            bytes32(publicInputs[0]) == cred.merkleRoot,
-            "Public input[0] must match credential merkle root"
-        );
+        require(bytes32(publicInputs[0]) == cred.merkleRoot, "Public input[0] must match credential merkle root");
         // publicInputs[1] must commit to the request context hash
-        require(
-            bytes32(publicInputs[1]) == contextHash,
-            "Public input[1] must match request context hash"
-        );
+        require(bytes32(publicInputs[1]) == contextHash, "Public input[1] must match request context hash");
 
         // Step 2: Verify ZK proof — proves the holder knows attribute values
         //         matching the disclosed Merkle leaves without revealing them
@@ -329,13 +319,12 @@ contract SelectiveDisclosure is ISelectiveDisclosure, AccessControl, Pausable, R
         bytes32 proofHash = keccak256(abi.encode(proof.a, proof.b, proof.c));
 
         _results[requestId] = DisclosureResult({
-            verified: true,
-            verifiedAt: uint64(block.timestamp),
-            proofHash: proofHash,
-            nullifier: nullifier
+            verified: true, verifiedAt: uint64(block.timestamp), proofHash: proofHash, nullifier: nullifier
         });
 
-        unchecked { totalSuccessfulDisclosures++; }
+        unchecked {
+            totalSuccessfulDisclosures++;
+        }
 
         emit DisclosureNullifierUsed(requestId, nullifier);
         emit DisclosureProofSubmitted(requestId, true);
@@ -349,7 +338,9 @@ contract SelectiveDisclosure is ISelectiveDisclosure, AccessControl, Pausable, R
 
     /// @inheritdoc ISelectiveDisclosure
     function getDisclosureResult(bytes32 requestId)
-        external view override
+        external
+        view
+        override
         requestExists(requestId)
         returns (bool verified, uint64 verifiedAt)
     {
@@ -359,7 +350,9 @@ contract SelectiveDisclosure is ISelectiveDisclosure, AccessControl, Pausable, R
 
     /// @notice Get full disclosure request details
     function getDisclosureRequest(bytes32 requestId)
-        external view requestExists(requestId)
+        external
+        view
+        requestExists(requestId)
         returns (
             bytes32 subjectDid,
             bytes32 credentialHash,
@@ -408,27 +401,31 @@ contract SelectiveDisclosure is ISelectiveDisclosure, AccessControl, Pausable, R
     /// @dev Verify that a set of attribute hashes are included in a Merkle tree
     ///      Uses a combined leaf approach: hash all requested attributes into
     ///      a single leaf and verify against the root.
-    function _verifyMerkleInclusion(
-        bytes32[] memory leaves,
-        bytes32[] memory proof,
-        bytes32 root
-    ) internal pure returns (bool) {
+    function _verifyMerkleInclusion(bytes32[] memory leaves, bytes32[] memory proof, bytes32 root)
+        internal
+        pure
+        returns (bool)
+    {
         // Combine all attribute hashes into a single composite leaf
         bytes32 computedHash = leaves[0];
-        for (uint256 i = 1; i < leaves.length; ) {
+        for (uint256 i = 1; i < leaves.length;) {
             computedHash = _efficientHash(computedHash, leaves[i]);
-            unchecked { i++; }
+            unchecked {
+                i++;
+            }
         }
 
         // Walk the Merkle proof path
-        for (uint256 i = 0; i < proof.length; ) {
+        for (uint256 i = 0; i < proof.length;) {
             bytes32 proofElement = proof[i];
             if (computedHash <= proofElement) {
                 computedHash = _efficientHash(computedHash, proofElement);
             } else {
                 computedHash = _efficientHash(proofElement, computedHash);
             }
-            unchecked { i++; }
+            unchecked {
+                i++;
+            }
         }
 
         return computedHash == root;
@@ -447,6 +444,11 @@ contract SelectiveDisclosure is ISelectiveDisclosure, AccessControl, Pausable, R
     // Admin
     // ──────────────────────────────────────────────────────────────
 
-    function pause() external onlyRole(ADMIN_ROLE) { _pause(); }
-    function unpause() external onlyRole(ADMIN_ROLE) { _unpause(); }
+    function pause() external onlyRole(ADMIN_ROLE) {
+        _pause();
+    }
+
+    function unpause() external onlyRole(ADMIN_ROLE) {
+        _unpause();
+    }
 }

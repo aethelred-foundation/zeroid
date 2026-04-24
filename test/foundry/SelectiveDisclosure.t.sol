@@ -33,11 +33,7 @@ contract MockZKVerifierSD {
         returnValue = v;
     }
 
-    function verifyProof(
-        bytes32,
-        Groth16Proof calldata,
-        uint256[] calldata
-    ) external view returns (bool) {
+    function verifyProof(bytes32, Groth16Proof calldata, uint256[] calldata) external view returns (bool) {
         return returnValue;
     }
 
@@ -61,6 +57,7 @@ contract SelectiveDisclosureTest is TestHelper {
     MockZKVerifierSD public mockZK;
 
     bytes32 constant SUBJECT_DID = keccak256("did:sd:subject");
+    bytes32 constant OTHER_SUBJECT_DID = keccak256("did:sd:other-subject");
     bytes32 constant CRED_HASH = keccak256("cred:sd:1");
     bytes32 constant CIRCUIT_ID = keccak256("circuit:sd:1");
 
@@ -76,6 +73,7 @@ contract SelectiveDisclosureTest is TestHelper {
 
         // Set credential as valid
         mockCred.setValid(CRED_HASH, true);
+        mockCred.setCred(CRED_HASH, _credentialForSubject(SUBJECT_DID));
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -127,8 +125,13 @@ contract SelectiveDisclosureTest is TestHelper {
         assertEq(sd.totalRequests(), 1);
 
         (
-            bytes32 subjectDid, bytes32 credHash, bytes32[] memory attrHashes,
-            address verifier, , uint64 expAt, bool fulfilled, bool cancelled
+            bytes32 subjectDid,
+            bytes32 credHash,
+            bytes32[] memory attrHashes,
+            address verifier,,
+            uint64 expAt,
+            bool fulfilled,
+            bool cancelled
         ) = sd.getDisclosureRequest(requestId);
 
         assertEq(subjectDid, SUBJECT_DID);
@@ -180,6 +183,21 @@ contract SelectiveDisclosureTest is TestHelper {
         sd.createDisclosureRequest(SUBJECT_DID, CRED_HASH, attrs, uint64(block.timestamp + 1 days));
     }
 
+    function test_CreateDisclosureRequest_RevertsSubjectMismatch() public {
+        mockCred.setCred(CRED_HASH, _credentialForSubject(OTHER_SUBJECT_DID));
+
+        bytes32[] memory attrs = new bytes32[](1);
+        attrs[0] = keccak256("attr");
+
+        vm.prank(alice);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                SelectiveDisclosure.CredentialSubjectMismatch.selector, CRED_HASH, SUBJECT_DID, OTHER_SUBJECT_DID
+            )
+        );
+        sd.createDisclosureRequest(SUBJECT_DID, CRED_HASH, attrs, uint64(block.timestamp + 1 days));
+    }
+
     function test_CreateDisclosureRequest_RevertsWithoutRole() public {
         bytes32[] memory attrs = new bytes32[](1);
         attrs[0] = keccak256("attr");
@@ -199,7 +217,7 @@ contract SelectiveDisclosureTest is TestHelper {
         vm.prank(alice);
         sd.cancelDisclosureRequest(requestId);
 
-        (, , , , , , , bool cancelled) = sd.getDisclosureRequest(requestId);
+        (,,,,,,, bool cancelled) = sd.getDisclosureRequest(requestId);
         assertTrue(cancelled);
     }
 
@@ -263,6 +281,19 @@ contract SelectiveDisclosureTest is TestHelper {
 
         vm.prank(alice);
         return sd.createDisclosureRequest(SUBJECT_DID, CRED_HASH, attrs, uint64(block.timestamp + 1 days));
+    }
+
+    function _credentialForSubject(bytes32 subjectDid) internal view returns (Credential memory) {
+        return Credential({
+            credentialHash: CRED_HASH,
+            schemaHash: keccak256("schema"),
+            issuerDid: keccak256("issuer"),
+            subjectDid: subjectDid,
+            issuedAt: uint64(block.timestamp),
+            expiresAt: uint64(block.timestamp + 365 days),
+            status: CredentialStatus.Active,
+            merkleRoot: keccak256("merkle_root")
+        });
     }
 
     // ════════════════════════════════════════════════════════════════

@@ -1,15 +1,28 @@
 import { Router, Response } from 'express';
 import { credentialService } from '../services/credential';
 import { AuthenticatedRequest } from '../middleware/auth';
-import { validate, issueCredentialSchema, uuidSchema, paginationSchema, credentialTypeSchema } from '../middleware/validation';
-import { apiRateLimiter, credentialIssuanceLimiter } from '../middleware/rateLimit';
+import {
+  validate,
+  issueCredentialSchema,
+  uuidSchema,
+  paginationSchema,
+  credentialTypeSchema,
+} from '../middleware/validation';
+import {
+  apiRateLimiter,
+  credentialIssuanceLimiter,
+} from '../middleware/rateLimit';
 import { logger } from '../index';
 import { z } from 'zod';
 
 const router = Router();
 router.use(apiRateLimiter);
 
-function sanitizeCredentialEvidenceExport(exported: Awaited<ReturnType<typeof credentialService.exportCredentialEvidence>>) {
+function sanitizeCredentialEvidenceExport(
+  exported: Awaited<
+    ReturnType<typeof credentialService.exportCredentialEvidence>
+  >,
+) {
   return {
     ...exported,
     credential: {
@@ -31,14 +44,25 @@ router.post(
   validate({ body: issueCredentialSchema }),
   async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
-      const { credentialType, subjectDid, claims, expiresAt, schemaId } = req.body;
+      const {
+        credentialType,
+        subjectDid,
+        claims,
+        expiresAt,
+        schemaId,
+        issuerProof,
+      } = req.body;
       const issuer = req.identity!;
 
       // Resolve subject DID to identity
       const { prisma } = await import('../index');
-      const subject = await prisma.identity.findUnique({ where: { did: subjectDid } });
+      const subject = await prisma.identity.findUnique({
+        where: { did: subjectDid },
+      });
       if (!subject) {
-        res.status(404).json({ error: 'Subject DID not found', code: 'SUBJECT_NOT_FOUND' });
+        res
+          .status(404)
+          .json({ error: 'Subject DID not found', code: 'SUBJECT_NOT_FOUND' });
         return;
       }
 
@@ -51,6 +75,7 @@ router.post(
         claims,
         expiresAt: expiresAt ? new Date(expiresAt) : undefined,
         schemaId,
+        issuerProof,
       });
 
       res.status(201).json({
@@ -76,23 +101,37 @@ router.get(
   validate({ params: z.object({ id: uuidSchema }) }),
   async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
-      const credential = await credentialService.getCredential(req.params.id as string);
+      const credential = await credentialService.getCredential(
+        req.params.id as string,
+      );
       if (!credential) {
-        res.status(404).json({ error: 'Credential not found', code: 'CREDENTIAL_NOT_FOUND' });
+        res
+          .status(404)
+          .json({
+            error: 'Credential not found',
+            code: 'CREDENTIAL_NOT_FOUND',
+          });
         return;
       }
 
       // Only the issuer or subject can view the credential
       const identity = req.identity!;
-      if (credential.issuerId !== identity.id && credential.subjectId !== identity.id) {
-        res.status(403).json({ error: 'Access denied', code: 'CREDENTIAL_ACCESS_DENIED' });
+      if (
+        credential.issuerId !== identity.id &&
+        credential.subjectId !== identity.id
+      ) {
+        res
+          .status(403)
+          .json({ error: 'Access denied', code: 'CREDENTIAL_ACCESS_DENIED' });
         return;
       }
 
       res.json({ data: credential });
     } catch (err) {
       const error = err as Error & { statusCode?: number; code?: string };
-      res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code });
+      res
+        .status(error.statusCode ?? 500)
+        .json({ error: error.message, code: error.code });
     }
   },
 );
@@ -111,11 +150,14 @@ router.get(
   validate({ query: querySchema }),
   async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
-      const { page, limit, credentialType, status, role } = req.query as unknown as z.infer<typeof querySchema>;
+      const { page, limit, credentialType, status, role } =
+        req.query as unknown as z.infer<typeof querySchema>;
       const identity = req.identity!;
 
       const query = {
-        ...(role === 'subject' ? { subjectId: identity.id } : { issuerId: identity.id }),
+        ...(role === 'subject'
+          ? { subjectId: identity.id }
+          : { issuerId: identity.id }),
         credentialType,
         status: status as import('@prisma/client').CredentialStatus | undefined,
         page,
@@ -135,7 +177,9 @@ router.get(
       });
     } catch (err) {
       const error = err as Error & { statusCode?: number; code?: string };
-      res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code });
+      res
+        .status(error.statusCode ?? 500)
+        .json({ error: error.message, code: error.code });
     }
   },
 );
@@ -169,8 +213,13 @@ router.post(
       });
     } catch (err) {
       const error = err as Error & { statusCode?: number; code?: string };
-      logger.error('credential_revoke_error', { error: error.message, credentialId: req.params.id });
-      res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code });
+      logger.error('credential_revoke_error', {
+        error: error.message,
+        credentialId: req.params.id,
+      });
+      res
+        .status(error.statusCode ?? 500)
+        .json({ error: error.message, code: error.code });
     }
   },
 );
@@ -184,11 +233,14 @@ router.post(
   async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
       const identity = req.identity!;
-      const result = await credentialService.verifyCredential(req.params.id as string);
+      const result = await credentialService.verifyCredential(
+        req.params.id as string,
+      );
 
       // Only return full credential data to issuer or subject
-      const isAuthorized = result.credential.issuerId === identity.id ||
-                           result.credential.subjectId === identity.id;
+      const isAuthorized =
+        result.credential.issuerId === identity.id ||
+        result.credential.subjectId === identity.id;
 
       res.json({
         data: {
@@ -196,21 +248,25 @@ router.post(
           checks: result.checks,
           verifiedAt: new Date().toISOString(),
           // Only include credential details for authorized parties
-          ...(isAuthorized ? { credential: result.credential } : {
-            credential: {
-              id: result.credential.id,
-              credentialType: result.credential.credentialType,
-              status: result.credential.status,
-              issuedAt: result.credential.issuedAt,
-              expiresAt: result.credential.expiresAt,
-              // Claims and proof are omitted for unauthorized verifiers
-            },
-          }),
+          ...(isAuthorized
+            ? { credential: result.credential }
+            : {
+                credential: {
+                  id: result.credential.id,
+                  credentialType: result.credential.credentialType,
+                  status: result.credential.status,
+                  issuedAt: result.credential.issuedAt,
+                  expiresAt: result.credential.expiresAt,
+                  // Claims and proof are omitted for unauthorized verifiers
+                },
+              }),
         },
       });
     } catch (err) {
       const error = err as Error & { statusCode?: number; code?: string };
-      res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code });
+      res
+        .status(error.statusCode ?? 500)
+        .json({ error: error.message, code: error.code });
     }
   },
 );
@@ -224,16 +280,23 @@ router.get(
   async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
       const identity = req.identity!;
-      const exported = await credentialService.exportCredentialEvidence(req.params.id as string);
-      const isAuthorized = exported.credential.issuerId === identity.id ||
+      const exported = await credentialService.exportCredentialEvidence(
+        req.params.id as string,
+      );
+      const isAuthorized =
+        exported.credential.issuerId === identity.id ||
         exported.credential.subjectId === identity.id;
 
       res.json({
-        data: isAuthorized ? exported : sanitizeCredentialEvidenceExport(exported),
+        data: isAuthorized
+          ? exported
+          : sanitizeCredentialEvidenceExport(exported),
       });
     } catch (err) {
       const error = err as Error & { statusCode?: number; code?: string };
-      res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code });
+      res
+        .status(error.statusCode ?? 500)
+        .json({ error: error.message, code: error.code });
     }
   },
 );

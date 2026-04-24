@@ -11,16 +11,24 @@ process.env.CREDENTIAL_SIGNING_PUBLIC_KEY = testKeyPair.publicKey;
 process.env.KMS_PROVIDER = 'local';
 process.env.ALLOW_LOCAL_CREDENTIAL_SIGNING = 'true';
 
-jest.mock('prom-client', () => ({
-  Registry: jest.fn(() => ({})),
-  Counter: jest.fn(() => ({ inc: jest.fn() })),
-}), { virtual: true });
+jest.mock(
+  'prom-client',
+  () => ({
+    Registry: jest.fn(() => ({})),
+    Counter: jest.fn(() => ({ inc: jest.fn() })),
+  }),
+  { virtual: true },
+);
 
-jest.mock('@aws-sdk/client-kms', () => ({
-  KMSClient: jest.fn(() => ({ send: jest.fn() })),
-  SignCommand: jest.fn(),
-  GetPublicKeyCommand: jest.fn(),
-}), { virtual: true });
+jest.mock(
+  '@aws-sdk/client-kms',
+  () => ({
+    KMSClient: jest.fn(() => ({ send: jest.fn() })),
+    SignCommand: jest.fn(),
+    GetPublicKeyCommand: jest.fn(),
+  }),
+  { virtual: true },
+);
 
 const mockIdentityFindUnique = jest.fn();
 const mockCredentialFindFirst = jest.fn();
@@ -66,6 +74,34 @@ jest.mock('../src/index', () => ({
 }));
 
 import { CredentialService, CredentialError } from '../src/services/credential';
+
+function canonicalize(value: unknown): string {
+  if (value === null || value === undefined) return JSON.stringify(value);
+  if (typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) {
+    return '[' + value.map((v) => canonicalize(v)).join(',') + ']';
+  }
+  const obj = value as Record<string, unknown>;
+  const keys = Object.keys(obj).sort();
+  const entries = keys.map(
+    (key) => JSON.stringify(key) + ':' + canonicalize(obj[key]),
+  );
+  return '{' + entries.join(',') + '}';
+}
+
+function hashClaims(claims: Record<string, unknown>): string {
+  return crypto.createHash('sha256').update(canonicalize(claims)).digest('hex');
+}
+
+function signForIssuer(issuerDid: string, claimsHash: string): string {
+  const message = crypto
+    .createHash('sha256')
+    .update(`${issuerDid}:${claimsHash}`)
+    .digest();
+  return crypto
+    .sign('sha256', message, crypto.createPrivateKey(testKeyPair.privateKey))
+    .toString('base64url');
+}
 
 describe('Credential trust enforcement', () => {
   let service: CredentialService;
@@ -126,10 +162,75 @@ describe('Credential trust enforcement', () => {
     },
   };
 
+  function buildIssuerProof(overrides: Record<string, unknown> = {}) {
+    const claimsHash = hashClaims(baseRequest.claims);
+    return {
+      type: 'DataIntegrityProof',
+      proofPurpose: 'assertionMethod' as const,
+      issuerDid: baseRequest.issuerDid,
+      keyVersion: '1',
+      verificationMethod: 'did:aethelred:issuer:alpha#assertion-key-1',
+      signatureValue: signForIssuer(baseRequest.issuerDid, claimsHash),
+      ...overrides,
+    };
+  }
+
   it('allows issuance when no issuer trust records exist yet', async () => {
     const credential = await service.issueCredential(baseRequest);
     expect(mockIssuerTrustFindMany).toHaveBeenCalled();
     expect(credential.id).toBe('cred-1');
+  });
+
+  it('stores an issuer-submitted credential proof validated against the issuer key', async () => {
+    const issuerProof = buildIssuerProof();
+
+    const credential = await service.issueCredential({
+      ...baseRequest,
+      issuerProof,
+    });
+
+    expect(credential.id).toBe('cred-1');
+    expect(mockCredentialCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          proof: expect.objectContaining({
+            issuerDid: baseRequest.issuerDid,
+            verificationMethod: issuerProof.verificationMethod,
+            keyVersion: issuerProof.keyVersion,
+            signatureValue: issuerProof.signatureValue,
+          }),
+        }),
+      }),
+    );
+  });
+
+  it('requires an issuer-submitted proof for production issuance', async () => {
+    process.env.NODE_ENV = 'production';
+    service = new CredentialService();
+
+    await expect(service.issueCredential(baseRequest)).rejects.toMatchObject<
+      Partial<CredentialError>
+    >({
+      code: 'CRED_ISSUER_SIGNATURE_REQUIRED',
+    });
+  });
+
+  it('rejects an issuer-submitted proof with an invalid signature', async () => {
+    const issuerProof = buildIssuerProof({
+      signatureValue: signForIssuer(
+        'did:aethelred:issuer:other',
+        hashClaims(baseRequest.claims),
+      ),
+    });
+
+    await expect(
+      service.issueCredential({
+        ...baseRequest,
+        issuerProof,
+      }),
+    ).rejects.toMatchObject<Partial<CredentialError>>({
+      code: 'CRED_ISSUER_PROOF_SIGNATURE_INVALID',
+    });
   });
 
   it('allows issuance when an accredited trust record permits the credential type', async () => {
@@ -148,18 +249,20 @@ describe('Credential trust enforcement', () => {
 
     const credential = await service.issueCredential(baseRequest);
     expect(credential.id).toBe('cred-1');
-    expect(mockAuditLogCreate).toHaveBeenCalledWith(expect.objectContaining({
-      data: expect.objectContaining({
-        details: expect.objectContaining({
-          issuerTrustPolicy: expect.objectContaining({
-            trustRecordId: 'trust-1',
-            accreditationScope: 'enterprise',
-            assuranceLevel: 'advanced',
-            matchedJurisdictions: ['UAE'],
+    expect(mockAuditLogCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          details: expect.objectContaining({
+            issuerTrustPolicy: expect.objectContaining({
+              trustRecordId: 'trust-1',
+              accreditationScope: 'enterprise',
+              assuranceLevel: 'advanced',
+              matchedJurisdictions: ['UAE'],
+            }),
           }),
         }),
       }),
-    }));
+    );
   });
 
   it('rejects issuance when trust governance exists but does not accredit the credential type', async () => {
@@ -180,7 +283,9 @@ describe('Credential trust enforcement', () => {
       },
     ]);
 
-    await expect(service.issueCredential(baseRequest)).rejects.toMatchObject<Partial<CredentialError>>({
+    await expect(service.issueCredential(baseRequest)).rejects.toMatchObject<
+      Partial<CredentialError>
+    >({
       code: 'CRED_ISSUER_NOT_ACCREDITED_FOR_TYPE',
       statusCode: 403,
     });
@@ -200,7 +305,9 @@ describe('Credential trust enforcement', () => {
       },
     ]);
 
-    await expect(service.issueCredential(baseRequest)).rejects.toMatchObject<Partial<CredentialError>>({
+    await expect(service.issueCredential(baseRequest)).rejects.toMatchObject<
+      Partial<CredentialError>
+    >({
       code: 'CRED_ISSUER_NOT_ACCREDITED_FOR_JURISDICTION',
       statusCode: 403,
     });
@@ -232,17 +339,19 @@ describe('Credential trust enforcement', () => {
 
     await service.issueCredential(baseRequest);
 
-    expect(mockAuditLogCreate).toHaveBeenCalledWith(expect.objectContaining({
-      data: expect.objectContaining({
-        details: expect.objectContaining({
-          issuerTrustPolicy: expect.objectContaining({
-            trustRecordId: 'trust-2',
-            accreditationScope: 'sovereign',
-            assuranceLevel: 'sovereign',
-            matchedJurisdictions: ['UAE'],
+    expect(mockAuditLogCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          details: expect.objectContaining({
+            issuerTrustPolicy: expect.objectContaining({
+              trustRecordId: 'trust-2',
+              accreditationScope: 'sovereign',
+              assuranceLevel: 'sovereign',
+              matchedJurisdictions: ['UAE'],
+            }),
           }),
         }),
       }),
-    }));
+    );
   });
 });

@@ -77,10 +77,12 @@ export function validate(schemas: ValidationTarget) {
 // Shared Zod schemas
 // ---------------------------------------------------------------------------
 
-export const didSchema = z.string().regex(
-  /^did:aethelred:[a-zA-Z0-9._-]+$/,
-  'Invalid DID format. Expected: did:aethelred:<identifier>',
-);
+export const didSchema = z
+  .string()
+  .regex(
+    /^did:aethelred:[a-zA-Z0-9._-]+$/,
+    'Invalid DID format. Expected: did:aethelred:<identifier>',
+  );
 
 export const uuidSchema = z.string().uuid('Invalid UUID format');
 
@@ -91,10 +93,11 @@ export const paginationSchema = z.object({
   sortOrder: z.enum(['asc', 'desc']).default('desc'),
 });
 
-export const publicKeySchema = z.string().min(32).max(512).regex(
-  /^[A-Za-z0-9+/=]+$/,
-  'Public key must be base64-encoded',
-);
+export const publicKeySchema = z
+  .string()
+  .min(32)
+  .max(512)
+  .regex(/^[A-Za-z0-9+/=]+$/, 'Public key must be base64-encoded');
 
 export const credentialTypeSchema = z.enum([
   'NATIONAL_ID',
@@ -111,30 +114,41 @@ export const credentialTypeSchema = z.enum([
   'CUSTOM',
 ]);
 
-export const dateRangeSchema = z.object({
-  from: z.coerce.date().optional(),
-  to: z.coerce.date().optional(),
-}).refine(
-  (data) => {
-    if (data.from && data.to) return data.from <= data.to;
-    return true;
-  },
-  { message: 'from must be before to' },
-);
+export const dateRangeSchema = z
+  .object({
+    from: z.coerce.date().optional(),
+    to: z.coerce.date().optional(),
+  })
+  .refine(
+    (data) => {
+      if (data.from && data.to) return data.from <= data.to;
+      return true;
+    },
+    { message: 'from must be before to' },
+  );
 
 // ---------------------------------------------------------------------------
 // Validation helpers
 // ---------------------------------------------------------------------------
-export function parseOrThrow<T>(schema: ZodSchema<T>, data: unknown, context: string): T {
+export function parseOrThrow<T>(
+  schema: ZodSchema<T>,
+  data: unknown,
+  context: string,
+): T {
   try {
     return schema.parse(data);
   } catch (err) {
     if (err instanceof ZodError) {
-      const details = err.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
-      throw Object.assign(new Error(`Validation failed in ${context}: ${details}`), {
-        statusCode: 400,
-        code: 'VALIDATION_ERROR',
-      });
+      const details = err.issues
+        .map((i) => `${i.path.join('.')}: ${i.message}`)
+        .join('; ');
+      throw Object.assign(
+        new Error(`Validation failed in ${context}: ${details}`),
+        {
+          statusCode: 400,
+          code: 'VALIDATION_ERROR',
+        },
+      );
     }
     throw err;
   }
@@ -157,6 +171,17 @@ export const issueCredentialSchema = z.object({
   claims: z.record(z.unknown()),
   expiresAt: z.coerce.date().optional(),
   schemaId: uuidSchema.optional(),
+  issuerProof: z
+    .object({
+      type: z.string().min(1).max(120).optional(),
+      created: z.string().datetime().optional(),
+      verificationMethod: z.string().min(1).max(500).optional(),
+      proofPurpose: z.literal('assertionMethod').optional(),
+      issuerDid: didSchema.optional(),
+      keyVersion: z.string().min(1).max(120).optional(),
+      signatureValue: z.string().min(16),
+    })
+    .optional(),
 });
 
 export const verifyCredentialSchema = z.object({
