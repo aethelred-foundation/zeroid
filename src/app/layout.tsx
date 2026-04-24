@@ -3,14 +3,12 @@
 import { Sora, DM_Sans, JetBrains_Mono } from "next/font/google";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { WagmiProvider } from "wagmi";
-import { RainbowKitProvider, darkTheme } from "@rainbow-me/rainbowkit";
 import { ThemeProvider } from "next-themes";
 import { Toaster } from "sonner";
 import { useState } from "react";
 import { wagmiConfig } from "@/config/wagmi";
 import { IdentityProvider } from "@/contexts/IdentityContext";
 import { ProofProvider } from "@/contexts/ProofContext";
-import "@rainbow-me/rainbowkit/styles.css";
 import "@/styles/globals.css";
 
 const sora = Sora({
@@ -81,36 +79,25 @@ export default function RootLayout({
         >
           <WagmiProvider config={wagmiConfig}>
             <QueryClientProvider client={queryClient}>
-              <RainbowKitProvider
-                theme={darkTheme({
-                  accentColor: "#c0c4cc",
-                  accentColorForeground: "#08090b",
-                  borderRadius: "large",
-                  fontStack: "system",
-                  overlayBlur: "small",
-                })}
-                modalSize="compact"
-              >
-                <IdentityProvider>
-                  <ProofProvider>
-                    {children}
-                    <Toaster
-                      position="bottom-right"
-                      toastOptions={{
-                        className: "font-body",
-                        style: {
-                          background: "rgba(14, 15, 18, 0.95)",
-                          backdropFilter: "blur(24px)",
-                          border: "1px solid rgba(255, 255, 255, 0.07)",
-                          color: "#eceef1",
-                          borderRadius: "16px",
-                          boxShadow: "0 20px 60px rgba(0,0,0,0.5)",
-                        },
-                      }}
-                    />
-                  </ProofProvider>
-                </IdentityProvider>
-              </RainbowKitProvider>
+              <IdentityProvider>
+                <ProofProvider>
+                  {children}
+                  <Toaster
+                    position="bottom-right"
+                    toastOptions={{
+                      className: "font-body",
+                      style: {
+                        background: "rgba(14, 15, 18, 0.95)",
+                        backdropFilter: "blur(24px)",
+                        border: "1px solid rgba(255, 255, 255, 0.07)",
+                        color: "#eceef1",
+                        borderRadius: "16px",
+                        boxShadow: "0 20px 60px rgba(0,0,0,0.5)",
+                      },
+                    }}
+                  />
+                </ProofProvider>
+              </IdentityProvider>
             </QueryClientProvider>
           </WagmiProvider>
         </ThemeProvider>

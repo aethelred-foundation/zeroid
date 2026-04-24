@@ -46,26 +46,6 @@ jest.mock("wagmi", () => ({
   useConnect: jest.fn(() => ({ connectors: [], connect: jest.fn() })),
 }));
 
-// Mock @rainbow-me/rainbowkit
-jest.mock("@rainbow-me/rainbowkit", () => ({
-  ConnectButton: {
-    Custom: ({ children }: { children: (props: any) => React.ReactNode }) => {
-      return (
-        <>
-          {children({
-            account: undefined,
-            chain: undefined,
-            openAccountModal: jest.fn(),
-            openChainModal: jest.fn(),
-            openConnectModal: jest.fn(),
-            mounted: true,
-          })}
-        </>
-      );
-    },
-  },
-}));
-
 // Mock framer-motion
 jest.mock("framer-motion", () => ({
   motion: {
@@ -133,6 +113,9 @@ jest.mock("lucide-react", () => {
     UserCog: createIcon("user-cog"),
     Command: createIcon("command"),
     Search: createIcon("search"),
+    CheckCircle: createIcon("check-circle"),
+    AlertTriangle: createIcon("alert-triangle"),
+    Info: createIcon("info"),
     X: createIcon("x"),
   };
 });

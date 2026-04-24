@@ -22,10 +22,6 @@ jest.mock("wagmi", () => ({
   useWaitForTransactionReceipt: jest.fn(() => ({ isLoading: false })),
 }));
 
-jest.mock("@rainbow-me/rainbowkit", () => ({
-  ConnectButton: () => <div data-testid="connect-button">Connect</div>,
-}));
-
 jest.mock("framer-motion", () => ({
   motion: new Proxy(
     {},

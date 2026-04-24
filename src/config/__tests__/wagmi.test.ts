@@ -14,13 +14,6 @@ jest.mock("wagmi/connectors", () => ({
   coinbaseWallet: jest.fn(() => "coinbase-connector"),
 }));
 
-jest.mock("@rainbow-me/rainbowkit", () => ({
-  getDefaultConfig: jest.fn((config: any) => ({
-    ...config,
-    _type: "rainbowkit",
-  })),
-}));
-
 import {
   wagmiConfig,
   activeChain,
@@ -55,7 +48,7 @@ describe("wagmi config", () => {
   });
 });
 
-describe("wagmi config — WalletConnect branch", () => {
+describe("wagmi config — WalletConnect connector", () => {
   const origEnv = process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID;
 
   afterEach(() => {
@@ -66,12 +59,14 @@ describe("wagmi config — WalletConnect branch", () => {
     }
   });
 
-  it("uses RainbowKit config when WALLETCONNECT_PROJECT_ID is set", () => {
+  it("includes WalletConnect when WALLETCONNECT_PROJECT_ID is set", () => {
     process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID = "test-project-id";
     jest.isolateModules(() => {
-      const { wagmiConfig: rkConfig } = require("../wagmi");
-      expect(rkConfig).toBeDefined();
-      expect((rkConfig as any)._type).toBe("rainbowkit");
+      const { wagmiConfig: walletConnectConfig } = require("../wagmi");
+      expect(walletConnectConfig).toBeDefined();
+      expect((walletConnectConfig as any).connectors).toContain(
+        "walletconnect-connector",
+      );
     });
   });
 });

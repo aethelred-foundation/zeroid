@@ -23,17 +23,6 @@ jest.mock("@tanstack/react-query", () => ({
   ),
 }));
 
-// Mock @rainbow-me/rainbowkit
-jest.mock("@rainbow-me/rainbowkit", () => ({
-  RainbowKitProvider: ({ children }: any) => (
-    <div data-testid="rainbowkit-provider">{children}</div>
-  ),
-  darkTheme: () => ({}),
-}));
-
-// Mock @rainbow-me/rainbowkit/styles.css
-jest.mock("@rainbow-me/rainbowkit/styles.css", () => ({}));
-
 // Mock next-themes
 jest.mock("next-themes", () => ({
   ThemeProvider: ({ children }: any) => (
@@ -70,6 +59,27 @@ jest.mock("@/styles/globals.css", () => ({}));
 import RootLayout from "../layout";
 
 describe("RootLayout", () => {
+  let consoleErrorSpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    const originalConsoleError = console.error;
+    consoleErrorSpy = jest
+      .spyOn(console, "error")
+      .mockImplementation((message?: unknown, ...args: unknown[]) => {
+        if (
+          typeof message === "string" &&
+          message.includes("validateDOMNesting")
+        ) {
+          return;
+        }
+        originalConsoleError(message, ...args);
+      });
+  });
+
+  afterEach(() => {
+    consoleErrorSpy.mockRestore();
+  });
+
   it("renders without crashing", () => {
     const { container } = render(
       <RootLayout>
@@ -96,7 +106,6 @@ describe("RootLayout", () => {
     );
     expect(screen.getByTestId("wagmi-provider")).toBeInTheDocument();
     expect(screen.getByTestId("query-provider")).toBeInTheDocument();
-    expect(screen.getByTestId("rainbowkit-provider")).toBeInTheDocument();
     expect(screen.getByTestId("identity-provider")).toBeInTheDocument();
     expect(screen.getByTestId("proof-provider")).toBeInTheDocument();
   });

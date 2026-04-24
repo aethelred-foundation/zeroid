@@ -2,12 +2,11 @@
  * Wagmi Configuration for ZeroID
  *
  * Configures wallet connectors, transports, and chain setup
- * for the ZeroID dApp with RainbowKit integration.
+ * for the ZeroID dApp.
  */
 
 import { http, createConfig, createStorage } from "wagmi";
 import { injected, walletConnect, coinbaseWallet } from "wagmi/connectors";
-import { getDefaultConfig } from "@rainbow-me/rainbowkit";
 import {
   aethelredMainnet,
   aethelredTestnet,
@@ -38,29 +37,21 @@ export const ssrSafeStorage =
   typeof window !== "undefined" ? window.localStorage : noopStorage;
 
 // ---------------------------------------------------------------------------
-// RainbowKit Configuration
+// Wallet Configuration
 // ---------------------------------------------------------------------------
 
 /**
- * RainbowKit-flavoured wagmi config.
- * When a valid WalletConnect project ID is provided, the full RainbowKit
- * modal experience is used. Otherwise we fall back to a manual connector
- * config so the app still works in development without a project ID.
+ * Sovereign-grade wallet config that keeps connector ownership local. The app
+ * can run without WalletConnect in development, and production can enable it
+ * by providing NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID.
  */
-export const wagmiConfig = WALLETCONNECT_PROJECT_ID
-  ? getDefaultConfig({
-      appName: "ZeroID by Aethelred",
-      projectId: WALLETCONNECT_PROJECT_ID,
-      chains: [aethelredMainnet, aethelredTestnet, aethelredDevnet],
-      ssr: true,
-    })
-  : createFallbackConfig();
+export const wagmiConfig = createZeroIdWalletConfig();
 
 // ---------------------------------------------------------------------------
-// Fallback Configuration (no WalletConnect project ID)
+// Local Wallet Configuration
 // ---------------------------------------------------------------------------
 
-function createFallbackConfig() {
+function createZeroIdWalletConfig() {
   const connectors = [
     injected({ shimDisconnect: true }),
     coinbaseWallet({
@@ -68,6 +59,14 @@ function createFallbackConfig() {
       appLogoUrl: "https://zeroid.aethelred.network/icon.png",
     }),
   ];
+
+  if (WALLETCONNECT_PROJECT_ID) {
+    connectors.push(
+      walletConnect({
+        projectId: WALLETCONNECT_PROJECT_ID,
+      }),
+    );
+  }
 
   const transports = {
     [aethelredMainnet.id]: http(),
