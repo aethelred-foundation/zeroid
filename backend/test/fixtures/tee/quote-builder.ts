@@ -463,6 +463,8 @@ export interface CollateralBuildOptions {
   }>;
   tcbIssueDate?: string;
   tcbNextUpdate?: string;
+  qeIssueDate?: string;
+  qeNextUpdate?: string;
   qeMrsigner?: string;
   qeIsvProdId?: number;
   qeTcbLevels?: Array<{ tcb: { isvsvn: number }; tcbStatus: string }>;
@@ -543,6 +545,8 @@ export function buildCollateral(opts: CollateralBuildOptions): BuiltCollateral {
   // ── Build QE Identity ─────────────────────────────────────────────────
   const qeMrsigner = opts.qeMrsigner ?? crypto.randomBytes(32).toString('hex');
   const qeIsvProdId = opts.qeIsvProdId ?? 1;
+  const qeIssueDate = opts.qeIssueDate ?? now.toISOString();
+  const qeNextUpdate = opts.qeNextUpdate ?? new Date(now.getTime() + 30 * 86400000).toISOString();
   const qeTcbLevels = opts.qeTcbLevels ?? [
     { tcb: { isvsvn: 6 }, tcbStatus: 'UpToDate' },
     { tcb: { isvsvn: 2 }, tcbStatus: 'OutOfDate' },
@@ -553,6 +557,8 @@ export function buildCollateral(opts: CollateralBuildOptions): BuiltCollateral {
       id: 'QE',
       mrsigner: qeMrsigner,
       isvprodid: qeIsvProdId,
+      issueDate: qeIssueDate,
+      nextUpdate: qeNextUpdate,
       tcbLevels: qeTcbLevels,
     },
   });

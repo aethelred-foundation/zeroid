@@ -32,6 +32,18 @@ import {
   type BuiltCollateral,
 } from './fixtures/tee/quote-builder';
 
+jest.mock('prom-client', () => {
+  const Metric = jest.fn().mockImplementation(() => ({
+    inc: jest.fn(),
+    observe: jest.fn(),
+  }));
+  return {
+    Counter: Metric,
+    Histogram: Metric,
+    Registry: jest.fn().mockImplementation(() => ({})),
+  };
+}, { virtual: true });
+
 // ---------------------------------------------------------------------------
 // Suppress logger and stub redis/prisma
 // ---------------------------------------------------------------------------
@@ -468,6 +480,26 @@ describe('validateCollateralFreshness', () => {
       priv().validateCollateralFreshness(collateral);
     }).not.toThrow();
   });
+
+  it('rejects stale QE identity collateral → TEE_QE_IDENTITY_STALE', () => {
+    const collateral = buildCollateral({
+      hierarchy,
+      tcbIssueDate: new Date().toISOString(),
+      tcbNextUpdate: new Date(Date.now() + 30 * 86400000).toISOString(),
+      qeIssueDate: new Date(Date.now() - 31 * 86400000).toISOString(),
+      qeNextUpdate: new Date(Date.now() + 86400000).toISOString(),
+    });
+
+    expect(() => {
+      priv().validateCollateralFreshness(collateral);
+    }).toThrow(AttestationError);
+
+    try {
+      priv().validateCollateralFreshness(collateral);
+    } catch (err: any) {
+      expect(err.code).toBe('TEE_QE_IDENTITY_STALE');
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -584,6 +616,37 @@ describe('verifyQEReportIdentity', () => {
       priv().verifyQEReportIdentity(collateral, certResult);
     } catch (err: any) {
       expect(err.code).toBe('TEE_QE_TCB_LEVEL_INSUFFICIENT');
+    }
+  });
+
+  it('rejects QE TCB status outside policy → TEE_QE_TCB_STATUS_REJECTED', () => {
+    const qeMrsigner = crypto.randomBytes(32).toString('hex');
+
+    const collateral = buildCollateral({
+      hierarchy,
+      qeMrsigner,
+      qeIsvProdId: 1,
+      qeTcbLevels: [
+        { tcb: { isvsvn: 4 }, tcbStatus: 'OutOfDate' },
+      ],
+    });
+
+    const certResult = {
+      fmspc: '00906ea10000',
+      qeReportMrenclave: crypto.randomBytes(32).toString('hex'),
+      qeReportMrsigner: qeMrsigner,
+      qeReportIsvProdId: 1,
+      qeReportIsvSvn: 6,
+    };
+
+    expect(() => {
+      priv().verifyQEReportIdentity(collateral, certResult);
+    }).toThrow(AttestationError);
+
+    try {
+      priv().verifyQEReportIdentity(collateral, certResult);
+    } catch (err: any) {
+      expect(err.code).toBe('TEE_QE_TCB_STATUS_REJECTED');
     }
   });
 });

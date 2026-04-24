@@ -151,6 +151,14 @@ const ALLOWED_TCB_STATUSES = new Set(
     .map((status) => status.trim())
     .filter(Boolean),
 );
+const ALLOWED_QE_TCB_STATUSES = new Set(
+  (process.env.TEE_ALLOWED_QE_TCB_STATUSES
+    ?? process.env.TEE_ALLOWED_TCB_STATUSES
+    ?? TCBStatus.UP_TO_DATE)
+    .split(',')
+    .map((status) => status.trim())
+    .filter(Boolean),
+);
 
 // ---------------------------------------------------------------------------
 // Intel SGX Root CA certificate (well-known trust anchor)
@@ -1022,6 +1030,9 @@ export class TEEAttestationService {
       if (!qeId.enclaveIdentity.id || !qeId.enclaveIdentity.tcbLevels) {
         throw new Error('Missing enclaveIdentity.id or enclaveIdentity.tcbLevels');
       }
+      if (!qeId.enclaveIdentity.issueDate || !qeId.enclaveIdentity.nextUpdate) {
+        throw new Error('Missing enclaveIdentity.issueDate or enclaveIdentity.nextUpdate');
+      }
     } catch (err) {
       if (err instanceof AttestationError) throw err;
       throw new AttestationError(
@@ -1065,17 +1076,17 @@ export class TEEAttestationService {
     const certs: string[] = [];
     const beginMarker = '-----BEGIN CERTIFICATE-----';
     const endMarker = '-----END CERTIFICATE-----';
-    let cursor = 0;
+    let scanOffset = 0;
 
-    while (cursor < pemChain.length) {
-      const begin = pemChain.indexOf(beginMarker, cursor);
+    while (scanOffset < pemChain.length) {
+      const begin = pemChain.indexOf(beginMarker, scanOffset);
       if (begin === -1) break;
 
       const end = pemChain.indexOf(endMarker, begin);
       if (end === -1) break;
 
       certs.push(pemChain.slice(begin, end + endMarker.length));
-      cursor = end + endMarker.length;
+      scanOffset = end + endMarker.length;
     }
     return certs;
   }
@@ -1783,6 +1794,19 @@ export class TEEAttestationService {
           'TEE_COLLATERAL_NO_NEXT_UPDATE',
         );
       }
+
+      if (collateral.qeIdentity) {
+        const qeIdentityWrapper = JSON.parse(collateral.qeIdentity);
+        const qeIdentity = qeIdentityWrapper.enclaveIdentity;
+        if (!qeIdentity) {
+          throw new AttestationError(
+            'QE identity payload missing enclaveIdentity field',
+            'TEE_INVALID_QE_IDENTITY',
+          );
+        }
+
+        this.validateQeIdentityFreshness(qeIdentity, now);
+      }
     } catch (err) {
       if (err instanceof AttestationError) throw err;
       throw new AttestationError(
@@ -1792,6 +1816,68 @@ export class TEEAttestationService {
     }
 
     logger.info('collateral_freshness_validated');
+  }
+
+  private validateQeIdentityFreshness(
+    qeIdentity: { issueDate?: string; nextUpdate?: string },
+    now: number,
+  ): void {
+    if (!qeIdentity.issueDate) {
+      throw new AttestationError(
+        'QE identity missing issueDate field',
+        'TEE_QE_IDENTITY_NO_ISSUE_DATE',
+      );
+    }
+
+    const issueDate = new Date(qeIdentity.issueDate).getTime();
+    if (Number.isNaN(issueDate)) {
+      throw new AttestationError(
+        `QE identity issueDate is invalid: ${qeIdentity.issueDate}`,
+        'TEE_QE_IDENTITY_INVALID_ISSUE_DATE',
+      );
+    }
+    if (issueDate > now) {
+      throw new AttestationError(
+        `QE identity issueDate is in the future: ${qeIdentity.issueDate}`,
+        'TEE_QE_IDENTITY_FUTURE_DATE',
+      );
+    }
+
+    const ageMs = now - issueDate;
+    if (ageMs > MAX_COLLATERAL_AGE_MS) {
+      const ageDays = Math.floor(ageMs / (24 * 60 * 60 * 1000));
+      const maxDays = Math.floor(MAX_COLLATERAL_AGE_MS / (24 * 60 * 60 * 1000));
+      throw new AttestationError(
+        `QE identity collateral is stale: issued ${ageDays} days ago, max allowed is ${maxDays} days`,
+        'TEE_QE_IDENTITY_STALE',
+      );
+    }
+
+    if (!qeIdentity.nextUpdate) {
+      throw new AttestationError(
+        'QE identity missing nextUpdate field',
+        'TEE_QE_IDENTITY_NO_NEXT_UPDATE',
+      );
+    }
+
+    const nextUpdate = new Date(qeIdentity.nextUpdate).getTime();
+    if (Number.isNaN(nextUpdate)) {
+      throw new AttestationError(
+        `QE identity nextUpdate is invalid: ${qeIdentity.nextUpdate}`,
+        'TEE_QE_IDENTITY_INVALID_NEXT_UPDATE',
+      );
+    }
+    if (nextUpdate <= now) {
+      throw new AttestationError(
+        `QE identity collateral has expired: nextUpdate was ${qeIdentity.nextUpdate}`,
+        'TEE_QE_IDENTITY_EXPIRED',
+      );
+    }
+
+    logger.info('qe_identity_freshness_validated', {
+      issueDate: qeIdentity.issueDate,
+      nextUpdate: qeIdentity.nextUpdate,
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -1975,17 +2061,33 @@ export class TEEAttestationService {
     // Verify QE tcbLevels — the QE's isvSvn must meet at least one
     // non-revoked TCB level from the authenticated identity
     if (Array.isArray(identity.tcbLevels) && identity.tcbLevels.length > 0) {
-      const matchingLevel = identity.tcbLevels.find(
+      const eligibleLevels = identity.tcbLevels.filter(
         (level: { tcb?: { isvsvn?: number }; tcbStatus?: string }) =>
           level.tcb?.isvsvn !== undefined &&
-          certResult.qeReportIsvSvn >= level.tcb.isvsvn &&
-          level.tcbStatus !== 'Revoked',
+          certResult.qeReportIsvSvn >= level.tcb.isvsvn,
+      );
+
+      if (eligibleLevels.length === 0) {
+        throw new AttestationError(
+          `QE Report isvSvn ${certResult.qeReportIsvSvn} does not meet any TCB level in authenticated QE Identity`,
+          'TEE_QE_TCB_LEVEL_INSUFFICIENT',
+        );
+      }
+
+      const matchingLevel = eligibleLevels.find(
+        (level: { tcbStatus?: string }) =>
+          typeof level.tcbStatus === 'string' && ALLOWED_QE_TCB_STATUSES.has(level.tcbStatus),
       );
 
       if (!matchingLevel) {
+        const statuses = Array.from(new Set(
+          eligibleLevels
+            .map((level: { tcbStatus?: string }) => level.tcbStatus)
+            .filter((status): status is string => typeof status === 'string' && status.length > 0),
+        ));
         throw new AttestationError(
-          `QE Report isvSvn ${certResult.qeReportIsvSvn} does not meet any non-revoked TCB level in authenticated QE Identity`,
-          'TEE_QE_TCB_LEVEL_INSUFFICIENT',
+          `QE Report matched QE TCB status ${statuses.join(', ') || 'unknown'}, which is not allowed by policy. Allowed statuses: ${Array.from(ALLOWED_QE_TCB_STATUSES).join(', ')}`,
+          'TEE_QE_TCB_STATUS_REJECTED',
         );
       }
     }

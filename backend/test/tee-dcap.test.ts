@@ -15,6 +15,18 @@
  */
 import * as crypto from 'crypto';
 
+jest.mock('prom-client', () => {
+  const Metric = jest.fn().mockImplementation(() => ({
+    inc: jest.fn(),
+    observe: jest.fn(),
+  }));
+  return {
+    Counter: Metric,
+    Histogram: Metric,
+    Registry: jest.fn().mockImplementation(() => ({})),
+  };
+}, { virtual: true });
+
 // Import the class directly — we instantiate it ourselves to avoid
 // the singleton's logger/redis dependency during construction.
 // We access private methods via (service as any).
@@ -838,7 +850,7 @@ MIIBxDCC...
       expectAttestationError(() => svc.verifyQEReportIdentity(collateral, certResult), 'TEE_QE_TCB_LEVEL_INSUFFICIENT');
     });
 
-    it('accepts when isvSvn meets a non-revoked level even if higher levels exist', () => {
+    it('rejects when matched QE TCB status is outside allowed policy', () => {
       const mrsigner = 'ab'.repeat(32);
       const collateral = makeQEIdentityCollateral({
         mrsigner,
@@ -855,7 +867,7 @@ MIIBxDCC...
         qeReportIsvSvn: 6, // Meets level with isvsvn=5
       };
 
-      expect(() => svc.verifyQEReportIdentity(collateral, certResult)).not.toThrow();
+      expectAttestationError(() => svc.verifyQEReportIdentity(collateral, certResult), 'TEE_QE_TCB_STATUS_REJECTED');
     });
   });
 
