@@ -28,10 +28,15 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: "npm"
+          cache-dependency-path: |
+            package-lock.json
+            backend/package-lock.json
       - run: npm ci --legacy-peer-deps
+      - name: Install backend dependencies
+        working-directory: ./backend
+        run: npm ci
       - name: NPM Security Audit
-        # Advisory: upstream transitive dep vulnerabilities tracked via Dependabot
-        run: npm audit --audit-level=critical --omit=dev || true
+        run: npm run security:audit:all
 
   # ===========================================================================
   # LINT & TYPE-CHECK
@@ -175,6 +180,7 @@ jobs:
       contents: read
     needs:
       [
+        security-scan,
         lint-format,
         test-frontend,
         test-backend,

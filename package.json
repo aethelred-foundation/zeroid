@@ -27,7 +27,8 @@
     "contracts:compile": "forge build",
     "contracts:test": "forge test",
     "analyze": "ANALYZE=true next build",
-    "security:audit": "npm audit --production"
+    "security:audit": "npm audit --audit-level=moderate",
+    "security:audit:all": "npm audit --audit-level=moderate && npm --prefix backend audit --audit-level=moderate"
   },
   "dependencies": {
     "@headlessui/react": "^1.7.0",
