@@ -1,4 +1,6 @@
+import crypto from 'crypto';
 import { logger, redis, prisma } from '../index';
+import { isProductionRuntime } from './production-safety';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -54,20 +56,23 @@ export interface GovernmentVerificationResult {
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
-const UAE_PASS_CONFIG = {
-  clientId: process.env.UAE_PASS_CLIENT_ID ?? '',
-  clientSecret: process.env.UAE_PASS_CLIENT_SECRET ?? '',
-  tokenEndpoint: process.env.UAE_PASS_TOKEN_URL ?? 'https://stg-id.uaepass.ae/idshub/token',
-  userInfoEndpoint: process.env.UAE_PASS_USERINFO_URL ?? 'https://stg-id.uaepass.ae/idshub/userinfo',
-  authEndpoint: process.env.UAE_PASS_AUTH_URL ?? 'https://stg-id.uaepass.ae/idshub/authorize',
-  scope: 'urn:uae:digitalid:profile:general',
-};
+const DEFAULT_UAE_PASS_BASE_URL = 'https://stg-id.uaepass.ae';
+const UAE_PASS_SCOPE = 'urn:uae:digitalid:profile:general';
 
-const EMIRATES_ID_CONFIG = {
-  apiUrl: process.env.EMIRATES_ID_API_URL ?? 'https://api.ica.gov.ae/v1',
-  apiKey: process.env.EMIRATES_ID_API_KEY ?? '',
-  apiSecret: process.env.EMIRATES_ID_API_SECRET ?? '',
-};
+interface UAEPassConfig {
+  clientId: string;
+  clientSecret: string;
+  tokenEndpoint: string;
+  userInfoEndpoint: string;
+  authEndpoint: string;
+  scope: 'urn:uae:digitalid:profile:general';
+}
+
+interface EmiratesIDConfig {
+  apiUrl: string;
+  apiKey: string;
+  apiSecret: string;
+}
 
 const GOV_VERIFICATION_CACHE_TTL = parseInt(process.env.GOV_VERIFICATION_CACHE_TTL ?? '86400', 10);
 
@@ -79,16 +84,17 @@ export class GovernmentAPIService {
   // UAE Pass: Get authorization URL
   // -------------------------------------------------------------------------
   getUAEPassAuthUrl(redirectUri: string, state: string): string {
+    const config = this.getUAEPassConfig();
     const params = new URLSearchParams({
       response_type: 'code',
-      client_id: UAE_PASS_CONFIG.clientId,
-      scope: UAE_PASS_CONFIG.scope,
+      client_id: config.clientId,
+      scope: config.scope,
       redirect_uri: redirectUri,
       state,
       acr_values: 'urn:safelayer:tws:policies:authentication:level:low',
     });
 
-    return `${UAE_PASS_CONFIG.authEndpoint}?${params.toString()}`;
+    return `${config.authEndpoint}?${params.toString()}`;
   }
 
   // -------------------------------------------------------------------------
@@ -98,16 +104,17 @@ export class GovernmentAPIService {
     logger.info('uaepass_auth_start', { identityId: request.identityId });
 
     try {
+      const config = this.getUAEPassConfig();
       // 1. Exchange authorization code for access token
-      const tokenResponse = await fetch(UAE_PASS_CONFIG.tokenEndpoint, {
+      const tokenResponse = await fetch(config.tokenEndpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: new URLSearchParams({
           grant_type: 'authorization_code',
           code: request.authorizationCode,
           redirect_uri: request.redirectUri,
-          client_id: UAE_PASS_CONFIG.clientId,
-          client_secret: UAE_PASS_CONFIG.clientSecret,
+          client_id: config.clientId,
+          client_secret: config.clientSecret,
         }),
       });
 
@@ -123,7 +130,7 @@ export class GovernmentAPIService {
       const tokenData = await tokenResponse.json() as { access_token: string; token_type: string; expires_in: number };
 
       // 2. Fetch user profile
-      const profileResponse = await fetch(UAE_PASS_CONFIG.userInfoEndpoint, {
+      const profileResponse = await fetch(config.userInfoEndpoint, {
         headers: {
           Authorization: `Bearer ${tokenData.access_token}`,
         },
@@ -222,6 +229,7 @@ export class GovernmentAPIService {
     }
 
     try {
+      const config = this.getEmiratesIDConfig();
       // Check cache first
       const cacheKey = `gov:eid:${this.hashSensitiveData(request.idNumber)}`;
       const cached = await redis.get(cacheKey);
@@ -231,12 +239,12 @@ export class GovernmentAPIService {
       }
 
       // Call ICA (Federal Authority for Identity and Citizenship) API
-      const response = await fetch(`${EMIRATES_ID_CONFIG.apiUrl}/identity/verify`, {
+      const response = await fetch(`${config.apiUrl}/identity/verify`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-API-Key': EMIRATES_ID_CONFIG.apiKey,
-          'X-API-Secret': EMIRATES_ID_CONFIG.apiSecret,
+          'X-API-Key': config.apiKey,
+          'X-API-Secret': config.apiSecret,
         },
         body: JSON.stringify({
           idNumber: request.idNumber,
@@ -372,6 +380,76 @@ export class GovernmentAPIService {
   // -------------------------------------------------------------------------
   // Internal helpers
   // -------------------------------------------------------------------------
+  private getUAEPassConfig(): UAEPassConfig {
+    const baseUrl = trimTrailingSlash(process.env.UAE_PASS_API_URL ?? DEFAULT_UAE_PASS_BASE_URL);
+    const config: UAEPassConfig = {
+      clientId: process.env.UAE_PASS_CLIENT_ID?.trim() ?? '',
+      clientSecret: process.env.UAE_PASS_CLIENT_SECRET?.trim() ?? '',
+      tokenEndpoint: process.env.UAE_PASS_TOKEN_URL?.trim() ?? `${baseUrl}/idshub/token`,
+      userInfoEndpoint: process.env.UAE_PASS_USERINFO_URL?.trim() ?? `${baseUrl}/idshub/userinfo`,
+      authEndpoint: process.env.UAE_PASS_AUTH_URL?.trim() ?? `${baseUrl}/idshub/authorize`,
+      scope: UAE_PASS_SCOPE,
+    };
+
+    this.assertProductionGovernmentConfig('UAE Pass', 'GOV_UAEPASS', [
+      ['UAE_PASS_CLIENT_ID', config.clientId],
+      ['UAE_PASS_CLIENT_SECRET', config.clientSecret],
+      ['UAE_PASS_TOKEN_URL', config.tokenEndpoint],
+      ['UAE_PASS_USERINFO_URL', config.userInfoEndpoint],
+      ['UAE_PASS_AUTH_URL', config.authEndpoint],
+    ], [config.tokenEndpoint, config.userInfoEndpoint, config.authEndpoint]);
+
+    return config;
+  }
+
+  private getEmiratesIDConfig(): EmiratesIDConfig {
+    const apiUrl = process.env.EMIRATES_ID_API_URL?.trim()
+      ?? process.env.EMIRATES_ID_VERIFICATION_URL?.trim()
+      ?? 'https://api.ica.gov.ae/v1';
+    const config: EmiratesIDConfig = {
+      apiUrl: trimTrailingSlash(apiUrl),
+      apiKey: process.env.EMIRATES_ID_API_KEY?.trim() ?? '',
+      apiSecret: process.env.EMIRATES_ID_API_SECRET?.trim() ?? '',
+    };
+
+    this.assertProductionGovernmentConfig('Emirates ID', 'GOV_EID', [
+      ['EMIRATES_ID_API_URL', config.apiUrl],
+      ['EMIRATES_ID_API_KEY', config.apiKey],
+      ['EMIRATES_ID_API_SECRET', config.apiSecret],
+    ], [config.apiUrl]);
+
+    return config;
+  }
+
+  private assertProductionGovernmentConfig(
+    provider: string,
+    codePrefix: string,
+    requiredValues: Array<[string, string]>,
+    endpointUrls: string[],
+  ): void {
+    if (!isProductionRuntime()) return;
+
+    const missing = requiredValues
+      .filter(([, value]) => value.length === 0)
+      .map(([key]) => key);
+    if (missing.length > 0) {
+      throw new GovernmentAPIError(
+        `${provider} configuration missing required production values: ${missing.join(', ')}`,
+        `${codePrefix}_CONFIG_MISSING`,
+        503,
+      );
+    }
+
+    const unsafeEndpoint = endpointUrls.find((url) => !isTrustedProductionEndpoint(url));
+    if (unsafeEndpoint) {
+      throw new GovernmentAPIError(
+        `${provider} production endpoint is not allowed: ${unsafeEndpoint}`,
+        `${codePrefix}_ENDPOINT_UNSAFE`,
+        503,
+      );
+    }
+  }
+
   private validateUAEPassProfile(profile: UAEPassProfile): void {
     if (!profile.uuid || !profile.fullNameEN || !profile.idCardNumber) {
       throw new GovernmentAPIError(
@@ -417,4 +495,19 @@ export class GovernmentAPIError extends Error {
 }
 
 export const governmentAPIService = new GovernmentAPIService();
-import crypto from 'crypto';
+
+function trimTrailingSlash(value: string): string {
+  return value.replace(/\/+$/, '');
+}
+
+function isTrustedProductionEndpoint(value: string): boolean {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'https:') return false;
+    const hostname = url.hostname.toLowerCase();
+    if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1') return false;
+    return !/(^|[.-])(stg|stage|staging|sandbox|test|dev)([.-]|$)/.test(hostname);
+  } catch {
+    return false;
+  }
+}
