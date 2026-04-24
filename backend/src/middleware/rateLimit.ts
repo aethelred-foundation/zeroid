@@ -17,6 +17,8 @@ export interface RateLimitConfig {
   includeHeaders?: boolean;
   /** Custom handler when limit is exceeded */
   onLimitReached?: (req: Request, res: Response) => void;
+  /** Development-only escape hatch for local Redis outages */
+  failOpenOnStoreError?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -30,6 +32,7 @@ export function createRateLimiter(config: RateLimitConfig) {
     keyExtractor,
     includeHeaders = true,
     onLimitReached,
+    failOpenOnStoreError,
   } = config;
 
   const windowSec = Math.ceil(windowMs / 1000);
@@ -54,9 +57,14 @@ export function createRateLimiter(config: RateLimitConfig) {
 
       const results = await pipeline.exec();
       if (!results) {
-        // Redis unavailable — fail open
         logger.warn('rate_limit_redis_unavailable', { key });
-        next();
+        handleRateLimitStoreFailure(req, res, next, {
+          key,
+          includeHeaders,
+          maxRequests,
+          windowSec,
+          failOpenOnStoreError,
+        });
         return;
       }
 
@@ -99,12 +107,17 @@ export function createRateLimiter(config: RateLimitConfig) {
 
       next();
     } catch (err) {
-      // Fail open if Redis is unavailable
       logger.error('rate_limit_error', {
         error: (err as Error).message,
         key,
       });
-      next();
+      handleRateLimitStoreFailure(req, res, next, {
+        key,
+        includeHeaders,
+        maxRequests,
+        windowSec,
+        failOpenOnStoreError,
+      });
     }
   };
 }
@@ -169,6 +182,48 @@ function extractClientIP(req: Request): string {
 
   // Use socket peer address — not spoofable
   return req.ip ?? req.socket.remoteAddress ?? 'unknown';
+}
+
+function shouldFailOpenOnStoreError(failOpenOnStoreError: boolean | undefined): boolean {
+  if (typeof failOpenOnStoreError === 'boolean') return failOpenOnStoreError;
+  return process.env.NODE_ENV !== 'production';
+}
+
+function handleRateLimitStoreFailure(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+  options: {
+    key: string;
+    includeHeaders: boolean;
+    maxRequests: number;
+    windowSec: number;
+    failOpenOnStoreError?: boolean;
+  },
+): void {
+  if (shouldFailOpenOnStoreError(options.failOpenOnStoreError)) {
+    logger.warn('rate_limit_store_failure_allowed', {
+      key: options.key,
+      path: req.path,
+      env: process.env.NODE_ENV ?? 'development',
+    });
+    next();
+    return;
+  }
+
+  const retryAfter = Math.max(1, options.windowSec);
+  if (options.includeHeaders) {
+    res.set('X-RateLimit-Limit', String(options.maxRequests));
+    res.set('X-RateLimit-Remaining', '0');
+    res.set('X-RateLimit-Reset', String(Math.ceil(Date.now() / 1000) + retryAfter));
+    res.set('X-RateLimit-Policy', `${options.maxRequests};w=${options.windowSec}`);
+  }
+  res.set('Retry-After', String(retryAfter));
+  res.status(503).json({
+    error: 'Rate limiting temporarily unavailable',
+    code: 'RATE_LIMIT_STORE_UNAVAILABLE',
+    retryAfter,
+  });
 }
 
 // ---------------------------------------------------------------------------

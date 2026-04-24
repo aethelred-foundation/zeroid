@@ -1,0 +1,133 @@
+const mockPipeline = jest.fn();
+const mockWarn = jest.fn();
+const mockError = jest.fn();
+
+jest.mock('../src/index', () => ({
+  redis: {
+    pipeline: mockPipeline,
+  },
+  logger: {
+    warn: mockWarn,
+    error: mockError,
+  },
+}));
+
+import { createRateLimiter } from '../src/middleware/rateLimit';
+
+const ORIGINAL_ENV = { ...process.env };
+
+function createPipeline(execResult: unknown) {
+  return {
+    zremrangebyscore: jest.fn().mockReturnThis(),
+    zadd: jest.fn().mockReturnThis(),
+    zcard: jest.fn().mockReturnThis(),
+    expire: jest.fn().mockReturnThis(),
+    exec: jest.fn(async () => execResult),
+  };
+}
+
+function createMockHttp() {
+  const req: any = {
+    ip: '127.0.0.1',
+    socket: {},
+    headers: {},
+    path: '/api/test',
+  };
+  const res: any = {
+    headers: {} as Record<string, string>,
+    statusCode: 200,
+    body: undefined,
+    set: jest.fn((name: string, value: string) => {
+      res.headers[name] = value;
+      return res;
+    }),
+    status: jest.fn((statusCode: number) => {
+      res.statusCode = statusCode;
+      return res;
+    }),
+    json: jest.fn((body: unknown) => {
+      res.body = body;
+      return res;
+    }),
+  };
+  const next = jest.fn();
+  return { req, res, next };
+}
+
+describe('createRateLimiter', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    process.env = { ...ORIGINAL_ENV, NODE_ENV: 'test' };
+  });
+
+  afterAll(() => {
+    process.env = ORIGINAL_ENV;
+  });
+
+  it('allows requests within the configured limit', async () => {
+    mockPipeline.mockReturnValue(createPipeline([[null, 1], [null, 1], [null, 1], [null, 1]]));
+    const limiter = createRateLimiter({ windowMs: 60_000, maxRequests: 2, keyPrefix: 'rl:test' });
+    const { req, res, next } = createMockHttp();
+
+    await limiter(req, res, next);
+
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(res.status).not.toHaveBeenCalled();
+    expect(res.headers['X-RateLimit-Limit']).toBe('2');
+    expect(res.headers['X-RateLimit-Remaining']).toBe('1');
+  });
+
+  it('rejects requests over the configured limit', async () => {
+    mockPipeline.mockReturnValue(createPipeline([[null, 1], [null, 1], [null, 3], [null, 1]]));
+    const limiter = createRateLimiter({ windowMs: 60_000, maxRequests: 2, keyPrefix: 'rl:test' });
+    const { req, res, next } = createMockHttp();
+
+    await limiter(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(429);
+    expect(res.body).toMatchObject({ code: 'RATE_LIMIT_EXCEEDED' });
+  });
+
+  it('fails open outside production when Redis returns no pipeline results', async () => {
+    mockPipeline.mockReturnValue(createPipeline(null));
+    const limiter = createRateLimiter({ windowMs: 60_000, maxRequests: 2, keyPrefix: 'rl:test' });
+    const { req, res, next } = createMockHttp();
+
+    await limiter(req, res, next);
+
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(res.status).not.toHaveBeenCalled();
+  });
+
+  it('fails closed in production when Redis returns no pipeline results', async () => {
+    process.env.NODE_ENV = 'production';
+    mockPipeline.mockReturnValue(createPipeline(null));
+    const limiter = createRateLimiter({ windowMs: 60_000, maxRequests: 2, keyPrefix: 'rl:test' });
+    const { req, res, next } = createMockHttp();
+
+    await limiter(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(503);
+    expect(res.body).toMatchObject({ code: 'RATE_LIMIT_STORE_UNAVAILABLE' });
+    expect(res.headers['X-RateLimit-Remaining']).toBe('0');
+  });
+
+  it('fails closed in production when Redis throws', async () => {
+    process.env.NODE_ENV = 'production';
+    mockPipeline.mockImplementation(() => {
+      throw new Error('redis unavailable');
+    });
+    const limiter = createRateLimiter({ windowMs: 60_000, maxRequests: 2, keyPrefix: 'rl:test' });
+    const { req, res, next } = createMockHttp();
+
+    await limiter(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(mockError).toHaveBeenCalledWith('rate_limit_error', expect.objectContaining({
+      error: 'redis unavailable',
+    }));
+    expect(res.status).toHaveBeenCalledWith(503);
+  });
+});
