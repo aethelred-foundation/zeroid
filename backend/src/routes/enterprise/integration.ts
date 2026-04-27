@@ -182,12 +182,18 @@ function validate<T>(schema: z.ZodSchema<T>) {
 // ---------------------------------------------------------------------------
 function getClientId(req: Request): string {
   const enterpriseReq = req as EnterpriseAuthenticatedRequest;
-  return (
-    enterpriseReq.enterpriseContext?.organizationId ??
-    (req.headers['x-zeroid-client-id'] as string) ??
-    (req as any).clientId ??
-    'anonymous'
-  );
+  const organizationId = enterpriseReq.enterpriseContext?.organizationId;
+  if (!organizationId) {
+    const error = new Error('Enterprise organization context required') as Error & {
+      statusCode?: number;
+      code?: string;
+    };
+    error.statusCode = 403;
+    error.code = 'ENTERPRISE_CONTEXT_REQUIRED';
+    throw error;
+  }
+
+  return organizationId;
 }
 
 const ENTERPRISE_READ_ROLES: EnterpriseRole[] = [
@@ -2620,11 +2626,14 @@ router.get(
       const violations = slaMonitor.getViolations(clientId, since);
       res.status(200).json({ data: violations });
     } catch (err) {
-      const error = err as Error;
+      const error = err as Error & { statusCode?: number; code?: string };
       logger.error('sla_violations_error', { error: error.message });
       res
-        .status(500)
-        .json({ error: error.message, code: 'SLA_VIOLATIONS_ERROR' });
+        .status(error.statusCode ?? 500)
+        .json({
+          error: error.message,
+          code: error.code ?? 'SLA_VIOLATIONS_ERROR',
+        });
     }
   },
 );
@@ -2642,9 +2651,12 @@ router.get(
       const alerts = slaMonitor.getAlerts(clientId, limit);
       res.status(200).json({ data: alerts });
     } catch (err) {
-      const error = err as Error;
+      const error = err as Error & { statusCode?: number; code?: string };
       logger.error('sla_alerts_error', { error: error.message });
-      res.status(500).json({ error: error.message, code: 'SLA_ALERTS_ERROR' });
+      res.status(error.statusCode ?? 500).json({
+        error: error.message,
+        code: error.code ?? 'SLA_ALERTS_ERROR',
+      });
     }
   },
 );
@@ -2666,9 +2678,12 @@ router.get(
       const analytics = await apiGateway.getAnalytics(clientId, periodDays);
       res.status(200).json({ data: analytics });
     } catch (err) {
-      const error = err as Error;
+      const error = err as Error & { statusCode?: number; code?: string };
       logger.error('usage_error', { error: error.message });
-      res.status(500).json({ error: error.message, code: 'USAGE_ERROR' });
+      res.status(error.statusCode ?? 500).json({
+        error: error.message,
+        code: error.code ?? 'USAGE_ERROR',
+      });
     }
   },
 );

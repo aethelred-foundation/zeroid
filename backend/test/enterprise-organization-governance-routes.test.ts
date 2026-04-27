@@ -53,6 +53,10 @@ jest.mock('winston', () => {
 jest.mock('../src/middleware/enterprise', () => ({
   requireEnterpriseContext: () => (req: Record<string, any>, _res: unknown, next: () => void) => {
     req.identity = { id: 'admin-1' };
+    if (req.headers?.['x-test-skip-enterprise-context'] === 'true') {
+      next();
+      return;
+    }
     req.enterpriseContext = {
       organizationId: 'org-1',
       role: 'admin',
@@ -152,7 +156,12 @@ import '../src/routes/enterprise/integration';
 async function invokeRoute(
   method: 'GET' | 'PATCH' | 'POST',
   path: string,
-  options: { body?: Record<string, unknown>; params?: Record<string, string>; query?: Record<string, unknown> } = {},
+  options: {
+    body?: Record<string, unknown>;
+    headers?: Record<string, string>;
+    params?: Record<string, string>;
+    query?: Record<string, unknown>;
+  } = {},
 ): Promise<{ statusCode: number; body: any }> {
   const handlers = routeRegistry[`${method} ${path}`];
   if (!handlers) {
@@ -163,7 +172,7 @@ async function invokeRoute(
     body: options.body ?? {},
     params: options.params ?? {},
     query: options.query ?? {},
-    headers: {},
+    headers: options.headers ?? {},
     path,
   };
 
@@ -360,5 +369,17 @@ describe('enterprise organization governance routes', () => {
       clientId: 'org-1',
       tier: 'enterprise',
     }));
+  });
+
+  it('fails closed when an enterprise-scoped route lacks organization context', async () => {
+    const response = await invokeRoute('GET', '/usage', {
+      headers: { 'x-test-skip-enterprise-context': 'true' },
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.body).toMatchObject({
+      code: 'ENTERPRISE_CONTEXT_REQUIRED',
+    });
+    expect(mockGetAnalytics).not.toHaveBeenCalled();
   });
 });
