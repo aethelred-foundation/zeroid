@@ -170,9 +170,7 @@ export const governanceLimiter = createRateLimiter({
  * Otherwise uses the socket peer address to prevent spoofing.
  */
 function extractClientIP(req: Request): string {
-  const trustedProxy = process.env.TRUSTED_PROXY;
-
-  if (trustedProxy) {
+  if (isRequestFromTrustedProxy(req)) {
     // Only trust forwarding headers when behind a known proxy
     const forwarded = req.headers['x-forwarded-for'];
     if (typeof forwarded === 'string') {
@@ -182,6 +180,30 @@ function extractClientIP(req: Request): string {
 
   // Use socket peer address — not spoofable
   return req.ip ?? req.socket.remoteAddress ?? 'unknown';
+}
+
+function isRequestFromTrustedProxy(req: Request): boolean {
+  const trustedProxies = parseTrustedProxyList(process.env.TRUSTED_PROXY);
+  if (trustedProxies.length === 0) return false;
+
+  const remoteAddress = normalizeProxyAddress(req.socket.remoteAddress ?? req.ip);
+  return Boolean(remoteAddress && trustedProxies.includes(remoteAddress));
+}
+
+function parseTrustedProxyList(value: string | undefined): string[] {
+  return (value ?? '')
+    .split(',')
+    .map((entry) => normalizeProxyAddress(entry))
+    .filter((entry): entry is string => Boolean(entry));
+}
+
+function normalizeProxyAddress(value: string | undefined): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed) return null;
+  return trimmed
+    .replace(/^\[|\]$/g, '')
+    .replace(/^::ffff:/i, '')
+    .toLowerCase();
 }
 
 function shouldFailOpenOnStoreError(failOpenOnStoreError: boolean | undefined): boolean {

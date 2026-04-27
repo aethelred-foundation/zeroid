@@ -128,6 +128,24 @@ describe('production safety controls', () => {
     ]);
   });
 
+  it('rejects wildcard trusted proxy configuration in production', () => {
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      TRUSTED_PROXY: '*',
+      METRICS_PUBLIC_DISABLED: 'true',
+    })).toEqual([
+      expect.objectContaining({ control: 'TRUSTED_PROXY' }),
+    ]);
+
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      TRUSTED_PROXY: '10.0.0.0/8',
+      METRICS_PUBLIC_DISABLED: 'true',
+    })).toEqual([
+      expect.objectContaining({ control: 'TRUSTED_PROXY' }),
+    ]);
+  });
+
   it('blocks production metrics when neither disabled nor token protected', () => {
     const env = { ...PROD_BASE_ENV };
 

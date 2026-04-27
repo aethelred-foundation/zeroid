@@ -89,6 +89,44 @@ describe('createRateLimiter', () => {
     expect(res.body).toMatchObject({ code: 'RATE_LIMIT_EXCEEDED' });
   });
 
+  it('trusts forwarded client IP only from configured proxy peers', async () => {
+    process.env.TRUSTED_PROXY = '10.0.0.5';
+    mockPipeline.mockReturnValue(createPipeline([[null, 1], [null, 1], [null, 1], [null, 1]]));
+    const limiter = createRateLimiter({ windowMs: 60_000, maxRequests: 2, keyPrefix: 'rl:test' });
+    const { req, next } = createMockHttp();
+    req.ip = '10.0.0.5';
+    req.socket.remoteAddress = '10.0.0.5';
+    req.headers['x-forwarded-for'] = '203.0.113.44, 10.0.0.5';
+
+    await limiter(req, createMockHttp().res, next);
+
+    const pipeline = mockPipeline.mock.results[0]?.value;
+    expect(pipeline.zremrangebyscore).toHaveBeenCalledWith(
+      'rl:test:203.0.113.44',
+      0,
+      expect.any(Number),
+    );
+  });
+
+  it('ignores spoofed forwarded client IP from untrusted peers', async () => {
+    process.env.TRUSTED_PROXY = '10.0.0.5';
+    mockPipeline.mockReturnValue(createPipeline([[null, 1], [null, 1], [null, 1], [null, 1]]));
+    const limiter = createRateLimiter({ windowMs: 60_000, maxRequests: 2, keyPrefix: 'rl:test' });
+    const { req, next } = createMockHttp();
+    req.ip = '198.51.100.9';
+    req.socket.remoteAddress = '198.51.100.9';
+    req.headers['x-forwarded-for'] = '203.0.113.44';
+
+    await limiter(req, createMockHttp().res, next);
+
+    const pipeline = mockPipeline.mock.results[0]?.value;
+    expect(pipeline.zremrangebyscore).toHaveBeenCalledWith(
+      'rl:test:198.51.100.9',
+      0,
+      expect.any(Number),
+    );
+  });
+
   it('fails open outside production when Redis returns no pipeline results', async () => {
     mockPipeline.mockReturnValue(createPipeline(null));
     const limiter = createRateLimiter({ windowMs: 60_000, maxRequests: 2, keyPrefix: 'rl:test' });

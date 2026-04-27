@@ -120,6 +120,7 @@ export function checkedProductionSafetyControls(): string[] {
     ...UNSAFE_PRODUCTION_FLAGS.map((flag) => flag.control),
     'REDIS_URL',
     'JWT_SECRET',
+    'TRUSTED_PROXY',
     'CORS_ORIGINS',
     'METRICS_PUBLIC_DISABLED_OR_METRICS_AUTH_TOKEN',
     'SANCTIONS_SCREENING_DISABLED_OR_SANCTIONS_LIST_SIGNATURE_PUBLIC_KEYS_JSON',
@@ -192,6 +193,8 @@ export function collectProductionSafetyViolations(
       risk: 'Production API JWT signing secret must not use a known development or test placeholder',
     });
   }
+
+  validateTrustedProxyConfig(env, violations);
 
   const corsOrigins = getAllowedCorsOrigins(env);
   if (!env.CORS_ORIGINS?.trim()) {
@@ -539,6 +542,28 @@ function validateSanctionsListMaxAge(
     violations.push({
       control: 'SANCTIONS_LIST_MAX_AGE_HOURS',
       risk: `SANCTIONS_LIST_MAX_AGE_HOURS must be an integer from 1 to ${MAX_PRODUCTION_SANCTIONS_LIST_AGE_HOURS}`,
+    });
+  }
+}
+
+function validateTrustedProxyConfig(
+  env: NodeJS.ProcessEnv,
+  violations: ProductionSafetyViolation[],
+): void {
+  const trustedProxy = env.TRUSTED_PROXY?.trim();
+  if (!trustedProxy) return;
+
+  const entries = parseCsv(trustedProxy);
+  const unsafeEntry = entries.find((entry) =>
+    entry === '*' ||
+    entry === '0.0.0.0/0' ||
+    entry === '::/0' ||
+    entry.includes('/'),
+  );
+  if (unsafeEntry) {
+    violations.push({
+      control: 'TRUSTED_PROXY',
+      risk: `TRUSTED_PROXY must list exact proxy peer addresses; unsafe entry: ${unsafeEntry}`,
     });
   }
 }
