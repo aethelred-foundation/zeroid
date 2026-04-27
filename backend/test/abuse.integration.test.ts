@@ -25,7 +25,10 @@ const issuedTokenHashes: Record<string, string> = {};
 
 const mockRedis = {
   get: jest.fn(async (key: string) => redisStore[key] ?? null),
-  set: jest.fn(async (key: string, value: string, _mode?: string, _ttl?: number) => {
+  set: jest.fn(async (key: string, value: string, ...args: unknown[]) => {
+    if (args.includes('NX') && redisStore[key] !== undefined) {
+      return null;
+    }
     redisStore[key] = value;
     return 'OK';
   }),
@@ -154,6 +157,7 @@ jest.mock('../src/services/zkproof', () => ({
       verifiedAt: new Date().toISOString(),
     })),
     buildSelectiveDisclosureInputs: jest.fn(() => ({})),
+    isCircuitContextBound: jest.fn(() => true),
     listCircuits: jest.fn(() => []),
   },
 }));
@@ -303,6 +307,10 @@ async function makeToken(
   const token = await builder.sign(JWT_SECRET);
   issuedTokenHashes[jti] = crypto.createHash('sha256').update(token).digest('hex');
   return token;
+}
+
+function proofNonceScopedKey(prefix: string, nonce: string): string {
+  return `${prefix}:${crypto.createHash('sha256').update(nonce).digest('hex')}`;
 }
 
 /** Stub the prisma + redis lookups so the auth middleware considers the token valid. */
@@ -846,11 +854,12 @@ describe('4 - Replay attack protection (ZK proof nonce reuse)', () => {
           tokenHash: issuedTokenHashes['session-1'],
         });
       }
-      if (key === `proof:used:${validProofPayload.nonce}`) {
+      if (key === proofNonceScopedKey('proof:used', validProofPayload.nonce)) {
         return JSON.stringify({ verifier: 'identity-1', verifiedAt: Date.now() - 5000 });
       }
-      if (key === `proof:nonce:${validProofPayload.nonce}`) {
+      if (key === proofNonceScopedKey('proof:nonce', validProofPayload.nonce)) {
         return JSON.stringify({
+          nonce: validProofPayload.nonce,
           audience: 'identity-1',
           subjectId: 'identity-1',
           credentialId: 'cred-1',

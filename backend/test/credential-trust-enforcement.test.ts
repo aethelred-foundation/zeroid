@@ -93,10 +93,37 @@ function hashClaims(claims: Record<string, unknown>): string {
   return crypto.createHash('sha256').update(canonicalize(claims)).digest('hex');
 }
 
-function signForIssuer(issuerDid: string, claimsHash: string): string {
+function buildCredentialBinding(
+  request: {
+    credentialType: string;
+    issuerId: string;
+    issuerDid: string;
+    subjectId: string;
+    subjectDid: string;
+    claims: Record<string, unknown>;
+  },
+  claimsHash = hashClaims(request.claims),
+) {
+  return {
+    version: 'zeroid.credential.signature.v2' as const,
+    proofPurpose: 'assertionMethod' as const,
+    issuerDid: request.issuerDid,
+    issuerId: request.issuerId,
+    subjectDid: request.subjectDid,
+    subjectId: request.subjectId,
+    credentialType: request.credentialType,
+    schemaId: null,
+    expiresAt: null,
+    claimsHash,
+  };
+}
+
+function signCredentialBinding(
+  binding: ReturnType<typeof buildCredentialBinding>,
+): string {
   const message = crypto
     .createHash('sha256')
-    .update(`${issuerDid}:${claimsHash}`)
+    .update(canonicalize(binding))
     .digest();
   return crypto
     .sign('sha256', message, crypto.createPrivateKey(testKeyPair.privateKey))
@@ -164,13 +191,15 @@ describe('Credential trust enforcement', () => {
 
   function buildIssuerProof(overrides: Record<string, unknown> = {}) {
     const claimsHash = hashClaims(baseRequest.claims);
+    const credentialBinding = buildCredentialBinding(baseRequest, claimsHash);
     return {
       type: 'DataIntegrityProof',
       proofPurpose: 'assertionMethod' as const,
       issuerDid: baseRequest.issuerDid,
       keyVersion: '1',
       verificationMethod: 'did:aethelred:issuer:alpha#assertion-key-1',
-      signatureValue: signForIssuer(baseRequest.issuerDid, claimsHash),
+      credentialBinding,
+      signatureValue: signCredentialBinding(credentialBinding),
       ...overrides,
     };
   }
@@ -216,11 +245,13 @@ describe('Credential trust enforcement', () => {
   });
 
   it('rejects an issuer-submitted proof with an invalid signature', async () => {
+    const credentialBinding = buildCredentialBinding(baseRequest);
     const issuerProof = buildIssuerProof({
-      signatureValue: signForIssuer(
-        'did:aethelred:issuer:other',
-        hashClaims(baseRequest.claims),
-      ),
+      credentialBinding,
+      signatureValue: signCredentialBinding({
+        ...credentialBinding,
+        claimsHash: 'f'.repeat(64),
+      }),
     });
 
     await expect(
@@ -230,6 +261,27 @@ describe('Credential trust enforcement', () => {
       }),
     ).rejects.toMatchObject<Partial<CredentialError>>({
       code: 'CRED_ISSUER_PROOF_SIGNATURE_INVALID',
+    });
+  });
+
+  it('rejects an issuer-submitted proof replayed onto a different credential envelope', async () => {
+    const replayedBinding = buildCredentialBinding({
+      ...baseRequest,
+      subjectId: 'subject-2',
+      subjectDid: 'did:aethelred:user:bob',
+    });
+    const issuerProof = buildIssuerProof({
+      credentialBinding: replayedBinding,
+      signatureValue: signCredentialBinding(replayedBinding),
+    });
+
+    await expect(
+      service.issueCredential({
+        ...baseRequest,
+        issuerProof,
+      }),
+    ).rejects.toMatchObject<Partial<CredentialError>>({
+      code: 'CRED_ISSUER_PROOF_BINDING_MISMATCH',
     });
   });
 

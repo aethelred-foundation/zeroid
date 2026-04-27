@@ -3,9 +3,14 @@ import { createLogger, format, transports } from 'winston';
 import crypto from 'crypto';
 import { redis } from '../../index';
 
-const isHttpsUrl = (value: string): boolean => {
+const isLocalDevelopmentUrl = (url: URL): boolean =>
+  process.env.NODE_ENV !== 'production' &&
+  ['localhost', '127.0.0.1', '::1'].includes(url.hostname);
+
+const isSecureOidcUrl = (value: string): boolean => {
   try {
-    return new URL(value).protocol === 'https:';
+    const url = new URL(value);
+    return url.protocol === 'https:' || isLocalDevelopmentUrl(url);
   } catch {
     return false;
   }
@@ -38,12 +43,35 @@ const logger = createLogger({
 // ---------------------------------------------------------------------------
 export const OIDCClientRegistrationSchema = z.object({
   clientName: z.string().min(1),
-  redirectUris: z.array(z.string().url()).min(1),
-  postLogoutRedirectUris: z.array(z.string().url()).default([]),
+  redirectUris: z
+    .array(
+      z
+        .string()
+        .url()
+        .refine(
+          isSecureOidcUrl,
+          'Redirect URI must use HTTPS, except localhost in non-production.',
+        ),
+    )
+    .min(1),
+  postLogoutRedirectUris: z
+    .array(
+      z
+        .string()
+        .url()
+        .refine(
+          isSecureOidcUrl,
+          'Post-logout redirect URI must use HTTPS, except localhost in non-production.',
+        ),
+    )
+    .default([]),
   backchannelLogoutUri: z
     .string()
     .url()
-    .refine(isHttpsUrl, 'Back-channel logout URI must use HTTPS.')
+    .refine(
+      isSecureOidcUrl,
+      'Back-channel logout URI must use HTTPS, except localhost in non-production.',
+    )
     .optional(),
   backchannelLogoutSessionRequired: z.boolean().default(true),
   grantTypes: z
@@ -62,7 +90,14 @@ export const OIDCClientRegistrationSchema = z.object({
   logoUri: z.string().url().optional(),
   policyUri: z.string().url().optional(),
   tosUri: z.string().url().optional(),
-  jwksUri: z.string().url().optional(),
+  jwksUri: z
+    .string()
+    .url()
+    .refine(
+      isSecureOidcUrl,
+      'JWKS URI must use HTTPS, except localhost in non-production.',
+    )
+    .optional(),
   idTokenSignedResponseAlg: z.enum(SUPPORTED_SIGNING_ALGORITHMS).optional(),
   idTokenEncryptedResponseAlg: z.enum(['RSA-OAEP', 'A256KW']).optional(),
   requirePkce: z.boolean().default(true),
@@ -547,6 +582,27 @@ export class OIDCBridge {
     }
     this.assertClientGrantAllowed(client, 'authorization_code');
 
+    if (parsed.responseType !== 'code') {
+      throw new OIDCError(
+        'unsupported_response_type',
+        'Implicit and hybrid OIDC response types are disabled. Use authorization code flow with PKCE.',
+      );
+    }
+
+    if (!client.registration.responseTypes.includes(parsed.responseType)) {
+      throw new OIDCError(
+        'unsupported_response_type',
+        'Requested response type is not registered for this client',
+      );
+    }
+
+    if (!isSecureOidcUrl(parsed.redirectUri)) {
+      throw new OIDCError(
+        'invalid_redirect_uri',
+        'Redirect URI must use HTTPS, except localhost in non-production.',
+      );
+    }
+
     if (!client.registration.redirectUris.includes(parsed.redirectUri)) {
       throw new OIDCError(
         'invalid_redirect_uri',
@@ -927,6 +983,13 @@ export class OIDCBridge {
 
     const client = await this.clients.get(session.clientId);
     const logoutUrls = client?.registration.postLogoutRedirectUris ?? [];
+    const insecureLogoutUri = logoutUrls.find((uri) => !isSecureOidcUrl(uri));
+    if (insecureLogoutUri) {
+      throw new OIDCError(
+        'invalid_client_metadata',
+        'Registered post-logout redirect URI must use HTTPS, except localhost in non-production.',
+      );
+    }
 
     logger.info('front_channel_logout', {
       sessionId,
@@ -1392,6 +1455,15 @@ export class OIDCBridge {
 
     if (tokenRecord.tokenType !== expectedTokenType) {
       throw new OIDCError('invalid_token', 'Unexpected token type', 401);
+    }
+
+    const client = await this.getNormalizedClient(tokenRecord.clientId);
+    if (!client || !this.isClientActive(client)) {
+      throw new OIDCError(
+        'invalid_token',
+        'Token client is no longer active',
+        401,
+      );
     }
 
     const now = Math.floor(Date.now() / 1000);

@@ -179,6 +179,20 @@ export const issueCredentialSchema = z.object({
       proofPurpose: z.literal('assertionMethod').optional(),
       issuerDid: didSchema.optional(),
       keyVersion: z.string().min(1).max(120).optional(),
+      credentialBinding: z
+        .object({
+          version: z.literal('zeroid.credential.signature.v2'),
+          proofPurpose: z.literal('assertionMethod'),
+          issuerDid: didSchema,
+          issuerId: z.string().min(1).max(120),
+          subjectDid: didSchema,
+          subjectId: z.string().min(1).max(120),
+          credentialType: credentialTypeSchema,
+          schemaId: uuidSchema.nullable(),
+          expiresAt: z.string().datetime().nullable(),
+          claimsHash: z.string().regex(/^[0-9a-f]{64}$/i),
+        })
+        .optional(),
       signatureValue: z.string().min(16),
     })
     .optional(),

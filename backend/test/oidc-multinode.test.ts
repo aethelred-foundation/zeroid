@@ -248,6 +248,47 @@ describe('OIDC multi-node correctness', () => {
     fetchMock.mockResolvedValue({ ok: true, status: 200 });
   });
 
+  test('client registration rejects insecure redirect and JWKS URIs', async () => {
+    await expect(
+      bridgeA.registerClient({
+        clientName: 'Insecure Client',
+        redirectUris: ['http://app.example.com/callback'],
+        postLogoutRedirectUris: ['https://app.example.com/logout'],
+        grantTypes: ['authorization_code'],
+        responseTypes: ['code'],
+        tokenEndpointAuthMethod: 'client_secret_basic',
+        scopes: ['openid'],
+        jwksUri: 'http://app.example.com/jwks.json',
+      }),
+    ).rejects.toThrow(/Redirect URI must use HTTPS/);
+  });
+
+  test('authorize rejects implicit flow even for a legacy stored client', async () => {
+    const client = await registerTestClient(bridgeA);
+    const storedClient = JSON.parse(
+      store.get(`oidc:clients:${client.clientId}`)!,
+    );
+    storedClient.registration.responseTypes = ['id_token'];
+    store.set(`oidc:clients:${client.clientId}`, JSON.stringify(storedClient));
+
+    await expect(
+      bridgeB.authorize(
+        {
+          clientId: client.clientId,
+          redirectUri: REDIRECT_URI,
+          responseType: 'id_token',
+          scope: 'openid profile',
+          state: crypto.randomBytes(8).toString('hex'),
+          nonce: crypto.randomBytes(8).toString('hex'),
+        },
+        'user-implicit',
+        { name: 'Legacy User' },
+      ),
+    ).rejects.toMatchObject({
+      errorCode: 'unsupported_response_type',
+    });
+  });
+
   // 1. Cross-instance session access
   test('session created on A is retrievable on B', async () => {
     const client = await registerTestClient(bridgeA);
@@ -775,6 +816,12 @@ describe('OIDC multi-node correctness', () => {
       }),
     ).rejects.toMatchObject({
       errorCode: 'invalid_client',
+    });
+
+    await expect(
+      bridgeB.getUserInfo(tokens.access_token),
+    ).rejects.toMatchObject({
+      errorCode: 'invalid_token',
     });
   });
 

@@ -44,6 +44,8 @@ interface CircuitConfig {
   vkeyPath: string;
   maxInputs: number;
   description: string;
+  publicSignals: string[];
+  contextBound: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -61,6 +63,8 @@ const CIRCUIT_REGISTRY: Record<string, CircuitConfig> = {
     vkeyPath: path.join(CIRCUITS_DIR, 'age_verification', 'verification_key.json'),
     maxInputs: 5,
     description: 'Prove age is above a threshold without revealing exact date of birth',
+    publicSignals: ['ageThresholdYears', 'currentTimestamp', 'credentialHashPublic'],
+    contextBound: false,
   },
   nationality_check: {
     wasmPath: path.join(CIRCUITS_DIR, 'nationality_check', 'nationality_check.wasm'),
@@ -68,6 +72,8 @@ const CIRCUIT_REGISTRY: Record<string, CircuitConfig> = {
     vkeyPath: path.join(CIRCUITS_DIR, 'nationality_check', 'verification_key.json'),
     maxInputs: 3,
     description: 'Prove nationality membership in a set without revealing exact nationality',
+    publicSignals: ['currentTimestamp', 'credentialHashPublic', 'allowedNationalities', 'merkleRoot', 'useMerkleMode'],
+    contextBound: false,
   },
   income_range: {
     wasmPath: path.join(CIRCUITS_DIR, 'income_range', 'income_range.wasm'),
@@ -75,6 +81,8 @@ const CIRCUIT_REGISTRY: Record<string, CircuitConfig> = {
     vkeyPath: path.join(CIRCUITS_DIR, 'income_range', 'verification_key.json'),
     maxInputs: 4,
     description: 'Prove income falls within a specified range',
+    publicSignals: [],
+    contextBound: false,
   },
   credential_ownership: {
     wasmPath: path.join(CIRCUITS_DIR, 'credential_ownership', 'credential_ownership.wasm'),
@@ -82,6 +90,8 @@ const CIRCUIT_REGISTRY: Record<string, CircuitConfig> = {
     vkeyPath: path.join(CIRCUITS_DIR, 'credential_ownership', 'verification_key.json'),
     maxInputs: 8,
     description: 'Prove ownership of a credential without revealing its contents',
+    publicSignals: [],
+    contextBound: false,
   },
   selective_disclosure: {
     wasmPath: path.join(CIRCUITS_DIR, 'selective_disclosure', 'selective_disclosure.wasm'),
@@ -89,6 +99,8 @@ const CIRCUIT_REGISTRY: Record<string, CircuitConfig> = {
     vkeyPath: path.join(CIRCUITS_DIR, 'selective_disclosure', 'verification_key.json'),
     maxInputs: 16,
     description: 'Selectively reveal specific fields of a credential while hiding others',
+    publicSignals: [],
+    contextBound: false,
   },
 };
 
@@ -280,12 +292,33 @@ export class ZKProofService {
   // -------------------------------------------------------------------------
   // List available circuits
   // -------------------------------------------------------------------------
-  listCircuits(): Array<{ name: string; description: string; maxInputs: number }> {
+  listCircuits(): Array<{
+    name: string;
+    description: string;
+    maxInputs: number;
+    publicSignals: string[];
+    contextBound: boolean;
+  }> {
     return Object.entries(CIRCUIT_REGISTRY).map(([name, config]) => ({
       name,
       description: config.description,
       maxInputs: config.maxInputs,
+      publicSignals: config.publicSignals,
+      contextBound: config.contextBound,
     }));
+  }
+
+  isCircuitContextBound(circuitName: string): boolean {
+    const circuit = CIRCUIT_REGISTRY[circuitName];
+    if (!circuit?.contextBound) {
+      return false;
+    }
+
+    return (
+      circuit.publicSignals[0] === 'claimsHash' &&
+      circuit.publicSignals[circuit.publicSignals.length - 1] ===
+        'contextCommitment'
+    );
   }
 
   // -------------------------------------------------------------------------

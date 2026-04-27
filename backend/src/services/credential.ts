@@ -180,7 +180,21 @@ export interface IssuerCredentialProof {
   proofPurpose?: 'assertionMethod';
   issuerDid?: string;
   keyVersion?: string;
+  credentialBinding?: CredentialSignatureBinding;
   signatureValue: string;
+}
+
+export interface CredentialSignatureBinding {
+  version: 'zeroid.credential.signature.v2';
+  proofPurpose: 'assertionMethod';
+  issuerDid: string;
+  issuerId: string;
+  subjectDid: string;
+  subjectId: string;
+  credentialType: string;
+  schemaId: string | null;
+  expiresAt: string | null;
+  claimsHash: string;
 }
 
 export interface CredentialResponse {
@@ -999,6 +1013,7 @@ export class CredentialService {
     credentialType: string;
     issuerId: string;
     subjectId: string;
+    schemaId?: string | null;
     claims: unknown;
     claimsHash: string;
     proof: unknown;
@@ -1025,6 +1040,7 @@ export class CredentialService {
     credentialType: string;
     issuerId: string;
     subjectId: string;
+    schemaId?: string | null;
     claims: unknown;
     claimsHash: string;
     proof: unknown;
@@ -1043,12 +1059,6 @@ export class CredentialService {
     );
     checks.integrityValid = currentHash === credential.claimsHash;
 
-    checks.signatureValid = await this.verifyProofSignature(
-      currentHash,
-      credential.issuerId,
-      credential.proof as Record<string, unknown>,
-    );
-
     const issuer = await prisma.identity.findUnique({
       where: { id: credential.issuerId },
     });
@@ -1058,6 +1068,20 @@ export class CredentialService {
       where: { id: credential.subjectId },
     });
     checks.subjectActive = subject?.status === 'ACTIVE';
+
+    checks.signatureValid = await this.verifyProofSignature(
+      currentHash,
+      credential.issuerId,
+      credential.proof as Record<string, unknown>,
+      {
+        credentialType: credential.credentialType,
+        expiresAt: credential.expiresAt,
+        issuerDid: issuer?.did,
+        schemaId: credential.schemaId ?? null,
+        subjectDid: subject?.did,
+        subjectId: credential.subjectId,
+      },
+    );
 
     const revocation = await prisma.revocationRegistry.findUnique({
       where: { credentialId: credential.id },
@@ -1269,17 +1293,13 @@ export class CredentialService {
     return '{' + entries.join(',') + '}';
   }
 
-  /**
-   * Sign a credential binding the signature to a specific issuer DID.
-   * The signed message is SHA-256(issuerDid:claimsHash), ensuring the
-   * credential cannot be re-attributed to a different issuer without
-   * invalidating the signature.
-   */
   private async signCredentialForIssuer(
-    issuerDid: string,
+    request: IssueCredentialRequest,
     claimsHash: string,
   ): Promise<string> {
-    const message = this.buildIssuerScopedMessage(issuerDid, claimsHash);
+    const message = this.buildCredentialSignatureMessage(
+      this.buildCredentialSignatureBinding(request, claimsHash),
+    );
     const signature = await this.signer.sign(message);
     return signature.toString('base64url');
   }
@@ -1311,6 +1331,10 @@ export class CredentialService {
     const verificationMethod =
       issuer.verificationMethod ||
       `${request.issuerDid}#assertion-key-${keyVersion}`;
+    const credentialBinding = this.buildCredentialSignatureBinding(
+      request,
+      claimsHash,
+    );
 
     return {
       type: this.signer.getProofType(),
@@ -1319,8 +1343,9 @@ export class CredentialService {
       proofPurpose: 'assertionMethod',
       issuerDid: request.issuerDid,
       keyVersion,
+      credentialBinding,
       signatureValue: await this.signCredentialForIssuer(
-        request.issuerDid,
+        request,
         claimsHash,
       ),
     };
@@ -1387,11 +1412,36 @@ export class CredentialService {
       );
     }
 
+    const expectedBinding = this.buildCredentialSignatureBinding(
+      request,
+      claimsHash,
+    );
+    const suppliedBinding = this.parseCredentialSignatureBinding(
+      proof.credentialBinding,
+    );
+    if (!suppliedBinding) {
+      throw new CredentialError(
+        'Issuer proof must include a credential binding envelope',
+        'CRED_ISSUER_PROOF_BINDING_REQUIRED',
+        400,
+      );
+    }
+    if (
+      this.canonicalize(suppliedBinding) !==
+      this.canonicalize(expectedBinding)
+    ) {
+      throw new CredentialError(
+        'Issuer proof credential binding does not match the requested credential',
+        'CRED_ISSUER_PROOF_BINDING_MISMATCH',
+        400,
+      );
+    }
+
     const signature = Buffer.from(proof.signatureValue, 'base64url');
     const publicKey = this.parseVerificationPublicKey(issuer.publicKey);
     if (
       !this.verifyMessage(
-        this.buildIssuerScopedMessage(request.issuerDid, claimsHash),
+        this.buildCredentialSignatureMessage(expectedBinding),
         signature,
         publicKey,
       )
@@ -1410,8 +1460,100 @@ export class CredentialService {
       proofPurpose: 'assertionMethod',
       issuerDid: request.issuerDid,
       keyVersion,
+      credentialBinding: expectedBinding,
       signatureValue: proof.signatureValue,
     };
+  }
+
+  private buildCredentialSignatureBinding(
+    request: IssueCredentialRequest,
+    claimsHash: string,
+  ): CredentialSignatureBinding {
+    return {
+      version: 'zeroid.credential.signature.v2',
+      proofPurpose: 'assertionMethod',
+      issuerDid: request.issuerDid,
+      issuerId: request.issuerId,
+      subjectDid: request.subjectDid,
+      subjectId: request.subjectId,
+      credentialType: request.credentialType,
+      schemaId: request.schemaId ?? null,
+      expiresAt: request.expiresAt ? request.expiresAt.toISOString() : null,
+      claimsHash,
+    };
+  }
+
+  private buildCredentialSignatureMessage(
+    binding: CredentialSignatureBinding,
+  ): Buffer {
+    return crypto
+      .createHash('sha256')
+      .update(this.canonicalize(binding))
+      .digest();
+  }
+
+  private parseCredentialSignatureBinding(
+    value: unknown,
+  ): CredentialSignatureBinding | null {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return null;
+    }
+
+    const binding = value as Record<string, unknown>;
+    if (
+      binding.version !== 'zeroid.credential.signature.v2' ||
+      binding.proofPurpose !== 'assertionMethod' ||
+      typeof binding.issuerDid !== 'string' ||
+      typeof binding.issuerId !== 'string' ||
+      typeof binding.subjectDid !== 'string' ||
+      typeof binding.subjectId !== 'string' ||
+      typeof binding.credentialType !== 'string' ||
+      typeof binding.claimsHash !== 'string' ||
+      !(typeof binding.schemaId === 'string' || binding.schemaId === null) ||
+      !(typeof binding.expiresAt === 'string' || binding.expiresAt === null)
+    ) {
+      return null;
+    }
+
+    return {
+      version: 'zeroid.credential.signature.v2',
+      proofPurpose: 'assertionMethod',
+      issuerDid: binding.issuerDid,
+      issuerId: binding.issuerId,
+      subjectDid: binding.subjectDid,
+      subjectId: binding.subjectId,
+      credentialType: binding.credentialType,
+      schemaId: binding.schemaId,
+      expiresAt: binding.expiresAt,
+      claimsHash: binding.claimsHash,
+    };
+  }
+
+  private credentialBindingMatchesContext(
+    binding: CredentialSignatureBinding,
+    context: {
+      claimsHash: string;
+      credentialType?: string;
+      expiresAt?: Date | null;
+      issuerDid?: string;
+      issuerId: string;
+      schemaId?: string | null;
+      subjectDid?: string;
+      subjectId?: string;
+    },
+  ): boolean {
+    return (
+      binding.claimsHash === context.claimsHash &&
+      binding.issuerId === context.issuerId &&
+      (!context.issuerDid || binding.issuerDid === context.issuerDid) &&
+      (!context.subjectId || binding.subjectId === context.subjectId) &&
+      (!context.subjectDid || binding.subjectDid === context.subjectDid) &&
+      (!context.credentialType ||
+        binding.credentialType === context.credentialType) &&
+      binding.schemaId === (context.schemaId ?? null) &&
+      binding.expiresAt ===
+        (context.expiresAt ? context.expiresAt.toISOString() : null)
+    );
   }
 
   private buildIssuerScopedMessage(
@@ -1428,6 +1570,14 @@ export class CredentialService {
     claimsHash: string,
     issuerId: string,
     proof: Record<string, unknown>,
+    credentialContext?: {
+      credentialType?: string;
+      expiresAt?: Date | null;
+      issuerDid?: string;
+      schemaId?: string | null;
+      subjectDid?: string;
+      subjectId?: string;
+    },
   ): Promise<boolean> {
     const signatureValue = proof?.signatureValue as string;
     if (!signatureValue) {
@@ -1445,11 +1595,69 @@ export class CredentialService {
       return false;
     }
 
-    // Issuer-scoped verification: if the proof contains an issuerDid field,
-    // the signed message is SHA-256(issuerDid:claimsHash). This ensures
-    // credentials are bound to the issuer and cannot be re-attributed.
     const issuerDid = proof?.issuerDid as string | undefined;
     if (issuerDid) {
+      const binding = this.parseCredentialSignatureBinding(
+        proof.credentialBinding,
+      );
+      if (binding) {
+        if (
+          !this.credentialBindingMatchesContext(binding, {
+            claimsHash,
+            issuerId,
+            ...credentialContext,
+          })
+        ) {
+          logger.warn('credential_binding_context_mismatch', {
+            issuerId,
+            issuerDid,
+            credentialType: credentialContext?.credentialType,
+          });
+          return false;
+        }
+
+        if (
+          this.verifyMessage(
+            this.buildCredentialSignatureMessage(binding),
+            signature,
+            publicKey,
+          )
+        ) {
+          const issuer = await prisma.identity.findUnique({
+            where: { id: issuerId },
+          });
+          if (
+            issuer &&
+            issuer.did === issuerDid &&
+            binding.issuerDid === issuer.did
+          ) {
+            return true;
+          }
+          logger.warn('credential_issuer_did_mismatch', {
+            proofIssuerDid: issuerDid,
+            bindingIssuerDid: binding.issuerDid,
+            credentialIssuerId: issuerId,
+          });
+          return false;
+        }
+
+        logger.warn('credential_binding_signature_invalid', {
+          issuerId,
+          issuerDid,
+        });
+        return false;
+      }
+
+      if (isProductionRuntime()) {
+        logger.warn('credential_binding_required_in_production', {
+          issuerId,
+          issuerDid,
+        });
+        return false;
+      }
+
+      // Non-production compatibility for credentials issued before envelope
+      // binding. Production refuses this path above.
       const issuerScopedMessage = this.buildIssuerScopedMessage(
         issuerDid,
         claimsHash,

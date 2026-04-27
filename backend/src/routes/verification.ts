@@ -16,6 +16,7 @@ import { z } from 'zod';
 const PROOF_NONCE_TTL_SECONDS = 300; // Nonces are valid for 5 minutes
 const PROOF_REPLAY_WINDOW_SECONDS = 86400; // Track used proofs for 24 hours
 const MAX_PROOF_AGE_MS = 5 * 60 * 1000; // Proofs expire after 5 minutes
+const PROOF_VERIFICATION_LOCK_TTL_SECONDS = 30;
 
 function canonicalizeClaims(value: unknown): string {
   if (value === null || value === undefined) return JSON.stringify(value);
@@ -42,6 +43,31 @@ function digestToFieldElement(hexDigest: string): string {
     ? normalized
     : createHash('sha256').update(hexDigest).digest('hex');
   return BigInt('0x' + digest.substring(0, 62)).toString();
+}
+
+function proofNonceScopedKey(prefix: string, nonce: string): string {
+  const nonceDigest = createHash('sha256').update(nonce).digest('hex');
+  return `${prefix}:${nonceDigest}`;
+}
+
+function isContextBoundCircuit(circuitName: string): boolean {
+  return zkProofService.isCircuitContextBound(circuitName);
+}
+
+function rejectUnboundCircuitIfNeeded(
+  circuitName: string,
+  res: Response,
+): boolean {
+  if (isContextBoundCircuit(circuitName)) {
+    return false;
+  }
+
+  res.status(503).json({
+    error:
+      'ZK circuit is not approved for context-bound production verification',
+    code: 'ZK_CIRCUIT_CONTEXT_BINDING_UNSUPPORTED',
+  });
+  return true;
 }
 
 const router = Router();
@@ -74,6 +100,8 @@ router.post(
   verificationLimiter,
   validate({ body: generateZKProofSchema }),
   async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    let reservedNonceKey: string | undefined;
+
     try {
       const identity = req.identity!;
       const {
@@ -84,6 +112,10 @@ router.post(
         audience,
       } = req.body;
       const nonce: string = req.body.nonce ?? randomUUID();
+
+      if (rejectUnboundCircuitIfNeeded(circuitName, res)) {
+        return;
+      }
 
       // Verify the credential belongs to the requester
       const credential = await credentialService.getCredential(credentialId);
@@ -128,6 +160,33 @@ router.post(
         '0x' + contextCommitment.substring(0, 62),
       ).toString();
       const claimsHashField = digestToFieldElement(credential.claimsHash);
+
+      // Reserve the nonce before expensive proof generation. SET NX prevents
+      // callers from overwriting another in-flight proof context with the same
+      // user-supplied nonce.
+      reservedNonceKey = proofNonceScopedKey('proof:nonce', nonce);
+      const nonceReserved = await redis.set(
+        reservedNonceKey,
+        JSON.stringify({
+          nonce,
+          audience,
+          subjectId: identity.id,
+          credentialId,
+          issuedAt,
+          claimsHashField,
+          contextCommitmentField,
+        }),
+        'EX',
+        PROOF_NONCE_TTL_SECONDS,
+        'NX',
+      );
+      if (nonceReserved !== 'OK') {
+        res.status(409).json({
+          error: 'Nonce is already bound to an active proof context',
+          code: 'PROOF_NONCE_COLLISION',
+        });
+        return;
+      }
 
       const witnessInputs: Record<string, string | number> = {
         // Claims hash as a public commitment for integrity binding
@@ -176,22 +235,6 @@ router.post(
         selectiveDisclosure,
       });
 
-      // Store nonce in Redis with the context commitment field value so the
-      // verifier can compare it against the proof's public signals.
-      await redis.set(
-        `proof:nonce:${nonce}`,
-        JSON.stringify({
-          audience,
-          subjectId: identity.id,
-          credentialId,
-          issuedAt,
-          claimsHashField,
-          contextCommitmentField,
-        }),
-        'EX',
-        PROOF_NONCE_TTL_SECONDS,
-      );
-
       // Create verification record
       await prisma.verification.create({
         data: {
@@ -238,6 +281,14 @@ router.post(
       verificationCounter.inc({ result: 'failed' });
       const error = asRouteError(err);
       logger.error('zk_proof_generation_error', { error: error.message });
+      if (reservedNonceKey) {
+        await redis.del(reservedNonceKey).catch((releaseError: Error) => {
+          logger.warn('proof_nonce_reservation_release_failed', {
+            nonceKey: reservedNonceKey,
+            error: releaseError.message,
+          });
+        });
+      }
       sendRouteError(res, error, 'ZK_PROOF_GENERATION_FAILED');
     }
   },
@@ -275,6 +326,9 @@ router.post(
   verificationLimiter,
   validate({ body: verifyZKProofSchema }),
   async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    let verificationLockKey: string | undefined;
+    let verificationLockAcquired = false;
+
     try {
       const {
         proof,
@@ -286,6 +340,10 @@ router.post(
         issuedAt,
       } = req.body;
       const verifier = req.identity!;
+
+      if (rejectUnboundCircuitIfNeeded(circuitName, res)) {
+        return;
+      }
 
       // 1. Check proof age — reject expired proofs
       const proofAge = Date.now() - issuedAt;
@@ -318,8 +376,8 @@ router.post(
         return;
       }
 
-      // 3. Replay protection — check if this nonce has already been consumed
-      const replayKey = `proof:used:${nonce}`;
+      // 3. Fast replay check — confirmed again after acquiring the nonce lock.
+      const replayKey = proofNonceScopedKey('proof:used', nonce);
       const alreadyUsed = await redis.get(replayKey);
       if (alreadyUsed) {
         logger.warn('proof_replay_detected', { nonce, verifier: verifier.id });
@@ -330,8 +388,47 @@ router.post(
         return;
       }
 
-      // 4. Validate nonce was actually issued by our system
-      const nonceData = await redis.get(`proof:nonce:${nonce}`);
+      // 4. Serialize verification per nonce. Without this lock, two
+      // concurrent requests can both observe an unused nonce and both pass
+      // before either one writes proof:used:<nonce>.
+      verificationLockKey = proofNonceScopedKey('proof:verify-lock', nonce);
+      const lockResult = await redis.set(
+        verificationLockKey,
+        JSON.stringify({
+          verifier: verifier.id,
+          lockedAt: Date.now(),
+        }),
+        'EX',
+        PROOF_VERIFICATION_LOCK_TTL_SECONDS,
+        'NX',
+      );
+      if (lockResult !== 'OK') {
+        res.status(409).json({
+          error: 'Proof verification is already in progress for this nonce',
+          code: 'PROOF_VERIFICATION_IN_PROGRESS',
+        });
+        return;
+      }
+      verificationLockAcquired = true;
+
+      const replayAfterLock = await redis.get(replayKey);
+      if (replayAfterLock) {
+        logger.warn('proof_replay_detected_after_lock', {
+          nonce,
+          verifier: verifier.id,
+        });
+        res.status(409).json({
+          error: 'Proof has already been verified (replay)',
+          code: 'PROOF_REPLAY',
+        });
+        return;
+      }
+
+      // 5. Validate nonce was actually issued by our system. This lookup is
+      // intentionally inside the lock so a stale local nonce record cannot be
+      // reused after another verifier has consumed and deleted it.
+      const nonceKey = proofNonceScopedKey('proof:nonce', nonce);
+      const nonceData = await redis.get(nonceKey);
       if (!nonceData) {
         logger.warn('proof_nonce_unknown', { nonce, verifier: verifier.id });
         res.status(400).json({
@@ -341,13 +438,14 @@ router.post(
         return;
       }
 
-      // 5. Verify context metadata and commitment integrity against the
+      // 6. Verify context metadata and commitment integrity against the
       //    server-side nonce record. The HTTP metadata must match the nonce
       //    record that created the public context commitment; otherwise a
       //    valid proof for one audience/timestamp could be rebound to another
       //    verifier request while still passing the public-signal check.
       const nonceRecord = JSON.parse(nonceData) as {
         audience?: unknown;
+        nonce?: unknown;
         subjectId?: unknown;
         credentialId?: unknown;
         issuedAt?: unknown;
@@ -357,6 +455,7 @@ router.post(
 
       if (
         typeof nonceRecord.audience !== 'string' ||
+        typeof nonceRecord.nonce !== 'string' ||
         typeof nonceRecord.subjectId !== 'string' ||
         typeof nonceRecord.credentialId !== 'string' ||
         typeof nonceRecord.issuedAt !== 'number' ||
@@ -371,6 +470,7 @@ router.post(
       }
 
       if (
+        nonceRecord.nonce !== nonce ||
         nonceRecord.audience !== audience ||
         nonceRecord.issuedAt !== issuedAt
       ) {
@@ -459,7 +559,7 @@ router.post(
         return;
       }
 
-      // 6. Verify the ZK proof cryptographically
+      // 7. Verify the ZK proof cryptographically
       const result = await zkProofService.verifyProof(
         proof,
         publicSignals,
@@ -474,7 +574,7 @@ router.post(
         return;
       }
 
-      // 7. CRITICAL: Enforce context commitment against the proof's actual
+      // 8. CRITICAL: Enforce context commitment against the proof's actual
       //    public signals. This closes the replay/rebinding gap — the proof
       //    is only accepted if the contextCommitment was committed as a
       //    public input during proof generation and is verified by the
@@ -526,7 +626,7 @@ router.post(
         return;
       }
 
-      // 8. Mark nonce as consumed — prevents replay
+      // 9. Mark nonce as consumed — prevents replay
       await redis.set(
         replayKey,
         JSON.stringify({
@@ -538,7 +638,7 @@ router.post(
       );
 
       // Clean up the issuance nonce
-      await redis.del(`proof:nonce:${nonce}`);
+      await redis.del(nonceKey);
 
       verificationCounter.inc({ result: 'success' });
 
@@ -563,6 +663,15 @@ router.post(
       const error = asRouteError(err);
       logger.error('zk_verify_error', { error: error.message });
       sendRouteError(res, error, 'ZK_VERIFY_FAILED');
+    } finally {
+      if (verificationLockAcquired && verificationLockKey) {
+        await redis.del(verificationLockKey).catch((error: Error) => {
+          logger.warn('proof_verification_lock_release_failed', {
+            lockKey: verificationLockKey,
+            error: error.message,
+          });
+        });
+      }
     }
   },
 );

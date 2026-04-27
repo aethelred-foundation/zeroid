@@ -35,7 +35,10 @@ const issuedTokenHashes: Record<string, string> = {};
 const mockRedis = {
   get: jest.fn(async (key: string) => redisStore[key] ?? null),
   set: jest.fn(
-    async (key: string, value: string, _mode?: string, _ttl?: number) => {
+    async (key: string, value: string, ...args: unknown[]) => {
+      if (args.includes('NX') && redisStore[key] !== undefined) {
+        return null;
+      }
       redisStore[key] = value;
       return 'OK';
     },
@@ -120,6 +123,7 @@ const mockVerifyProof = jest.fn(async () => ({
   publicSignals: ['1', '2'],
   verifiedAt: new Date().toISOString(),
 }));
+const mockIsCircuitContextBound = jest.fn(() => true);
 
 jest.mock('../src/services/zkproof', () => ({
   zkProofService: {
@@ -138,6 +142,7 @@ jest.mock('../src/services/zkproof', () => ({
       generationTimeMs: 42,
     })),
     verifyProof: mockVerifyProof,
+    isCircuitContextBound: mockIsCircuitContextBound,
     buildSelectiveDisclosureInputs: jest.fn(() => ({})),
     listCircuits: jest.fn(() => []),
   },
@@ -359,6 +364,10 @@ function computeContextCommitmentField(
   return BigInt('0x' + hash.substring(0, 62)).toString();
 }
 
+function proofNonceScopedKey(prefix: string, nonce: string): string {
+  return `${prefix}:${createHash('sha256').update(nonce).digest('hex')}`;
+}
+
 /** Seed a nonce record into the mock Redis store (simulating proof generation). */
 function seedNonce(
   nonce: string,
@@ -369,7 +378,8 @@ function seedNonce(
   contextCommitmentField: string,
   claimsHashField = CREDENTIAL_CLAIMS_FIELD,
 ) {
-  redisStore[`proof:nonce:${nonce}`] = JSON.stringify({
+  redisStore[proofNonceScopedKey('proof:nonce', nonce)] = JSON.stringify({
+    nonce,
     audience,
     subjectId,
     credentialId,
@@ -433,6 +443,7 @@ function buildValidPayload(
 // ---------------------------------------------------------------------------
 beforeEach(() => {
   jest.clearAllMocks();
+  mockIsCircuitContextBound.mockReturnValue(true);
   for (const k of Object.keys(redisStore)) delete redisStore[k];
   for (const k of Object.keys(redisSortedSets)) delete redisSortedSets[k];
   for (const k of Object.keys(issuedTokenHashes)) delete issuedTokenHashes[k];
@@ -456,6 +467,25 @@ beforeEach(() => {
 // ZK Context-Tamper Tests
 // =========================================================================
 describe('ZK-01: Context-tamper verification', () => {
+  it('rejects circuits that are not declared context-bound', async () => {
+    const token = await makeToken({ sub: VERIFIER_ID, did: VERIFIER_DID });
+    stubAuthFor(VERIFIER_ID, VERIFIER_DID);
+    mockIsCircuitContextBound.mockReturnValue(false);
+
+    const payload = buildValidPayload({
+      nonce: 'nonce-unbound-circuit1',
+    });
+
+    const res = await request(app as Express)
+      .post('/api/v1/verification/zk-verify')
+      .set('Authorization', `Bearer ${token}`)
+      .send(payload);
+
+    expect(res.status).toBe(503);
+    expect(res.body.code).toBe('ZK_CIRCUIT_CONTEXT_BINDING_UNSUPPORTED');
+    expect(mockVerifyProof).not.toHaveBeenCalled();
+  });
+
   // -----------------------------------------------------------------------
   // 1. Context commitment mismatch
   // -----------------------------------------------------------------------
@@ -731,7 +761,7 @@ describe('ZK-01: Context-tamper verification', () => {
     expect(res1.body.data.valid).toBe(true);
 
     // Re-seed the nonce so step 4 doesn't reject (the nonce was deleted on first verify).
-    // But the replay key proof:used:<nonce> is now set, so step 3 should reject.
+    // But the replay key is now set, so step 3 should reject.
     seedNonce(
       nonce,
       VERIFIER_ID,
@@ -748,6 +778,71 @@ describe('ZK-01: Context-tamper verification', () => {
 
     expect(res2.status).toBe(409);
     expect(res2.body.code).toBe('PROOF_REPLAY');
+  });
+
+  it('rejects a concurrent double-submit while the nonce is being verified', async () => {
+    const token = await makeToken({ sub: VERIFIER_ID, did: VERIFIER_DID });
+    stubAuthFor(VERIFIER_ID, VERIFIER_DID);
+
+    const nonce = 'nonce-concurrent-race1';
+    const issuedAt = Date.now() - 1000;
+    const ctxField = computeContextCommitmentField(
+      nonce,
+      VERIFIER_ID,
+      SUBJECT_ID,
+      CREDENTIAL_ID,
+      issuedAt,
+    );
+    seedNonce(
+      nonce,
+      VERIFIER_ID,
+      SUBJECT_ID,
+      CREDENTIAL_ID,
+      issuedAt,
+      ctxField,
+    );
+
+    mockVerifyProof.mockImplementationOnce(
+      async () =>
+        new Promise((resolve) => {
+          setTimeout(
+            () =>
+              resolve({
+                valid: true,
+                proofId: 'proof-concurrent-id',
+                circuitName: 'ageCheck',
+                publicSignals: [CREDENTIAL_CLAIMS_FIELD, '2', ctxField],
+                verifiedAt: new Date(),
+              }),
+            50,
+          );
+        }),
+    );
+
+    const payload = buildValidPayload({
+      nonce,
+      audience: VERIFIER_ID,
+      contextCommitment: ctxField,
+      issuedAt,
+      publicSignals: [CREDENTIAL_CLAIMS_FIELD, '2', ctxField],
+    });
+
+    const [first, second] = await Promise.all([
+      request(app as Express)
+        .post('/api/v1/verification/zk-verify')
+        .set('Authorization', `Bearer ${token}`)
+        .send(payload),
+      request(app as Express)
+        .post('/api/v1/verification/zk-verify')
+        .set('Authorization', `Bearer ${token}`)
+        .send(payload),
+    ]);
+
+    const responses = [first, second].sort((a, b) => a.status - b.status);
+    expect(responses[0].status).toBe(200);
+    expect(responses[0].body.data.valid).toBe(true);
+    expect(responses[1].status).toBe(409);
+    expect(responses[1].body.code).toBe('PROOF_VERIFICATION_IN_PROGRESS');
   });
 
   // -----------------------------------------------------------------------
@@ -947,9 +1042,9 @@ describe('ZK-01: Context-tamper verification', () => {
       }),
     );
 
-    // Nonce should be consumed — proof:used:<nonce> should be set
-    expect(redisStore[`proof:used:${nonce}`]).toBeDefined();
+    // Nonce should be consumed.
+    expect(redisStore[proofNonceScopedKey('proof:used', nonce)]).toBeDefined();
     // Original nonce should be deleted
-    expect(redisStore[`proof:nonce:${nonce}`]).toBeUndefined();
+    expect(redisStore[proofNonceScopedKey('proof:nonce', nonce)]).toBeUndefined();
   });
 });
