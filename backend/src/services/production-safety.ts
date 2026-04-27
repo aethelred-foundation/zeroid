@@ -59,6 +59,10 @@ const UNSAFE_PRODUCTION_FLAGS: ProductionSafetyViolation[] = [
     control: 'REGULATORY_SUBMISSION_BUNDLE_ALLOW_LOCAL_SIGNING',
     risk: 'Allows local private-key signing for regulatory submission bundles in production',
   },
+  {
+    control: 'SANCTIONS_SCREENING_DISABLED',
+    risk: 'Disables sanctions screening in production compliance workflows',
+  },
 ];
 
 export function isProductionRuntime(env: NodeJS.ProcessEnv = process.env): boolean {
