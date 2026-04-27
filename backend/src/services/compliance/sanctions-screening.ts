@@ -18,6 +18,7 @@ const logger = createLogger({
 // ---------------------------------------------------------------------------
 export const SANCTIONS_LIST_NAMES = ['ofac_sdn', 'eu_consolidated', 'un_sanctions', 'uae_local', 'pep_database'] as const;
 export type SanctionsListName = typeof SANCTIONS_LIST_NAMES[number];
+const MAX_PRODUCTION_SANCTIONS_LIST_AGE_HOURS = 24;
 
 export const SanctionsListMetadataSchema = z.object({
   updatedAt: z.string().datetime(),
@@ -786,7 +787,21 @@ export class SanctionsScreeningService {
   }
 
   private resolveListMaxAgeMs(): number {
-    const configuredHours = Number(process.env.SANCTIONS_LIST_MAX_AGE_HOURS ?? '24');
+    const rawConfiguredHours = process.env.SANCTIONS_LIST_MAX_AGE_HOURS ?? '24';
+    const configuredHours = Number(rawConfiguredHours);
+    if (
+      isProductionRuntime() &&
+      (
+        !/^[1-9]\d*$/.test(rawConfiguredHours.trim()) ||
+        configuredHours > MAX_PRODUCTION_SANCTIONS_LIST_AGE_HOURS
+      )
+    ) {
+      const error = new Error(
+        `SANCTIONS_LIST_MAX_AGE_HOURS must be an integer from 1 to ${MAX_PRODUCTION_SANCTIONS_LIST_AGE_HOURS} in production`,
+      );
+      (error as Error & { code: string }).code = 'SANCTIONS_LIST_MAX_AGE_INVALID';
+      throw error;
+    }
     const hours = Number.isFinite(configuredHours) && configuredHours > 0 ? configuredHours : 24;
     return hours * 60 * 60 * 1000;
   }

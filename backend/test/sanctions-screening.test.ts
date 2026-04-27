@@ -143,6 +143,15 @@ describe('SanctionsScreeningService readiness', () => {
     expect(service.getListReadiness(['ofac_sdn'])[0].issues).toContain('stale');
   });
 
+  it('rejects unsafe production sanctions list freshness windows', () => {
+    process.env.NODE_ENV = 'production';
+    process.env.SANCTIONS_LIST_MAX_AGE_HOURS = '168';
+
+    expect(() => new SanctionsScreeningService()).toThrow(
+      expect.objectContaining({ code: 'SANCTIONS_LIST_MAX_AGE_INVALID' }),
+    );
+  });
+
   it('rejects tampered production list manifests', async () => {
     process.env.NODE_ENV = 'production';
     const privateKey = configureTrustedListKey();

@@ -10,6 +10,7 @@ const MIN_JWT_SECRET_LENGTH = 48;
 const MIN_POLICY_RECEIPT_SECRET_LENGTH = 48;
 const DEFAULT_DEVELOPMENT_CORS_ORIGINS = ['http://localhost:3000'];
 const REQUIRED_SECRET_KEY_BYTES = 32;
+const MAX_PRODUCTION_SANCTIONS_LIST_AGE_HOURS = 24;
 const SUPPORTED_OIDC_SIGNING_ALGORITHMS = new Set(['RS256', 'PS256']);
 const PRODUCTION_KMS_PROVIDERS = new Set(['aws-kms', 'gcp-kms', 'azure-kms']);
 const SGX_MRSIGNER_PATTERN = /^[0-9a-f]{64}$/i;
@@ -122,6 +123,7 @@ export function checkedProductionSafetyControls(): string[] {
     'CORS_ORIGINS',
     'METRICS_PUBLIC_DISABLED_OR_METRICS_AUTH_TOKEN',
     'SANCTIONS_SCREENING_DISABLED_OR_SANCTIONS_LIST_SIGNATURE_PUBLIC_KEYS_JSON',
+    'SANCTIONS_LIST_MAX_AGE_HOURS',
     'WEBHOOK_SECRET_ENCRYPTION_KEY',
     'POLICY_RECEIPT_SIGNING_SECRET',
     'OIDC_ISSUER_URL',
@@ -252,6 +254,8 @@ export function collectProductionSafetyViolations(
         });
       }
     }
+
+    validateSanctionsListMaxAge(env, violations);
   }
 
   const webhookSecretKey = env.WEBHOOK_SECRET_ENCRYPTION_KEY?.trim();
@@ -518,6 +522,23 @@ function validateMinimumThreshold(
     violations.push({
       control,
       risk: `${control} must be an integer greater than or equal to 2`,
+    });
+  }
+}
+
+function validateSanctionsListMaxAge(
+  env: NodeJS.ProcessEnv,
+  violations: ProductionSafetyViolation[],
+): void {
+  const value = env.SANCTIONS_LIST_MAX_AGE_HOURS?.trim() || '24';
+  const hours = Number(value);
+  if (
+    !/^[1-9]\d*$/.test(value) ||
+    hours > MAX_PRODUCTION_SANCTIONS_LIST_AGE_HOURS
+  ) {
+    violations.push({
+      control: 'SANCTIONS_LIST_MAX_AGE_HOURS',
+      risk: `SANCTIONS_LIST_MAX_AGE_HOURS must be an integer from 1 to ${MAX_PRODUCTION_SANCTIONS_LIST_AGE_HOURS}`,
     });
   }
 }

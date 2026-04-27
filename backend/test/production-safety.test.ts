@@ -27,6 +27,7 @@ const PROD_BASE_ENV: NodeJS.ProcessEnv = {
   SANCTIONS_LIST_SIGNATURE_PUBLIC_KEYS_JSON: JSON.stringify({
     sovereign_list_signer: '-----BEGIN PUBLIC KEY-----trusted-sanctions-list-key-----END PUBLIC KEY-----',
   }),
+  SANCTIONS_LIST_MAX_AGE_HOURS: '24',
   WEBHOOK_SECRET_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64'),
   POLICY_RECEIPT_SIGNING_SECRET: 'r'.repeat(64),
   OIDC_ISSUER_URL: 'https://id.zeroid.example/enterprise/oidc',
@@ -196,6 +197,24 @@ describe('production safety controls', () => {
 
     expect(collectProductionSafetyViolations(env)).toEqual([
       expect.objectContaining({ control: 'SANCTIONS_LIST_SIGNATURE_PUBLIC_KEYS_JSON' }),
+    ]);
+  });
+
+  it('caps sanctions list freshness windows in production', () => {
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      METRICS_PUBLIC_DISABLED: 'true',
+      SANCTIONS_LIST_MAX_AGE_HOURS: '168',
+    })).toEqual([
+      expect.objectContaining({ control: 'SANCTIONS_LIST_MAX_AGE_HOURS' }),
+    ]);
+
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      METRICS_PUBLIC_DISABLED: 'true',
+      SANCTIONS_LIST_MAX_AGE_HOURS: 'not-a-number',
+    })).toEqual([
+      expect.objectContaining({ control: 'SANCTIONS_LIST_MAX_AGE_HOURS' }),
     ]);
   });
 
