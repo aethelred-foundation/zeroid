@@ -591,6 +591,96 @@ describe('OIDC multi-node correctness', () => {
     ).toBe(true);
   });
 
+  test('authorization-code-only clients do not receive refresh tokens', async () => {
+    const client = await bridgeA.registerClient({
+      clientName: 'Auth Code Only Client',
+      redirectUris: [REDIRECT_URI],
+      grantTypes: ['authorization_code'],
+      responseTypes: ['code'],
+      tokenEndpointAuthMethod: 'client_secret_basic',
+      scopes: ['openid', 'profile'],
+      requirePkce: false,
+    });
+
+    const { code } = await authorizeCode(
+      bridgeB,
+      client.clientId,
+      'user-no-refresh-grant',
+    );
+
+    const tokens = await bridgeA.exchangeToken({
+      grantType: 'authorization_code',
+      code: code!,
+      redirectUri: REDIRECT_URI,
+      clientId: client.clientId,
+      clientSecret: client.clientSecret,
+    });
+
+    expect(tokens.access_token).toBeDefined();
+    expect(tokens.refresh_token).toBeUndefined();
+    expect(
+      [...store.keys()].some((key) => key.startsWith('oidc:refresh:')),
+    ).toBe(false);
+  });
+
+  test('client credentials grant is rejected unless registered for the client', async () => {
+    const authClient = await registerTestClient(bridgeA);
+    await expect(
+      bridgeB.exchangeToken({
+        grantType: 'client_credentials',
+        clientId: authClient.clientId,
+        clientSecret: authClient.clientSecret,
+        scope: 'openid',
+      }),
+    ).rejects.toMatchObject({
+      errorCode: 'unauthorized_client',
+    });
+
+    const machineClient = await bridgeA.registerClient({
+      clientName: 'Machine Client',
+      redirectUris: [REDIRECT_URI],
+      grantTypes: ['client_credentials'],
+      responseTypes: ['code'],
+      tokenEndpointAuthMethod: 'client_secret_basic',
+      scopes: ['openid'],
+      requirePkce: false,
+    });
+
+    const token = await bridgeB.exchangeToken({
+      grantType: 'client_credentials',
+      clientId: machineClient.clientId,
+      clientSecret: machineClient.clientSecret,
+      scope: 'openid',
+    });
+
+    expect(token.access_token).toBeDefined();
+    expect(token.token_type).toBe('Bearer');
+  });
+
+  test('token endpoint rejects grant requests missing required fields', async () => {
+    const client = await registerTestClient(bridgeA);
+
+    await expect(
+      bridgeA.exchangeToken({
+        grantType: 'authorization_code',
+        clientId: client.clientId,
+        clientSecret: client.clientSecret,
+      }),
+    ).rejects.toMatchObject({
+      errorCode: 'invalid_request',
+    });
+
+    await expect(
+      bridgeA.exchangeToken({
+        grantType: 'refresh_token',
+        clientId: client.clientId,
+        clientSecret: client.clientSecret,
+      }),
+    ).rejects.toMatchObject({
+      errorCode: 'invalid_request',
+    });
+  });
+
   // 6. Pending lifecycle clients cannot authorize before approval
   test('pending client registered on A cannot authorize on B before approval', async () => {
     const client = await registerOwnedClient(bridgeA, {

@@ -106,6 +106,7 @@ export const TokenRequestSchema = z.object({
 });
 
 export type TokenRequest = z.infer<typeof TokenRequestSchema>;
+type OIDCGrantType = TokenRequest['grantType'];
 
 export interface OIDCClientRegistrationResult {
   clientId: string;
@@ -544,6 +545,7 @@ export class OIDCBridge {
     if (!client || !this.isClientActive(client)) {
       throw new OIDCError('invalid_client', 'Client not found or inactive');
     }
+    this.assertClientGrantAllowed(client, 'authorization_code');
 
     if (!client.registration.redirectUris.includes(parsed.redirectUri)) {
       throw new OIDCError(
@@ -634,6 +636,7 @@ export class OIDCBridge {
     scope: string;
   }> {
     const parsed = TokenRequestSchema.parse(request);
+    this.assertTokenRequestRequiredFields(parsed);
 
     if (parsed.grantType === 'authorization_code') {
       return this.handleAuthCodeExchange(parsed);
@@ -658,7 +661,7 @@ export class OIDCBridge {
     token_type: string;
     expires_in: number;
     id_token: string;
-    refresh_token: string;
+    refresh_token?: string;
     scope: string;
   }> {
     // Atomically claim the auth code: compare-and-set used=false→true.
@@ -706,7 +709,11 @@ export class OIDCBridge {
     }
 
     // Client authentication
-    await this.authenticateClient(request.clientId, request.clientSecret);
+    const client = await this.authenticateClient(
+      request.clientId,
+      request.clientSecret,
+    );
+    this.assertClientGrantAllowed(client, 'authorization_code');
 
     const accessToken = await this.generateToken(
       authCode.clientId,
@@ -726,12 +733,16 @@ export class OIDCBridge {
       authCode.scope,
       authCode.sessionId,
     );
-    const refreshToken = await this.generateRefreshToken(
-      authCode.clientId,
-      authCode.subjectId,
-      authCode.scope,
-      authCode.sessionId,
-    );
+    const refreshToken = client.registration.grantTypes.includes(
+      'refresh_token',
+    )
+      ? await this.generateRefreshToken(
+          authCode.clientId,
+          authCode.subjectId,
+          authCode.scope,
+          authCode.sessionId,
+        )
+      : undefined;
 
     logger.info('tokens_issued', {
       clientId: authCode.clientId,
@@ -743,7 +754,7 @@ export class OIDCBridge {
       token_type: 'Bearer',
       expires_in: 3600,
       id_token: idToken.token,
-      refresh_token: refreshToken,
+      ...(refreshToken ? { refresh_token: refreshToken } : {}),
       scope: authCode.scope,
     };
   }
@@ -754,7 +765,11 @@ export class OIDCBridge {
     expires_in: number;
     scope: string;
   }> {
-    await this.authenticateClient(request.clientId, request.clientSecret);
+    const client = await this.authenticateClient(
+      request.clientId,
+      request.clientSecret,
+    );
+    this.assertClientGrantAllowed(client, 'client_credentials');
 
     const scope = request.scope ?? 'openid';
     const accessToken = await this.generateToken(
@@ -806,7 +821,11 @@ export class OIDCBridge {
       throw new OIDCError('invalid_grant', 'Client mismatch');
     }
 
-    await this.authenticateClient(request.clientId, request.clientSecret);
+    const client = await this.authenticateClient(
+      request.clientId,
+      request.clientSecret,
+    );
+    this.assertClientGrantAllowed(client, 'refresh_token');
     await this.assertRefreshSessionActive(refreshData, refreshStorageKey);
 
     // Atomically consume the refresh token: getAndDelete ensures only one
@@ -1189,7 +1208,7 @@ export class OIDCBridge {
   private async authenticateClient(
     clientId: string,
     clientSecret?: string,
-  ): Promise<void> {
+  ): Promise<RegisteredClient> {
     const client = await this.getNormalizedClient(clientId);
     if (!client) {
       throw new OIDCError('invalid_client', 'Client not found');
@@ -1220,6 +1239,39 @@ export class OIDCBridge {
         });
         logger.info('oidc_client_secret_migrated_to_hash', { clientId });
       }
+    }
+
+    return client;
+  }
+
+  private assertTokenRequestRequiredFields(request: TokenRequest): void {
+    if (request.grantType === 'authorization_code') {
+      if (!request.code || !request.redirectUri) {
+        throw new OIDCError(
+          'invalid_request',
+          'Authorization code grant requires code and redirectUri',
+        );
+      }
+      return;
+    }
+
+    if (request.grantType === 'refresh_token' && !request.refreshToken) {
+      throw new OIDCError(
+        'invalid_request',
+        'Refresh token grant requires refreshToken',
+      );
+    }
+  }
+
+  private assertClientGrantAllowed(
+    client: RegisteredClient,
+    grantType: OIDCGrantType,
+  ): void {
+    if (!client.registration.grantTypes.includes(grantType)) {
+      throw new OIDCError(
+        'unauthorized_client',
+        `Client is not registered for ${grantType} grant`,
+      );
     }
   }
 
