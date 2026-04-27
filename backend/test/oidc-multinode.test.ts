@@ -678,6 +678,53 @@ describe('OIDC multi-node correctness', () => {
     ).toBe(true);
   });
 
+  test('production rejects legacy plaintext refresh token records', async () => {
+    const client = await registerTestClient(bridgeA);
+    const { code } = await authorizeCode(
+      bridgeA,
+      client.clientId,
+      'user-refresh-legacy-production',
+    );
+
+    const tokens = await bridgeA.exchangeToken({
+      grantType: 'authorization_code',
+      code: code!,
+      redirectUri: REDIRECT_URI,
+      clientId: client.clientId,
+      clientSecret: client.clientSecret,
+    });
+
+    const refreshKey = [...store.keys()].find((key) =>
+      key.startsWith('oidc:refresh:sha256:'),
+    );
+    expect(refreshKey).toBeDefined();
+    const record = store.get(refreshKey!)!;
+    store.delete(refreshKey!);
+    store.set(`oidc:refresh:${tokens.refresh_token}`, record);
+
+    const previousNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    try {
+      await expect(
+        bridgeB.exchangeToken({
+          grantType: 'refresh_token',
+          refreshToken: tokens.refresh_token,
+          clientId: client.clientId,
+          clientSecret: client.clientSecret,
+        }),
+      ).rejects.toMatchObject({
+        errorCode: 'invalid_grant',
+      });
+    } finally {
+      process.env.NODE_ENV = previousNodeEnv;
+    }
+
+    expect(store.has(`oidc:refresh:${tokens.refresh_token}`)).toBe(true);
+    expect(
+      [...store.keys()].some((key) => key.startsWith('oidc:refresh:sha256:')),
+    ).toBe(false);
+  });
+
   test('authorization-code-only clients do not receive refresh tokens', async () => {
     const client = await bridgeA.registerClient({
       clientName: 'Auth Code Only Client',

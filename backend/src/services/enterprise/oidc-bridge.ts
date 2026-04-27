@@ -858,8 +858,17 @@ export class OIDCBridge {
     let refreshStorageKey = refreshTokenKey;
 
     if (!refreshData && !this.isHashedCredentialStorageKey(refreshToken)) {
-      refreshData = await this.refreshTokenMap.get(refreshToken);
-      refreshStorageKey = refreshToken;
+      if (process.env.NODE_ENV !== 'production') {
+        refreshData = await this.refreshTokenMap.get(refreshToken);
+        refreshStorageKey = refreshToken;
+      } else {
+        const legacyRefreshData = await this.refreshTokenMap.get(refreshToken);
+        if (legacyRefreshData) {
+          logger.error('oidc_plaintext_refresh_token_blocked', {
+            clientId: request.clientId,
+          });
+        }
+      }
     }
 
     if (!refreshData) {

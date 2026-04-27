@@ -8,6 +8,8 @@ export interface ProductionSafetyViolation {
 const MIN_METRICS_TOKEN_LENGTH = 32;
 const DEFAULT_DEVELOPMENT_CORS_ORIGINS = ['http://localhost:3000'];
 const REQUIRED_SECRET_KEY_BYTES = 32;
+const SUPPORTED_OIDC_SIGNING_ALGORITHMS = new Set(['RS256', 'PS256']);
+const PRODUCTION_KMS_PROVIDERS = new Set(['aws-kms', 'gcp-kms', 'azure-kms']);
 
 const UNSAFE_PRODUCTION_FLAGS: ProductionSafetyViolation[] = [
   {
@@ -85,6 +87,9 @@ export function checkedProductionSafetyControls(): string[] {
     'METRICS_PUBLIC_DISABLED_OR_METRICS_AUTH_TOKEN',
     'SANCTIONS_SCREENING_DISABLED_OR_SANCTIONS_LIST_SIGNATURE_PUBLIC_KEYS_JSON',
     'WEBHOOK_SECRET_ENCRYPTION_KEY',
+    'OIDC_SIGNING_KEYPAIR',
+    'CREDENTIAL_SIGNING_KMS',
+    'ZK_CONTEXT_BOUND_CIRCUITS_READY',
   ];
 }
 
@@ -201,7 +206,132 @@ export function collectProductionSafetyViolations(
     });
   }
 
+  validateOidcSigningConfig(env, violations);
+  validateCredentialSigningConfig(env, violations);
+
+  if (env.ZK_CONTEXT_BOUND_CIRCUITS_READY !== 'true') {
+    violations.push({
+      control: 'ZK_CONTEXT_BOUND_CIRCUITS_READY',
+      risk: 'Production ZK verification requires audited circuits that expose claimsHash and contextCommitment as fixed public signals',
+    });
+  }
+
   return violations;
+}
+
+function validateOidcSigningConfig(
+  env: NodeJS.ProcessEnv,
+  violations: ProductionSafetyViolation[],
+): void {
+  const rawPrivateKey = env.OIDC_SIGNING_PRIVATE_KEY?.trim();
+  const rawPublicKey = env.OIDC_SIGNING_PUBLIC_KEY?.trim();
+  if (!rawPrivateKey || !rawPublicKey) {
+    violations.push({
+      control: 'OIDC_SIGNING_KEYPAIR',
+      risk: 'OIDC token signing requires both OIDC_SIGNING_PRIVATE_KEY and OIDC_SIGNING_PUBLIC_KEY in production',
+    });
+    return;
+  }
+
+  const algorithm = env.OIDC_SIGNING_ALG?.trim() || 'RS256';
+  if (!SUPPORTED_OIDC_SIGNING_ALGORITHMS.has(algorithm)) {
+    violations.push({
+      control: 'OIDC_SIGNING_ALG',
+      risk: 'OIDC_SIGNING_ALG must be RS256 or PS256 in production',
+    });
+    return;
+  }
+
+  try {
+    const privateKey = parseSigningPrivateKey(rawPrivateKey);
+    const publicKey = parseSigningPublicKey(rawPublicKey);
+    const derivedPublicKey = crypto.createPublicKey(privateKey);
+
+    if (!publicKeyDerEquals(publicKey, derivedPublicKey)) {
+      violations.push({
+        control: 'OIDC_SIGNING_KEYPAIR',
+        risk: 'OIDC_SIGNING_PUBLIC_KEY does not match OIDC_SIGNING_PRIVATE_KEY',
+      });
+      return;
+    }
+
+    if (!['rsa', 'rsa-pss'].includes(String(privateKey.asymmetricKeyType))) {
+      violations.push({
+        control: 'OIDC_SIGNING_KEYPAIR',
+        risk: 'OIDC signing keys must be RSA keys for RS256/PS256',
+      });
+    }
+  } catch (error) {
+    violations.push({
+      control: 'OIDC_SIGNING_KEYPAIR',
+      risk: `OIDC signing key material is invalid: ${(error as Error).message}`,
+    });
+  }
+}
+
+function validateCredentialSigningConfig(
+  env: NodeJS.ProcessEnv,
+  violations: ProductionSafetyViolation[],
+): void {
+  const provider = env.KMS_PROVIDER?.trim();
+  const keyId = env.KMS_KEY_ID?.trim();
+
+  if (!provider || !PRODUCTION_KMS_PROVIDERS.has(provider)) {
+    violations.push({
+      control: 'CREDENTIAL_SIGNING_KMS',
+      risk: 'Production credential issuance must use aws-kms, gcp-kms, or azure-kms',
+    });
+    return;
+  }
+
+  if (!keyId) {
+    violations.push({
+      control: 'KMS_KEY_ID',
+      risk: 'Production credential issuance requires KMS_KEY_ID for the configured KMS provider',
+    });
+  }
+}
+
+function normalizeKeyMaterial(raw: string): string {
+  return raw.trim().replace(/\\n/g, '\n');
+}
+
+function parseSigningPrivateKey(raw: string): crypto.KeyObject {
+  const normalized = normalizeKeyMaterial(raw);
+  if (normalized.includes('BEGIN PRIVATE KEY')) {
+    return crypto.createPrivateKey(normalized);
+  }
+
+  return crypto.createPrivateKey({
+    key: Buffer.from(normalized.replace(/-/g, '+').replace(/_/g, '/'), 'base64'),
+    format: 'der',
+    type: 'pkcs8',
+  });
+}
+
+function parseSigningPublicKey(raw: string): crypto.KeyObject {
+  const normalized = normalizeKeyMaterial(raw);
+  if (normalized.includes('BEGIN PUBLIC KEY')) {
+    return crypto.createPublicKey(normalized);
+  }
+
+  return crypto.createPublicKey({
+    key: Buffer.from(normalized.replace(/-/g, '+').replace(/_/g, '/'), 'base64'),
+    format: 'der',
+    type: 'spki',
+  });
+}
+
+function publicKeyDerEquals(
+  left: crypto.KeyObject,
+  right: crypto.KeyObject,
+): boolean {
+  const leftDer = left.export({ format: 'der', type: 'spki' });
+  const rightDer = right.export({ format: 'der', type: 'spki' });
+  return (
+    leftDer.length === rightDer.length &&
+    crypto.timingSafeEqual(leftDer, rightDer)
+  );
 }
 
 function isValidSecretEncryptionKey(value: string): boolean {

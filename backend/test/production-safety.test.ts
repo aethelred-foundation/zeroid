@@ -5,6 +5,17 @@ import {
   isMetricsRequestAuthorized,
   validateProductionConfig,
 } from '../src/services/production-safety';
+import crypto from 'crypto';
+
+const oidcKeyPair = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+const oidcPrivateKey = oidcKeyPair.privateKey.export({
+  type: 'pkcs8',
+  format: 'pem',
+}) as string;
+const oidcPublicKey = oidcKeyPair.publicKey.export({
+  type: 'spki',
+  format: 'pem',
+}) as string;
 
 const BASE_ENV: NodeJS.ProcessEnv = { NODE_ENV: 'test' };
 const PROD_BASE_ENV: NodeJS.ProcessEnv = {
@@ -13,6 +24,11 @@ const PROD_BASE_ENV: NodeJS.ProcessEnv = {
   CORS_ORIGINS: 'https://app.zeroid.example,https://admin.zeroid.example',
   SANCTIONS_SCREENING_DISABLED: 'true',
   WEBHOOK_SECRET_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64'),
+  OIDC_SIGNING_PRIVATE_KEY: oidcPrivateKey,
+  OIDC_SIGNING_PUBLIC_KEY: oidcPublicKey,
+  KMS_PROVIDER: 'aws-kms',
+  KMS_KEY_ID: 'arn:aws:kms:us-east-1:111122223333:key/zeroid-credential-signer',
+  ZK_CONTEXT_BOUND_CIRCUITS_READY: 'true',
 };
 
 describe('production safety controls', () => {
@@ -144,6 +160,56 @@ describe('production safety controls', () => {
       WEBHOOK_SECRET_ENCRYPTION_KEY: Buffer.alloc(16, 1).toString('base64'),
     })).toEqual([
       expect.objectContaining({ control: 'WEBHOOK_SECRET_ENCRYPTION_KEY' }),
+    ]);
+  });
+
+  it('requires valid OIDC signing key material in production', () => {
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      METRICS_PUBLIC_DISABLED: 'true',
+      OIDC_SIGNING_PRIVATE_KEY: '',
+    })).toEqual([
+      expect.objectContaining({ control: 'OIDC_SIGNING_KEYPAIR' }),
+    ]);
+
+    const otherKeyPair = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      METRICS_PUBLIC_DISABLED: 'true',
+      OIDC_SIGNING_PUBLIC_KEY: otherKeyPair.publicKey.export({
+        type: 'spki',
+        format: 'pem',
+      }) as string,
+    })).toEqual([
+      expect.objectContaining({ control: 'OIDC_SIGNING_KEYPAIR' }),
+    ]);
+  });
+
+  it('requires KMS-backed credential signing in production', () => {
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      METRICS_PUBLIC_DISABLED: 'true',
+      KMS_PROVIDER: 'local',
+    })).toEqual([
+      expect.objectContaining({ control: 'CREDENTIAL_SIGNING_KMS' }),
+    ]);
+
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      METRICS_PUBLIC_DISABLED: 'true',
+      KMS_KEY_ID: '',
+    })).toEqual([
+      expect.objectContaining({ control: 'KMS_KEY_ID' }),
+    ]);
+  });
+
+  it('requires explicit context-bound ZK circuit readiness in production', () => {
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      METRICS_PUBLIC_DISABLED: 'true',
+      ZK_CONTEXT_BOUND_CIRCUITS_READY: '',
+    })).toEqual([
+      expect.objectContaining({ control: 'ZK_CONTEXT_BOUND_CIRCUITS_READY' }),
     ]);
   });
 });
