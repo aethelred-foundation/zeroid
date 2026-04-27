@@ -25,6 +25,7 @@ const PROD_BASE_ENV: NodeJS.ProcessEnv = {
   CORS_ORIGINS: 'https://app.zeroid.example,https://admin.zeroid.example',
   SANCTIONS_SCREENING_DISABLED: 'true',
   WEBHOOK_SECRET_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64'),
+  POLICY_RECEIPT_SIGNING_SECRET: 'r'.repeat(64),
   OIDC_SIGNING_PRIVATE_KEY: oidcPrivateKey,
   OIDC_SIGNING_PUBLIC_KEY: oidcPublicKey,
   KMS_PROVIDER: 'aws-kms',
@@ -190,6 +191,32 @@ describe('production safety controls', () => {
       WEBHOOK_SECRET_ENCRYPTION_KEY: Buffer.alloc(16, 1).toString('base64'),
     })).toEqual([
       expect.objectContaining({ control: 'WEBHOOK_SECRET_ENCRYPTION_KEY' }),
+    ]);
+  });
+
+  it('requires a dedicated policy receipt signing secret in production', () => {
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      METRICS_PUBLIC_DISABLED: 'true',
+      POLICY_RECEIPT_SIGNING_SECRET: '',
+    })).toEqual([
+      expect.objectContaining({ control: 'POLICY_RECEIPT_SIGNING_SECRET' }),
+    ]);
+
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      METRICS_PUBLIC_DISABLED: 'true',
+      POLICY_RECEIPT_SIGNING_SECRET: 'short-receipt-secret',
+    })).toEqual([
+      expect.objectContaining({ control: 'POLICY_RECEIPT_SIGNING_SECRET' }),
+    ]);
+
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      METRICS_PUBLIC_DISABLED: 'true',
+      POLICY_RECEIPT_SIGNING_SECRET: 'change-me',
+    })).toEqual([
+      expect.objectContaining({ control: 'POLICY_RECEIPT_SIGNING_SECRET' }),
     ]);
   });
 

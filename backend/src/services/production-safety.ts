@@ -7,6 +7,7 @@ export interface ProductionSafetyViolation {
 
 const MIN_METRICS_TOKEN_LENGTH = 32;
 const MIN_JWT_SECRET_LENGTH = 48;
+const MIN_POLICY_RECEIPT_SECRET_LENGTH = 48;
 const DEFAULT_DEVELOPMENT_CORS_ORIGINS = ['http://localhost:3000'];
 const REQUIRED_SECRET_KEY_BYTES = 32;
 const SUPPORTED_OIDC_SIGNING_ALGORITHMS = new Set(['RS256', 'PS256']);
@@ -114,6 +115,7 @@ export function checkedProductionSafetyControls(): string[] {
     'METRICS_PUBLIC_DISABLED_OR_METRICS_AUTH_TOKEN',
     'SANCTIONS_SCREENING_DISABLED_OR_SANCTIONS_LIST_SIGNATURE_PUBLIC_KEYS_JSON',
     'WEBHOOK_SECRET_ENCRYPTION_KEY',
+    'POLICY_RECEIPT_SIGNING_SECRET',
     'OIDC_SIGNING_KEYPAIR',
     'CREDENTIAL_SIGNING_KMS',
     'INTEL_PCS_API_KEY',
@@ -252,6 +254,24 @@ export function collectProductionSafetyViolations(
     violations.push({
       control: 'WEBHOOK_SECRET_ENCRYPTION_KEY',
       risk: `Webhook secret encryption key must decode to ${REQUIRED_SECRET_KEY_BYTES} bytes`,
+    });
+  }
+
+  const policyReceiptSecret = env.POLICY_RECEIPT_SIGNING_SECRET?.trim();
+  if (!policyReceiptSecret) {
+    violations.push({
+      control: 'POLICY_RECEIPT_SIGNING_SECRET',
+      risk: 'Production policy decision receipts require a dedicated signing secret',
+    });
+  } else if (policyReceiptSecret.length < MIN_POLICY_RECEIPT_SECRET_LENGTH) {
+    violations.push({
+      control: 'POLICY_RECEIPT_SIGNING_SECRET',
+      risk: `Policy receipt signing secret must be at least ${MIN_POLICY_RECEIPT_SECRET_LENGTH} characters`,
+    });
+  } else if (isKnownUnsafeJwtSecret(policyReceiptSecret)) {
+    violations.push({
+      control: 'POLICY_RECEIPT_SIGNING_SECRET',
+      risk: 'Policy receipt signing secret must not use a known development or test placeholder',
     });
   }
 

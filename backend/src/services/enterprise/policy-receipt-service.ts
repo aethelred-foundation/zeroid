@@ -4,6 +4,7 @@ import { credentialService } from '../credential';
 
 const RECEIPT_TTL_SECONDS = 90 * 24 * 60 * 60;
 const RECEIPT_INDEX_LIMIT = 200;
+const MIN_PRODUCTION_RECEIPT_SIGNING_SECRET_LENGTH = 48;
 
 export type PolicyReceiptType =
   | 'compliance_evaluation'
@@ -922,18 +923,24 @@ export class PolicyDecisionReceiptService {
   }
 
   private getSigningSecret(): string {
-    const configured =
-      process.env.POLICY_RECEIPT_SIGNING_SECRET ?? process.env.JWT_SECRET;
-    if (configured && configured.length >= 16) {
-      return configured;
-    }
-
+    const configured = process.env.POLICY_RECEIPT_SIGNING_SECRET?.trim();
     if (process.env.NODE_ENV === 'production') {
+      if (
+        configured &&
+        configured.length >= MIN_PRODUCTION_RECEIPT_SIGNING_SECRET_LENGTH
+      ) {
+        return configured;
+      }
+
       throw new PolicyDecisionReceiptError(
-        'POLICY_RECEIPT_SIGNING_SECRET (or JWT_SECRET) must be configured in production',
+        `POLICY_RECEIPT_SIGNING_SECRET must be configured in production and contain at least ${MIN_PRODUCTION_RECEIPT_SIGNING_SECRET_LENGTH} characters`,
         'POLICY_RECEIPT_SECRET_MISSING',
         500,
       );
+    }
+
+    if (configured && configured.length >= 16) {
+      return configured;
     }
 
     return 'zeroid-policy-receipt-dev-secret';

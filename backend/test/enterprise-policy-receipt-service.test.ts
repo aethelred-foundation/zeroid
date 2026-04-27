@@ -264,6 +264,59 @@ describe('PolicyDecisionReceiptService', () => {
     expect(verification.valid).toBe(false);
   });
 
+  it('requires a dedicated strong signing secret for production receipts', async () => {
+    const previousNodeEnv = process.env.NODE_ENV;
+    const previousReceiptSecret = process.env.POLICY_RECEIPT_SIGNING_SECRET;
+    const previousJwtSecret = process.env.JWT_SECRET;
+
+    const createMinimalReceipt = () =>
+      service.createReceipt({
+        organizationId: 'org-1',
+        actorIdentityId: 'actor-1',
+        receiptType: 'sanctions_screening',
+        policyName: 'sanctions_screening',
+        decisionSummary: 'screening_result:clear',
+        input: { entityId: 'entity-9' },
+        output: { overallRisk: 'clear' },
+      });
+
+    try {
+      process.env.NODE_ENV = 'production';
+      process.env.JWT_SECRET = 'j'.repeat(64);
+      delete process.env.POLICY_RECEIPT_SIGNING_SECRET;
+
+      await expect(createMinimalReceipt()).rejects.toMatchObject({
+        code: 'POLICY_RECEIPT_SECRET_MISSING',
+      });
+
+      process.env.POLICY_RECEIPT_SIGNING_SECRET = 'short-receipt-secret';
+      await expect(createMinimalReceipt()).rejects.toMatchObject({
+        code: 'POLICY_RECEIPT_SECRET_MISSING',
+      });
+
+      process.env.POLICY_RECEIPT_SIGNING_SECRET = 'r'.repeat(64);
+      await expect(createMinimalReceipt()).resolves.toMatchObject({
+        receiptType: 'sanctions_screening',
+      });
+    } finally {
+      if (previousNodeEnv === undefined) {
+        delete process.env.NODE_ENV;
+      } else {
+        process.env.NODE_ENV = previousNodeEnv;
+      }
+      if (previousReceiptSecret === undefined) {
+        delete process.env.POLICY_RECEIPT_SIGNING_SECRET;
+      } else {
+        process.env.POLICY_RECEIPT_SIGNING_SECRET = previousReceiptSecret;
+      }
+      if (previousJwtSecret === undefined) {
+        delete process.env.JWT_SECRET;
+      } else {
+        process.env.JWT_SECRET = previousJwtSecret;
+      }
+    }
+  });
+
   it('falls back to the durable ledger when the redis cache is cold', async () => {
     const createdAt = new Date('2026-04-21T00:00:00.000Z');
     const expiresAt = new Date('2026-07-20T00:00:00.000Z');
