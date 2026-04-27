@@ -1306,7 +1306,7 @@ router.post(
       const grantType = req.body.grantType ?? req.body.grant_type;
 
       if (grantType === 'client_credentials') {
-        const token = apiGateway.issueOAuth2Token({
+        const token = await apiGateway.issueOAuth2Token({
           grantType: 'client_credentials',
           clientId: req.body.clientId ?? req.body.client_id,
           clientSecret: req.body.clientSecret ?? req.body.client_secret,

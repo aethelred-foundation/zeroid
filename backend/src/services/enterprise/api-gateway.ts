@@ -144,6 +144,18 @@ interface OAuth2Token {
   issuedAt: number;
 }
 
+interface OAuth2ClientRecord {
+  clientId: string;
+  clientSecretHash: string;
+  scopes: APIKeyScope[];
+  environment: string;
+}
+
+interface OAuth2TokenRecord extends OAuth2Token {
+  clientId: string;
+  scopes: APIKeyScope[];
+}
+
 // ---------------------------------------------------------------------------
 // APIGateway
 // ---------------------------------------------------------------------------
@@ -151,19 +163,6 @@ export class APIGateway {
   private usageRecords: UsageRecord[] = [];
   private quotaTrackers: Map<string, QuotaTracker> = new Map();
   private rateLimitStates: Map<string, RateLimitState> = new Map();
-  private oauth2Clients: Map<
-    string,
-    {
-      clientId: string;
-      clientSecretHash: string;
-      scopes: APIKeyScope[];
-      environment: string;
-    }
-  > = new Map();
-  private oauth2Tokens: Map<
-    string,
-    OAuth2Token & { clientId: string; scopes: APIKeyScope[] }
-  > = new Map();
 
   private readonly maxUsageRecords = 500_000;
 
@@ -177,6 +176,14 @@ export class APIGateway {
 
   private apiKeyConfigKey(apiKeyId: string): string {
     return `enterprise:api-key-config:${apiKeyId}`;
+  }
+
+  private oauth2ClientKey(clientId: string): string {
+    return `enterprise:oauth2-client:${clientId}`;
+  }
+
+  private oauth2TokenKey(accessToken: string): string {
+    return `enterprise:oauth2-token:${this.hashOAuth2AccessToken(accessToken)}`;
   }
 
   private async persistAPIKeyConfig(
@@ -434,28 +441,30 @@ export class APIGateway {
   // -------------------------------------------------------------------------
   // OAuth2 client credentials flow
   // -------------------------------------------------------------------------
-  registerOAuth2Client(
+  async registerOAuth2Client(
     clientId: string,
     scopes: APIKeyScope[],
     environment: string,
-  ): { clientId: string; clientSecret: string } {
+  ): Promise<{ clientId: string; clientSecret: string }> {
     const clientSecret = crypto.randomBytes(32).toString('base64url');
-    const clientSecretHash = this.hashOAuth2ClientSecret(clientSecret);
-
-    this.oauth2Clients.set(clientId, {
+    const client: OAuth2ClientRecord = {
       clientId,
-      clientSecretHash,
+      clientSecretHash: this.hashOAuth2ClientSecret(clientSecret),
       scopes,
       environment,
-    });
+    };
+
+    await redis.set(this.oauth2ClientKey(clientId), JSON.stringify(client));
 
     logger.info('oauth2_client_registered', { clientId, scopes, environment });
     return { clientId, clientSecret };
   }
 
-  issueOAuth2Token(credentials: OAuth2ClientCredentials): OAuth2Token {
+  async issueOAuth2Token(
+    credentials: OAuth2ClientCredentials,
+  ): Promise<OAuth2Token> {
     const parsed = OAuth2ClientCredentialsSchema.parse(credentials);
-    const client = this.oauth2Clients.get(parsed.clientId);
+    const client = await this.getOAuth2Client(parsed.clientId);
     if (!client) {
       throw new GatewayError(
         'Invalid client credentials',
@@ -495,33 +504,33 @@ export class APIGateway {
       issuedAt: Math.floor(Date.now() / 1000),
     };
 
-    this.oauth2Tokens.set(accessToken, {
+    await redis.set(this.oauth2TokenKey(accessToken), JSON.stringify({
       ...token,
       clientId: parsed.clientId,
       scopes: requestedScopes,
-    });
+    } satisfies OAuth2TokenRecord), 'EX', token.expiresIn);
 
     logger.info('oauth2_token_issued', { clientId: parsed.clientId });
     return token;
   }
 
-  validateOAuth2Token(accessToken: string): {
+  async validateOAuth2Token(accessToken: string): Promise<{
     clientId: string;
     scopes: APIKeyScope[];
     environment: string;
-  } {
-    const tokenData = this.oauth2Tokens.get(accessToken);
+  }> {
+    const tokenData = await this.getOAuth2Token(accessToken);
     if (!tokenData) {
       throw new GatewayError('Invalid access token', 'INVALID_TOKEN', 401);
     }
 
     const now = Math.floor(Date.now() / 1000);
     if (now > tokenData.issuedAt + tokenData.expiresIn) {
-      this.oauth2Tokens.delete(accessToken);
+      await redis.del(this.oauth2TokenKey(accessToken));
       throw new GatewayError('Access token expired', 'TOKEN_EXPIRED', 401);
     }
 
-    const client = this.oauth2Clients.get(tokenData.clientId);
+    const client = await this.getOAuth2Client(tokenData.clientId);
     return {
       clientId: tokenData.clientId,
       scopes: tokenData.scopes,
@@ -529,11 +538,45 @@ export class APIGateway {
     };
   }
 
+  private async getOAuth2Client(
+    clientId: string,
+  ): Promise<OAuth2ClientRecord | null> {
+    const raw = await redis.get(this.oauth2ClientKey(clientId));
+    if (!raw) return null;
+
+    try {
+      return JSON.parse(raw) as OAuth2ClientRecord;
+    } catch {
+      return null;
+    }
+  }
+
+  private async getOAuth2Token(
+    accessToken: string,
+  ): Promise<OAuth2TokenRecord | null> {
+    const raw = await redis.get(this.oauth2TokenKey(accessToken));
+    if (!raw) return null;
+
+    try {
+      return JSON.parse(raw) as OAuth2TokenRecord;
+    } catch {
+      return null;
+    }
+  }
+
   private hashOAuth2ClientSecret(clientSecret: string): string {
     return crypto
       .createHash('sha256')
       .update('zeroid:enterprise-oauth2-client-secret:v1:')
       .update(clientSecret)
+      .digest('hex');
+  }
+
+  private hashOAuth2AccessToken(accessToken: string): string {
+    return crypto
+      .createHash('sha256')
+      .update('zeroid:enterprise-oauth2-access-token:v1:')
+      .update(accessToken)
       .digest('hex');
   }
 

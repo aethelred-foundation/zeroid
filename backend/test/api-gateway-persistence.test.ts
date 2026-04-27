@@ -22,6 +22,11 @@ jest.mock('../src/index', () => ({
       redisStore[key] = value;
       return 'OK';
     }),
+    del: jest.fn(async (key: string) => {
+      const existed = Object.prototype.hasOwnProperty.call(redisStore, key);
+      delete redisStore[key];
+      return existed ? 1 : 0;
+    }),
   },
 }));
 
@@ -156,14 +161,14 @@ describe('APIGateway persistence', () => {
     });
   });
 
-  it('limits OAuth2 issued scopes to the registered client scope set', () => {
-    const client = apiGateway.registerOAuth2Client(
+  it('limits OAuth2 issued scopes to the registered client scope set', async () => {
+    const client = await apiGateway.registerOAuth2Client(
       'oauth-client-scoped',
       ['credentials:read', 'verification:write'],
       'production',
     );
 
-    const token = apiGateway.issueOAuth2Token({
+    const token = await apiGateway.issueOAuth2Token({
       grantType: 'client_credentials',
       clientId: client.clientId,
       clientSecret: client.clientSecret,
@@ -171,46 +176,70 @@ describe('APIGateway persistence', () => {
     });
 
     expect(token.scope).toBe('credentials:read');
-    expect(apiGateway.validateOAuth2Token(token.accessToken)).toMatchObject({
+    await expect(apiGateway.validateOAuth2Token(token.accessToken)).resolves.toMatchObject({
       clientId: client.clientId,
       scopes: ['credentials:read'],
       environment: 'production',
     });
   });
 
-  it('rejects OAuth2 scopes outside the registered client scope set', () => {
-    const client = apiGateway.registerOAuth2Client(
+  it('rejects OAuth2 scopes outside the registered client scope set', async () => {
+    const client = await apiGateway.registerOAuth2Client(
       'oauth-client-scope-denied',
       ['credentials:read'],
       'production',
     );
 
-    expect(() => apiGateway.issueOAuth2Token({
+    await expect(apiGateway.issueOAuth2Token({
       grantType: 'client_credentials',
       clientId: client.clientId,
       clientSecret: client.clientSecret,
       scope: 'admin:full',
-    })).toThrow(expect.objectContaining({
+    })).rejects.toMatchObject({
       code: 'INVALID_SCOPE',
       statusCode: 400,
-    }));
+    });
   });
 
-  it('rejects OAuth2 client secret mismatches', () => {
-    const client = apiGateway.registerOAuth2Client(
+  it('rejects OAuth2 client secret mismatches', async () => {
+    const client = await apiGateway.registerOAuth2Client(
       'oauth-client-secret-denied',
       ['credentials:read'],
       'production',
     );
 
-    expect(() => apiGateway.issueOAuth2Token({
+    await expect(apiGateway.issueOAuth2Token({
       grantType: 'client_credentials',
       clientId: client.clientId,
       clientSecret: `${client.clientSecret}-wrong`,
       scope: 'credentials:read',
-    })).toThrow(expect.objectContaining({
+    })).rejects.toMatchObject({
       code: 'INVALID_CLIENT',
       statusCode: 401,
-    }));
+    });
+  });
+
+  it('persists OAuth2 client and token state in redis for multi-node use', async () => {
+    const client = await apiGateway.registerOAuth2Client(
+      'oauth-client-redis-backed',
+      ['credentials:read'],
+      'production',
+    );
+
+    expect(redisStore[`enterprise:oauth2-client:${client.clientId}`]).toBeDefined();
+
+    const token = await apiGateway.issueOAuth2Token({
+      grantType: 'client_credentials',
+      clientId: client.clientId,
+      clientSecret: client.clientSecret,
+      scope: 'credentials:read',
+    });
+
+    expect(redisStore[`enterprise:oauth2-token:${token.accessToken}`]).toBeUndefined();
+    expect(
+      Object.keys(redisStore).some((key) =>
+        key.startsWith('enterprise:oauth2-token:'),
+      ),
+    ).toBe(true);
   });
 });
