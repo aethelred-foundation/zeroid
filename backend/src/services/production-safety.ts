@@ -120,6 +120,7 @@ export function checkedProductionSafetyControls(): string[] {
     'SANCTIONS_SCREENING_DISABLED_OR_SANCTIONS_LIST_SIGNATURE_PUBLIC_KEYS_JSON',
     'WEBHOOK_SECRET_ENCRYPTION_KEY',
     'POLICY_RECEIPT_SIGNING_SECRET',
+    'OIDC_ISSUER_URL',
     'OIDC_SIGNING_KEYPAIR',
     'CREDENTIAL_SIGNING_KMS',
     'INTEL_PCS_API_KEY',
@@ -276,6 +277,19 @@ export function collectProductionSafetyViolations(
     violations.push({
       control: 'POLICY_RECEIPT_SIGNING_SECRET',
       risk: 'Policy receipt signing secret must not use a known development or test placeholder',
+    });
+  }
+
+  const oidcIssuerUrl = env.OIDC_ISSUER_URL?.trim();
+  if (!oidcIssuerUrl) {
+    violations.push({
+      control: 'OIDC_ISSUER_URL',
+      risk: 'Production OIDC issuer URL must be explicitly configured',
+    });
+  } else if (!isTrustedHttpsUrl(oidcIssuerUrl)) {
+    violations.push({
+      control: 'OIDC_ISSUER_URL',
+      risk: 'Production OIDC issuer URL must use HTTPS and must not target localhost',
     });
   }
 

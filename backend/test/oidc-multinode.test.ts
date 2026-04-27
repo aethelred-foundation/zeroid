@@ -256,6 +256,24 @@ describe('OIDC multi-node correctness', () => {
     expect(discovery).not.toHaveProperty('backchannel_logout_supported');
   });
 
+  test('production issuer must be HTTPS and non-local', () => {
+    const previousNodeEnv = process.env.NODE_ENV;
+    try {
+      process.env.NODE_ENV = 'production';
+
+      expect(() => new OIDCBridge('http://localhost:4000/oidc')).toThrow(
+        /OIDC_ISSUER_URL/,
+      );
+      expect(() => new OIDCBridge('https://id.zeroid.test/oidc')).not.toThrow();
+    } finally {
+      if (previousNodeEnv === undefined) {
+        delete process.env.NODE_ENV;
+      } else {
+        process.env.NODE_ENV = previousNodeEnv;
+      }
+    }
+  });
+
   test('client registration rejects insecure redirect and JWKS URIs', async () => {
     await expect(
       bridgeA.registerClient({

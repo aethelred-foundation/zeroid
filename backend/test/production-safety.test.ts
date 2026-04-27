@@ -26,6 +26,7 @@ const PROD_BASE_ENV: NodeJS.ProcessEnv = {
   SANCTIONS_SCREENING_DISABLED: 'true',
   WEBHOOK_SECRET_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64'),
   POLICY_RECEIPT_SIGNING_SECRET: 'r'.repeat(64),
+  OIDC_ISSUER_URL: 'https://id.zeroid.example/enterprise/oidc',
   OIDC_SIGNING_PRIVATE_KEY: oidcPrivateKey,
   OIDC_SIGNING_PUBLIC_KEY: oidcPublicKey,
   KMS_PROVIDER: 'aws-kms',
@@ -247,6 +248,24 @@ describe('production safety controls', () => {
       }) as string,
     })).toEqual([
       expect.objectContaining({ control: 'OIDC_SIGNING_KEYPAIR' }),
+    ]);
+  });
+
+  it('requires an explicit trusted OIDC issuer URL in production', () => {
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      METRICS_PUBLIC_DISABLED: 'true',
+      OIDC_ISSUER_URL: '',
+    })).toEqual([
+      expect.objectContaining({ control: 'OIDC_ISSUER_URL' }),
+    ]);
+
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      METRICS_PUBLIC_DISABLED: 'true',
+      OIDC_ISSUER_URL: 'http://localhost:4000/enterprise/oidc',
+    })).toEqual([
+      expect.objectContaining({ control: 'OIDC_ISSUER_URL' }),
     ]);
   });
 

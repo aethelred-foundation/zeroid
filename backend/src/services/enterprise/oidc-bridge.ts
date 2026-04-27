@@ -3,14 +3,25 @@ import { createLogger, format, transports } from 'winston';
 import crypto from 'crypto';
 import { redis } from '../../index';
 
+const isLoopbackHost = (url: URL): boolean =>
+  ['localhost', '127.0.0.1', '::1'].includes(url.hostname.toLowerCase());
+
 const isLocalDevelopmentUrl = (url: URL): boolean =>
-  process.env.NODE_ENV !== 'production' &&
-  ['localhost', '127.0.0.1', '::1'].includes(url.hostname);
+  process.env.NODE_ENV !== 'production' && isLoopbackHost(url);
 
 const isSecureOidcUrl = (value: string): boolean => {
   try {
     const url = new URL(value);
     return url.protocol === 'https:' || isLocalDevelopmentUrl(url);
+  } catch {
+    return false;
+  }
+};
+
+const isTrustedProductionIssuer = (value: string): boolean => {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && !isLoopbackHost(url);
   } catch {
     return false;
   }
@@ -390,6 +401,12 @@ export class OIDCBridge {
     issuer = process.env.OIDC_ISSUER_URL ??
       'https://id.zeroid.aethelred.network/enterprise/oidc',
   ) {
+    if (process.env.NODE_ENV === 'production' && !isTrustedProductionIssuer(issuer)) {
+      throw new Error(
+        'OIDC_ISSUER_URL must be an HTTPS, non-local issuer URL in production.',
+      );
+    }
+
     this.issuer = issuer;
     this.signingAlgorithm = this.resolveSigningAlgorithm();
     logger.info('OIDCBridge initialized', {
