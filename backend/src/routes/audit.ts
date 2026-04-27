@@ -3,6 +3,7 @@ import { AuthenticatedRequest } from '../middleware/auth';
 import { apiRateLimiter } from '../middleware/rateLimit';
 import { validate, auditQuerySchema, uuidSchema } from '../middleware/validation';
 import { prisma, logger } from '../index';
+import { asRouteError, sendRouteError } from '../utils/route-error';
 import { z } from 'zod';
 
 const router = Router();
@@ -78,9 +79,9 @@ router.get(
         },
       });
     } catch (err) {
-      const error = err as Error & { statusCode?: number; code?: string };
+      const error = asRouteError(err);
       logger.error('audit_query_error', { error: error.message });
-      res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code });
+      sendRouteError(res, error, 'AUDIT_QUERY_FAILED');
     }
   },
 );
@@ -112,8 +113,7 @@ router.get(
 
       res.json({ data: log });
     } catch (err) {
-      const error = err as Error & { statusCode?: number; code?: string };
-      res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code });
+      sendRouteError(res, asRouteError(err), 'AUDIT_GET_FAILED');
     }
   },
 );
@@ -163,8 +163,7 @@ router.get(
         pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
       });
     } catch (err) {
-      const error = err as Error & { statusCode?: number; code?: string };
-      res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code });
+      sendRouteError(res, asRouteError(err), 'AUDIT_RESOURCE_QUERY_FAILED');
     }
   },
 );
@@ -222,9 +221,9 @@ router.get(
         },
       });
     } catch (err) {
-      const error = err as Error & { statusCode?: number; code?: string };
+      const error = asRouteError(err);
       logger.error('audit_summary_error', { error: error.message });
-      res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code });
+      sendRouteError(res, error, 'AUDIT_SUMMARY_FAILED');
     }
   },
 );
@@ -276,8 +275,7 @@ router.get(
         records: logs,
       });
     } catch (err) {
-      const error = err as Error & { statusCode?: number; code?: string };
-      res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code });
+      sendRouteError(res, asRouteError(err), 'AUDIT_EXPORT_FAILED');
     }
   },
 );

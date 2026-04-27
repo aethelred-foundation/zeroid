@@ -3,6 +3,7 @@ import { AuthenticatedRequest } from '../middleware/auth';
 import { validate, createSchemaSchema, uuidSchema, paginationSchema } from '../middleware/validation';
 import { governanceLimiter } from '../middleware/rateLimit';
 import { prisma, logger } from '../index';
+import { asRouteError, sendRouteError } from '../utils/route-error';
 import { z } from 'zod';
 
 const router = Router();
@@ -75,9 +76,9 @@ router.post(
         message: 'Schema proposed successfully',
       });
     } catch (err) {
-      const error = err as Error & { statusCode?: number; code?: string };
+      const error = asRouteError(err);
       logger.error('schema_propose_error', { error: error.message });
-      res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code });
+      sendRouteError(res, error, 'SCHEMA_PROPOSE_FAILED');
     }
   },
 );
@@ -194,9 +195,9 @@ router.post(
         message: `Vote recorded. Schema status: ${updated.status}`,
       });
     } catch (err) {
-      const error = err as Error & { statusCode?: number; code?: string };
+      const error = asRouteError(err);
       logger.error('schema_vote_error', { error: error.message });
-      res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code });
+      sendRouteError(res, error, 'SCHEMA_VOTE_FAILED');
     }
   },
 );
@@ -235,8 +236,7 @@ router.get(
         pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
       });
     } catch (err) {
-      const error = err as Error & { statusCode?: number; code?: string };
-      res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code });
+      sendRouteError(res, asRouteError(err), 'SCHEMA_LIST_FAILED');
     }
   },
 );
@@ -260,8 +260,7 @@ router.get(
 
       res.json({ data: schema });
     } catch (err) {
-      const error = err as Error & { statusCode?: number; code?: string };
-      res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code });
+      sendRouteError(res, asRouteError(err), 'SCHEMA_GET_FAILED');
     }
   },
 );
@@ -311,8 +310,7 @@ router.patch(
 
       res.json({ data: updated, message: 'Schema deprecated successfully' });
     } catch (err) {
-      const error = err as Error & { statusCode?: number; code?: string };
-      res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code });
+      sendRouteError(res, asRouteError(err), 'SCHEMA_DEPRECATE_FAILED');
     }
   },
 );

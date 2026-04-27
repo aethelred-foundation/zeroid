@@ -7,6 +7,7 @@ import { teeService } from '../services/tee';
 import { credentialService } from '../services/credential';
 import { prisma, logger, redis, verificationCounter } from '../index';
 import { createHash, randomUUID } from 'crypto';
+import { asRouteError, sendRouteError } from '../utils/route-error';
 import { z } from 'zod';
 
 // ---------------------------------------------------------------------------
@@ -235,11 +236,9 @@ router.post(
       });
     } catch (err) {
       verificationCounter.inc({ result: 'failed' });
-      const error = err as Error & { statusCode?: number; code?: string };
+      const error = asRouteError(err);
       logger.error('zk_proof_generation_error', { error: error.message });
-      res
-        .status(error.statusCode ?? 500)
-        .json({ error: error.message, code: error.code });
+      sendRouteError(res, error, 'ZK_PROOF_GENERATION_FAILED');
     }
   },
 );
@@ -561,11 +560,9 @@ router.post(
       });
     } catch (err) {
       verificationCounter.inc({ result: 'error' });
-      const error = err as Error & { statusCode?: number; code?: string };
+      const error = asRouteError(err);
       logger.error('zk_verify_error', { error: error.message });
-      res
-        .status(error.statusCode ?? 500)
-        .json({ error: error.message, code: error.code });
+      sendRouteError(res, error, 'ZK_VERIFY_FAILED');
     }
   },
 );
@@ -610,11 +607,9 @@ router.post(
         message: 'TEE attestation verified successfully',
       });
     } catch (err) {
-      const error = err as Error & { statusCode?: number; code?: string };
+      const error = asRouteError(err);
       logger.error('tee_attestation_error', { error: error.message });
-      res
-        .status(error.statusCode ?? 500)
-        .json({ error: error.message, code: error.code });
+      sendRouteError(res, error, 'TEE_ATTESTATION_FAILED');
     }
   },
 );
@@ -683,10 +678,7 @@ router.get(
         },
       });
     } catch (err) {
-      const error = err as Error & { statusCode?: number; code?: string };
-      res
-        .status(error.statusCode ?? 500)
-        .json({ error: error.message, code: error.code });
+      sendRouteError(res, asRouteError(err), 'VERIFICATION_HISTORY_FAILED');
     }
   },
 );

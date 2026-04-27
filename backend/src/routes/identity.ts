@@ -5,6 +5,7 @@ import { authMiddleware, AuthenticatedRequest, optionalAuthMiddleware } from '..
 import { validate, registerIdentitySchema, didSchema } from '../middleware/validation';
 import { apiRateLimiter, authRateLimiter } from '../middleware/rateLimit';
 import { logger } from '../index';
+import { asRouteError, sendRouteError } from '../utils/route-error';
 import { z } from 'zod';
 
 const router = Router();
@@ -38,9 +39,9 @@ router.post(
         message: 'Identity registered successfully',
       });
     } catch (err) {
-      const error = err as Error & { statusCode?: number; code?: string };
+      const error = asRouteError(err);
       logger.error('identity_register_error', { error: error.message });
-      res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code });
+      sendRouteError(res, error, 'IDENTITY_REGISTER_FAILED');
     }
   },
 );
@@ -71,8 +72,7 @@ router.get(
         },
       });
     } catch (err) {
-      const error = err as Error & { statusCode?: number; code?: string };
-      res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code });
+      sendRouteError(res, asRouteError(err), 'IDENTITY_PROFILE_FAILED');
     }
   },
 );
@@ -106,8 +106,7 @@ router.get(
         },
       });
     } catch (err) {
-      const error = err as Error & { statusCode?: number; code?: string };
-      res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code });
+      sendRouteError(res, asRouteError(err), 'DID_RESOLVE_FAILED');
     }
   },
 );
@@ -144,9 +143,9 @@ router.post(
         message: 'Identity recovered successfully',
       });
     } catch (err) {
-      const error = err as Error & { statusCode?: number; code?: string };
+      const error = asRouteError(err);
       logger.error('identity_recover_error', { error: error.message });
-      res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code });
+      sendRouteError(res, error, 'IDENTITY_RECOVER_FAILED');
     }
   },
 );
@@ -174,9 +173,9 @@ router.post(
         message: 'Delegation granted successfully',
       });
     } catch (err) {
-      const error = err as Error & { statusCode?: number; code?: string };
+      const error = asRouteError(err);
       logger.error('delegation_error', { error: error.message });
-      res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code });
+      sendRouteError(res, error, 'DELEGATION_FAILED');
     }
   },
 );
@@ -198,8 +197,7 @@ router.delete(
         message: 'Delegation revoked successfully',
       });
     } catch (err) {
-      const error = err as Error & { statusCode?: number; code?: string };
-      res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code });
+      sendRouteError(res, asRouteError(err), 'DELEGATION_REVOKE_FAILED');
     }
   },
 );
@@ -217,8 +215,7 @@ router.post(
       }
       res.json({ message: 'Logged out successfully' });
     } catch (err) {
-      const error = err as Error & { statusCode?: number; code?: string };
-      res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code });
+      sendRouteError(res, asRouteError(err), 'LOGOUT_FAILED');
     }
   },
 );
@@ -246,8 +243,7 @@ router.patch(
 
       res.json({ data: identity, message: 'Identity updated successfully' });
     } catch (err) {
-      const error = err as Error & { statusCode?: number; code?: string };
-      res.status(error.statusCode ?? 500).json({ error: error.message, code: error.code });
+      sendRouteError(res, asRouteError(err), 'IDENTITY_UPDATE_FAILED');
     }
   },
 );
