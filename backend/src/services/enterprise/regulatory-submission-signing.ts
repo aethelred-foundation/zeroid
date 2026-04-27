@@ -277,7 +277,7 @@ async function buildEnterpriseSigningContext(
     publicKey: options?.publicKey,
     defaultVerificationMethod: buildDefaultBundleVerificationMethod(keyId),
     verificationMethod: process.env[candidate.verificationMethodEnvKey]?.trim(),
-    allowLocalSigning: options?.allowLocalSigning ?? process.env.REGULATORY_SUBMISSION_BUNDLE_ALLOW_LOCAL_SIGNING === 'true',
+    allowLocalSigning: options?.allowLocalSigning ?? process.env.NODE_ENV !== 'production',
     signingUnavailableMessage: 'Regulatory submission bundle signing private key is not configured.',
     signingUnavailableCode: 'REG_SUBMISSION_SIGNING_UNAVAILABLE',
     kmsConfigMissingCode: 'REG_SUBMISSION_KMS_CONFIG_MISSING',
@@ -285,7 +285,7 @@ async function buildEnterpriseSigningContext(
     kmsSignFailedCode: 'REG_SUBMISSION_KMS_SIGN_FAILED',
     kmsPublicKeyFailedCode: 'REG_SUBMISSION_KMS_PUBKEY_FAILED',
     kmsAuthFailedCode: 'REG_SUBMISSION_KMS_AUTH_FAILED',
-    localSigningBlockedMessage: 'Local regulatory submission bundle signing is blocked in production. Configure KMS-backed signing or set REGULATORY_SUBMISSION_BUNDLE_ALLOW_LOCAL_SIGNING=true for a controlled deployment.',
+    localSigningBlockedMessage: 'Local regulatory submission bundle signing is blocked in production. Configure KMS-backed signing.',
     localSigningBlockedCode: 'REG_SUBMISSION_LOCAL_SIGNING_BLOCKED',
     awsSigningAlgorithmEnvKey: candidate.awsKmsAlgorithmEnvKey,
     gcpAccessTokenEnvKey: candidate.gcpAccessTokenEnvKey,
@@ -320,8 +320,7 @@ async function resolveRegulatorySubmissionSigningContext(
       return buildEnterpriseSigningContext(candidate, keyId, 'local', {
         privateKey: rawPrivateKey,
         publicKey: process.env[candidate.publicKeyEnvKey],
-        allowLocalSigning: process.env.NODE_ENV !== 'production'
-          || process.env.REGULATORY_SUBMISSION_BUNDLE_ALLOW_LOCAL_SIGNING === 'true',
+        allowLocalSigning: process.env.NODE_ENV !== 'production',
       });
     }
 

@@ -153,14 +153,22 @@ describe('production safety controls', () => {
   });
 
   it('keeps unsafe production overrides in the startup block list', () => {
-    const env = {
+    expect(collectProductionSafetyViolations({
       ...PROD_BASE_ENV,
       METRICS_PUBLIC_DISABLED: 'true',
       ALLOW_UNSAFE_TEE_ATTESTATION: 'true',
-    };
-
-    expect(collectProductionSafetyViolations(env)).toEqual([
+    })).toEqual([
       expect.objectContaining({ control: 'ALLOW_UNSAFE_TEE_ATTESTATION' }),
+    ]);
+
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      METRICS_PUBLIC_DISABLED: 'true',
+      REGULATORY_SUBMISSION_BUNDLE_ALLOW_LOCAL_SIGNING: 'true',
+    })).toEqual([
+      expect.objectContaining({
+        control: 'REGULATORY_SUBMISSION_BUNDLE_ALLOW_LOCAL_SIGNING',
+      }),
     ]);
   });
 

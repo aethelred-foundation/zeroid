@@ -55,6 +55,10 @@ const UNSAFE_PRODUCTION_FLAGS: ProductionSafetyViolation[] = [
     control: 'ALLOW_UNSAFE_TEE_ATTESTATION',
     risk: 'Disables DCAP quote verification; attestation cannot be trusted',
   },
+  {
+    control: 'REGULATORY_SUBMISSION_BUNDLE_ALLOW_LOCAL_SIGNING',
+    risk: 'Allows local private-key signing for regulatory submission bundles in production',
+  },
 ];
 
 export function isProductionRuntime(env: NodeJS.ProcessEnv = process.env): boolean {

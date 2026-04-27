@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import {
   createRegulatorySubmissionBundleSignature,
   verifyRegulatorySubmissionBundleSignature,
@@ -15,6 +16,7 @@ describe('regulatory submission signing service', () => {
     delete process.env.REGULATORY_SUBMISSION_BUNDLE_SIGNING_KEY_ID__ORG__ORG_1__AUTHORITY__FSRA;
     delete process.env.REGULATORY_SUBMISSION_BUNDLE_SIGNING_KEY_VERSION__ORG__ORG_1__AUTHORITY__FSRA;
     delete process.env.REGULATORY_SUBMISSION_BUNDLE_SIGNING_VERIFICATION_METHOD__ORG__ORG_1__AUTHORITY__FSRA;
+    delete process.env.REGULATORY_SUBMISSION_BUNDLE_ALLOW_LOCAL_SIGNING;
     process.env.NODE_ENV = 'test';
   });
 
@@ -93,6 +95,22 @@ describe('regulatory submission signing service', () => {
       signingKeyId: 'org:org-1:authority:fsra',
       signingScope: 'organization_authority',
       issues: [],
+    });
+  });
+
+  it('blocks local regulatory submission signing in production even when the legacy escape hatch is set', async () => {
+    const keyPair = crypto.generateKeyPairSync('ed25519');
+    process.env.NODE_ENV = 'production';
+    process.env.REGULATORY_SUBMISSION_BUNDLE_ALLOW_LOCAL_SIGNING = 'true';
+    process.env.REGULATORY_SUBMISSION_BUNDLE_SIGNING_PRIVATE_KEY__ORG__ORG_1__AUTHORITY__FSRA =
+      keyPair.privateKey.export({ format: 'pem', type: 'pkcs8' }).toString();
+
+    await expect(createRegulatorySubmissionBundleSignature('c'.repeat(64), {
+      organizationId: 'org-1',
+      authority: 'FSRA',
+      filingJurisdiction: 'AE-ADGM',
+    })).rejects.toMatchObject({
+      code: 'REG_SUBMISSION_LOCAL_SIGNING_BLOCKED',
     });
   });
 });
