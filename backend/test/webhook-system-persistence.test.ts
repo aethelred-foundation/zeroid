@@ -9,6 +9,7 @@ const redisSortedSets: Record<
   string,
   Array<{ score: number; member: string }>
 > = {};
+const originalWebhookSecretEncryptionKey = process.env.WEBHOOK_SECRET_ENCRYPTION_KEY;
 
 const mockRedisEval = jest.fn(
   async (_script: string, numKeys: number, ...args: unknown[]) => {
@@ -71,13 +72,22 @@ jest.mock('winston', () => {
   };
 }, { virtual: true });
 
-import { webhookSystem } from '../src/services/enterprise/webhook-system';
+import { WebhookSystem, webhookSystem } from '../src/services/enterprise/webhook-system';
 
 describe('WebhookSystem persistence', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     for (const key of Object.keys(redisStore)) delete redisStore[key];
     for (const key of Object.keys(redisSortedSets)) delete redisSortedSets[key];
+    delete process.env.WEBHOOK_SECRET_ENCRYPTION_KEY;
+  });
+
+  afterAll(() => {
+    if (originalWebhookSecretEncryptionKey === undefined) {
+      delete process.env.WEBHOOK_SECRET_ENCRYPTION_KEY;
+    } else {
+      process.env.WEBHOOK_SECRET_ENCRYPTION_KEY = originalWebhookSecretEncryptionKey;
+    }
   });
 
   it('registers an organization-owned webhook and persists extended config in redis', async () => {
@@ -107,6 +117,9 @@ describe('WebhookSystem persistence', () => {
         status: 'ACTIVE',
       }),
     }));
+    const storedSecret = mockWebhookCreate.mock.calls[0][0].data.secret;
+    expect(storedSecret).toMatch(/^local:v1:/);
+    expect(storedSecret).not.toBe(webhook.secret);
     expect(webhook.clientId).toBe('org-1');
     expect(webhook.description).toBe('primary sink');
     expect(JSON.parse(redisStore[`enterprise:webhook-config:${webhook.id}`] as string)).toMatchObject({
@@ -114,6 +127,42 @@ describe('WebhookSystem persistence', () => {
       metadata: { owner: 'platform' },
       headers: { 'x-tenant': 'org-1' },
     });
+  });
+
+  it('encrypts new webhook secrets when an envelope key is configured', async () => {
+    const previousKey = process.env.WEBHOOK_SECRET_ENCRYPTION_KEY;
+    process.env.WEBHOOK_SECRET_ENCRYPTION_KEY = Buffer.alloc(32, 9).toString('base64');
+
+    try {
+      const createdAt = new Date('2026-04-21T00:00:00.000Z');
+      const updatedAt = new Date('2026-04-21T00:00:00.000Z');
+      const rawSecret = 's'.repeat(64);
+
+      mockWebhookCreate.mockImplementation(async ({ data }: any) => ({
+        ...data,
+        createdAt,
+        updatedAt,
+        lastDeliveredAt: null,
+        lastStatusCode: null,
+      }));
+
+      const webhook = await webhookSystem.register('org-1', {
+        url: 'https://hooks.zeroid.example/encrypted',
+        events: ['credential.issued'],
+        secret: rawSecret,
+      });
+
+      const storedSecret = mockWebhookCreate.mock.calls[0][0].data.secret;
+      expect(storedSecret).toMatch(/^enc:v1:/);
+      expect(storedSecret).not.toContain(rawSecret);
+      expect(webhook.secret).toBe(rawSecret);
+    } finally {
+      if (previousKey === undefined) {
+        delete process.env.WEBHOOK_SECRET_ENCRYPTION_KEY;
+      } else {
+        process.env.WEBHOOK_SECRET_ENCRYPTION_KEY = previousKey;
+      }
+    }
   });
 
   it('lists persisted webhooks for one organization only', async () => {
@@ -261,5 +310,23 @@ describe('WebhookSystem persistence', () => {
     expect(deliveryIds).toEqual([]);
     expect(fetchSpy).not.toHaveBeenCalled();
     fetchSpy.mockRestore();
+  });
+
+  it('rejects malformed webhook signatures without throwing', () => {
+    expect(
+      WebhookSystem.verifySignature(
+        '{"ok":true}',
+        't=not-a-number,v1=abc',
+        's'.repeat(64),
+      ),
+    ).toBe(false);
+    expect(
+      WebhookSystem.verifySignature(
+        '{"ok":true}',
+        't=1760000000,v1=abc',
+        's'.repeat(64),
+        Number.MAX_SAFE_INTEGER,
+      ),
+    ).toBe(false);
   });
 });

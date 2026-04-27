@@ -7,6 +7,7 @@ export interface ProductionSafetyViolation {
 
 const MIN_METRICS_TOKEN_LENGTH = 32;
 const DEFAULT_DEVELOPMENT_CORS_ORIGINS = ['http://localhost:3000'];
+const REQUIRED_SECRET_KEY_BYTES = 32;
 
 const UNSAFE_PRODUCTION_FLAGS: ProductionSafetyViolation[] = [
   {
@@ -83,6 +84,7 @@ export function checkedProductionSafetyControls(): string[] {
     'CORS_ORIGINS',
     'METRICS_PUBLIC_DISABLED_OR_METRICS_AUTH_TOKEN',
     'SANCTIONS_SCREENING_DISABLED_OR_SANCTIONS_LIST_SIGNATURE_PUBLIC_KEYS_JSON',
+    'WEBHOOK_SECRET_ENCRYPTION_KEY',
   ];
 }
 
@@ -186,7 +188,39 @@ export function collectProductionSafetyViolations(
     }
   }
 
+  const webhookSecretKey = env.WEBHOOK_SECRET_ENCRYPTION_KEY?.trim();
+  if (!webhookSecretKey) {
+    violations.push({
+      control: 'WEBHOOK_SECRET_ENCRYPTION_KEY',
+      risk: 'Webhook signing secrets would be stored without envelope encryption',
+    });
+  } else if (!isValidSecretEncryptionKey(webhookSecretKey)) {
+    violations.push({
+      control: 'WEBHOOK_SECRET_ENCRYPTION_KEY',
+      risk: `Webhook secret encryption key must decode to ${REQUIRED_SECRET_KEY_BYTES} bytes`,
+    });
+  }
+
   return violations;
+}
+
+function isValidSecretEncryptionKey(value: string): boolean {
+  return decodeSecretEncryptionKey(value)?.length === REQUIRED_SECRET_KEY_BYTES;
+}
+
+function decodeSecretEncryptionKey(value: string): Buffer | null {
+  const trimmed = value.trim();
+  if (/^[0-9a-f]{64}$/i.test(trimmed)) {
+    return Buffer.from(trimmed, 'hex');
+  }
+
+  try {
+    const normalized = trimmed.replace(/-/g, '+').replace(/_/g, '/');
+    const padded = normalized + '='.repeat((4 - (normalized.length % 4)) % 4);
+    return Buffer.from(padded, 'base64');
+  } catch {
+    return null;
+  }
 }
 
 function isTrustedRedisUrl(value: string): boolean {

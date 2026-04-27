@@ -13,6 +13,11 @@ const logger = createLogger({
   transports: [new transports.Console()],
 });
 
+const WEBHOOK_SECRET_ENCRYPTION_KEY_ENV = 'WEBHOOK_SECRET_ENCRYPTION_KEY';
+const WEBHOOK_SECRET_AAD = 'zeroid:webhook-secret:v1';
+const ENCRYPTED_WEBHOOK_SECRET_PREFIX = 'enc:v1:';
+const LOCAL_WEBHOOK_SECRET_PREFIX = 'local:v1:';
+
 // ---------------------------------------------------------------------------
 // Zod Schemas
 // ---------------------------------------------------------------------------
@@ -249,7 +254,7 @@ export class WebhookSystem {
       clientId: record.organizationId,
       url: record.url,
       events: record.events,
-      secret: record.secret,
+      secret: this.revealWebhookSecret(record.secret),
       description: config?.description ?? '',
       active: record.status === 'ACTIVE',
       metadata: config?.metadata ?? {},
@@ -269,13 +274,14 @@ export class WebhookSystem {
     const parsed = WebhookRegistrationSchema.parse(registration);
     const id = crypto.randomUUID();
     const secret = parsed.secret ?? crypto.randomBytes(32).toString('hex');
+    const protectedSecret = this.protectWebhookSecret(secret);
 
     const record = await prisma.webhook.create({
       data: {
         id,
         organizationId: clientId,
         url: parsed.url,
-        secret,
+        secret: protectedSecret,
         events: parsed.events,
         status: parsed.active ? 'ACTIVE' : 'PAUSED',
         failureCount: 0,
@@ -745,13 +751,145 @@ export class WebhookSystem {
 
     const timestamp = timestampPart.slice(2);
     const sig = sigPart.slice(3);
+    if (!/^\d+$/.test(timestamp) || !/^[0-9a-f]+$/i.test(sig)) return false;
 
     // Check tolerance
     const now = Math.floor(Date.now() / 1000);
     if (Math.abs(now - parseInt(timestamp, 10)) > toleranceSeconds) return false;
 
     const expectedSig = crypto.createHmac('sha256', secret).update(`${timestamp}.${payload}`).digest('hex');
-    return crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expectedSig));
+    const actual = Buffer.from(sig, 'hex');
+    const expected = Buffer.from(expectedSig, 'hex');
+    if (actual.length !== expected.length) return false;
+    return crypto.timingSafeEqual(actual, expected);
+  }
+
+  private protectWebhookSecret(secret: string): string {
+    const key = this.getWebhookSecretEncryptionKey();
+    if (!key) {
+      return `${LOCAL_WEBHOOK_SECRET_PREFIX}${Buffer.from(secret, 'utf8').toString('base64url')}`;
+    }
+
+    const iv = crypto.randomBytes(12);
+    const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+    cipher.setAAD(Buffer.from(WEBHOOK_SECRET_AAD));
+    const ciphertext = Buffer.concat([
+      cipher.update(secret, 'utf8'),
+      cipher.final(),
+    ]);
+    const tag = cipher.getAuthTag();
+
+    return `${ENCRYPTED_WEBHOOK_SECRET_PREFIX}${iv.toString('base64url')}:${tag.toString('base64url')}:${ciphertext.toString('base64url')}`;
+  }
+
+  private revealWebhookSecret(storedSecret: string): string {
+    if (storedSecret.startsWith(ENCRYPTED_WEBHOOK_SECRET_PREFIX)) {
+      const key = this.getWebhookSecretEncryptionKey();
+      if (!key) {
+        throw new WebhookError(
+          `${WEBHOOK_SECRET_ENCRYPTION_KEY_ENV} is required to decrypt webhook secrets`,
+          'WEBHOOK_SECRET_KEY_REQUIRED',
+          500,
+        );
+      }
+
+      const parts = storedSecret
+        .slice(ENCRYPTED_WEBHOOK_SECRET_PREFIX.length)
+        .split(':');
+      if (parts.length !== 3) {
+        throw new WebhookError(
+          'Encrypted webhook secret payload is malformed',
+          'WEBHOOK_SECRET_PAYLOAD_INVALID',
+          500,
+        );
+      }
+
+      try {
+        const iv = Buffer.from(parts[0], 'base64url');
+        const tag = Buffer.from(parts[1], 'base64url');
+        const ciphertext = Buffer.from(parts[2], 'base64url');
+        const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+        decipher.setAAD(Buffer.from(WEBHOOK_SECRET_AAD));
+        decipher.setAuthTag(tag);
+        return Buffer.concat([
+          decipher.update(ciphertext),
+          decipher.final(),
+        ]).toString('utf8');
+      } catch {
+        throw new WebhookError(
+          'Webhook secret decryption failed',
+          'WEBHOOK_SECRET_DECRYPT_FAILED',
+          500,
+        );
+      }
+    }
+
+    if (storedSecret.startsWith(LOCAL_WEBHOOK_SECRET_PREFIX)) {
+      if (this.isProductionRuntime()) {
+        throw new WebhookError(
+          'Local webhook secret storage is blocked in production',
+          'WEBHOOK_SECRET_LOCAL_STORAGE_BLOCKED',
+          500,
+        );
+      }
+      return Buffer.from(
+        storedSecret.slice(LOCAL_WEBHOOK_SECRET_PREFIX.length),
+        'base64url',
+      ).toString('utf8');
+    }
+
+    if (this.isProductionRuntime()) {
+      throw new WebhookError(
+        'Legacy plaintext webhook secrets are blocked in production',
+        'WEBHOOK_SECRET_PLAINTEXT_BLOCKED',
+        500,
+      );
+    }
+
+    return storedSecret;
+  }
+
+  private getWebhookSecretEncryptionKey(): Buffer | null {
+    const rawKey = process.env[WEBHOOK_SECRET_ENCRYPTION_KEY_ENV]?.trim();
+    if (!rawKey) {
+      if (this.isProductionRuntime()) {
+        throw new WebhookError(
+          `${WEBHOOK_SECRET_ENCRYPTION_KEY_ENV} is required in production`,
+          'WEBHOOK_SECRET_KEY_REQUIRED',
+          500,
+        );
+      }
+      return null;
+    }
+
+    const key = this.decodeWebhookSecretEncryptionKey(rawKey);
+    if (!key || key.length !== 32) {
+      throw new WebhookError(
+        `${WEBHOOK_SECRET_ENCRYPTION_KEY_ENV} must decode to 32 bytes`,
+        'WEBHOOK_SECRET_KEY_INVALID',
+        500,
+      );
+    }
+
+    return key;
+  }
+
+  private decodeWebhookSecretEncryptionKey(rawKey: string): Buffer | null {
+    if (/^[0-9a-f]{64}$/i.test(rawKey)) {
+      return Buffer.from(rawKey, 'hex');
+    }
+
+    try {
+      const normalized = rawKey.replace(/-/g, '+').replace(/_/g, '/');
+      const padded = normalized + '='.repeat((4 - (normalized.length % 4)) % 4);
+      return Buffer.from(padded, 'base64');
+    } catch {
+      return null;
+    }
+  }
+
+  private isProductionRuntime(): boolean {
+    return process.env.NODE_ENV === 'production';
   }
 }
 

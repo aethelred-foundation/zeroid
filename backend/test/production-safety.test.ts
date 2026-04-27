@@ -12,6 +12,7 @@ const PROD_BASE_ENV: NodeJS.ProcessEnv = {
   REDIS_URL: 'rediss://redis.zeroid.example:6380',
   CORS_ORIGINS: 'https://app.zeroid.example,https://admin.zeroid.example',
   SANCTIONS_SCREENING_DISABLED: 'true',
+  WEBHOOK_SECRET_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64'),
 };
 
 describe('production safety controls', () => {
@@ -125,6 +126,24 @@ describe('production safety controls', () => {
 
     expect(collectProductionSafetyViolations(env)).toEqual([
       expect.objectContaining({ control: 'SANCTIONS_LIST_SIGNATURE_PUBLIC_KEYS_JSON' }),
+    ]);
+  });
+
+  it('requires an envelope key for webhook signing secrets in production', () => {
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      METRICS_PUBLIC_DISABLED: 'true',
+      WEBHOOK_SECRET_ENCRYPTION_KEY: '',
+    })).toEqual([
+      expect.objectContaining({ control: 'WEBHOOK_SECRET_ENCRYPTION_KEY' }),
+    ]);
+
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      METRICS_PUBLIC_DISABLED: 'true',
+      WEBHOOK_SECRET_ENCRYPTION_KEY: Buffer.alloc(16, 1).toString('base64'),
+    })).toEqual([
+      expect.objectContaining({ control: 'WEBHOOK_SECRET_ENCRYPTION_KEY' }),
     ]);
   });
 });

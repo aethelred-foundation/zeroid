@@ -1108,7 +1108,18 @@ router.patch(
         clientId,
         req.body,
       );
-      res.status(200).json({ data: webhook, message: 'Webhook updated' });
+      res.status(200).json({
+        data: {
+          id: webhook.id,
+          url: webhook.url,
+          events: webhook.events,
+          active: webhook.active,
+          health: webhook.health,
+          createdAt: webhook.createdAt,
+          updatedAt: webhook.updatedAt,
+        },
+        message: 'Webhook updated',
+      });
     } catch (err) {
       const error = err as Error & { statusCode?: number; code?: string };
       logger.error('webhook_update_error', { error: error.message });
