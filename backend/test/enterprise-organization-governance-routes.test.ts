@@ -3,6 +3,9 @@ const routeRegistry: Record<string, Array<(req: any, res: any, next: (err?: unkn
 const mockGetGovernanceSettings = jest.fn();
 const mockUpdateGovernanceSettings = jest.fn();
 const mockListGovernancePacks = jest.fn();
+const mockGetAnalytics = jest.fn();
+const mockGetViolations = jest.fn();
+const mockGetAlerts = jest.fn();
 
 jest.mock('express', () => {
   const createRouter = () => {
@@ -69,7 +72,9 @@ jest.mock('../src/services/enterprise/webhook-system', () => ({
 }));
 
 jest.mock('../src/services/enterprise/api-gateway', () => ({
-  apiGateway: {},
+  apiGateway: {
+    getAnalytics: mockGetAnalytics,
+  },
   CreateAPIKeySchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
 }));
 
@@ -79,7 +84,10 @@ jest.mock('../src/services/enterprise/oidc-bridge', () => ({
 }));
 
 jest.mock('../src/services/enterprise/sla-monitor', () => ({
-  slaMonitor: {},
+  slaMonitor: {
+    getViolations: mockGetViolations,
+    getAlerts: mockGetAlerts,
+  },
   SLADefinitionSchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
 }));
 
@@ -234,6 +242,9 @@ describe('enterprise organization governance routes', () => {
         profileHints: ['sovereign'],
       },
     ]);
+    mockGetAnalytics.mockReturnValue({ totalRequests: 0 });
+    mockGetViolations.mockReturnValue([]);
+    mockGetAlerts.mockReturnValue([]);
   });
 
   it('returns organization governance settings', async () => {
@@ -295,5 +306,29 @@ describe('enterprise organization governance routes', () => {
       }),
     ]);
     expect(mockListGovernancePacks).toHaveBeenCalled();
+  });
+
+  it('scopes usage analytics to the enterprise context organization', async () => {
+    const response = await invokeRoute('GET', '/usage', {
+      query: { period: '7' },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(mockGetAnalytics).toHaveBeenCalledWith('org-1', 7);
+  });
+
+  it('scopes SLA violations and alerts to the enterprise context organization', async () => {
+    await invokeRoute('GET', '/sla/violations', {
+      query: { since: '2026-04-21T00:00:00.000Z' },
+    });
+    await invokeRoute('GET', '/sla/alerts', {
+      query: { limit: '10' },
+    });
+
+    expect(mockGetViolations).toHaveBeenCalledWith(
+      'org-1',
+      '2026-04-21T00:00:00.000Z',
+    );
+    expect(mockGetAlerts).toHaveBeenCalledWith('org-1', 10);
   });
 });

@@ -2604,6 +2604,7 @@ router.get(
 // ---------------------------------------------------------------------------
 router.get(
   '/sla/violations',
+  requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES),
   async (req: Request, res: Response): Promise<void> => {
     try {
       const clientId = getClientId(req);
@@ -2625,6 +2626,7 @@ router.get(
 // ---------------------------------------------------------------------------
 router.get(
   '/sla/alerts',
+  requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES),
   async (req: Request, res: Response): Promise<void> => {
     try {
       const clientId = getClientId(req);
@@ -2646,18 +2648,22 @@ router.get(
 // ---------------------------------------------------------------------------
 // GET /enterprise/usage — Usage metrics
 // ---------------------------------------------------------------------------
-router.get('/usage', async (req: Request, res: Response): Promise<void> => {
-  try {
-    const clientId = getClientId(req);
-    const periodDays = parseInt(req.query.period as string, 10) || 30;
-    const analytics = apiGateway.getAnalytics(clientId, periodDays);
-    res.status(200).json({ data: analytics });
-  } catch (err) {
-    const error = err as Error;
-    logger.error('usage_error', { error: error.message });
-    res.status(500).json({ error: error.message, code: 'USAGE_ERROR' });
-  }
-});
+router.get(
+  '/usage',
+  requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const clientId = getClientId(req);
+      const periodDays = parseInt(req.query.period as string, 10) || 30;
+      const analytics = apiGateway.getAnalytics(clientId, periodDays);
+      res.status(200).json({ data: analytics });
+    } catch (err) {
+      const error = err as Error;
+      logger.error('usage_error', { error: error.message });
+      res.status(500).json({ error: error.message, code: 'USAGE_ERROR' });
+    }
+  },
+);
 
 // ---------------------------------------------------------------------------
 // GET /enterprise/sdk/metadata — SDK generation metadata
