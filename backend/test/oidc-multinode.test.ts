@@ -527,6 +527,44 @@ describe('OIDC multi-node correctness', () => {
     expect(migrated.clientSecretHash).toMatch(/^sha256:/);
   });
 
+  test('production rejects legacy plaintext client secrets instead of migrating them', async () => {
+    const client = await registerTestClient(bridgeA);
+    const clientKey = `oidc:clients:${client.clientId}`;
+    const stored = JSON.parse(store.get(clientKey)!);
+    delete stored.clientSecretHash;
+    delete stored.clientSecretHashAlg;
+    stored.clientSecret = client.clientSecret;
+    store.set(clientKey, JSON.stringify(stored));
+
+    const { code } = await authorizeCode(
+      bridgeA,
+      client.clientId,
+      'user-prod-legacy-secret',
+    );
+
+    const previousNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    try {
+      await expect(
+        bridgeB.exchangeToken({
+          grantType: 'authorization_code',
+          code: code!,
+          redirectUri: REDIRECT_URI,
+          clientId: client.clientId,
+          clientSecret: client.clientSecret,
+        }),
+      ).rejects.toMatchObject({
+        errorCode: 'invalid_client',
+      });
+    } finally {
+      process.env.NODE_ENV = previousNodeEnv;
+    }
+
+    const stillLegacy = JSON.parse(store.get(clientKey)!);
+    expect(stillLegacy.clientSecret).toBe(client.clientSecret);
+    expect(stillLegacy.clientSecretHash).toBeUndefined();
+  });
+
   test('refresh tokens are stored only by digest and remain redeemable', async () => {
     const client = await registerTestClient(bridgeA);
     const { code } = await authorizeCode(

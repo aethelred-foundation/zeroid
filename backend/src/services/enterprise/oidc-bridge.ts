@@ -1375,6 +1375,13 @@ export class OIDCBridge {
     }
 
     if (client.clientSecret) {
+      if (process.env.NODE_ENV === 'production') {
+        logger.error('oidc_plaintext_client_secret_blocked', {
+          clientId: client.clientId,
+        });
+        return { valid: false, legacyPlaintext: false };
+      }
+
       return {
         valid: this.timingSafeStringEqual(presentedSecret, client.clientSecret),
         legacyPlaintext: true,
