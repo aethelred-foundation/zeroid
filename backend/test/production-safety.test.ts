@@ -21,6 +21,7 @@ const BASE_ENV: NodeJS.ProcessEnv = { NODE_ENV: 'test' };
 const PROD_BASE_ENV: NodeJS.ProcessEnv = {
   NODE_ENV: 'production',
   REDIS_URL: 'rediss://redis.zeroid.example:6380',
+  JWT_SECRET: 'j'.repeat(64),
   CORS_ORIGINS: 'https://app.zeroid.example,https://admin.zeroid.example',
   SANCTIONS_SCREENING_DISABLED: 'true',
   WEBHOOK_SECRET_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64'),
@@ -28,6 +29,9 @@ const PROD_BASE_ENV: NodeJS.ProcessEnv = {
   OIDC_SIGNING_PUBLIC_KEY: oidcPublicKey,
   KMS_PROVIDER: 'aws-kms',
   KMS_KEY_ID: 'arn:aws:kms:us-east-1:111122223333:key/zeroid-credential-signer',
+  INTEL_PCS_API_KEY: 'pcs_' + 'p'.repeat(40),
+  TRUSTED_MRSIGNERS: 'a'.repeat(64),
+  MIN_ISV_SVN: '1',
   ZK_CONTEXT_BOUND_CIRCUITS_READY: 'true',
 };
 
@@ -61,6 +65,32 @@ describe('production safety controls', () => {
       METRICS_PUBLIC_DISABLED: 'true',
     })).toEqual([
       expect.objectContaining({ control: 'REDIS_URL' }),
+    ]);
+  });
+
+  it('requires a strong JWT signing secret in production', () => {
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      JWT_SECRET: '',
+      METRICS_PUBLIC_DISABLED: 'true',
+    })).toEqual([
+      expect.objectContaining({ control: 'JWT_SECRET' }),
+    ]);
+
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      JWT_SECRET: 'short-secret',
+      METRICS_PUBLIC_DISABLED: 'true',
+    })).toEqual([
+      expect.objectContaining({ control: 'JWT_SECRET' }),
+    ]);
+
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      JWT_SECRET: 'test-secret-that-is-at-least-32-chars!!',
+      METRICS_PUBLIC_DISABLED: 'true',
+    })).toEqual([
+      expect.objectContaining({ control: 'JWT_SECRET' }),
     ]);
   });
 
@@ -200,6 +230,69 @@ describe('production safety controls', () => {
       KMS_KEY_ID: '',
     })).toEqual([
       expect.objectContaining({ control: 'KMS_KEY_ID' }),
+    ]);
+  });
+
+  it('requires authenticated TEE collateral access in production', () => {
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      METRICS_PUBLIC_DISABLED: 'true',
+      INTEL_PCS_API_KEY: '',
+    })).toEqual([
+      expect.objectContaining({ control: 'INTEL_PCS_API_KEY' }),
+    ]);
+
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      METRICS_PUBLIC_DISABLED: 'true',
+      TEE_DCAP_API_URL: 'http://localhost:8081',
+    })).toEqual([
+      expect.objectContaining({ control: 'TEE_COLLATERAL_PROVIDER_URL' }),
+    ]);
+  });
+
+  it('requires explicit trusted TEE signer and ISV SVN policies in production', () => {
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      METRICS_PUBLIC_DISABLED: 'true',
+      TRUSTED_MRSIGNERS: '',
+    })).toEqual([
+      expect.objectContaining({ control: 'TRUSTED_MRSIGNERS' }),
+    ]);
+
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      METRICS_PUBLIC_DISABLED: 'true',
+      TRUSTED_MRSIGNERS: 'not-a-signer',
+    })).toEqual([
+      expect.objectContaining({ control: 'TRUSTED_MRSIGNERS' }),
+    ]);
+
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      METRICS_PUBLIC_DISABLED: 'true',
+      MIN_ISV_SVN: '',
+    })).toEqual([
+      expect.objectContaining({ control: 'MIN_ISV_SVN' }),
+    ]);
+  });
+
+  it('rejects unsafe TEE TCB status policies in production', () => {
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      METRICS_PUBLIC_DISABLED: 'true',
+      TEE_ALLOWED_TCB_STATUSES: 'UpToDate,Revoked',
+    })).toEqual([
+      expect.objectContaining({ control: 'TEE_ALLOWED_TCB_STATUSES' }),
+      expect.objectContaining({ control: 'TEE_ALLOWED_QE_TCB_STATUSES' }),
+    ]);
+
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      METRICS_PUBLIC_DISABLED: 'true',
+      TEE_ALLOWED_QE_TCB_STATUSES: 'DefinitelyNotAStatus',
+    })).toEqual([
+      expect.objectContaining({ control: 'TEE_ALLOWED_QE_TCB_STATUSES' }),
     ]);
   });
 

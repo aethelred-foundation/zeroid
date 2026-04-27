@@ -6,10 +6,36 @@ export interface ProductionSafetyViolation {
 }
 
 const MIN_METRICS_TOKEN_LENGTH = 32;
+const MIN_JWT_SECRET_LENGTH = 48;
 const DEFAULT_DEVELOPMENT_CORS_ORIGINS = ['http://localhost:3000'];
 const REQUIRED_SECRET_KEY_BYTES = 32;
 const SUPPORTED_OIDC_SIGNING_ALGORITHMS = new Set(['RS256', 'PS256']);
 const PRODUCTION_KMS_PROVIDERS = new Set(['aws-kms', 'gcp-kms', 'azure-kms']);
+const SGX_MRSIGNER_PATTERN = /^[0-9a-f]{64}$/i;
+const KNOWN_TEE_TCB_STATUSES = new Set([
+  'UpToDate',
+  'SWHardeningNeeded',
+  'ConfigurationNeeded',
+  'ConfigurationAndSWHardeningNeeded',
+  'OutOfDate',
+  'Revoked',
+]);
+const REJECTED_PRODUCTION_TEE_TCB_STATUSES = new Set([
+  'OutOfDate',
+  'Revoked',
+]);
+const KNOWN_UNSAFE_JWT_SECRETS = new Set([
+  'change-me',
+  'changeme',
+  'dev',
+  'development',
+  'jwt-secret',
+  'secret',
+  'test',
+  'test-secret',
+  'test-secret-that-is-at-least-32-chars!!',
+  'zeroid-secret',
+]);
 
 const UNSAFE_PRODUCTION_FLAGS: ProductionSafetyViolation[] = [
   {
@@ -83,12 +109,17 @@ export function checkedProductionSafetyControls(): string[] {
   return [
     ...UNSAFE_PRODUCTION_FLAGS.map((flag) => flag.control),
     'REDIS_URL',
+    'JWT_SECRET',
     'CORS_ORIGINS',
     'METRICS_PUBLIC_DISABLED_OR_METRICS_AUTH_TOKEN',
     'SANCTIONS_SCREENING_DISABLED_OR_SANCTIONS_LIST_SIGNATURE_PUBLIC_KEYS_JSON',
     'WEBHOOK_SECRET_ENCRYPTION_KEY',
     'OIDC_SIGNING_KEYPAIR',
     'CREDENTIAL_SIGNING_KMS',
+    'INTEL_PCS_API_KEY',
+    'TRUSTED_MRSIGNERS',
+    'MIN_ISV_SVN',
+    'TEE_TCB_STATUS_POLICY',
     'ZK_CONTEXT_BOUND_CIRCUITS_READY',
   ];
 }
@@ -127,6 +158,24 @@ export function collectProductionSafetyViolations(
     violations.push({
       control: 'REDIS_URL',
       risk: 'Production Redis connection must use a non-local redis:// or rediss:// endpoint',
+    });
+  }
+
+  const jwtSecret = env.JWT_SECRET?.trim();
+  if (!jwtSecret) {
+    violations.push({
+      control: 'JWT_SECRET',
+      risk: 'Production API JWT signing secret is missing',
+    });
+  } else if (jwtSecret.length < MIN_JWT_SECRET_LENGTH) {
+    violations.push({
+      control: 'JWT_SECRET',
+      risk: `Production API JWT signing secret must be at least ${MIN_JWT_SECRET_LENGTH} characters`,
+    });
+  } else if (isKnownUnsafeJwtSecret(jwtSecret)) {
+    violations.push({
+      control: 'JWT_SECRET',
+      risk: 'Production API JWT signing secret must not use a known development or test placeholder',
     });
   }
 
@@ -208,6 +257,7 @@ export function collectProductionSafetyViolations(
 
   validateOidcSigningConfig(env, violations);
   validateCredentialSigningConfig(env, violations);
+  validateTeeAttestationConfig(env, violations);
 
   if (env.ZK_CONTEXT_BOUND_CIRCUITS_READY !== 'true') {
     violations.push({
@@ -292,6 +342,101 @@ function validateCredentialSigningConfig(
   }
 }
 
+function validateTeeAttestationConfig(
+  env: NodeJS.ProcessEnv,
+  violations: ProductionSafetyViolation[],
+): void {
+  const pcsApiKey = env.INTEL_PCS_API_KEY?.trim();
+  if (!pcsApiKey) {
+    violations.push({
+      control: 'INTEL_PCS_API_KEY',
+      risk: 'Production TEE attestation requires authenticated Intel PCS collateral access',
+    });
+  }
+
+  const collateralProviderUrl =
+    env.TEE_DCAP_API_URL?.trim() || env.INTEL_PCS_URL?.trim();
+  if (
+    collateralProviderUrl &&
+    !isTrustedHttpsUrl(collateralProviderUrl)
+  ) {
+    violations.push({
+      control: 'TEE_COLLATERAL_PROVIDER_URL',
+      risk: 'Production TEE collateral provider URL must use HTTPS and must not target localhost',
+    });
+  }
+
+  const trustedMrsigners = parseCsv(env.TRUSTED_MRSIGNERS);
+  if (trustedMrsigners.length === 0) {
+    violations.push({
+      control: 'TRUSTED_MRSIGNERS',
+      risk: 'Production TEE attestation requires at least one trusted SGX MRSIGNER allowlist entry',
+    });
+  } else if (
+    trustedMrsigners.some((mrsigner) => !SGX_MRSIGNER_PATTERN.test(mrsigner))
+  ) {
+    violations.push({
+      control: 'TRUSTED_MRSIGNERS',
+      risk: 'TRUSTED_MRSIGNERS entries must be 32-byte SGX signer hashes encoded as 64 hex characters',
+    });
+  }
+
+  const minIsvSvn = env.MIN_ISV_SVN?.trim();
+  if (!minIsvSvn) {
+    violations.push({
+      control: 'MIN_ISV_SVN',
+      risk: 'Production TEE attestation requires an explicit minimum ISV SVN policy',
+    });
+  } else if (!/^[1-9]\d*$/.test(minIsvSvn)) {
+    violations.push({
+      control: 'MIN_ISV_SVN',
+      risk: 'MIN_ISV_SVN must be a positive integer',
+    });
+  }
+
+  validateTeeTcbStatusPolicy(
+    'TEE_ALLOWED_TCB_STATUSES',
+    parseCsv(env.TEE_ALLOWED_TCB_STATUSES || 'UpToDate'),
+    violations,
+  );
+  validateTeeTcbStatusPolicy(
+    'TEE_ALLOWED_QE_TCB_STATUSES',
+    parseCsv(
+      env.TEE_ALLOWED_QE_TCB_STATUSES ||
+        env.TEE_ALLOWED_TCB_STATUSES ||
+        'UpToDate',
+    ),
+    violations,
+  );
+}
+
+function validateTeeTcbStatusPolicy(
+  control: string,
+  statuses: string[],
+  violations: ProductionSafetyViolation[],
+): void {
+  const unknownStatus = statuses.find(
+    (status) => !KNOWN_TEE_TCB_STATUSES.has(status),
+  );
+  if (unknownStatus) {
+    violations.push({
+      control,
+      risk: `Production TEE TCB policy contains an unknown status: ${unknownStatus}`,
+    });
+    return;
+  }
+
+  const rejectedStatus = statuses.find((status) =>
+    REJECTED_PRODUCTION_TEE_TCB_STATUSES.has(status),
+  );
+  if (rejectedStatus) {
+    violations.push({
+      control,
+      risk: `Production TEE TCB policy must not allow ${rejectedStatus} attestations`,
+    });
+  }
+}
+
 function normalizeKeyMaterial(raw: string): string {
   return raw.trim().replace(/\\n/g, '\n');
 }
@@ -338,6 +483,10 @@ function isValidSecretEncryptionKey(value: string): boolean {
   return decodeSecretEncryptionKey(value)?.length === REQUIRED_SECRET_KEY_BYTES;
 }
 
+function isKnownUnsafeJwtSecret(value: string): boolean {
+  return KNOWN_UNSAFE_JWT_SECRETS.has(value.trim().toLowerCase());
+}
+
 function decodeSecretEncryptionKey(value: string): Buffer | null {
   const trimmed = value.trim();
   if (/^[0-9a-f]{64}$/i.test(trimmed)) {
@@ -359,6 +508,16 @@ function isTrustedRedisUrl(value: string): boolean {
     if (url.protocol !== 'redis:' && url.protocol !== 'rediss:') return false;
     const hostname = url.hostname.toLowerCase();
     return !isLocalHostname(hostname);
+  } catch {
+    return false;
+  }
+}
+
+function isTrustedHttpsUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'https:') return false;
+    return !isLocalHostname(url.hostname.toLowerCase());
   } catch {
     return false;
   }
@@ -391,6 +550,13 @@ function isLocalHostname(hostname: string): boolean {
     normalized === '::' ||
     normalized.endsWith('.localhost')
   );
+}
+
+function parseCsv(value: string | undefined): string[] {
+  return (value ?? '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
 export function validateProductionConfig(env: NodeJS.ProcessEnv = process.env): void {
