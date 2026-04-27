@@ -11,6 +11,7 @@ const redisSortedSets: Record<
   string,
   Array<{ score: number; member: string }>
 > = {};
+const redisLists: Record<string, string[]> = {};
 const originalWebhookSecretEncryptionKey = process.env.WEBHOOK_SECRET_ENCRYPTION_KEY;
 
 const mockRedisEval = jest.fn(
@@ -61,6 +62,17 @@ jest.mock('../src/index', () => ({
       redisStore[key] = value;
       return 'OK';
     }),
+    lpush: jest.fn(async (key: string, value: string) => {
+      redisLists[key] = [value, ...(redisLists[key] ?? [])];
+      return redisLists[key].length;
+    }),
+    ltrim: jest.fn(async (key: string, start: number, stop: number) => {
+      redisLists[key] = (redisLists[key] ?? []).slice(start, stop + 1);
+      return 'OK';
+    }),
+    lrange: jest.fn(async (key: string, start: number, stop: number) =>
+      (redisLists[key] ?? []).slice(start, stop + 1),
+    ),
     eval: mockRedisEval,
   },
 }));
@@ -85,6 +97,7 @@ describe('WebhookSystem persistence', () => {
     jest.clearAllMocks();
     for (const key of Object.keys(redisStore)) delete redisStore[key];
     for (const key of Object.keys(redisSortedSets)) delete redisSortedSets[key];
+    for (const key of Object.keys(redisLists)) delete redisLists[key];
     delete process.env.WEBHOOK_SECRET_ENCRYPTION_KEY;
   });
 
@@ -358,6 +371,62 @@ describe('WebhookSystem persistence', () => {
         statusCode: 200,
         responseBody: 'ok',
         success: true,
+      }),
+    }));
+    fetchSpy.mockRestore();
+  });
+
+  it('stores replay events in redis and replays matching events after ownership check', async () => {
+    const createdAt = new Date('2026-04-21T00:00:00.000Z');
+    const updatedAt = new Date('2026-04-21T00:00:00.000Z');
+    mockWebhookFindFirst.mockResolvedValue({
+      id: 'wh-replay',
+      organizationId: 'org-1',
+      url: 'https://hooks.zeroid.example/replay',
+      secret: 's'.repeat(64),
+      events: ['credential.issued'],
+      status: 'ACTIVE',
+      failureCount: 0,
+      lastDeliveredAt: null,
+      lastStatusCode: null,
+      createdAt,
+      updatedAt,
+    });
+    redisLists['enterprise:webhook-events'] = [
+      JSON.stringify({
+        eventId: 'event-ignore',
+        eventType: 'verification.failed',
+        timestamp: '2026-04-21T10:00:00.000Z',
+        data: { verificationId: 'ver-1' },
+        source: 'zeroid',
+      }),
+      JSON.stringify({
+        eventId: 'event-replay',
+        eventType: 'credential.issued',
+        timestamp: '2026-04-21T10:00:00.000Z',
+        data: { credentialId: 'cred-1' },
+        source: 'zeroid',
+      }),
+    ];
+    mockWebhookDeliveryUpsert.mockResolvedValue({});
+    const fetchSpy = jest
+      .spyOn(global, 'fetch')
+      .mockResolvedValue(new Response('ok', { status: 200 }));
+
+    const result = await webhookSystem.replayEvents(
+      'wh-replay',
+      '2026-04-21T00:00:00.000Z',
+      '2026-04-22T00:00:00.000Z',
+      'org-1',
+    );
+
+    expect(result.replayed).toBe(1);
+    expect(result.deliveryIds).toHaveLength(1);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(mockWebhookDeliveryUpsert).toHaveBeenCalledWith(expect.objectContaining({
+      create: expect.objectContaining({
+        webhookId: 'wh-replay',
+        eventType: 'credential.issued',
       }),
     }));
     fetchSpy.mockRestore();

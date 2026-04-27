@@ -17,6 +17,8 @@ const WEBHOOK_SECRET_ENCRYPTION_KEY_ENV = 'WEBHOOK_SECRET_ENCRYPTION_KEY';
 const WEBHOOK_SECRET_AAD = 'zeroid:webhook-secret:v1';
 const ENCRYPTED_WEBHOOK_SECRET_PREFIX = 'enc:v1:';
 const LOCAL_WEBHOOK_SECRET_PREFIX = 'local:v1:';
+const WEBHOOK_REPLAY_EVENT_LOG_KEY = 'enterprise:webhook-events';
+const MAX_WEBHOOK_REPLAY_EVENTS = 10_000;
 
 // ---------------------------------------------------------------------------
 // Zod Schemas
@@ -447,10 +449,7 @@ export class WebhookSystem {
       source,
     };
 
-    this.eventLog.push(event);
-    if (this.eventLog.length > 10000) {
-      this.eventLog = this.eventLog.slice(-5000);
-    }
+    await this.storeReplayEvent(event);
 
     const webhookRecords = await prisma.webhook.findMany({
       where: { status: 'ACTIVE' },
@@ -652,10 +651,11 @@ export class WebhookSystem {
     const sinceTime = new Date(since).getTime();
     const untilTime = until ? new Date(until).getTime() : Date.now();
 
-    const eventsToReplay = this.eventLog.filter((e) => {
-      const eventTime = new Date(e.timestamp).getTime();
-      return eventTime >= sinceTime && eventTime <= untilTime && webhook.events.includes(e.eventType);
-    });
+    const eventsToReplay = await this.loadReplayEvents(
+      sinceTime,
+      untilTime,
+      webhook.events,
+    );
 
     const deliveryIds: string[] = [];
     for (const event of eventsToReplay) {
@@ -761,6 +761,48 @@ export class WebhookSystem {
     });
     if (!webhookRecord) return null;
     return this.hydrateWebhook(webhookRecord);
+  }
+
+  private async storeReplayEvent(event: WebhookEvent): Promise<void> {
+    this.eventLog.push(event);
+    if (this.eventLog.length > MAX_WEBHOOK_REPLAY_EVENTS) {
+      this.eventLog = this.eventLog.slice(-Math.floor(MAX_WEBHOOK_REPLAY_EVENTS / 2));
+    }
+
+    await redis.lpush(WEBHOOK_REPLAY_EVENT_LOG_KEY, JSON.stringify(event));
+    await redis.ltrim(WEBHOOK_REPLAY_EVENT_LOG_KEY, 0, MAX_WEBHOOK_REPLAY_EVENTS - 1);
+  }
+
+  private async loadReplayEvents(
+    sinceTime: number,
+    untilTime: number,
+    eventTypes: WebhookEventType[],
+  ): Promise<WebhookEvent[]> {
+    const rawEvents = await redis.lrange(WEBHOOK_REPLAY_EVENT_LOG_KEY, 0, MAX_WEBHOOK_REPLAY_EVENTS - 1);
+    const allowedTypes = new Set(eventTypes);
+    const events: WebhookEvent[] = [];
+
+    for (const raw of rawEvents) {
+      try {
+        const event = JSON.parse(raw) as WebhookEvent;
+        const eventTime = new Date(event.timestamp).getTime();
+        if (
+          Number.isFinite(eventTime) &&
+          eventTime >= sinceTime &&
+          eventTime <= untilTime &&
+          allowedTypes.has(event.eventType)
+        ) {
+          events.push(event);
+        }
+      } catch {
+        logger.warn('webhook_replay_event_parse_failed');
+      }
+    }
+
+    return events.sort(
+      (left, right) =>
+        new Date(left.timestamp).getTime() - new Date(right.timestamp).getTime(),
+    );
   }
 
   private async persistDelivery(delivery: WebhookDelivery): Promise<void> {

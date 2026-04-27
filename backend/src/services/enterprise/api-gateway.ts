@@ -147,10 +147,6 @@ interface OAuth2TokenRecord extends OAuth2Token {
 // APIGateway
 // ---------------------------------------------------------------------------
 export class APIGateway {
-  private usageRecords: UsageRecord[] = [];
-
-  private readonly maxUsageRecords = 500_000;
-
   // API version configuration
   private readonly supportedVersions = ['v1', 'v2'];
   private readonly defaultVersion = 'v1';
@@ -775,23 +771,35 @@ export class APIGateway {
   // -------------------------------------------------------------------------
   // Usage metering
   // -------------------------------------------------------------------------
-  recordUsage(record: Omit<UsageRecord, 'timestamp'>): void {
-    this.usageRecords.push({ ...record, timestamp: Date.now() });
-    if (this.usageRecords.length > this.maxUsageRecords) {
-      this.usageRecords = this.usageRecords.slice(
-        -Math.floor(this.maxUsageRecords / 2),
-      );
-    }
+  async recordUsage(record: Omit<UsageRecord, 'timestamp'>): Promise<void> {
+    await prisma.aPIUsageLog.create({
+      data: {
+        apiKeyId: record.apiKeyId,
+        endpoint: record.endpoint,
+        method: record.method,
+        statusCode: record.statusCode,
+        responseTimeMs: record.latencyMs,
+        requestSize: record.requestSize,
+        responseSize: record.responseSize,
+        timestamp: new Date(),
+      },
+    });
   }
 
   // -------------------------------------------------------------------------
   // API analytics
   // -------------------------------------------------------------------------
-  getAnalytics(clientId: string, periodDays = 30): APIAnalytics {
-    const cutoff = Date.now() - periodDays * 24 * 60 * 60 * 1000;
-    const records = this.usageRecords.filter(
-      (r) => r.clientId === clientId && r.timestamp >= cutoff,
-    );
+  async getAnalytics(clientId: string, periodDays = 30): Promise<APIAnalytics> {
+    const cutoff = new Date(Date.now() - periodDays * 24 * 60 * 60 * 1000);
+    const records = await prisma.aPIUsageLog.findMany({
+      where: {
+        timestamp: { gte: cutoff },
+        apiKey: {
+          organizationId: clientId,
+        },
+      },
+      orderBy: { timestamp: 'asc' },
+    });
 
     const endpointBreakdown: APIAnalytics['endpointBreakdown'] = {};
     const statusCodeBreakdown: Record<string, number> = {};
@@ -807,7 +815,7 @@ export class APIGateway {
       }
       const ep = endpointBreakdown[key];
       ep.avgLatencyMs =
-        (ep.avgLatencyMs * ep.count + record.latencyMs) / (ep.count + 1);
+        (ep.avgLatencyMs * ep.count + record.responseTimeMs) / (ep.count + 1);
       ep.count++;
       if (record.statusCode >= 400) ep.errors++;
 
@@ -817,13 +825,13 @@ export class APIGateway {
         (statusCodeBreakdown[statusKey] ?? 0) + 1;
 
       // Daily
-      const dateKey = new Date(record.timestamp).toISOString().substring(0, 10);
+      const dateKey = record.timestamp.toISOString().substring(0, 10);
       const daily = dailyMap.get(dateKey) ?? { requests: 0, errors: 0 };
       daily.requests++;
       if (record.statusCode >= 400) daily.errors++;
       dailyMap.set(dateKey, daily);
 
-      totalLatency += record.latencyMs;
+      totalLatency += record.responseTimeMs;
       if (record.statusCode >= 400) totalErrors++;
     }
 

@@ -2655,7 +2655,7 @@ router.get(
     try {
       const clientId = getClientId(req);
       const periodDays = parseInt(req.query.period as string, 10) || 30;
-      const analytics = apiGateway.getAnalytics(clientId, periodDays);
+      const analytics = await apiGateway.getAnalytics(clientId, periodDays);
       res.status(200).json({ data: analytics });
     } catch (err) {
       const error = err as Error;

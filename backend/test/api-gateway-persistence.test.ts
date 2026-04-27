@@ -5,6 +5,8 @@ const mockApiKeyFindMany = jest.fn();
 const mockApiKeyFindFirst = jest.fn();
 const mockApiKeyFindUnique = jest.fn();
 const mockApiKeyUpdate = jest.fn();
+const mockApiUsageLogCreate = jest.fn();
+const mockApiUsageLogFindMany = jest.fn();
 
 const redisStore: Record<string, string> = {};
 
@@ -65,6 +67,10 @@ jest.mock('../src/index', () => ({
       findFirst: mockApiKeyFindFirst,
       findUnique: mockApiKeyFindUnique,
       update: mockApiKeyUpdate,
+    },
+    aPIUsageLog: {
+      create: mockApiUsageLogCreate,
+      findMany: mockApiUsageLogFindMany,
     },
   },
   redis: {
@@ -410,6 +416,108 @@ describe('APIGateway persistence', () => {
     ).rejects.toMatchObject({
       code: 'RATE_LIMITED',
       statusCode: 429,
+    });
+  });
+
+  it('persists API usage logs in the durable analytics store', async () => {
+    mockApiUsageLogCreate.mockResolvedValue({});
+
+    await apiGateway.recordUsage({
+      apiKeyId: 'key-usage-1',
+      clientId: 'org-usage',
+      endpoint: '/credentials',
+      method: 'POST',
+      statusCode: 201,
+      latencyMs: 42,
+      requestSize: 128,
+      responseSize: 256,
+      environment: 'production',
+      apiVersion: 'v1',
+    });
+
+    expect(mockApiUsageLogCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        apiKeyId: 'key-usage-1',
+        endpoint: '/credentials',
+        method: 'POST',
+        statusCode: 201,
+        responseTimeMs: 42,
+        requestSize: 128,
+        responseSize: 256,
+      }),
+    });
+  });
+
+  it('loads API analytics from persisted usage logs scoped by organization', async () => {
+    mockApiUsageLogFindMany.mockResolvedValue([
+      {
+        id: 'usage-1',
+        apiKeyId: 'key-1',
+        endpoint: '/credentials',
+        method: 'POST',
+        statusCode: 201,
+        responseTimeMs: 40,
+        requestSize: 128,
+        responseSize: 256,
+        ipAddress: null,
+        timestamp: new Date('2026-04-21T10:00:00.000Z'),
+      },
+      {
+        id: 'usage-2',
+        apiKeyId: 'key-1',
+        endpoint: '/credentials',
+        method: 'POST',
+        statusCode: 500,
+        responseTimeMs: 80,
+        requestSize: 128,
+        responseSize: 256,
+        ipAddress: null,
+        timestamp: new Date('2026-04-21T10:01:00.000Z'),
+      },
+      {
+        id: 'usage-3',
+        apiKeyId: 'key-2',
+        endpoint: '/verification/verify',
+        method: 'POST',
+        statusCode: 200,
+        responseTimeMs: 20,
+        requestSize: 64,
+        responseSize: 96,
+        ipAddress: null,
+        timestamp: new Date('2026-04-22T10:01:00.000Z'),
+      },
+    ]);
+
+    const analytics = await apiGateway.getAnalytics('org-usage', 7);
+
+    expect(mockApiUsageLogFindMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        apiKey: { organizationId: 'org-usage' },
+      }),
+      orderBy: { timestamp: 'asc' },
+    }));
+    expect(analytics).toMatchObject({
+      totalRequests: 3,
+      totalErrors: 1,
+      averageLatencyMs: 47,
+      statusCodeBreakdown: {
+        '200': 1,
+        '201': 1,
+        '500': 1,
+      },
+    });
+    expect(analytics.endpointBreakdown['POST /credentials']).toMatchObject({
+      count: 2,
+      errors: 1,
+      avgLatencyMs: 60,
+    });
+    expect(analytics.dailyUsage).toEqual([
+      { date: '2026-04-21', requests: 2, errors: 1 },
+      { date: '2026-04-22', requests: 1, errors: 0 },
+    ]);
+    expect(analytics.topEndpoints[0]).toEqual({
+      endpoint: 'POST /credentials',
+      count: 2,
     });
   });
 });
