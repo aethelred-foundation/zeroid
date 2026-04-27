@@ -426,10 +426,6 @@ export class OIDCBridge {
       token_endpoint_auth_methods_supported: tokenEndpointAuthMethodsSupported,
       claims_supported: [...new Set(Object.values(STANDARD_SCOPES).flat())],
       code_challenge_methods_supported: ['S256'],
-      end_session_endpoint: `${this.issuer}/logout`,
-      frontchannel_logout_supported: true,
-      backchannel_logout_supported: true,
-      backchannel_logout_session_supported: true,
     };
   }
 

@@ -248,6 +248,14 @@ describe('OIDC multi-node correctness', () => {
     fetchMock.mockResolvedValue({ ok: true, status: 200 });
   });
 
+  test('discovery does not advertise unrouted logout endpoints', () => {
+    const discovery = bridgeA.getDiscoveryDocument();
+
+    expect(discovery).not.toHaveProperty('end_session_endpoint');
+    expect(discovery).not.toHaveProperty('frontchannel_logout_supported');
+    expect(discovery).not.toHaveProperty('backchannel_logout_supported');
+  });
+
   test('client registration rejects insecure redirect and JWKS URIs', async () => {
     await expect(
       bridgeA.registerClient({
