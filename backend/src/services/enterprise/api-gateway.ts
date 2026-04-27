@@ -706,10 +706,25 @@ export class APIGateway {
   async getQuotaStatus(apiKeyId: string): Promise<{
     daily: { used: number; limit: number };
     monthly: { used: number; limit: number };
+  }>;
+  async getQuotaStatus(apiKeyId: string, clientId: string): Promise<{
+    daily: { used: number; limit: number };
+    monthly: { used: number; limit: number };
+  }>;
+  async getQuotaStatus(apiKeyId: string, clientId?: string): Promise<{
+    daily: { used: number; limit: number };
+    monthly: { used: number; limit: number };
   }> {
-    const keyRecord = await prisma.aPIKey.findUnique({
-      where: { id: apiKeyId },
-    });
+    const keyRecord = clientId
+      ? await prisma.aPIKey.findFirst({
+          where: {
+            id: apiKeyId,
+            organizationId: clientId,
+          },
+        })
+      : await prisma.aPIKey.findUnique({
+          where: { id: apiKeyId },
+        });
     if (!keyRecord) {
       throw new GatewayError('API key not found', 'KEY_NOT_FOUND', 404);
     }

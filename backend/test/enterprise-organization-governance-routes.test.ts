@@ -6,6 +6,7 @@ const mockListGovernancePacks = jest.fn();
 const mockGetAnalytics = jest.fn();
 const mockGetViolations = jest.fn();
 const mockGetAlerts = jest.fn();
+const mockRegisterSLA = jest.fn();
 
 jest.mock('express', () => {
   const createRouter = () => {
@@ -85,6 +86,7 @@ jest.mock('../src/services/enterprise/oidc-bridge', () => ({
 
 jest.mock('../src/services/enterprise/sla-monitor', () => ({
   slaMonitor: {
+    registerSLA: mockRegisterSLA,
     getViolations: mockGetViolations,
     getAlerts: mockGetAlerts,
   },
@@ -148,7 +150,7 @@ jest.mock('../src/index', () => ({
 import '../src/routes/enterprise/integration';
 
 async function invokeRoute(
-  method: 'GET' | 'PATCH',
+  method: 'GET' | 'PATCH' | 'POST',
   path: string,
   options: { body?: Record<string, unknown>; params?: Record<string, string>; query?: Record<string, unknown> } = {},
 ): Promise<{ statusCode: number; body: any }> {
@@ -245,6 +247,7 @@ describe('enterprise organization governance routes', () => {
     mockGetAnalytics.mockReturnValue({ totalRequests: 0 });
     mockGetViolations.mockReturnValue([]);
     mockGetAlerts.mockReturnValue([]);
+    mockRegisterSLA.mockReturnValue(undefined);
   });
 
   it('returns organization governance settings', async () => {
@@ -330,5 +333,32 @@ describe('enterprise organization governance routes', () => {
       '2026-04-21T00:00:00.000Z',
     );
     expect(mockGetAlerts).toHaveBeenCalledWith('org-1', 10);
+  });
+
+  it('binds SLA registration to the enterprise context organization', async () => {
+    const response = await invokeRoute('POST', '/sla/register', {
+      body: {
+        clientId: 'attacker-supplied-org',
+        tier: 'enterprise',
+        components: [
+          {
+            component: 'api_gateway',
+            uptimeTarget: 99.9,
+            latencyP50Ms: 100,
+            latencyP95Ms: 250,
+            latencyP99Ms: 500,
+            errorRateTarget: 0.1,
+          },
+        ],
+        creditPercentages: { tier1: 10, tier2: 25, tier3: 50 },
+        reportingIntervalDays: 30,
+      },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(mockRegisterSLA).toHaveBeenCalledWith(expect.objectContaining({
+      clientId: 'org-1',
+      tier: 'enterprise',
+    }));
   });
 });

@@ -1295,7 +1295,11 @@ router.get(
   requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES),
   async (req: Request, res: Response): Promise<void> => {
     try {
-      const quota = await apiGateway.getQuotaStatus(req.params.id as string);
+      const clientId = getClientId(req);
+      const quota = await apiGateway.getQuotaStatus(
+        req.params.id as string,
+        clientId,
+      );
       res.status(200).json({ data: quota });
     } catch (err) {
       const error = err as Error & { statusCode?: number; code?: string };
@@ -2564,7 +2568,11 @@ router.post(
   validate(SLADefinitionSchema),
   async (req: Request, res: Response): Promise<void> => {
     try {
-      slaMonitor.registerSLA(req.body);
+      const clientId = getClientId(req);
+      slaMonitor.registerSLA({
+        ...req.body,
+        clientId,
+      });
       res.status(201).json({ message: 'SLA definition registered' });
     } catch (err) {
       const error = err as Error & { statusCode?: number; code?: string };

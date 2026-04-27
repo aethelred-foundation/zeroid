@@ -520,4 +520,22 @@ describe('APIGateway persistence', () => {
       count: 2,
     });
   });
+
+  it('requires API key ownership before returning quota status', async () => {
+    mockApiKeyFindFirst.mockResolvedValue(null);
+
+    await expect(
+      apiGateway.getQuotaStatus('foreign-key-id', 'org-1'),
+    ).rejects.toMatchObject({
+      code: 'KEY_NOT_FOUND',
+      statusCode: 404,
+    });
+    expect(mockApiKeyFindFirst).toHaveBeenCalledWith({
+      where: {
+        id: 'foreign-key-id',
+        organizationId: 'org-1',
+      },
+    });
+    expect(mockApiKeyFindUnique).not.toHaveBeenCalled();
+  });
 });
