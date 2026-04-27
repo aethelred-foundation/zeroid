@@ -235,13 +235,24 @@ describe('Credential trust enforcement', () => {
 
   it('requires an issuer-submitted proof for production issuance', async () => {
     process.env.NODE_ENV = 'production';
-    service = new CredentialService();
+    process.env.KMS_PROVIDER = 'aws-kms';
+    process.env.KMS_KEY_ID = 'arn:aws:kms:us-east-1:111122223333:key/test-credential-signer';
+    delete process.env.ALLOW_LOCAL_CREDENTIAL_SIGNING;
 
-    await expect(service.issueCredential(baseRequest)).rejects.toMatchObject<
-      Partial<CredentialError>
-    >({
-      code: 'CRED_ISSUER_SIGNATURE_REQUIRED',
-    });
+    try {
+      service = new CredentialService();
+
+      await expect(service.issueCredential(baseRequest)).rejects.toMatchObject<
+        Partial<CredentialError>
+      >({
+        code: 'CRED_ISSUER_SIGNATURE_REQUIRED',
+      });
+    } finally {
+      process.env.NODE_ENV = 'test';
+      process.env.KMS_PROVIDER = 'local';
+      process.env.ALLOW_LOCAL_CREDENTIAL_SIGNING = 'true';
+      delete process.env.KMS_KEY_ID;
+    }
   });
 
   it('rejects an issuer-submitted proof with an invalid signature', async () => {

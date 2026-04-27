@@ -56,10 +56,9 @@ class KMSCredentialSigner {
         verificationMethodEnvKey: 'CREDENTIAL_SIGNING_VERIFICATION_METHOD',
         defaultVerificationMethod:
           'did:aethelred:zeroid:credential-signer#key-1',
-        allowLocalSigning:
-          process.env.ALLOW_LOCAL_CREDENTIAL_SIGNING === 'true',
+        allowLocalSigning: !isProductionRuntime(),
         localSigningBlockedMessage:
-          'Local credential signing is blocked in production. Configure AWS/GCP/Azure KMS or explicitly set ALLOW_LOCAL_CREDENTIAL_SIGNING=true for a controlled break-glass deployment.',
+          'Local credential signing is blocked in production. Configure AWS/GCP/Azure KMS.',
         localSigningBlockedCode: 'CRED_LOCAL_SIGNING_BLOCKED',
         signingUnavailableMessage:
           'CREDENTIAL_SIGNING_PRIVATE_KEY not configured. Credential issuance is disabled until signing is configured.',

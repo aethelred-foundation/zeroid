@@ -181,6 +181,11 @@ describe('CRED-01: Issuer-scoped credential verification', () => {
 
     // Reset NODE_ENV to test
     process.env.NODE_ENV = 'test';
+    process.env.KMS_PROVIDER = 'local';
+    process.env.ALLOW_LOCAL_CREDENTIAL_SIGNING = 'true';
+    delete process.env.KMS_KEY_ID;
+    delete process.env.KMS_KEY_VERSION;
+    delete process.env.CREDENTIAL_SIGNING_PUBLIC_KEYS_JSON;
     delete process.env.ALLOW_LEGACY_HMAC_CREDENTIAL_SIGNING;
 
     service = new CredentialService();
@@ -295,8 +300,13 @@ describe('CRED-01: Issuer-scoped credential verification', () => {
     process.env.NODE_ENV = 'production';
     process.env.CREDENTIAL_SIGNING_PRIVATE_KEY = testKeyPair.privateKey;
     process.env.CREDENTIAL_SIGNING_PUBLIC_KEY = testKeyPair.publicKey;
-    process.env.KMS_PROVIDER = 'local';
-    process.env.ALLOW_LOCAL_CREDENTIAL_SIGNING = 'true';
+    process.env.KMS_PROVIDER = 'aws-kms';
+    process.env.KMS_KEY_ID = 'arn:aws:kms:us-east-1:111122223333:key/test-credential-signer';
+    process.env.KMS_KEY_VERSION = 'kms';
+    process.env.CREDENTIAL_SIGNING_PUBLIC_KEYS_JSON = JSON.stringify({
+      '1': testKeyPair.publicKey,
+    });
+    delete process.env.ALLOW_LOCAL_CREDENTIAL_SIGNING;
 
     jest.mock('../src/index', () => {
       const { Registry, Counter } = require('prom-client');
@@ -355,6 +365,11 @@ describe('CRED-01: Issuer-scoped credential verification', () => {
 
     // Restore
     process.env.NODE_ENV = 'test';
+    process.env.KMS_PROVIDER = 'local';
+    process.env.ALLOW_LOCAL_CREDENTIAL_SIGNING = 'true';
+    delete process.env.KMS_KEY_ID;
+    delete process.env.KMS_KEY_VERSION;
+    delete process.env.CREDENTIAL_SIGNING_PUBLIC_KEYS_JSON;
   });
 
   // -------------------------------------------------------------------------
@@ -507,8 +522,9 @@ describe('CRED-01: Issuer-scoped credential verification', () => {
     process.env.NODE_ENV = 'production';
     process.env.CREDENTIAL_SIGNING_PRIVATE_KEY = testKeyPair.privateKey;
     process.env.CREDENTIAL_SIGNING_PUBLIC_KEY = testKeyPair.publicKey;
-    process.env.KMS_PROVIDER = 'local';
-    process.env.ALLOW_LOCAL_CREDENTIAL_SIGNING = 'true';
+    process.env.KMS_PROVIDER = 'aws-kms';
+    process.env.KMS_KEY_ID = 'arn:aws:kms:us-east-1:111122223333:key/test-credential-signer';
+    delete process.env.ALLOW_LOCAL_CREDENTIAL_SIGNING;
 
     // Identity exists but has no publicKey
     mockIdentityFindUnique.mockResolvedValue({
@@ -578,6 +594,60 @@ describe('CRED-01: Issuer-scoped credential verification', () => {
     );
 
     process.env.NODE_ENV = 'test';
+    process.env.KMS_PROVIDER = 'local';
+    process.env.ALLOW_LOCAL_CREDENTIAL_SIGNING = 'true';
+    delete process.env.KMS_KEY_ID;
+  });
+
+  it('should block local credential signing in production even when the override flag is set', () => {
+    jest.resetModules();
+    process.env.NODE_ENV = 'production';
+    process.env.CREDENTIAL_SIGNING_PRIVATE_KEY = testKeyPair.privateKey;
+    process.env.CREDENTIAL_SIGNING_PUBLIC_KEY = testKeyPair.publicKey;
+    process.env.KMS_PROVIDER = 'local';
+    process.env.ALLOW_LOCAL_CREDENTIAL_SIGNING = 'true';
+
+    jest.mock('../src/index', () => {
+      const { Registry, Counter } = require('prom-client');
+      const registry = new Registry();
+      return {
+        logger: mockLogger,
+        redis: {
+          get: jest.fn().mockResolvedValue(null),
+          set: jest.fn().mockResolvedValue('OK'),
+          del: jest.fn().mockResolvedValue(1),
+        },
+        prisma: {
+          identity: { findUnique: mockIdentityFindUnique },
+          credential: {
+            findFirst: jest.fn().mockResolvedValue(null),
+            findUnique: jest.fn().mockResolvedValue(null),
+            create: jest.fn(),
+          },
+          auditLog: { create: jest.fn().mockResolvedValue({}) },
+          schemaGovernance: { findUnique: jest.fn().mockResolvedValue(null) },
+          revocationRegistry: {
+            findUnique: jest.fn().mockResolvedValue(null),
+            create: jest.fn().mockResolvedValue({}),
+          },
+        },
+        metricsRegistry: registry,
+        credentialIssuedCounter: new Counter({
+          name: 'zeroid_test_local_signing_blocked_total',
+          help: 'test counter',
+          registers: [registry],
+        }),
+      };
+    });
+
+    expect(() => {
+      require('../src/services/credential');
+    }).toThrow('Local credential signing is blocked in production');
+
+    process.env.NODE_ENV = 'test';
+    process.env.KMS_PROVIDER = 'local';
+    process.env.ALLOW_LOCAL_CREDENTIAL_SIGNING = 'true';
+    delete process.env.KMS_KEY_ID;
   });
 
   // -------------------------------------------------------------------------
@@ -589,8 +659,9 @@ describe('CRED-01: Issuer-scoped credential verification', () => {
 
     process.env.CREDENTIAL_SIGNING_PRIVATE_KEY = testKeyPair.privateKey;
     process.env.CREDENTIAL_SIGNING_PUBLIC_KEY = testKeyPair.publicKey;
-    process.env.KMS_PROVIDER = 'local';
-    process.env.ALLOW_LOCAL_CREDENTIAL_SIGNING = 'true';
+    process.env.KMS_PROVIDER = 'aws-kms';
+    process.env.KMS_KEY_ID = 'arn:aws:kms:us-east-1:111122223333:key/test-credential-signer';
+    delete process.env.ALLOW_LOCAL_CREDENTIAL_SIGNING;
     process.env.ALLOW_LEGACY_HMAC_CREDENTIAL_SIGNING = 'true';
     process.env.CREDENTIAL_SIGNING_SECRET = 'test-hmac-secret';
 
@@ -641,6 +712,9 @@ describe('CRED-01: Issuer-scoped credential verification', () => {
 
     // Restore
     process.env.NODE_ENV = 'test';
+    process.env.KMS_PROVIDER = 'local';
+    process.env.ALLOW_LOCAL_CREDENTIAL_SIGNING = 'true';
+    delete process.env.KMS_KEY_ID;
     delete process.env.ALLOW_LEGACY_HMAC_CREDENTIAL_SIGNING;
     delete process.env.CREDENTIAL_SIGNING_SECRET;
   });
