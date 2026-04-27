@@ -9,6 +9,8 @@ import {
 const BASE_ENV: NodeJS.ProcessEnv = { NODE_ENV: 'test' };
 const PROD_BASE_ENV: NodeJS.ProcessEnv = {
   NODE_ENV: 'production',
+  REDIS_URL: 'rediss://redis.zeroid.example:6380',
+  CORS_ORIGINS: 'https://app.zeroid.example,https://admin.zeroid.example',
   SANCTIONS_SCREENING_DISABLED: 'true',
 };
 
@@ -17,6 +19,58 @@ describe('production safety controls', () => {
     expect(collectProductionSafetyViolations(BASE_ENV)).toEqual([]);
     expect(isMetricsAccessConfigured(BASE_ENV)).toBe(true);
     expect(isMetricsRequestAuthorized(undefined, BASE_ENV)).toBe(true);
+  });
+
+  it('blocks production startup when Redis is missing or local', () => {
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      REDIS_URL: '',
+      METRICS_PUBLIC_DISABLED: 'true',
+    })).toEqual([
+      expect.objectContaining({ control: 'REDIS_URL' }),
+    ]);
+
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      REDIS_URL: 'redis://localhost:6379',
+      METRICS_PUBLIC_DISABLED: 'true',
+    })).toEqual([
+      expect.objectContaining({ control: 'REDIS_URL' }),
+    ]);
+
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      REDIS_URL: 'redis://[::1]:6379',
+      METRICS_PUBLIC_DISABLED: 'true',
+    })).toEqual([
+      expect.objectContaining({ control: 'REDIS_URL' }),
+    ]);
+  });
+
+  it('blocks production startup when CORS origins are missing or unsafe', () => {
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      CORS_ORIGINS: '',
+      METRICS_PUBLIC_DISABLED: 'true',
+    })).toEqual([
+      expect.objectContaining({ control: 'CORS_ORIGINS' }),
+    ]);
+
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      CORS_ORIGINS: 'https://app.zeroid.example,http://localhost:3000',
+      METRICS_PUBLIC_DISABLED: 'true',
+    })).toEqual([
+      expect.objectContaining({ control: 'CORS_ORIGINS' }),
+    ]);
+
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      CORS_ORIGINS: 'https://app.zeroid.example,https://[::1]:3000',
+      METRICS_PUBLIC_DISABLED: 'true',
+    })).toEqual([
+      expect.objectContaining({ control: 'CORS_ORIGINS' }),
+    ]);
   });
 
   it('blocks production metrics when neither disabled nor token protected', () => {
@@ -52,9 +106,8 @@ describe('production safety controls', () => {
 
   it('keeps unsafe production overrides in the startup block list', () => {
     const env = {
-      NODE_ENV: 'production',
+      ...PROD_BASE_ENV,
       METRICS_PUBLIC_DISABLED: 'true',
-      SANCTIONS_SCREENING_DISABLED: 'true',
       ALLOW_UNSAFE_TEE_ATTESTATION: 'true',
     };
 
@@ -65,7 +118,7 @@ describe('production safety controls', () => {
 
   it('requires trusted sanctions list keys when screening is enabled in production', () => {
     const env = {
-      NODE_ENV: 'production',
+      ...PROD_BASE_ENV,
       METRICS_PUBLIC_DISABLED: 'true',
       SANCTIONS_SCREENING_DISABLED: 'false',
     };

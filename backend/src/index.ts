@@ -19,6 +19,7 @@ import { createRateLimiter } from './middleware/rateLimit';
 import {
   checkedProductionSafetyControls,
   collectProductionSafetyViolations,
+  getAllowedCorsOrigins,
   isMetricsAccessConfigured,
   isMetricsEndpointDisabled,
   isMetricsRequestAuthorized,
@@ -142,7 +143,7 @@ app.use(helmet({
 
 // CORS
 app.use(cors({
-  origin: process.env.CORS_ORIGINS?.split(',') ?? ['http://localhost:3000'],
+  origin: getAllowedCorsOrigins(),
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-Id'],
   credentials: true,

@@ -950,7 +950,7 @@ describe('5 - Privilege escalation', () => {
     });
   });
 
-  it('should deny access to another user\'s credential', async () => {
+  it('should hide another user\'s credential from unauthorized callers', async () => {
     stubAuthFor('identity-alice', 'did:aethelred:alice', 'session-alice');
     const token = await makeToken({
       sub: 'identity-alice',
@@ -973,8 +973,8 @@ describe('5 - Privilege escalation', () => {
       .get('/api/v1/credentials/00000000-0000-0000-0000-000000000001')
       .set('Authorization', `Bearer ${token}`);
 
-    expect(res.status).toBe(403);
-    expect(res.body.code).toBe('CREDENTIAL_ACCESS_DENIED');
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('CREDENTIAL_NOT_FOUND');
   });
 
   it('should deny ZK proof generation for another user\'s credential', async () => {
@@ -1118,10 +1118,6 @@ describe('6 - Enumeration protection', () => {
   });
 
   it('should return 404 not 403 when credential exists but belongs to another user', async () => {
-    // Note: current implementation returns 403 for existing creds belonging to others.
-    // This test documents the current behavior. Ideally for anti-enumeration, it would
-    // be 404 to avoid leaking existence. If the code returns 403, this test serves as a
-    // known gap flagged to the auditor.
     stubAuthFor('identity-alice', 'did:aethelred:alice', 'session-alice');
     const token = await makeToken({
       sub: 'identity-alice',
@@ -1141,16 +1137,11 @@ describe('6 - Enumeration protection', () => {
       .get('/api/v1/credentials/00000000-0000-0000-0000-000000000050')
       .set('Authorization', `Bearer ${token}`);
 
-    // Document current behavior: returns 403 (potential enumeration leak)
-    // Auditor flag: ideally should be 404 to prevent enumeration
-    expect([403, 404]).toContain(res.status);
-    if (res.status === 403) {
-      // Mark this as a known enumeration vector
-      console.warn(
-        'AUDIT NOTE: GET /api/v1/credentials/:id returns 403 for unauthorized access. ' +
-        'This leaks credential existence and should ideally return 404.',
-      );
-    }
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({
+      error: 'Credential not found',
+      code: 'CREDENTIAL_NOT_FOUND',
+    });
   });
 
   it('should reject non-UUID credential ID formats (prevents sequential enumeration)', async () => {
@@ -1206,22 +1197,10 @@ describe('6 - Enumeration protection', () => {
 
     expect(res.status).toBe(500);
     const body = JSON.stringify(res.body);
-    // AUDIT FINDING: The credentials route handler exposes raw error messages
-    // to the client (res.status(error.statusCode ?? 500).json({ error: error.message })).
-    // Ideally, 5xx errors should return a generic message like "Internal server error"
-    // rather than leaking implementation details.
-    // The global error handler in index.ts does mask 5xx errors, but per-route
-    // catch blocks re-throw the raw message before it reaches the global handler.
-    //
-    // Documenting current behavior: raw error messages ARE leaked.
-    // This should be flagged for remediation.
-    if (body.includes('DB connection')) {
-      console.warn(
-        'AUDIT FINDING: Route-level error handler leaks internal error messages. ' +
-        'POST /api/v1/credentials/:id returns raw Error.message for 500 errors.',
-      );
-    }
+    expect(res.body.error).toBe('Internal server error');
+    expect(res.body.code).toBe('CREDENTIAL_GET_FAILED');
     // Stack traces and node_modules paths should never appear
+    expect(body).not.toContain('DB connection');
     expect(body).not.toContain('stack');
     expect(body).not.toContain('node_modules');
   });

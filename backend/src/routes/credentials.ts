@@ -18,6 +18,29 @@ import { z } from 'zod';
 const router = Router();
 router.use(apiRateLimiter);
 
+type CredentialRouteError = Error & { statusCode?: number; code?: string };
+
+function sendCredentialNotFound(res: Response): void {
+  res.status(404).json({
+    error: 'Credential not found',
+    code: 'CREDENTIAL_NOT_FOUND',
+  });
+}
+
+function sendCredentialRouteError(
+  res: Response,
+  error: CredentialRouteError,
+  fallbackCode: string,
+): void {
+  const statusCode = error.statusCode ?? 500;
+  const isServerError = statusCode >= 500;
+
+  res.status(statusCode).json({
+    error: isServerError ? 'Internal server error' : error.message,
+    code: isServerError ? fallbackCode : error.code ?? fallbackCode,
+  });
+}
+
 function sanitizeCredentialEvidenceExport(
   exported: Awaited<
     ReturnType<typeof credentialService.exportCredentialEvidence>
@@ -83,12 +106,9 @@ router.post(
         message: 'Credential issued successfully',
       });
     } catch (err) {
-      const error = err as Error & { statusCode?: number; code?: string };
+      const error = err as CredentialRouteError;
       logger.error('credential_issue_error', { error: error.message });
-      res.status(error.statusCode ?? 500).json({
-        error: error.message,
-        code: error.code ?? 'CREDENTIAL_ISSUE_FAILED',
-      });
+      sendCredentialRouteError(res, error, 'CREDENTIAL_ISSUE_FAILED');
     }
   },
 );
@@ -105,12 +125,7 @@ router.get(
         req.params.id as string,
       );
       if (!credential) {
-        res
-          .status(404)
-          .json({
-            error: 'Credential not found',
-            code: 'CREDENTIAL_NOT_FOUND',
-          });
+        sendCredentialNotFound(res);
         return;
       }
 
@@ -120,18 +135,14 @@ router.get(
         credential.issuerId !== identity.id &&
         credential.subjectId !== identity.id
       ) {
-        res
-          .status(403)
-          .json({ error: 'Access denied', code: 'CREDENTIAL_ACCESS_DENIED' });
+        sendCredentialNotFound(res);
         return;
       }
 
       res.json({ data: credential });
     } catch (err) {
-      const error = err as Error & { statusCode?: number; code?: string };
-      res
-        .status(error.statusCode ?? 500)
-        .json({ error: error.message, code: error.code });
+      const error = err as CredentialRouteError;
+      sendCredentialRouteError(res, error, 'CREDENTIAL_GET_FAILED');
     }
   },
 );
@@ -176,10 +187,8 @@ router.get(
         },
       });
     } catch (err) {
-      const error = err as Error & { statusCode?: number; code?: string };
-      res
-        .status(error.statusCode ?? 500)
-        .json({ error: error.message, code: error.code });
+      const error = err as CredentialRouteError;
+      sendCredentialRouteError(res, error, 'CREDENTIAL_QUERY_FAILED');
     }
   },
 );
@@ -212,14 +221,12 @@ router.post(
         message: 'Credential revoked successfully',
       });
     } catch (err) {
-      const error = err as Error & { statusCode?: number; code?: string };
+      const error = err as CredentialRouteError;
       logger.error('credential_revoke_error', {
         error: error.message,
         credentialId: req.params.id,
       });
-      res
-        .status(error.statusCode ?? 500)
-        .json({ error: error.message, code: error.code });
+      sendCredentialRouteError(res, error, 'CREDENTIAL_REVOKE_FAILED');
     }
   },
 );
@@ -263,10 +270,8 @@ router.post(
         },
       });
     } catch (err) {
-      const error = err as Error & { statusCode?: number; code?: string };
-      res
-        .status(error.statusCode ?? 500)
-        .json({ error: error.message, code: error.code });
+      const error = err as CredentialRouteError;
+      sendCredentialRouteError(res, error, 'CREDENTIAL_VERIFY_FAILED');
     }
   },
 );
@@ -293,10 +298,8 @@ router.get(
           : sanitizeCredentialEvidenceExport(exported),
       });
     } catch (err) {
-      const error = err as Error & { statusCode?: number; code?: string };
-      res
-        .status(error.statusCode ?? 500)
-        .json({ error: error.message, code: error.code });
+      const error = err as CredentialRouteError;
+      sendCredentialRouteError(res, error, 'CREDENTIAL_EVIDENCE_FAILED');
     }
   },
 );

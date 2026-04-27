@@ -6,6 +6,7 @@ export interface ProductionSafetyViolation {
 }
 
 const MIN_METRICS_TOKEN_LENGTH = 32;
+const DEFAULT_DEVELOPMENT_CORS_ORIGINS = ['http://localhost:3000'];
 
 const UNSAFE_PRODUCTION_FLAGS: ProductionSafetyViolation[] = [
   {
@@ -78,9 +79,26 @@ export function isMetricsRequestAuthorized(
 export function checkedProductionSafetyControls(): string[] {
   return [
     ...UNSAFE_PRODUCTION_FLAGS.map((flag) => flag.control),
+    'REDIS_URL',
+    'CORS_ORIGINS',
     'METRICS_PUBLIC_DISABLED_OR_METRICS_AUTH_TOKEN',
     'SANCTIONS_SCREENING_DISABLED_OR_SANCTIONS_LIST_SIGNATURE_PUBLIC_KEYS_JSON',
   ];
+}
+
+export function getAllowedCorsOrigins(
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
+  const configured = env.CORS_ORIGINS
+    ?.split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+
+  if (configured && configured.length > 0) {
+    return [...new Set(configured)];
+  }
+
+  return [...DEFAULT_DEVELOPMENT_CORS_ORIGINS];
 }
 
 export function collectProductionSafetyViolations(
@@ -91,6 +109,37 @@ export function collectProductionSafetyViolations(
   const violations = UNSAFE_PRODUCTION_FLAGS
     .filter((flag) => isTrue(env[flag.control]))
     .map((flag) => ({ ...flag }));
+
+  const redisUrl = env.REDIS_URL?.trim();
+  if (!redisUrl) {
+    violations.push({
+      control: 'REDIS_URL',
+      risk: 'Production Redis connection is missing; rate limiting and session state cannot be enforced reliably',
+    });
+  } else if (!isTrustedRedisUrl(redisUrl)) {
+    violations.push({
+      control: 'REDIS_URL',
+      risk: 'Production Redis connection must use a non-local redis:// or rediss:// endpoint',
+    });
+  }
+
+  const corsOrigins = getAllowedCorsOrigins(env);
+  if (!env.CORS_ORIGINS?.trim()) {
+    violations.push({
+      control: 'CORS_ORIGINS',
+      risk: 'Production CORS allowlist is missing and would fall back to localhost',
+    });
+  } else {
+    const unsafeOrigin = corsOrigins.find(
+      (origin) => !isTrustedCorsOrigin(origin),
+    );
+    if (unsafeOrigin) {
+      violations.push({
+        control: 'CORS_ORIGINS',
+        risk: `Production CORS origin is not allowed: ${unsafeOrigin}`,
+      });
+    }
+  }
 
   if (!isMetricsEndpointDisabled(env)) {
     const token = getMetricsAuthToken(env);
@@ -138,6 +187,46 @@ export function collectProductionSafetyViolations(
   }
 
   return violations;
+}
+
+function isTrustedRedisUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'redis:' && url.protocol !== 'rediss:') return false;
+    const hostname = url.hostname.toLowerCase();
+    return !isLocalHostname(hostname);
+  } catch {
+    return false;
+  }
+}
+
+function isTrustedCorsOrigin(value: string): boolean {
+  if (value === '*') return false;
+
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'https:') return false;
+    if (url.pathname !== '/' || url.search || url.hash) return false;
+    return !isLocalHostname(url.hostname.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
+function isLocalHostname(hostname: string): boolean {
+  const normalized = hostname
+    .toLowerCase()
+    .replace(/^\[|\]$/g, '')
+    .replace(/\.$/, '');
+
+  return (
+    normalized === 'localhost' ||
+    normalized === '127.0.0.1' ||
+    normalized === '0.0.0.0' ||
+    normalized === '::1' ||
+    normalized === '::' ||
+    normalized.endsWith('.localhost')
+  );
 }
 
 export function validateProductionConfig(env: NodeJS.ProcessEnv = process.env): void {
