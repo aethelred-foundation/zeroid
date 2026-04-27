@@ -127,6 +127,7 @@ export function checkedProductionSafetyControls(): string[] {
     'TRUSTED_MRSIGNERS',
     'MIN_ISV_SVN',
     'TEE_TCB_STATUS_POLICY',
+    'SCHEMA_GOVERNANCE_THRESHOLDS',
     'ZK_CONTEXT_BOUND_CIRCUITS_READY',
   ];
 }
@@ -296,6 +297,7 @@ export function collectProductionSafetyViolations(
   validateOidcSigningConfig(env, violations);
   validateCredentialSigningConfig(env, violations);
   validateTeeAttestationConfig(env, violations);
+  validateSchemaGovernanceThresholds(env, violations);
 
   if (env.ZK_CONTEXT_BOUND_CIRCUITS_READY !== 'true') {
     violations.push({
@@ -471,6 +473,47 @@ function validateTeeTcbStatusPolicy(
     violations.push({
       control,
       risk: `Production TEE TCB policy must not allow ${rejectedStatus} attestations`,
+    });
+  }
+}
+
+function validateSchemaGovernanceThresholds(
+  env: NodeJS.ProcessEnv,
+  violations: ProductionSafetyViolation[],
+): void {
+  validateMinimumThreshold(
+    env.SCHEMA_APPROVAL_THRESHOLD,
+    'SCHEMA_APPROVAL_THRESHOLD',
+    'Production schema approval requires an explicit multi-party approval threshold',
+    violations,
+  );
+  validateMinimumThreshold(
+    env.SCHEMA_REJECTION_THRESHOLD,
+    'SCHEMA_REJECTION_THRESHOLD',
+    'Production schema rejection requires an explicit multi-party rejection threshold',
+    violations,
+  );
+}
+
+function validateMinimumThreshold(
+  rawValue: string | undefined,
+  control: string,
+  missingRisk: string,
+  violations: ProductionSafetyViolation[],
+): void {
+  const value = rawValue?.trim();
+  if (!value) {
+    violations.push({
+      control,
+      risk: missingRisk,
+    });
+    return;
+  }
+
+  if (!/^[2-9]\d*$/.test(value)) {
+    violations.push({
+      control,
+      risk: `${control} must be an integer greater than or equal to 2`,
     });
   }
 }

@@ -34,6 +34,8 @@ const PROD_BASE_ENV: NodeJS.ProcessEnv = {
   INTEL_PCS_API_KEY: 'pcs_' + 'p'.repeat(40),
   TRUSTED_MRSIGNERS: 'a'.repeat(64),
   MIN_ISV_SVN: '1',
+  SCHEMA_APPROVAL_THRESHOLD: '3',
+  SCHEMA_REJECTION_THRESHOLD: '3',
   ZK_CONTEXT_BOUND_CIRCUITS_READY: 'true',
 };
 
@@ -347,6 +349,32 @@ describe('production safety controls', () => {
       TEE_ALLOWED_QE_TCB_STATUSES: 'DefinitelyNotAStatus',
     })).toEqual([
       expect.objectContaining({ control: 'TEE_ALLOWED_QE_TCB_STATUSES' }),
+    ]);
+  });
+
+  it('requires multi-party schema governance thresholds in production', () => {
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      METRICS_PUBLIC_DISABLED: 'true',
+      SCHEMA_APPROVAL_THRESHOLD: '',
+    })).toEqual([
+      expect.objectContaining({ control: 'SCHEMA_APPROVAL_THRESHOLD' }),
+    ]);
+
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      METRICS_PUBLIC_DISABLED: 'true',
+      SCHEMA_APPROVAL_THRESHOLD: '1',
+    })).toEqual([
+      expect.objectContaining({ control: 'SCHEMA_APPROVAL_THRESHOLD' }),
+    ]);
+
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      METRICS_PUBLIC_DISABLED: 'true',
+      SCHEMA_REJECTION_THRESHOLD: 'not-a-number',
+    })).toEqual([
+      expect.objectContaining({ control: 'SCHEMA_REJECTION_THRESHOLD' }),
     ]);
   });
 
