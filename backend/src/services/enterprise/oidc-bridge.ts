@@ -159,7 +159,9 @@ const STANDARD_SCOPES: Record<string, string[]> = {
 // ---------------------------------------------------------------------------
 export interface RegisteredClient {
   clientId: string;
-  clientSecret: string;
+  clientSecret?: string;
+  clientSecretHash?: string;
+  clientSecretHashAlg?: 'sha256';
   registration: OIDCClientRegistration;
   createdAt: string;
   active: boolean;
@@ -480,7 +482,8 @@ export class OIDCBridge {
 
     const client: RegisteredClient = {
       clientId,
-      clientSecret,
+      clientSecretHash: this.hashClientSecret(clientSecret),
+      clientSecretHashAlg: 'sha256',
       registration: {
         ...parsed,
         idTokenSignedResponseAlg: requestedSigningAlg,
@@ -783,7 +786,15 @@ export class OIDCBridge {
     scope: string;
   }> {
     const refreshToken = request.refreshToken!;
-    const refreshData = await this.refreshTokenMap.get(refreshToken);
+    const refreshTokenKey = this.hashRefreshToken(refreshToken);
+    let refreshData = await this.refreshTokenMap.get(refreshTokenKey);
+    let refreshStorageKey = refreshTokenKey;
+
+    if (!refreshData && !this.isHashedCredentialStorageKey(refreshToken)) {
+      refreshData = await this.refreshTokenMap.get(refreshToken);
+      refreshStorageKey = refreshToken;
+    }
+
     if (!refreshData) {
       throw new OIDCError(
         'invalid_grant',
@@ -796,12 +807,12 @@ export class OIDCBridge {
     }
 
     await this.authenticateClient(request.clientId, request.clientSecret);
-    await this.assertRefreshSessionActive(refreshData, refreshToken);
+    await this.assertRefreshSessionActive(refreshData, refreshStorageKey);
 
     // Atomically consume the refresh token: getAndDelete ensures only one
     // concurrent caller can redeem it. The loser gets undefined.
     const consumedRefreshData =
-      await this.refreshTokenMap.getAndDelete(refreshToken);
+      await this.refreshTokenMap.getAndDelete(refreshStorageKey);
     if (!consumedRefreshData) {
       throw new OIDCError(
         'invalid_grant',
@@ -816,11 +827,14 @@ export class OIDCBridge {
     if (consumedRefreshData.sessionId) {
       await redis.srem(
         sessionRefreshTokenSetKey(consumedRefreshData.sessionId),
-        refreshToken,
+        refreshStorageKey,
       );
     }
 
-    await this.assertRefreshSessionActive(consumedRefreshData, refreshToken);
+    await this.assertRefreshSessionActive(
+      consumedRefreshData,
+      refreshStorageKey,
+    );
 
     const newAccessToken = await this.generateToken(
       consumedRefreshData.clientId,
@@ -1018,7 +1032,7 @@ export class OIDCBridge {
 
   private async assertRefreshSessionActive(
     refreshData: RefreshTokenRecord,
-    refreshToken: string,
+    refreshStorageKey: string,
   ): Promise<void> {
     if (!refreshData.sessionId) {
       return;
@@ -1031,10 +1045,10 @@ export class OIDCBridge {
       session.clientId !== refreshData.clientId ||
       session.subjectId !== refreshData.subjectId
     ) {
-      await this.refreshTokenMap.delete(refreshToken);
+      await this.refreshTokenMap.delete(refreshStorageKey);
       await redis.srem(
         sessionRefreshTokenSetKey(refreshData.sessionId),
-        refreshToken,
+        refreshStorageKey,
       );
       throw new OIDCError(
         'invalid_grant',
@@ -1140,8 +1154,9 @@ export class OIDCBridge {
     sessionId?: string,
   ): Promise<string> {
     const refreshToken = crypto.randomBytes(48).toString('base64url');
-    await this.refreshTokenMap.set(refreshToken, {
-      tokenId: refreshToken,
+    const refreshTokenKey = this.hashRefreshToken(refreshToken);
+    await this.refreshTokenMap.set(refreshTokenKey, {
+      tokenId: refreshTokenKey,
       clientId,
       subjectId,
       scope,
@@ -1149,7 +1164,7 @@ export class OIDCBridge {
     });
     if (sessionId) {
       const setKey = sessionRefreshTokenSetKey(sessionId);
-      await redis.sadd(setKey, refreshToken);
+      await redis.sadd(setKey, refreshTokenKey);
       await redis.expire(setKey, OIDC_REFRESH_TOKEN_TTL);
     }
     return refreshToken;
@@ -1186,12 +1201,85 @@ export class OIDCBridge {
         `Client is not active (${lifecycleState})`,
       );
     }
-    if (
-      client.registration.tokenEndpointAuthMethod !== 'none' &&
-      clientSecret !== client.clientSecret
-    ) {
-      throw new OIDCError('invalid_client', 'Client authentication failed');
+    if (client.registration.tokenEndpointAuthMethod !== 'none') {
+      if (!clientSecret) {
+        throw new OIDCError('invalid_client', 'Client authentication failed');
+      }
+
+      const verification = this.verifyClientSecret(client, clientSecret);
+      if (!verification.valid) {
+        throw new OIDCError('invalid_client', 'Client authentication failed');
+      }
+
+      if (verification.legacyPlaintext) {
+        await this.clients.set(clientId, {
+          ...client,
+          clientSecret: undefined,
+          clientSecretHash: this.hashClientSecret(clientSecret),
+          clientSecretHashAlg: 'sha256',
+        });
+        logger.info('oidc_client_secret_migrated_to_hash', { clientId });
+      }
     }
+  }
+
+  private hashClientSecret(clientSecret: string): string {
+    return (
+      'sha256:' +
+      crypto
+        .createHash('sha256')
+        .update('zeroid:oidc-client-secret:v1:')
+        .update(clientSecret)
+        .digest('base64url')
+    );
+  }
+
+  private hashRefreshToken(refreshToken: string): string {
+    return (
+      'sha256:' +
+      crypto
+        .createHash('sha256')
+        .update('zeroid:oidc-refresh-token:v1:')
+        .update(refreshToken)
+        .digest('base64url')
+    );
+  }
+
+  private isHashedCredentialStorageKey(value: string): boolean {
+    return /^sha256:[A-Za-z0-9_-]{43}$/.test(value);
+  }
+
+  private verifyClientSecret(
+    client: RegisteredClient,
+    presentedSecret: string,
+  ): { valid: boolean; legacyPlaintext: boolean } {
+    if (client.clientSecretHash) {
+      return {
+        valid: this.timingSafeStringEqual(
+          this.hashClientSecret(presentedSecret),
+          client.clientSecretHash,
+        ),
+        legacyPlaintext: false,
+      };
+    }
+
+    if (client.clientSecret) {
+      return {
+        valid: this.timingSafeStringEqual(presentedSecret, client.clientSecret),
+        legacyPlaintext: true,
+      };
+    }
+
+    return { valid: false, legacyPlaintext: false };
+  }
+
+  private timingSafeStringEqual(left: string, right: string): boolean {
+    const leftBuffer = Buffer.from(left);
+    const rightBuffer = Buffer.from(right);
+    return (
+      leftBuffer.length === rightBuffer.length &&
+      crypto.timingSafeEqual(leftBuffer, rightBuffer)
+    );
   }
 
   private async verifyToken(

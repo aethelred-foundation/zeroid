@@ -425,6 +425,172 @@ describe('OIDC multi-node correctness', () => {
     expect(tokens.access_token).toBeDefined();
   });
 
+  test('client secrets are hashed at rest while remaining usable across nodes', async () => {
+    const client = await registerTestClient(bridgeA);
+    const storedRaw = store.get(`oidc:clients:${client.clientId}`);
+    expect(storedRaw).toBeDefined();
+
+    const stored = JSON.parse(storedRaw!);
+    expect(stored.clientSecret).toBeUndefined();
+    expect(stored.clientSecretHash).toMatch(/^sha256:/);
+    expect(stored.clientSecretHash).not.toContain(client.clientSecret);
+
+    const { code } = await authorizeCode(
+      bridgeB,
+      client.clientId,
+      'user-hashed-secret',
+    );
+    const tokens = await bridgeA.exchangeToken({
+      grantType: 'authorization_code',
+      code: code!,
+      redirectUri: REDIRECT_URI,
+      clientId: client.clientId,
+      clientSecret: client.clientSecret,
+    });
+    expect(tokens.access_token).toBeDefined();
+  });
+
+  test('legacy plaintext client secrets are migrated after successful authentication', async () => {
+    const client = await registerTestClient(bridgeA);
+    const clientKey = `oidc:clients:${client.clientId}`;
+    const stored = JSON.parse(store.get(clientKey)!);
+    delete stored.clientSecretHash;
+    delete stored.clientSecretHashAlg;
+    stored.clientSecret = client.clientSecret;
+    store.set(clientKey, JSON.stringify(stored));
+
+    const { code } = await authorizeCode(
+      bridgeA,
+      client.clientId,
+      'user-legacy-secret',
+    );
+    const tokens = await bridgeB.exchangeToken({
+      grantType: 'authorization_code',
+      code: code!,
+      redirectUri: REDIRECT_URI,
+      clientId: client.clientId,
+      clientSecret: client.clientSecret,
+    });
+    expect(tokens.access_token).toBeDefined();
+
+    const migrated = JSON.parse(store.get(clientKey)!);
+    expect(migrated.clientSecret).toBeUndefined();
+    expect(migrated.clientSecretHash).toMatch(/^sha256:/);
+  });
+
+  test('refresh tokens are stored only by digest and remain redeemable', async () => {
+    const client = await registerTestClient(bridgeA);
+    const { code } = await authorizeCode(
+      bridgeA,
+      client.clientId,
+      'user-refresh-hash',
+    );
+
+    const tokens = await bridgeA.exchangeToken({
+      grantType: 'authorization_code',
+      code: code!,
+      redirectUri: REDIRECT_URI,
+      clientId: client.clientId,
+      clientSecret: client.clientSecret,
+    });
+
+    expect(store.has(`oidc:refresh:${tokens.refresh_token}`)).toBe(false);
+    const refreshKeys = [...store.keys()].filter((key) =>
+      key.startsWith('oidc:refresh:'),
+    );
+    expect(refreshKeys).toHaveLength(1);
+    expect(refreshKeys[0]).toMatch(/^oidc:refresh:sha256:/);
+    for (const members of setStore.values()) {
+      expect([...members]).not.toContain(tokens.refresh_token);
+    }
+
+    const refreshed = await bridgeB.exchangeToken({
+      grantType: 'refresh_token',
+      refreshToken: tokens.refresh_token,
+      clientId: client.clientId,
+      clientSecret: client.clientSecret,
+    });
+    expect(refreshed.access_token).toBeDefined();
+    expect(refreshed.refresh_token).not.toBe(tokens.refresh_token);
+  });
+
+  test('stored refresh token digests are not accepted as bearer tokens', async () => {
+    const client = await registerTestClient(bridgeA);
+    const { code } = await authorizeCode(
+      bridgeA,
+      client.clientId,
+      'user-refresh-digest-leak',
+    );
+
+    await bridgeA.exchangeToken({
+      grantType: 'authorization_code',
+      code: code!,
+      redirectUri: REDIRECT_URI,
+      clientId: client.clientId,
+      clientSecret: client.clientSecret,
+    });
+
+    const refreshStorageKey = [...store.keys()]
+      .find((key) => key.startsWith('oidc:refresh:sha256:'))
+      ?.replace('oidc:refresh:', '');
+    expect(refreshStorageKey).toMatch(/^sha256:/);
+
+    await expect(
+      bridgeB.exchangeToken({
+        grantType: 'refresh_token',
+        refreshToken: refreshStorageKey,
+        clientId: client.clientId,
+        clientSecret: client.clientSecret,
+      }),
+    ).rejects.toMatchObject({
+      errorCode: 'invalid_grant',
+    });
+  });
+
+  test('legacy plaintext refresh token records are consumed safely', async () => {
+    const client = await registerTestClient(bridgeA);
+    const { code } = await authorizeCode(
+      bridgeA,
+      client.clientId,
+      'user-refresh-legacy',
+    );
+
+    const tokens = await bridgeA.exchangeToken({
+      grantType: 'authorization_code',
+      code: code!,
+      redirectUri: REDIRECT_URI,
+      clientId: client.clientId,
+      clientSecret: client.clientSecret,
+    });
+
+    const refreshKey = [...store.keys()].find((key) =>
+      key.startsWith('oidc:refresh:sha256:'),
+    );
+    expect(refreshKey).toBeDefined();
+    const record = store.get(refreshKey!)!;
+    store.delete(refreshKey!);
+    store.set(`oidc:refresh:${tokens.refresh_token}`, record);
+
+    for (const [setKey, members] of setStore.entries()) {
+      if (setKey.startsWith('oidc:session-refresh-tokens:')) {
+        members.clear();
+        members.add(tokens.refresh_token);
+      }
+    }
+
+    const refreshed = await bridgeB.exchangeToken({
+      grantType: 'refresh_token',
+      refreshToken: tokens.refresh_token,
+      clientId: client.clientId,
+      clientSecret: client.clientSecret,
+    });
+    expect(refreshed.access_token).toBeDefined();
+    expect(store.has(`oidc:refresh:${tokens.refresh_token}`)).toBe(false);
+    expect(
+      [...store.keys()].some((key) => key.startsWith('oidc:refresh:sha256:')),
+    ).toBe(true);
+  });
+
   // 6. Pending lifecycle clients cannot authorize before approval
   test('pending client registered on A cannot authorize on B before approval', async () => {
     const client = await registerOwnedClient(bridgeA, {
