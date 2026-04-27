@@ -110,19 +110,6 @@ interface UsageRecord {
   apiVersion: string;
 }
 
-interface QuotaTracker {
-  apiKeyId: string;
-  dailyUsage: Map<string, number>; // dateKey -> count
-  monthlyUsage: Map<string, number>; // monthKey -> count
-}
-
-interface RateLimitState {
-  tokens: number;
-  lastRefill: number;
-  requestsPerSecond: number;
-  burstSize: number;
-}
-
 interface APIAnalytics {
   totalRequests: number;
   totalErrors: number;
@@ -161,8 +148,6 @@ interface OAuth2TokenRecord extends OAuth2Token {
 // ---------------------------------------------------------------------------
 export class APIGateway {
   private usageRecords: UsageRecord[] = [];
-  private quotaTrackers: Map<string, QuotaTracker> = new Map();
-  private rateLimitStates: Map<string, RateLimitState> = new Map();
 
   private readonly maxUsageRecords = 500_000;
 
@@ -184,6 +169,18 @@ export class APIGateway {
 
   private oauth2TokenKey(accessToken: string): string {
     return `enterprise:oauth2-token:${this.hashOAuth2AccessToken(accessToken)}`;
+  }
+
+  private rateLimitKey(apiKeyId: string): string {
+    return `enterprise:api-rate:${apiKeyId}`;
+  }
+
+  private dailyQuotaKey(apiKeyId: string, dayKey: string): string {
+    return `enterprise:api-quota:${apiKeyId}:day:${dayKey}`;
+  }
+
+  private monthlyQuotaKey(apiKeyId: string, monthKey: string): string {
+    return `enterprise:api-quota:${apiKeyId}:month:${monthKey}`;
   }
 
   private async persistAPIKeyConfig(
@@ -284,12 +281,6 @@ export class APIGateway {
       metadata: parsed.metadata,
       revokedAt: null,
       revokedReason: null,
-    });
-
-    this.quotaTrackers.set(id, {
-      apiKeyId: id,
-      dailyUsage: new Map(),
-      monthlyUsage: new Map(),
     });
 
     logger.info('api_key_created', {
@@ -413,12 +404,12 @@ export class APIGateway {
     }
 
     // Rate limiting
-    if (!this.checkRateLimit(keyId, key.rateLimit)) {
+    if (!(await this.checkRateLimit(keyId, key.rateLimit))) {
       throw new GatewayError('Rate limit exceeded', 'RATE_LIMITED', 429);
     }
 
     // Quota check
-    if (!this.checkQuota(keyId, key.dailyQuota, key.monthlyQuota)) {
+    if (!(await this.checkQuota(keyId, key.dailyQuota, key.monthlyQuota))) {
       throw new GatewayError('API quota exceeded', 'QUOTA_EXCEEDED', 429);
     }
 
@@ -618,64 +609,102 @@ export class APIGateway {
   // -------------------------------------------------------------------------
   // Rate limiting (token bucket)
   // -------------------------------------------------------------------------
-  private checkRateLimit(
+  private async checkRateLimit(
     apiKeyId: string,
     config: { requestsPerSecond: number; burstSize: number },
-  ): boolean {
-    let state = this.rateLimitStates.get(apiKeyId);
+  ): Promise<boolean> {
     const now = Date.now();
-
-    if (!state) {
-      state = {
-        tokens: config.burstSize,
-        lastRefill: now,
-        requestsPerSecond: config.requestsPerSecond,
-        burstSize: config.burstSize,
-      };
-      this.rateLimitStates.set(apiKeyId, state);
-    }
-
-    // Refill tokens
-    const elapsed = (now - state.lastRefill) / 1000;
-    state.tokens = Math.min(
-      state.burstSize,
-      state.tokens + elapsed * state.requestsPerSecond,
+    const ttlMs = Math.max(
+      60_000,
+      Math.ceil((config.burstSize / config.requestsPerSecond) * 2_000),
     );
-    state.lastRefill = now;
+    const result = await redis.eval(
+      `
+      local raw = redis.call('GET', KEYS[1])
+      local now = tonumber(ARGV[1])
+      local rate = tonumber(ARGV[2])
+      local burst = tonumber(ARGV[3])
+      local ttl = tonumber(ARGV[4])
+      local tokens = burst
+      local last = now
 
-    if (state.tokens < 1) {
-      return false;
-    }
+      if raw then
+        local separator = string.find(raw, ':')
+        if separator then
+          tokens = tonumber(string.sub(raw, 1, separator - 1)) or burst
+          last = tonumber(string.sub(raw, separator + 1)) or now
+        end
+      end
 
-    state.tokens -= 1;
-    return true;
+      local elapsed = math.max(0, now - last) / 1000
+      tokens = math.min(burst, tokens + (elapsed * rate))
+
+      if tokens < 1 then
+        redis.call('SET', KEYS[1], tostring(tokens) .. ':' .. tostring(now), 'PX', ttl)
+        return {0}
+      end
+
+      tokens = tokens - 1
+      redis.call('SET', KEYS[1], tostring(tokens) .. ':' .. tostring(now), 'PX', ttl)
+      return {1}
+      `,
+      1,
+      this.rateLimitKey(apiKeyId),
+      now,
+      config.requestsPerSecond,
+      config.burstSize,
+      ttlMs,
+    );
+
+    return this.redisInteger(Array.isArray(result) ? result[0] : result) === 1;
   }
 
   // -------------------------------------------------------------------------
   // Quota management
   // -------------------------------------------------------------------------
-  private checkQuota(
+  private async checkQuota(
     apiKeyId: string,
     dailyLimit: number,
     monthlyLimit: number,
-  ): boolean {
-    const tracker = this.quotaTrackers.get(apiKeyId);
-    if (!tracker) return true;
-
+  ): Promise<boolean> {
     const now = new Date();
     const dayKey = now.toISOString().substring(0, 10);
     const monthKey = now.toISOString().substring(0, 7);
+    const result = await redis.eval(
+      `
+      local daily = tonumber(redis.call('GET', KEYS[1]) or '0') or 0
+      local monthly = tonumber(redis.call('GET', KEYS[2]) or '0') or 0
+      local dailyLimit = tonumber(ARGV[1])
+      local monthlyLimit = tonumber(ARGV[2])
+      local dailyTtl = tonumber(ARGV[3])
+      local monthlyTtl = tonumber(ARGV[4])
 
-    const dailyCount = (tracker.dailyUsage.get(dayKey) ?? 0) + 1;
-    const monthlyCount = (tracker.monthlyUsage.get(monthKey) ?? 0) + 1;
+      if daily + 1 > dailyLimit or monthly + 1 > monthlyLimit then
+        return {0, daily, monthly}
+      end
 
-    if (dailyCount > dailyLimit || monthlyCount > monthlyLimit) {
-      return false;
-    }
+      daily = redis.call('INCR', KEYS[1])
+      if daily == 1 then
+        redis.call('EXPIRE', KEYS[1], dailyTtl)
+      end
 
-    tracker.dailyUsage.set(dayKey, dailyCount);
-    tracker.monthlyUsage.set(monthKey, monthlyCount);
-    return true;
+      monthly = redis.call('INCR', KEYS[2])
+      if monthly == 1 then
+        redis.call('EXPIRE', KEYS[2], monthlyTtl)
+      end
+
+      return {1, daily, monthly}
+      `,
+      2,
+      this.dailyQuotaKey(apiKeyId, dayKey),
+      this.monthlyQuotaKey(apiKeyId, monthKey),
+      dailyLimit,
+      monthlyLimit,
+      this.secondsUntilEndOfUtcDay(now),
+      this.secondsUntilEndOfUtcMonth(now),
+    );
+
+    return this.redisInteger(Array.isArray(result) ? result[0] : result) === 1;
   }
 
   async getQuotaStatus(apiKeyId: string): Promise<{
@@ -685,8 +714,7 @@ export class APIGateway {
     const keyRecord = await prisma.aPIKey.findUnique({
       where: { id: apiKeyId },
     });
-    const tracker = this.quotaTrackers.get(apiKeyId);
-    if (!keyRecord || !tracker) {
+    if (!keyRecord) {
       throw new GatewayError('API key not found', 'KEY_NOT_FOUND', 404);
     }
     const key = await this.hydrateAPIKey(keyRecord);
@@ -694,17 +722,54 @@ export class APIGateway {
     const now = new Date();
     const dayKey = now.toISOString().substring(0, 10);
     const monthKey = now.toISOString().substring(0, 7);
+    const [dailyRaw, monthlyRaw] = await Promise.all([
+      redis.get(this.dailyQuotaKey(apiKeyId, dayKey)),
+      redis.get(this.monthlyQuotaKey(apiKeyId, monthKey)),
+    ]);
 
     return {
       daily: {
-        used: tracker.dailyUsage.get(dayKey) ?? 0,
+        used: this.redisInteger(dailyRaw),
         limit: key.dailyQuota,
       },
       monthly: {
-        used: tracker.monthlyUsage.get(monthKey) ?? 0,
+        used: this.redisInteger(monthlyRaw),
         limit: key.monthlyQuota,
       },
     };
+  }
+
+  private secondsUntilEndOfUtcDay(now: Date): number {
+    const end = Date.UTC(
+      now.getUTCFullYear(),
+      now.getUTCMonth(),
+      now.getUTCDate() + 1,
+      0,
+      0,
+      5,
+    );
+    return Math.max(60, Math.ceil((end - now.getTime()) / 1000));
+  }
+
+  private secondsUntilEndOfUtcMonth(now: Date): number {
+    const end = Date.UTC(
+      now.getUTCFullYear(),
+      now.getUTCMonth() + 1,
+      1,
+      0,
+      0,
+      5,
+    );
+    return Math.max(60, Math.ceil((end - now.getTime()) / 1000));
+  }
+
+  private redisInteger(value: unknown): number {
+    if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+    if (typeof value === 'bigint') return Number(value);
+    if (typeof value !== 'string') return 0;
+
+    const parsed = Number.parseInt(value, 10);
+    return Number.isFinite(parsed) ? parsed : 0;
   }
 
   // -------------------------------------------------------------------------

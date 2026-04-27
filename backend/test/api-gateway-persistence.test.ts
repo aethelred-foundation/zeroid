@@ -1,3 +1,5 @@
+import crypto from 'crypto';
+
 const mockApiKeyCreate = jest.fn();
 const mockApiKeyFindMany = jest.fn();
 const mockApiKeyFindFirst = jest.fn();
@@ -5,6 +7,55 @@ const mockApiKeyFindUnique = jest.fn();
 const mockApiKeyUpdate = jest.fn();
 
 const redisStore: Record<string, string> = {};
+
+const mockRedisEval = jest.fn(
+  async (_script: string, numKeys: number, ...args: unknown[]) => {
+    const keys = args.slice(0, numKeys).map(String);
+    const argv = args.slice(numKeys);
+
+    if (keys[0]?.startsWith('enterprise:api-rate:')) {
+      const now = Number(argv[0]);
+      const rate = Number(argv[1]);
+      const burst = Number(argv[2]);
+      let tokens = burst;
+      let lastRefill = now;
+
+      const raw = redisStore[keys[0]];
+      if (raw) {
+        const [tokensRaw, lastRaw] = raw.split(':');
+        tokens = Number(tokensRaw);
+        lastRefill = Number(lastRaw);
+      }
+
+      const elapsed = Math.max(0, now - lastRefill) / 1000;
+      tokens = Math.min(burst, tokens + elapsed * rate);
+      if (tokens < 1) {
+        redisStore[keys[0]] = `${tokens}:${now}`;
+        return [0];
+      }
+
+      redisStore[keys[0]] = `${tokens - 1}:${now}`;
+      return [1];
+    }
+
+    if (keys[0]?.startsWith('enterprise:api-quota:')) {
+      const dailyLimit = Number(argv[0]);
+      const monthlyLimit = Number(argv[1]);
+      const daily = Number(redisStore[keys[0]] ?? '0');
+      const monthly = Number(redisStore[keys[1]] ?? '0');
+
+      if (daily + 1 > dailyLimit || monthly + 1 > monthlyLimit) {
+        return [0, daily, monthly];
+      }
+
+      redisStore[keys[0]] = String(daily + 1);
+      redisStore[keys[1]] = String(monthly + 1);
+      return [1, daily + 1, monthly + 1];
+    }
+
+    throw new Error(`Unexpected Redis eval key: ${keys[0]}`);
+  },
+);
 
 jest.mock('../src/index', () => ({
   prisma: {
@@ -27,6 +78,7 @@ jest.mock('../src/index', () => ({
       delete redisStore[key];
       return existed ? 1 : 0;
     }),
+    eval: mockRedisEval,
   },
 }));
 
@@ -43,7 +95,7 @@ jest.mock('winston', () => {
   };
 }, { virtual: true });
 
-import { apiGateway } from '../src/services/enterprise/api-gateway';
+import { APIGateway, apiGateway } from '../src/services/enterprise/api-gateway';
 
 describe('APIGateway persistence', () => {
   beforeEach(() => {
@@ -241,5 +293,123 @@ describe('APIGateway persistence', () => {
         key.startsWith('enterprise:oauth2-token:'),
       ),
     ).toBe(true);
+  });
+
+  it('enforces API key quotas through redis across gateway instances', async () => {
+    mockApiKeyCreate.mockResolvedValue({});
+    mockApiKeyUpdate.mockResolvedValue({});
+
+    const result = await apiGateway.createAPIKey('org-quota', {
+      name: 'Quota checked key',
+      scopes: ['credentials:read'],
+      environment: 'production',
+      expiresInDays: 30,
+      ipAllowlist: [],
+      dailyQuota: 100,
+      monthlyQuota: 1000,
+      rateLimit: { requestsPerSecond: 100, burstSize: 100 },
+      metadata: {},
+    });
+    redisStore[`enterprise:api-key-config:${result.apiKeyId}`] = JSON.stringify({
+      dailyQuota: 2,
+      monthlyQuota: 2,
+      rateLimit: { requestsPerSecond: 100, burstSize: 100 },
+      metadata: {},
+      revokedAt: null,
+      revokedReason: null,
+    });
+    const keyHash = crypto
+      .createHash('sha256')
+      .update(result.apiKey)
+      .digest('hex');
+
+    mockApiKeyFindUnique.mockResolvedValue({
+      id: result.apiKeyId,
+      organizationId: 'org-quota',
+      name: 'Quota checked key',
+      keyHash,
+      keyPrefix: result.apiKey.substring(0, 12),
+      scopes: ['credentials:read'],
+      environment: 'production',
+      rateLimitPerMinute: 6000,
+      ipAllowlist: [],
+      expiresAt: new Date(result.expiresAt),
+      isActive: true,
+      lastUsedAt: null,
+      createdAt: new Date(),
+    });
+
+    const secondNodeGateway = new APIGateway();
+    await apiGateway.authenticateRequest(result.apiKey, '10.0.0.1', [
+      'credentials:read',
+    ]);
+    await secondNodeGateway.authenticateRequest(result.apiKey, '10.0.0.1', [
+      'credentials:read',
+    ]);
+
+    await expect(
+      secondNodeGateway.authenticateRequest(result.apiKey, '10.0.0.1', [
+        'credentials:read',
+      ]),
+    ).rejects.toMatchObject({
+      code: 'QUOTA_EXCEEDED',
+      statusCode: 429,
+    });
+
+    await expect(apiGateway.getQuotaStatus(result.apiKeyId)).resolves.toEqual({
+      daily: { used: 2, limit: 2 },
+      monthly: { used: 2, limit: 2 },
+    });
+  });
+
+  it('enforces API key rate limits through redis across gateway instances', async () => {
+    mockApiKeyCreate.mockResolvedValue({});
+    mockApiKeyUpdate.mockResolvedValue({});
+
+    const result = await apiGateway.createAPIKey('org-rate', {
+      name: 'Rate checked key',
+      scopes: ['verification:write'],
+      environment: 'production',
+      expiresInDays: 30,
+      ipAllowlist: [],
+      dailyQuota: 1000,
+      monthlyQuota: 1000,
+      rateLimit: { requestsPerSecond: 1, burstSize: 1 },
+      metadata: {},
+    });
+    const keyHash = crypto
+      .createHash('sha256')
+      .update(result.apiKey)
+      .digest('hex');
+
+    mockApiKeyFindUnique.mockResolvedValue({
+      id: result.apiKeyId,
+      organizationId: 'org-rate',
+      name: 'Rate checked key',
+      keyHash,
+      keyPrefix: result.apiKey.substring(0, 12),
+      scopes: ['verification:write'],
+      environment: 'production',
+      rateLimitPerMinute: 60,
+      ipAllowlist: [],
+      expiresAt: new Date(result.expiresAt),
+      isActive: true,
+      lastUsedAt: null,
+      createdAt: new Date(),
+    });
+
+    const secondNodeGateway = new APIGateway();
+    await apiGateway.authenticateRequest(result.apiKey, '10.0.0.1', [
+      'verification:write',
+    ]);
+
+    await expect(
+      secondNodeGateway.authenticateRequest(result.apiKey, '10.0.0.1', [
+        'verification:write',
+      ]),
+    ).rejects.toMatchObject({
+      code: 'RATE_LIMITED',
+      statusCode: 429,
+    });
   });
 });

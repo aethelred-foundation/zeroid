@@ -129,7 +129,6 @@ interface DeadLetterEntry {
 // Rate limiter per subscriber
 // ---------------------------------------------------------------------------
 class SubscriberRateLimiter {
-  private windows: Map<string, { count: number; windowStart: number }> = new Map();
   private readonly maxPerWindow: number;
   private readonly windowMs: number;
 
@@ -138,21 +137,40 @@ class SubscriberRateLimiter {
     this.windowMs = windowMs;
   }
 
-  allow(webhookId: string): boolean {
+  async allow(webhookId: string): Promise<boolean> {
     const now = Date.now();
-    const entry = this.windows.get(webhookId);
+    const key = `enterprise:webhook-rate:${webhookId}`;
+    const result = await redis.eval(
+      `
+      redis.call('ZREMRANGEBYSCORE', KEYS[1], 0, ARGV[1])
+      local count = redis.call('ZCARD', KEYS[1])
+      if count >= tonumber(ARGV[4]) then
+        redis.call('EXPIRE', KEYS[1], tonumber(ARGV[5]))
+        return 0
+      end
 
-    if (!entry || now - entry.windowStart > this.windowMs) {
-      this.windows.set(webhookId, { count: 1, windowStart: now });
-      return true;
-    }
+      redis.call('ZADD', KEYS[1], ARGV[2], ARGV[3])
+      redis.call('EXPIRE', KEYS[1], tonumber(ARGV[5]))
+      return 1
+      `,
+      1,
+      key,
+      now - this.windowMs,
+      now,
+      `${now}:${crypto.randomUUID()}`,
+      this.maxPerWindow,
+      Math.ceil(this.windowMs / 1000) + 1,
+    );
 
-    if (entry.count >= this.maxPerWindow) {
-      return false;
-    }
+    return this.redisInteger(result) === 1;
+  }
 
-    entry.count++;
-    return true;
+  private redisInteger(value: unknown): number {
+    if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+    if (typeof value !== 'string') return 0;
+
+    const parsed = Number.parseInt(value, 10);
+    return Number.isFinite(parsed) ? parsed : 0;
   }
 }
 
@@ -447,7 +465,7 @@ export class WebhookSystem {
         continue;
       }
 
-      if (!this.rateLimiter.allow(webhook.id)) {
+      if (!(await this.rateLimiter.allow(webhook.id))) {
         logger.warn('webhook_rate_limited', { webhookId: webhook.id });
         continue;
       }

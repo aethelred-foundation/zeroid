@@ -5,6 +5,38 @@ const mockWebhookFindUnique = jest.fn();
 const mockWebhookUpdate = jest.fn();
 
 const redisStore: Record<string, string> = {};
+const redisSortedSets: Record<
+  string,
+  Array<{ score: number; member: string }>
+> = {};
+
+const mockRedisEval = jest.fn(
+  async (_script: string, numKeys: number, ...args: unknown[]) => {
+    const keys = args.slice(0, numKeys).map(String);
+    const argv = args.slice(numKeys);
+
+    if (keys[0]?.startsWith('enterprise:webhook-rate:')) {
+      const cutoff = Number(argv[0]);
+      const score = Number(argv[1]);
+      const member = String(argv[2]);
+      const limit = Number(argv[3]);
+      const current = (redisSortedSets[keys[0]] ?? []).filter(
+        (entry) => entry.score > cutoff,
+      );
+
+      if (current.length >= limit) {
+        redisSortedSets[keys[0]] = current;
+        return 0;
+      }
+
+      current.push({ score, member });
+      redisSortedSets[keys[0]] = current;
+      return 1;
+    }
+
+    throw new Error(`Unexpected Redis eval key: ${keys[0]}`);
+  },
+);
 
 jest.mock('../src/index', () => ({
   prisma: {
@@ -22,6 +54,7 @@ jest.mock('../src/index', () => ({
       redisStore[key] = value;
       return 'OK';
     }),
+    eval: mockRedisEval,
   },
 }));
 
@@ -44,6 +77,7 @@ describe('WebhookSystem persistence', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     for (const key of Object.keys(redisStore)) delete redisStore[key];
+    for (const key of Object.keys(redisSortedSets)) delete redisSortedSets[key];
   });
 
   it('registers an organization-owned webhook and persists extended config in redis', async () => {
@@ -174,5 +208,58 @@ describe('WebhookSystem persistence', () => {
         disabledReason: 'Webhook removed by organization',
       }),
     });
+  });
+
+  it('enforces webhook subscriber rate limits in redis before delivery', async () => {
+    const now = Date.now();
+    redisSortedSets['enterprise:webhook-rate:wh-rate'] = Array.from(
+      { length: 100 },
+      (_, index) => ({ score: now, member: `existing-${index}` }),
+    );
+
+    mockWebhookFindMany.mockResolvedValue([
+      {
+        id: 'wh-rate',
+        organizationId: 'org-1',
+        url: 'https://hooks.zeroid.example/ingest',
+        secret: 's'.repeat(64),
+        events: ['credential.issued'],
+        status: 'ACTIVE',
+        failureCount: 0,
+        lastDeliveredAt: null,
+        lastStatusCode: null,
+        createdAt: new Date('2026-04-21T00:00:00.000Z'),
+        updatedAt: new Date('2026-04-21T00:00:00.000Z'),
+      },
+    ]);
+    redisStore['enterprise:webhook-config:wh-rate'] = JSON.stringify({
+      description: 'primary sink',
+      metadata: {},
+      batchDelivery: false,
+      batchIntervalMs: 5000,
+      headers: {},
+      health: {
+        consecutiveFailures: 0,
+        lastSuccessAt: null,
+        lastFailureAt: null,
+        lastStatusCode: null,
+        totalDelivered: 0,
+        totalFailed: 0,
+        averageLatencyMs: 0,
+        disabled: false,
+        disabledReason: null,
+      },
+    });
+    const fetchSpy = jest
+      .spyOn(global, 'fetch')
+      .mockResolvedValue(new Response('', { status: 200 }));
+
+    const deliveryIds = await webhookSystem.emit('credential.issued', {
+      credentialId: 'cred-1',
+    });
+
+    expect(deliveryIds).toEqual([]);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
   });
 });
