@@ -608,6 +608,7 @@ export class WebhookSystem {
     }
 
     this.deliveries.set(delivery.deliveryId, delivery);
+    await this.persistDelivery(delivery);
   }
 
   // -------------------------------------------------------------------------
@@ -635,8 +636,15 @@ export class WebhookSystem {
   // -------------------------------------------------------------------------
   // Event replay for recovery
   // -------------------------------------------------------------------------
-  async replayEvents(webhookId: string, since: string, until?: string): Promise<{ replayed: number; deliveryIds: string[] }> {
-    const webhook = await this.getWebhook(webhookId);
+  async replayEvents(
+    webhookId: string,
+    since: string,
+    until?: string,
+    clientId?: string,
+  ): Promise<{ replayed: number; deliveryIds: string[] }> {
+    const webhook = clientId
+      ? await this.getWebhookForClient(webhookId, clientId)
+      : await this.getWebhook(webhookId);
     if (!webhook) {
       throw new WebhookError('Webhook not found', 'WEBHOOK_NOT_FOUND', 404);
     }
@@ -689,11 +697,23 @@ export class WebhookSystem {
   // -------------------------------------------------------------------------
   // Delivery logs
   // -------------------------------------------------------------------------
-  getDeliveries(webhookId: string, limit = 50): WebhookDelivery[] {
-    return [...this.deliveries.values()]
-      .filter((d) => d.webhookId === webhookId)
-      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-      .slice(0, limit);
+  async getDeliveries(
+    webhookId: string,
+    clientId: string,
+    limit = 50,
+  ): Promise<WebhookDelivery[]> {
+    const webhook = await this.getWebhookForClient(webhookId, clientId);
+    if (!webhook) {
+      throw new WebhookError('Webhook not found', 'WEBHOOK_NOT_FOUND', 404);
+    }
+
+    const records = await prisma.webhookDelivery.findMany({
+      where: { webhookId },
+      orderBy: { deliveredAt: 'desc' },
+      take: limit,
+    });
+
+    return records.map((record: any) => this.hydrateDeliveryLog(record));
   }
 
   getDelivery(deliveryId: string): WebhookDelivery | null {
@@ -727,6 +747,103 @@ export class WebhookSystem {
         logger.warn('webhook_auto_disabled', { webhookId: webhook.id, consecutiveFailures: health.consecutiveFailures });
       }
     }
+  }
+
+  private async getWebhookForClient(
+    webhookId: string,
+    clientId: string,
+  ): Promise<RegisteredWebhook | null> {
+    const webhookRecord = await prisma.webhook.findFirst({
+      where: {
+        id: webhookId,
+        organizationId: clientId,
+      },
+    });
+    if (!webhookRecord) return null;
+    return this.hydrateWebhook(webhookRecord);
+  }
+
+  private async persistDelivery(delivery: WebhookDelivery): Promise<void> {
+    try {
+      const completedAt = delivery.completedAt
+        ? new Date(delivery.completedAt)
+        : new Date();
+      const nextRetryAt = delivery.nextRetryAt
+        ? new Date(delivery.nextRetryAt)
+        : null;
+
+      const data = {
+        webhookId: delivery.webhookId,
+        eventType: delivery.eventType,
+        payload: delivery.payload as any,
+        statusCode: delivery.response?.statusCode ?? null,
+        responseBody: delivery.response?.body ?? null,
+        responseTimeMs: delivery.response?.latencyMs ?? null,
+        attempt: delivery.attempts,
+        success: delivery.status === 'delivered',
+        deliveredAt: completedAt,
+        nextRetryAt,
+      };
+
+      await prisma.webhookDelivery.upsert({
+        where: { id: delivery.deliveryId },
+        create: {
+          id: delivery.deliveryId,
+          ...data,
+        },
+        update: data,
+      });
+    } catch (error) {
+      logger.error('webhook_delivery_log_persist_failed', {
+        deliveryId: delivery.deliveryId,
+        webhookId: delivery.webhookId,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
+  }
+
+  private hydrateDeliveryLog(record: any): WebhookDelivery {
+    const deliveredAt = this.dateToIso(record.deliveredAt);
+    const nextRetryAt = record.nextRetryAt
+      ? this.dateToIso(record.nextRetryAt)
+      : null;
+    const response = record.statusCode === null && record.responseBody === null
+      ? null
+      : {
+          statusCode: record.statusCode ?? 0,
+          body: record.responseBody ?? '',
+          latencyMs: record.responseTimeMs ?? 0,
+        };
+    const status: WebhookDelivery['status'] = record.success
+      ? 'delivered'
+      : nextRetryAt
+        ? 'pending'
+        : record.attempt >= this.maxRetries
+          ? 'dead_letter'
+          : 'failed';
+
+    return {
+      deliveryId: record.id,
+      webhookId: record.webhookId,
+      eventType: record.eventType as WebhookEventType,
+      payload: record.payload as Record<string, unknown>,
+      status,
+      attempts: record.attempt,
+      maxAttempts: this.maxRetries,
+      nextRetryAt,
+      request: {
+        url: '',
+        headers: {},
+        body: JSON.stringify(record.payload ?? {}),
+      },
+      response,
+      createdAt: deliveredAt,
+      completedAt: status === 'pending' ? null : deliveredAt,
+    };
+  }
+
+  private dateToIso(value: Date | string): string {
+    return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
   }
 
   // -------------------------------------------------------------------------

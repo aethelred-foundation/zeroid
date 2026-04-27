@@ -3,6 +3,8 @@ const mockWebhookFindMany = jest.fn();
 const mockWebhookFindFirst = jest.fn();
 const mockWebhookFindUnique = jest.fn();
 const mockWebhookUpdate = jest.fn();
+const mockWebhookDeliveryFindMany = jest.fn();
+const mockWebhookDeliveryUpsert = jest.fn();
 
 const redisStore: Record<string, string> = {};
 const redisSortedSets: Record<
@@ -47,6 +49,10 @@ jest.mock('../src/index', () => ({
       findFirst: mockWebhookFindFirst,
       findUnique: mockWebhookFindUnique,
       update: mockWebhookUpdate,
+    },
+    webhookDelivery: {
+      findMany: mockWebhookDeliveryFindMany,
+      upsert: mockWebhookDeliveryUpsert,
     },
   },
   redis: {
@@ -310,6 +316,137 @@ describe('WebhookSystem persistence', () => {
     expect(deliveryIds).toEqual([]);
     expect(fetchSpy).not.toHaveBeenCalled();
     fetchSpy.mockRestore();
+  });
+
+  it('persists successful delivery attempts to the durable delivery log', async () => {
+    mockWebhookFindMany.mockResolvedValue([
+      {
+        id: 'wh-deliver',
+        organizationId: 'org-1',
+        url: 'https://hooks.zeroid.example/ingest',
+        secret: 's'.repeat(64),
+        events: ['credential.issued'],
+        status: 'ACTIVE',
+        failureCount: 0,
+        lastDeliveredAt: null,
+        lastStatusCode: null,
+        createdAt: new Date('2026-04-21T00:00:00.000Z'),
+        updatedAt: new Date('2026-04-21T00:00:00.000Z'),
+      },
+    ]);
+    mockWebhookDeliveryUpsert.mockResolvedValue({});
+    const fetchSpy = jest
+      .spyOn(global, 'fetch')
+      .mockResolvedValue(new Response('ok', { status: 200 }));
+
+    const deliveryIds = await webhookSystem.emit('credential.issued', {
+      credentialId: 'cred-1',
+    });
+
+    expect(deliveryIds).toHaveLength(1);
+    expect(mockWebhookDeliveryUpsert).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: deliveryIds[0] },
+      create: expect.objectContaining({
+        id: deliveryIds[0],
+        webhookId: 'wh-deliver',
+        eventType: 'credential.issued',
+        statusCode: 200,
+        responseBody: 'ok',
+        success: true,
+      }),
+      update: expect.objectContaining({
+        statusCode: 200,
+        responseBody: 'ok',
+        success: true,
+      }),
+    }));
+    fetchSpy.mockRestore();
+  });
+
+  it('requires organization ownership before returning delivery logs', async () => {
+    mockWebhookFindFirst.mockResolvedValue(null);
+
+    await expect(
+      webhookSystem.getDeliveries('wh-other-org', 'org-1'),
+    ).rejects.toMatchObject({
+      code: 'WEBHOOK_NOT_FOUND',
+      statusCode: 404,
+    });
+    expect(mockWebhookFindFirst).toHaveBeenCalledWith({
+      where: {
+        id: 'wh-other-org',
+        organizationId: 'org-1',
+      },
+    });
+  });
+
+  it('loads delivery logs from the durable store after ownership is confirmed', async () => {
+    mockWebhookFindFirst.mockResolvedValue({
+      id: 'wh-1',
+      organizationId: 'org-1',
+      url: 'https://hooks.zeroid.example/ingest',
+      secret: 's'.repeat(64),
+      events: ['credential.issued'],
+      status: 'ACTIVE',
+      failureCount: 0,
+      lastDeliveredAt: null,
+      lastStatusCode: null,
+      createdAt: new Date('2026-04-21T00:00:00.000Z'),
+      updatedAt: new Date('2026-04-21T00:00:00.000Z'),
+    });
+    mockWebhookDeliveryFindMany.mockResolvedValue([
+      {
+        id: 'del-1',
+        webhookId: 'wh-1',
+        eventType: 'credential.issued',
+        payload: { credentialId: 'cred-1' },
+        statusCode: 200,
+        responseBody: 'ok',
+        responseTimeMs: 12,
+        attempt: 1,
+        success: true,
+        deliveredAt: new Date('2026-04-21T00:00:01.000Z'),
+        nextRetryAt: null,
+      },
+    ]);
+
+    const deliveries = await webhookSystem.getDeliveries('wh-1', 'org-1', 10);
+
+    expect(mockWebhookDeliveryFindMany).toHaveBeenCalledWith({
+      where: { webhookId: 'wh-1' },
+      orderBy: { deliveredAt: 'desc' },
+      take: 10,
+    });
+    expect(deliveries[0]).toMatchObject({
+      deliveryId: 'del-1',
+      webhookId: 'wh-1',
+      eventType: 'credential.issued',
+      status: 'delivered',
+      response: { statusCode: 200, body: 'ok', latencyMs: 12 },
+    });
+    expect(deliveries[0].request.headers).toEqual({});
+  });
+
+  it('requires organization ownership before replaying webhook events', async () => {
+    mockWebhookFindFirst.mockResolvedValue(null);
+
+    await expect(
+      webhookSystem.replayEvents(
+        'wh-other-org',
+        '2026-04-21T00:00:00.000Z',
+        undefined,
+        'org-1',
+      ),
+    ).rejects.toMatchObject({
+      code: 'WEBHOOK_NOT_FOUND',
+      statusCode: 404,
+    });
+    expect(mockWebhookFindFirst).toHaveBeenCalledWith({
+      where: {
+        id: 'wh-other-org',
+        organizationId: 'org-1',
+      },
+    });
   });
 
   it('rejects malformed webhook signatures without throwing', () => {

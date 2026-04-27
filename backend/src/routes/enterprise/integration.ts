@@ -1161,9 +1161,11 @@ router.get(
   requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES),
   async (req: Request, res: Response): Promise<void> => {
     try {
+      const clientId = getClientId(req);
       const limit = parseInt(req.query.limit as string, 10) || 50;
-      const deliveries = webhookSystem.getDeliveries(
+      const deliveries = await webhookSystem.getDeliveries(
         req.params.id as string,
+        clientId,
         limit,
       );
       res.status(200).json({ data: deliveries });
@@ -1193,10 +1195,12 @@ router.post(
         });
         return;
       }
+      const clientId = getClientId(req);
       const result = await webhookSystem.replayEvents(
         req.params.id as string,
         since,
         until,
+        clientId,
       );
       res.status(200).json({ data: result, message: 'Events replayed' });
     } catch (err) {
