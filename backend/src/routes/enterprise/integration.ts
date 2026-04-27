@@ -85,6 +85,43 @@ const oidcPublicRouteLimiter = createRateLimiter({
 });
 oidcPublicRouter.use(oidcPublicRouteLimiter);
 
+type PublicOAuthRouteError = Error & {
+  statusCode?: number;
+  errorCode?: string;
+  code?: string;
+};
+
+function sendPublicOAuthError(
+  res: Response,
+  error: PublicOAuthRouteError,
+  fallbackCode: string,
+): void {
+  const statusCode =
+    Number.isInteger(error.statusCode) &&
+    error.statusCode! >= 400 &&
+    error.statusCode! < 600
+      ? error.statusCode!
+      : 500;
+  const isServerError = statusCode >= 500;
+  const protocolCode = isServerError
+    ? 'server_error'
+    : normalizeOAuthErrorCode(error.errorCode ?? error.code ?? fallbackCode);
+
+  res.status(statusCode).json({
+    error: protocolCode,
+    error_description: isServerError
+      ? 'Internal server error'
+      : error.message,
+  });
+}
+
+function normalizeOAuthErrorCode(code: string): string {
+  return code
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_]+/g, '_');
+}
+
 // ---------------------------------------------------------------------------
 // Middleware: strip spoofable identity headers at the enterprise edge
 //
@@ -1286,9 +1323,7 @@ router.post(
     } catch (err) {
       const error = err as Error & { statusCode?: number; code?: string };
       logger.error('oauth2_token_error', { error: error.message });
-      res
-        .status(error.statusCode ?? 500)
-        .json({ error: error.message, code: error.code ?? 'OAUTH2_ERROR' });
+      sendPublicOAuthError(res, error, 'oauth2_error');
     }
   },
 );
@@ -2418,10 +2453,7 @@ router.post(
     } catch (err) {
       const error = err as Error & { statusCode?: number; errorCode?: string };
       logger.error('oidc_authorize_error', { error: error.message });
-      const errorCode = (error as any).errorCode ?? 'OIDC_AUTH_ERROR';
-      res
-        .status(error.statusCode ?? 500)
-        .json({ error: errorCode, error_description: error.message });
+      sendPublicOAuthError(res, error, 'oidc_auth_error');
     }
   },
 );
@@ -2453,10 +2485,7 @@ oidcPublicRouter.post(
     } catch (err) {
       const error = err as Error & { statusCode?: number; errorCode?: string };
       logger.error('oidc_token_error', { error: error.message });
-      const errorCode = (error as any).errorCode ?? 'OIDC_TOKEN_ERROR';
-      res
-        .status(error.statusCode ?? 500)
-        .json({ error: errorCode, error_description: error.message });
+      sendPublicOAuthError(res, error, 'oidc_token_error');
     }
   },
 );
@@ -2486,10 +2515,7 @@ oidcPublicRouter.get(
     } catch (err) {
       const error = err as Error & { statusCode?: number; errorCode?: string };
       logger.error('oidc_userinfo_error', { error: error.message });
-      res.status(error.statusCode ?? 500).json({
-        error: (error as any).errorCode ?? 'USERINFO_ERROR',
-        error_description: error.message,
-      });
+      sendPublicOAuthError(res, error, 'userinfo_error');
     }
   },
 );

@@ -440,10 +440,7 @@ export class APIGateway {
     environment: string,
   ): { clientId: string; clientSecret: string } {
     const clientSecret = crypto.randomBytes(32).toString('base64url');
-    const clientSecretHash = crypto
-      .createHash('sha256')
-      .update(clientSecret)
-      .digest('hex');
+    const clientSecretHash = this.hashOAuth2ClientSecret(clientSecret);
 
     this.oauth2Clients.set(clientId, {
       clientId,
@@ -471,7 +468,13 @@ export class APIGateway {
       .createHash('sha256')
       .update(parsed.clientSecret)
       .digest('hex');
-    if (secretHash !== client.clientSecretHash) {
+    if (
+      !this.timingSafeStringEqual(
+        this.hashOAuth2ClientSecret(parsed.clientSecret),
+        client.clientSecretHash,
+      ) &&
+      !this.timingSafeStringEqual(secretHash, client.clientSecretHash)
+    ) {
       throw new GatewayError(
         'Invalid client credentials',
         'INVALID_CLIENT',
@@ -479,19 +482,23 @@ export class APIGateway {
       );
     }
 
+    const requestedScopes = this.resolveOAuth2RequestedScopes(
+      parsed.scope,
+      client.scopes,
+    );
     const accessToken = crypto.randomBytes(32).toString('base64url');
     const token: OAuth2Token = {
       accessToken,
       tokenType: 'Bearer',
       expiresIn: 3600,
-      scope: parsed.scope ?? client.scopes.join(' '),
+      scope: requestedScopes.join(' '),
       issuedAt: Math.floor(Date.now() / 1000),
     };
 
     this.oauth2Tokens.set(accessToken, {
       ...token,
       clientId: parsed.clientId,
-      scopes: client.scopes,
+      scopes: requestedScopes,
     });
 
     logger.info('oauth2_token_issued', { clientId: parsed.clientId });
@@ -520,6 +527,49 @@ export class APIGateway {
       scopes: tokenData.scopes,
       environment: client?.environment ?? 'sandbox',
     };
+  }
+
+  private hashOAuth2ClientSecret(clientSecret: string): string {
+    return crypto
+      .createHash('sha256')
+      .update('zeroid:enterprise-oauth2-client-secret:v1:')
+      .update(clientSecret)
+      .digest('hex');
+  }
+
+  private timingSafeStringEqual(left: string, right: string): boolean {
+    const leftBuffer = Buffer.from(left);
+    const rightBuffer = Buffer.from(right);
+    return (
+      leftBuffer.length === rightBuffer.length &&
+      crypto.timingSafeEqual(leftBuffer, rightBuffer)
+    );
+  }
+
+  private resolveOAuth2RequestedScopes(
+    requestedScope: string | undefined,
+    allowedScopes: APIKeyScope[],
+  ): APIKeyScope[] {
+    if (!requestedScope?.trim()) {
+      return [...allowedScopes];
+    }
+
+    const requestedScopes = [
+      ...new Set(requestedScope.split(/\s+/).filter(Boolean)),
+    ] as APIKeyScope[];
+    const allowed = new Set(allowedScopes);
+    const unauthorizedScope = requestedScopes.find(
+      (scope) => !allowed.has(scope),
+    );
+    if (unauthorizedScope) {
+      throw new GatewayError(
+        `Requested OAuth2 scope is not allowed: ${unauthorizedScope}`,
+        'INVALID_SCOPE',
+        400,
+      );
+    }
+
+    return requestedScopes;
   }
 
   // -------------------------------------------------------------------------

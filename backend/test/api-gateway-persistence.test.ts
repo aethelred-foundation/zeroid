@@ -155,4 +155,62 @@ describe('APIGateway persistence', () => {
       revokedReason: 'rotation',
     });
   });
+
+  it('limits OAuth2 issued scopes to the registered client scope set', () => {
+    const client = apiGateway.registerOAuth2Client(
+      'oauth-client-scoped',
+      ['credentials:read', 'verification:write'],
+      'production',
+    );
+
+    const token = apiGateway.issueOAuth2Token({
+      grantType: 'client_credentials',
+      clientId: client.clientId,
+      clientSecret: client.clientSecret,
+      scope: 'credentials:read',
+    });
+
+    expect(token.scope).toBe('credentials:read');
+    expect(apiGateway.validateOAuth2Token(token.accessToken)).toMatchObject({
+      clientId: client.clientId,
+      scopes: ['credentials:read'],
+      environment: 'production',
+    });
+  });
+
+  it('rejects OAuth2 scopes outside the registered client scope set', () => {
+    const client = apiGateway.registerOAuth2Client(
+      'oauth-client-scope-denied',
+      ['credentials:read'],
+      'production',
+    );
+
+    expect(() => apiGateway.issueOAuth2Token({
+      grantType: 'client_credentials',
+      clientId: client.clientId,
+      clientSecret: client.clientSecret,
+      scope: 'admin:full',
+    })).toThrow(expect.objectContaining({
+      code: 'INVALID_SCOPE',
+      statusCode: 400,
+    }));
+  });
+
+  it('rejects OAuth2 client secret mismatches', () => {
+    const client = apiGateway.registerOAuth2Client(
+      'oauth-client-secret-denied',
+      ['credentials:read'],
+      'production',
+    );
+
+    expect(() => apiGateway.issueOAuth2Token({
+      grantType: 'client_credentials',
+      clientId: client.clientId,
+      clientSecret: `${client.clientSecret}-wrong`,
+      scope: 'credentials:read',
+    })).toThrow(expect.objectContaining({
+      code: 'INVALID_CLIENT',
+      statusCode: 401,
+    }));
+  });
 });
