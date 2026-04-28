@@ -1,5 +1,6 @@
 const mockCredentialFindUnique = jest.fn();
 const mockCredentialUpdate = jest.fn();
+const mockRevocationFindUnique = jest.fn();
 const mockRedisGet = jest.fn();
 const mockRedisSet = jest.fn();
 const mockRedisDel = jest.fn();
@@ -14,6 +15,9 @@ jest.mock('../src/index', () => ({
     credential: {
       findUnique: mockCredentialFindUnique,
       update: mockCredentialUpdate,
+    },
+    revocationRegistry: {
+      findUnique: mockRevocationFindUnique,
     },
   },
   redis: {
@@ -54,6 +58,7 @@ describe('Credential cache expiry enforcement', () => {
     mockRedisDel.mockResolvedValue(1);
     mockCredentialFindUnique.mockResolvedValue(null);
     mockCredentialUpdate.mockResolvedValue({});
+    mockRevocationFindUnique.mockResolvedValue(null);
   });
 
   it('marks cached active credentials expired before returning them', async () => {
@@ -91,5 +96,29 @@ describe('Credential cache expiry enforcement', () => {
     const ttl = mockRedisSet.mock.calls[0][3] as number;
     expect(ttl).toBeGreaterThan(0);
     expect(ttl).toBeLessThanOrEqual(60);
+  });
+
+  it('does not return cached active credentials after durable revocation', async () => {
+    mockRedisGet.mockResolvedValueOnce(JSON.stringify(credentialRecord()));
+    mockRevocationFindUnique.mockResolvedValueOnce({
+      credentialId: 'credential-1',
+      reason: 'compromised',
+    });
+    const service = new CredentialService();
+
+    const result = await service.getCredential('credential-1');
+
+    expect(result?.status).toBe('REVOKED');
+    expect(mockCredentialFindUnique).not.toHaveBeenCalled();
+    expect(mockCredentialUpdate).toHaveBeenCalledWith({
+      where: { id: 'credential-1' },
+      data: { status: 'REVOKED' },
+    });
+    expect(mockRedisSet).toHaveBeenCalledWith(
+      'cred:credential-1',
+      expect.stringContaining('"status":"REVOKED"'),
+      'EX',
+      300,
+    );
   });
 });

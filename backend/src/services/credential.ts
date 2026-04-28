@@ -757,7 +757,10 @@ export class CredentialService {
     if (cached) {
       const cachedCredential = this.parseCachedCredential(cached);
       if (cachedCredential) {
-        return this.enforceCredentialExpiry(credentialId, cachedCredential);
+        return this.enforceCredentialFreshness(
+          credentialId,
+          cachedCredential,
+        );
       }
       await redis.del(cacheKey);
     }
@@ -781,7 +784,10 @@ export class CredentialService {
       credential.status = 'EXPIRED';
     }
 
-    const formatted = this.formatCredential(credential);
+    const formatted = await this.enforceCredentialFreshness(
+      credentialId,
+      this.formatCredential(credential),
+    );
 
     const cacheTtl = this.getCredentialCacheTtl(formatted);
     if (cacheTtl > 0) {
@@ -1139,6 +1145,50 @@ export class CredentialService {
     }
 
     return credential;
+  }
+
+  private async enforceCredentialFreshness(
+    credentialId: string,
+    credential: CredentialResponse,
+  ): Promise<CredentialResponse> {
+    const expiryChecked = await this.enforceCredentialExpiry(
+      credentialId,
+      credential,
+    );
+    if (expiryChecked.status !== 'ACTIVE') {
+      return expiryChecked;
+    }
+
+    const revocationRegistry = (prisma as any).revocationRegistry;
+    if (!revocationRegistry?.findUnique) {
+      return expiryChecked;
+    }
+
+    const revocation = await revocationRegistry.findUnique({
+      where: { credentialId },
+    });
+    if (!revocation) {
+      return expiryChecked;
+    }
+
+    const revokedCredential = { ...expiryChecked, status: 'REVOKED' };
+    await prisma.credential.update({
+      where: { id: credentialId },
+      data: { status: 'REVOKED' },
+    }).catch((error: Error) => {
+      logger.warn('credential_revocation_status_update_failed', {
+        credentialId,
+        error: error.message,
+      });
+    });
+    await redis.set(
+      `cred:${credentialId}`,
+      JSON.stringify(revokedCredential),
+      'EX',
+      300,
+    );
+
+    return revokedCredential;
   }
 
   private getCredentialCacheTtl(credential: CredentialResponse): number {
