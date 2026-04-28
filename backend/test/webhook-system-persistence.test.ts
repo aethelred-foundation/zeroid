@@ -174,6 +174,11 @@ describe('WebhookSystem persistence', () => {
     })).rejects.toThrow(/Webhook URL/);
 
     await expect(webhookSystem.register('org-1', {
+      url: 'https://[::ffff:0a00:0005]/internal',
+      events: ['verification.completed'],
+    })).rejects.toThrow(/Webhook URL/);
+
+    await expect(webhookSystem.register('org-1', {
       url: 'https://metadata.google.internal/compute',
       events: ['verification.completed'],
     })).rejects.toThrow(/Webhook URL/);
@@ -428,6 +433,51 @@ describe('WebhookSystem persistence', () => {
         success: true,
       }),
     }));
+    fetchSpy.mockRestore();
+  });
+
+  it('captures only a bounded webhook response preview', async () => {
+    mockWebhookFindMany.mockResolvedValue([
+      {
+        id: 'wh-large-response',
+        organizationId: 'org-1',
+        url: 'https://hooks.zeroid.example/ingest',
+        secret: 's'.repeat(64),
+        events: ['credential.issued'],
+        status: 'ACTIVE',
+        failureCount: 0,
+        lastDeliveredAt: null,
+        lastStatusCode: null,
+        createdAt: new Date('2026-04-21T00:00:00.000Z'),
+        updatedAt: new Date('2026-04-21T00:00:00.000Z'),
+      },
+    ]);
+    mockWebhookDeliveryUpsert.mockResolvedValue({});
+    let streamCanceled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('x'.repeat(2048)));
+      },
+      cancel() {
+        streamCanceled = true;
+      },
+    });
+    const fetchSpy = jest
+      .spyOn(global, 'fetch')
+      .mockResolvedValue(new Response(stream, { status: 200 }));
+
+    const deliveryIds = await webhookSystem.emit('credential.issued', {
+      credentialId: 'cred-1',
+    });
+
+    expect(deliveryIds).toHaveLength(1);
+    expect(mockWebhookDeliveryUpsert).toHaveBeenCalledWith(expect.objectContaining({
+      create: expect.objectContaining({
+        responseBody: 'x'.repeat(1024),
+        success: true,
+      }),
+    }));
+    expect(streamCanceled).toBe(true);
     fetchSpy.mockRestore();
   });
 

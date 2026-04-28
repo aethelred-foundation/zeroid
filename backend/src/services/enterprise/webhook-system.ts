@@ -20,6 +20,7 @@ const ENCRYPTED_WEBHOOK_SECRET_PREFIX = 'enc:v1:';
 const LOCAL_WEBHOOK_SECRET_PREFIX = 'local:v1:';
 const WEBHOOK_REPLAY_EVENT_LOG_KEY = 'enterprise:webhook-events';
 const MAX_WEBHOOK_REPLAY_EVENTS = 10_000;
+const WEBHOOK_RESPONSE_PREVIEW_BYTES = 1024;
 const SAFE_WEBHOOK_ENDPOINT_MESSAGE =
   'Webhook URL must use HTTPS and must not target localhost or private network addresses in production.';
 const RESERVED_WEBHOOK_HEADER_MESSAGE =
@@ -75,18 +76,13 @@ function isLocalOrPrivateHostname(hostname: string): boolean {
 
   const ipVersion = net.isIP(normalized);
   if (ipVersion === 4) {
-    const octets = normalized.split('.').map(Number);
-    return (
-      octets[0] === 0 ||
-      octets[0] === 10 ||
-      octets[0] === 127 ||
-      (octets[0] === 169 && octets[1] === 254) ||
-      (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31) ||
-      (octets[0] === 192 && octets[1] === 168)
-    );
+    return isPrivateIpv4Address(normalized);
   }
 
   if (ipVersion === 6) {
+    const mappedIpv4 = extractIpv4MappedAddress(normalized);
+    if (mappedIpv4) return isPrivateIpv4Address(mappedIpv4);
+
     return (
       normalized === '::' ||
       normalized === '::1' ||
@@ -102,6 +98,35 @@ function isLocalOrPrivateHostname(hostname: string): boolean {
   );
 }
 
+function isPrivateIpv4Address(value: string): boolean {
+  const octets = value.split('.').map(Number);
+  return (
+    octets[0] === 0 ||
+    octets[0] === 10 ||
+    octets[0] === 127 ||
+    (octets[0] === 169 && octets[1] === 254) ||
+    (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31) ||
+    (octets[0] === 192 && octets[1] === 168)
+  );
+}
+
+function extractIpv4MappedAddress(value: string): string | null {
+  const dotted = value.match(/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i);
+  if (dotted && net.isIP(dotted[1]) === 4) return dotted[1];
+
+  const hexadecimal = value.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
+  if (!hexadecimal) return null;
+
+  const high = parseInt(hexadecimal[1], 16);
+  const low = parseInt(hexadecimal[2], 16);
+  return [
+    (high >> 8) & 0xff,
+    high & 0xff,
+    (low >> 8) & 0xff,
+    low & 0xff,
+  ].join('.');
+}
+
 function hasOnlySafeCustomWebhookHeaders(headers: Record<string, string>): boolean {
   return Object.keys(headers).every((header) => !RESERVED_WEBHOOK_HEADER_NAMES.has(header.toLowerCase()));
 }
@@ -110,6 +135,39 @@ function safeCustomWebhookHeaders(headers: Record<string, string>): Record<strin
   return Object.fromEntries(
     Object.entries(headers).filter(([header]) => !RESERVED_WEBHOOK_HEADER_NAMES.has(header.toLowerCase())),
   );
+}
+
+async function readWebhookResponsePreview(response: Response): Promise<string> {
+  if (!response.body) {
+    const body = await response.text();
+    return body.substring(0, WEBHOOK_RESPONSE_PREVIEW_BYTES);
+  }
+
+  const reader = response.body.getReader();
+  const chunks: Buffer[] = [];
+  let totalBytes = 0;
+
+  try {
+    while (totalBytes < WEBHOOK_RESPONSE_PREVIEW_BYTES) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+
+      const remaining = WEBHOOK_RESPONSE_PREVIEW_BYTES - totalBytes;
+      const chunk = Buffer.from(value).subarray(0, remaining);
+      chunks.push(chunk);
+      totalBytes += chunk.byteLength;
+
+      if (totalBytes >= WEBHOOK_RESPONSE_PREVIEW_BYTES) {
+        await reader.cancel().catch(() => undefined);
+        break;
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  return Buffer.concat(chunks, totalBytes).toString('utf8');
 }
 
 // ---------------------------------------------------------------------------
@@ -640,11 +698,11 @@ export class WebhookSystem {
       });
 
       const latencyMs = Date.now() - startTime;
-      const responseBody = await response.text().catch(() => '');
+      const responseBody = await readWebhookResponsePreview(response).catch(() => '');
 
       delivery.response = {
         statusCode: response.status,
-        body: responseBody.substring(0, 1024),
+        body: responseBody,
         latencyMs,
       };
 
