@@ -389,10 +389,67 @@ describe('WebhookSystem persistence', () => {
 
     const deliveryIds = await webhookSystem.emit('credential.issued', {
       credentialId: 'cred-1',
-    });
+    }, 'org-1');
 
     expect(deliveryIds).toEqual([]);
     expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
+  });
+
+  it('delivers emitted events only to webhooks owned by the event organization', async () => {
+    mockWebhookFindMany.mockResolvedValue([
+      {
+        id: 'wh-org-1',
+        organizationId: 'org-1',
+        url: 'https://hooks.zeroid.example/org-1',
+        secret: 's'.repeat(64),
+        events: ['credential.issued'],
+        status: 'ACTIVE',
+        failureCount: 0,
+        lastDeliveredAt: null,
+        lastStatusCode: null,
+        createdAt: new Date('2026-04-21T00:00:00.000Z'),
+        updatedAt: new Date('2026-04-21T00:00:00.000Z'),
+      },
+      {
+        id: 'wh-org-2',
+        organizationId: 'org-2',
+        url: 'https://hooks.zeroid.example/org-2',
+        secret: 's'.repeat(64),
+        events: ['credential.issued'],
+        status: 'ACTIVE',
+        failureCount: 0,
+        lastDeliveredAt: null,
+        lastStatusCode: null,
+        createdAt: new Date('2026-04-21T00:00:00.000Z'),
+        updatedAt: new Date('2026-04-21T00:00:00.000Z'),
+      },
+    ]);
+    mockWebhookDeliveryUpsert.mockResolvedValue({});
+    const fetchSpy = jest
+      .spyOn(global, 'fetch')
+      .mockResolvedValue(new Response('ok', { status: 200 }));
+
+    const deliveryIds = await webhookSystem.emit('credential.issued', {
+      credentialId: 'cred-1',
+    }, 'org-1');
+
+    expect(mockWebhookFindMany).toHaveBeenCalledWith({
+      where: {
+        organizationId: 'org-1',
+        status: 'ACTIVE',
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+    expect(deliveryIds).toHaveLength(1);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy.mock.calls[0][0]).toBe('https://hooks.zeroid.example/org-1');
+    expect(redisLists['enterprise:webhook-events:org-1']).toHaveLength(1);
+    expect(JSON.parse(redisLists['enterprise:webhook-events:org-1'][0])).toMatchObject({
+      clientId: 'org-1',
+      eventType: 'credential.issued',
+    });
+    expect(redisLists['enterprise:webhook-events:org-2']).toBeUndefined();
     fetchSpy.mockRestore();
   });
 
@@ -419,7 +476,7 @@ describe('WebhookSystem persistence', () => {
 
     const deliveryIds = await webhookSystem.emit('credential.issued', {
       credentialId: 'cred-1',
-    });
+    }, 'org-1');
 
     const request = fetchSpy.mock.calls[0][1] as RequestInit;
     expect(deliveryIds).toHaveLength(1);
@@ -475,7 +532,7 @@ describe('WebhookSystem persistence', () => {
 
     const deliveryIds = await webhookSystem.emit('credential.issued', {
       credentialId: 'cred-1',
-    });
+    }, 'org-1');
 
     expect(deliveryIds).toHaveLength(1);
     expect(mockWebhookDeliveryUpsert).toHaveBeenCalledWith(expect.objectContaining({
@@ -533,7 +590,7 @@ describe('WebhookSystem persistence', () => {
 
     const deliveryIds = await webhookSystem.emit('credential.issued', {
       credentialId: 'cred-1',
-    });
+    }, 'org-1');
 
     const request = fetchSpy.mock.calls[0][1] as RequestInit;
     const headers = request.headers as Record<string, string>;
@@ -563,9 +620,10 @@ describe('WebhookSystem persistence', () => {
       createdAt,
       updatedAt,
     });
-    redisLists['enterprise:webhook-events'] = [
+    redisLists['enterprise:webhook-events:org-1'] = [
       JSON.stringify({
         eventId: 'event-ignore',
+        clientId: 'org-1',
         eventType: 'verification.failed',
         timestamp: '2026-04-21T10:00:00.000Z',
         data: { verificationId: 'ver-1' },
@@ -573,9 +631,28 @@ describe('WebhookSystem persistence', () => {
       }),
       JSON.stringify({
         eventId: 'event-replay',
+        clientId: 'org-1',
         eventType: 'credential.issued',
         timestamp: '2026-04-21T10:00:00.000Z',
         data: { credentialId: 'cred-1' },
+        source: 'zeroid',
+      }),
+      JSON.stringify({
+        eventId: 'event-wrong-org-in-same-list',
+        clientId: 'org-2',
+        eventType: 'credential.issued',
+        timestamp: '2026-04-21T10:00:00.000Z',
+        data: { credentialId: 'cred-2' },
+        source: 'zeroid',
+      }),
+    ];
+    redisLists['enterprise:webhook-events:org-2'] = [
+      JSON.stringify({
+        eventId: 'event-wrong-org-list',
+        clientId: 'org-2',
+        eventType: 'credential.issued',
+        timestamp: '2026-04-21T10:00:00.000Z',
+        data: { credentialId: 'cred-3' },
         source: 'zeroid',
       }),
     ];

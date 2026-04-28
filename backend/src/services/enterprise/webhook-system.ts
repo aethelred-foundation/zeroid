@@ -18,7 +18,7 @@ const WEBHOOK_SECRET_ENCRYPTION_KEY_ENV = 'WEBHOOK_SECRET_ENCRYPTION_KEY';
 const WEBHOOK_SECRET_AAD = 'zeroid:webhook-secret:v1';
 const ENCRYPTED_WEBHOOK_SECRET_PREFIX = 'enc:v1:';
 const LOCAL_WEBHOOK_SECRET_PREFIX = 'local:v1:';
-const WEBHOOK_REPLAY_EVENT_LOG_KEY = 'enterprise:webhook-events';
+const WEBHOOK_REPLAY_EVENT_LOG_KEY_PREFIX = 'enterprise:webhook-events';
 const MAX_WEBHOOK_REPLAY_EVENTS = 10_000;
 const WEBHOOK_RESPONSE_PREVIEW_BYTES = 1024;
 const SAFE_WEBHOOK_ENDPOINT_MESSAGE =
@@ -281,6 +281,7 @@ interface WebhookDelivery {
 
 interface WebhookEvent {
   eventId: string;
+  clientId: string;
   eventType: WebhookEventType;
   timestamp: string;
   data: Record<string, unknown>;
@@ -363,6 +364,18 @@ export class WebhookSystem {
 
   private webhookConfigKey(webhookId: string): string {
     return `enterprise:webhook-config:${webhookId}`;
+  }
+
+  private replayEventLogKey(clientId: string): string {
+    return `${WEBHOOK_REPLAY_EVENT_LOG_KEY_PREFIX}:${clientId}`;
+  }
+
+  private normalizeClientId(clientId: string): string {
+    const normalized = clientId.trim();
+    if (!normalized) {
+      throw new WebhookError('Webhook organization scope is required', 'WEBHOOK_SCOPE_REQUIRED', 400);
+    }
+    return normalized;
   }
 
   private async persistWebhookConfig(webhookId: string, config: {
@@ -604,9 +617,16 @@ export class WebhookSystem {
   // -------------------------------------------------------------------------
   // Emit event — dispatches to all matching webhooks
   // -------------------------------------------------------------------------
-  async emit(eventType: WebhookEventType, data: Record<string, unknown>, source = 'zeroid'): Promise<string[]> {
+  async emit(
+    eventType: WebhookEventType,
+    data: Record<string, unknown>,
+    clientId: string,
+    source = 'zeroid',
+  ): Promise<string[]> {
+    const scopedClientId = this.normalizeClientId(clientId);
     const event: WebhookEvent = {
       eventId: crypto.randomUUID(),
+      clientId: scopedClientId,
       eventType,
       timestamp: new Date().toISOString(),
       data,
@@ -616,12 +636,15 @@ export class WebhookSystem {
     await this.storeReplayEvent(event);
 
     const webhookRecords = await prisma.webhook.findMany({
-      where: { status: 'ACTIVE' },
+      where: {
+        organizationId: scopedClientId,
+        status: 'ACTIVE',
+      },
       orderBy: { createdAt: 'asc' },
     });
     const hydratedWebhooks = await Promise.all(webhookRecords.map((record) => this.hydrateWebhook(record)));
     const matchingWebhooks = hydratedWebhooks.filter(
-      (w) => w.active && !w.health.disabled && w.events.includes(eventType),
+      (w) => w.clientId === scopedClientId && w.active && !w.health.disabled && w.events.includes(eventType),
     );
 
     const deliveryIds: string[] = [];
@@ -643,7 +666,12 @@ export class WebhookSystem {
       deliveryIds.push(deliveryId);
     }
 
-    logger.info('event_emitted', { eventId: event.eventId, eventType, matchedWebhooks: matchingWebhooks.length });
+    logger.info('event_emitted', {
+      eventId: event.eventId,
+      eventType,
+      clientId: scopedClientId,
+      matchedWebhooks: matchingWebhooks.length,
+    });
     return deliveryIds;
   }
 
@@ -787,6 +815,7 @@ export class WebhookSystem {
 
     const batchEvent: WebhookEvent = {
       eventId: crypto.randomUUID(),
+      clientId: webhook.clientId,
       eventType: 'credential.issued', // batch type
       timestamp: new Date().toISOString(),
       data: { batch: true, events: buffer, count: buffer.length },
@@ -806,9 +835,8 @@ export class WebhookSystem {
     until?: string,
     clientId?: string,
   ): Promise<{ replayed: number; deliveryIds: string[] }> {
-    const webhook = clientId
-      ? await this.getWebhookForClient(webhookId, clientId)
-      : await this.getWebhook(webhookId);
+    const scopedClientId = this.normalizeClientId(clientId ?? '');
+    const webhook = await this.getWebhookForClient(webhookId, scopedClientId);
     if (!webhook) {
       throw new WebhookError('Webhook not found', 'WEBHOOK_NOT_FOUND', 404);
     }
@@ -820,6 +848,7 @@ export class WebhookSystem {
       sinceTime,
       untilTime,
       webhook.events,
+      webhook.clientId,
     );
 
     const deliveryIds: string[] = [];
@@ -828,7 +857,13 @@ export class WebhookSystem {
       deliveryIds.push(deliveryId);
     }
 
-    logger.info('events_replayed', { webhookId, replayed: eventsToReplay.length, since, until });
+    logger.info('events_replayed', {
+      webhookId,
+      clientId: scopedClientId,
+      replayed: eventsToReplay.length,
+      since,
+      until,
+    });
     return { replayed: eventsToReplay.length, deliveryIds };
   }
 
@@ -934,16 +969,19 @@ export class WebhookSystem {
       this.eventLog = this.eventLog.slice(-Math.floor(MAX_WEBHOOK_REPLAY_EVENTS / 2));
     }
 
-    await redis.lpush(WEBHOOK_REPLAY_EVENT_LOG_KEY, JSON.stringify(event));
-    await redis.ltrim(WEBHOOK_REPLAY_EVENT_LOG_KEY, 0, MAX_WEBHOOK_REPLAY_EVENTS - 1);
+    const replayKey = this.replayEventLogKey(event.clientId);
+    await redis.lpush(replayKey, JSON.stringify(event));
+    await redis.ltrim(replayKey, 0, MAX_WEBHOOK_REPLAY_EVENTS - 1);
   }
 
   private async loadReplayEvents(
     sinceTime: number,
     untilTime: number,
     eventTypes: WebhookEventType[],
+    clientId: string,
   ): Promise<WebhookEvent[]> {
-    const rawEvents = await redis.lrange(WEBHOOK_REPLAY_EVENT_LOG_KEY, 0, MAX_WEBHOOK_REPLAY_EVENTS - 1);
+    const replayKey = this.replayEventLogKey(clientId);
+    const rawEvents = await redis.lrange(replayKey, 0, MAX_WEBHOOK_REPLAY_EVENTS - 1);
     const allowedTypes = new Set(eventTypes);
     const events: WebhookEvent[] = [];
 
@@ -955,6 +993,7 @@ export class WebhookSystem {
           Number.isFinite(eventTime) &&
           eventTime >= sinceTime &&
           eventTime <= untilTime &&
+          event.clientId === clientId &&
           allowedTypes.has(event.eventType)
         ) {
           events.push(event);
