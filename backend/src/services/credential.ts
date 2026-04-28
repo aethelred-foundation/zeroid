@@ -1208,6 +1208,15 @@ export class CredentialService {
       },
     );
 
+    const issuerTrustPolicy = await this.resolveIssuerTrustPolicy(
+      credential.issuerId,
+      credential.credentialType,
+      this.extractCredentialJurisdictions(
+        credential.claims as Record<string, unknown>,
+      ),
+    );
+    checks.issuerTrustValid = issuerTrustPolicy.accredited;
+
     const revocation = await prisma.revocationRegistry.findUnique({
       where: { credentialId: credential.id },
     });

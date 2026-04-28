@@ -218,6 +218,7 @@ describe('Credential evidence export', () => {
         checks: expect.objectContaining({
           statusActive: true,
           signatureValid: true,
+          issuerTrustValid: true,
           issuerActive: true,
           subjectActive: true,
           notRevoked: true,
@@ -257,5 +258,35 @@ describe('Credential evidence export', () => {
         }),
       },
     });
+  });
+
+  it('fails credential verification when issuer trust is no longer accredited', async () => {
+    mockIssuerTrustFindMany
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);
+
+    const exported = await service.exportCredentialEvidence('cred-1');
+
+    expect(exported.verification).toMatchObject({
+      valid: false,
+      checks: expect.objectContaining({
+        statusActive: true,
+        signatureValid: true,
+        issuerTrustValid: false,
+        issuerActive: true,
+        subjectActive: true,
+        notRevoked: true,
+      }),
+    });
+    expect(exported.trustLineage).toMatchObject({
+      enforced: false,
+      matchedJurisdictions: [],
+      keyLineage: expect.objectContaining({
+        current: expect.objectContaining({
+          keyHistoryId: 'hist-2',
+        }),
+      }),
+    });
+    expect(exported.trustLineage).not.toHaveProperty('selectedTrustRecordId');
   });
 });
