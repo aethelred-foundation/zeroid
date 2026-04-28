@@ -15,6 +15,7 @@ import {
   OIDCClientRegistrationSchema,
   RegisteredClient,
 } from '../../services/enterprise/oidc-bridge';
+import { buildTrustedOIDCClaims } from '../../services/enterprise/oidc-claims';
 import {
   slaMonitor,
   SLADefinitionSchema,
@@ -273,75 +274,6 @@ const ENTERPRISE_AUDIT_ROLES: EnterpriseRole[] = [
   'auditor',
   'compliance_officer',
 ];
-
-function buildTrustedOIDCClaims(subject: {
-  displayName: string | null;
-  metadata: unknown;
-  teeAttested: boolean;
-  teeAttestationId: string | null;
-  governmentVerified: boolean;
-  updatedAt: Date;
-}): Record<string, unknown> {
-  const metadata =
-    subject.metadata && typeof subject.metadata === 'object'
-      ? (subject.metadata as Record<string, unknown>)
-      : {};
-
-  const claims: Record<string, unknown> = {
-    updated_at: Math.floor(subject.updatedAt.getTime() / 1000),
-  };
-
-  if (subject.displayName) {
-    claims.name = subject.displayName;
-  }
-
-  for (const field of [
-    'given_name',
-    'family_name',
-    'middle_name',
-    'preferred_username',
-    'picture',
-    'email',
-    'address',
-    'phone_number',
-  ] as const) {
-    const value = metadata[field];
-    if (typeof value === 'string' && value.length > 0) {
-      claims[field] = value;
-    }
-  }
-
-  for (const field of [
-    'email_verified',
-    'phone_number_verified',
-    'age_over_18',
-    'age_over_21',
-  ] as const) {
-    const value = metadata[field];
-    if (typeof value === 'boolean') {
-      claims[field] = value;
-    }
-  }
-
-  if (subject.governmentVerified) {
-    claims.kyc_level = 'government_verified';
-    claims.kyc_provider = 'zeroid_government_registry';
-  }
-
-  if (subject.teeAttested) {
-    claims.verification_level = subject.governmentVerified
-      ? 'government_and_tee'
-      : 'tee_attested';
-  } else if (subject.governmentVerified) {
-    claims.verification_level = 'government_verified';
-  }
-
-  if (subject.teeAttestationId) {
-    claims.tee_attestation_id = subject.teeAttestationId;
-  }
-
-  return claims;
-}
 
 function serializeOIDCClient(
   client: RegisteredClient,
@@ -2515,9 +2447,7 @@ router.post(
           displayName: true,
           metadata: true,
           status: true,
-          teeAttested: true,
           teeAttestationId: true,
-          governmentVerified: true,
           updatedAt: true,
         },
       });
@@ -2530,7 +2460,7 @@ router.post(
         return;
       }
 
-      const subjectClaims = buildTrustedOIDCClaims(subject);
+      const subjectClaims = await buildTrustedOIDCClaims(subjectId, subject);
       const result = await oidcBridge.authorize(
         req.body,
         subjectId,
