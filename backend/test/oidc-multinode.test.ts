@@ -271,7 +271,16 @@ describe('OIDC multi-node correctness', () => {
       expect(() => new OIDCBridge('http://localhost:4000/oidc')).toThrow(
         /OIDC_ISSUER_URL/,
       );
-      expect(() => new OIDCBridge('https://id.zeroid.test/oidc')).not.toThrow();
+      expect(() => new OIDCBridge('https://127.0.0.1/oidc')).toThrow(
+        /OIDC_ISSUER_URL/,
+      );
+      expect(() => new OIDCBridge('https://metadata.google.internal/oidc')).toThrow(
+        /OIDC_ISSUER_URL/,
+      );
+      expect(() => new OIDCBridge('https://user:pass@id.zeroid.example.com/oidc')).toThrow(
+        /OIDC_ISSUER_URL/,
+      );
+      expect(() => new OIDCBridge('https://id.zeroid.example.com/oidc')).not.toThrow();
     } finally {
       if (previousNodeEnv === undefined) {
         delete process.env.NODE_ENV;
@@ -294,6 +303,70 @@ describe('OIDC multi-node correctness', () => {
         jwksUri: 'http://app.example.com/jwks.json',
       }),
     ).rejects.toThrow(/Redirect URI must use HTTPS/);
+  });
+
+  test('production client registration rejects private OIDC metadata endpoints', async () => {
+    const previousNodeEnv = process.env.NODE_ENV;
+    try {
+      process.env.NODE_ENV = 'production';
+
+      await expect(
+        bridgeA.registerClient({
+          clientName: 'Private Redirect Client',
+          redirectUris: ['https://10.0.0.5/callback'],
+          postLogoutRedirectUris: ['https://app.example.com/logout'],
+          grantTypes: ['authorization_code'],
+          responseTypes: ['code'],
+          tokenEndpointAuthMethod: 'client_secret_basic',
+          scopes: ['openid'],
+        }),
+      ).rejects.toThrow(/Redirect URI/);
+
+      await expect(
+        bridgeA.registerClient({
+          clientName: 'Private Backchannel Client',
+          redirectUris: ['https://app.example.com/callback'],
+          postLogoutRedirectUris: ['https://app.example.com/logout'],
+          backchannelLogoutUri: 'https://metadata.google.internal/logout',
+          grantTypes: ['authorization_code'],
+          responseTypes: ['code'],
+          tokenEndpointAuthMethod: 'client_secret_basic',
+          scopes: ['openid'],
+        }),
+      ).rejects.toThrow(/Back-channel logout URI/);
+
+      await expect(
+        bridgeA.registerClient({
+          clientName: 'Credentialed JWKS Client',
+          redirectUris: ['https://app.example.com/callback'],
+          postLogoutRedirectUris: ['https://app.example.com/logout'],
+          grantTypes: ['authorization_code'],
+          responseTypes: ['code'],
+          tokenEndpointAuthMethod: 'client_secret_basic',
+          scopes: ['openid'],
+          jwksUri: 'https://user:pass@app.example.com/jwks.json',
+        }),
+      ).rejects.toThrow(/JWKS URI/);
+
+      await expect(
+        bridgeA.registerClient({
+          clientName: 'Insecure Policy Metadata Client',
+          redirectUris: ['https://app.example.com/callback'],
+          postLogoutRedirectUris: ['https://app.example.com/logout'],
+          grantTypes: ['authorization_code'],
+          responseTypes: ['code'],
+          tokenEndpointAuthMethod: 'client_secret_basic',
+          scopes: ['openid'],
+          policyUri: 'http://app.example.com/policy',
+        }),
+      ).rejects.toThrow(/Policy URI/);
+    } finally {
+      if (previousNodeEnv === undefined) {
+        delete process.env.NODE_ENV;
+      } else {
+        process.env.NODE_ENV = previousNodeEnv;
+      }
+    }
   });
 
   test('authorize rejects implicit flow even for a legacy stored client', async () => {

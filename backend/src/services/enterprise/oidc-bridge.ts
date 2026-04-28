@@ -1,18 +1,85 @@
 import { z } from 'zod';
 import { createLogger, format, transports } from 'winston';
 import crypto from 'crypto';
+import * as net from 'net';
 import { redis } from '../../index';
 
+const PRIVATE_OIDC_HOSTNAME_SUFFIXES = [
+  '.corp',
+  '.home',
+  '.internal',
+  '.lan',
+  '.local',
+  '.localhost',
+  '.test',
+];
+
+const isProductionRuntime = (): boolean => process.env.NODE_ENV === 'production';
+
+function normalizeOidcHostname(hostname: string): string {
+  return hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
+}
+
+function isLocalOrPrivateOidcHost(hostname: string): boolean {
+  const normalized = normalizeOidcHostname(hostname);
+  if (
+    normalized === 'localhost' ||
+    normalized === '0.0.0.0' ||
+    normalized === '127.0.0.1' ||
+    normalized === '::' ||
+    normalized === '::1' ||
+    normalized.endsWith('.localhost')
+  ) {
+    return true;
+  }
+
+  const ipVersion = net.isIP(normalized);
+  if (ipVersion === 4) {
+    const octets = normalized.split('.').map(Number);
+    return (
+      octets[0] === 0 ||
+      octets[0] === 10 ||
+      octets[0] === 127 ||
+      (octets[0] === 169 && octets[1] === 254) ||
+      (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31) ||
+      (octets[0] === 192 && octets[1] === 168)
+    );
+  }
+
+  if (ipVersion === 6) {
+    return (
+      normalized === '::' ||
+      normalized === '::1' ||
+      normalized.startsWith('fc') ||
+      normalized.startsWith('fd') ||
+      normalized.startsWith('fe80:')
+    );
+  }
+
+  return (
+    !normalized.includes('.') ||
+    PRIVATE_OIDC_HOSTNAME_SUFFIXES.some((suffix) => normalized.endsWith(suffix))
+  );
+}
+
 const isLoopbackHost = (url: URL): boolean =>
-  ['localhost', '127.0.0.1', '::1'].includes(url.hostname.toLowerCase());
+  ['localhost', '127.0.0.1', '::1'].includes(normalizeOidcHostname(url.hostname));
 
 const isLocalDevelopmentUrl = (url: URL): boolean =>
-  process.env.NODE_ENV !== 'production' && isLoopbackHost(url);
+  !isProductionRuntime() && isLoopbackHost(url);
+
+const isTrustedProductionOidcUrl = (url: URL): boolean =>
+  url.protocol === 'https:' &&
+  url.username === '' &&
+  url.password === '' &&
+  !isLocalOrPrivateOidcHost(url.hostname);
 
 const isSecureOidcUrl = (value: string): boolean => {
   try {
     const url = new URL(value);
-    return url.protocol === 'https:' || isLocalDevelopmentUrl(url);
+    return isProductionRuntime()
+      ? isTrustedProductionOidcUrl(url)
+      : url.protocol === 'https:' || isLocalDevelopmentUrl(url);
   } catch {
     return false;
   }
@@ -21,7 +88,7 @@ const isSecureOidcUrl = (value: string): boolean => {
 const isTrustedProductionIssuer = (value: string): boolean => {
   try {
     const url = new URL(value);
-    return url.protocol === 'https:' && !isLoopbackHost(url);
+    return isTrustedProductionOidcUrl(url);
   } catch {
     return false;
   }
@@ -61,7 +128,7 @@ export const OIDCClientRegistrationSchema = z.object({
         .url()
         .refine(
           isSecureOidcUrl,
-          'Redirect URI must use HTTPS, except localhost in non-production.',
+          'Redirect URI must use HTTPS and must not target localhost, private, or internal hosts in production.',
         ),
     )
     .min(1),
@@ -72,7 +139,7 @@ export const OIDCClientRegistrationSchema = z.object({
         .url()
         .refine(
           isSecureOidcUrl,
-          'Post-logout redirect URI must use HTTPS, except localhost in non-production.',
+          'Post-logout redirect URI must use HTTPS and must not target localhost, private, or internal hosts in production.',
         ),
     )
     .default([]),
@@ -81,7 +148,7 @@ export const OIDCClientRegistrationSchema = z.object({
     .url()
     .refine(
       isSecureOidcUrl,
-      'Back-channel logout URI must use HTTPS, except localhost in non-production.',
+      'Back-channel logout URI must use HTTPS and must not target localhost, private, or internal hosts in production.',
     )
     .optional(),
   backchannelLogoutSessionRequired: z.boolean().default(true),
@@ -98,15 +165,36 @@ export const OIDCClientRegistrationSchema = z.object({
     .default('client_secret_basic'),
   scopes: z.array(z.string()).default(['openid', 'profile']),
   contacts: z.array(z.string().email()).default([]),
-  logoUri: z.string().url().optional(),
-  policyUri: z.string().url().optional(),
-  tosUri: z.string().url().optional(),
+  logoUri: z
+    .string()
+    .url()
+    .refine(
+      isSecureOidcUrl,
+      'Logo URI must use HTTPS and must not target localhost, private, or internal hosts in production.',
+    )
+    .optional(),
+  policyUri: z
+    .string()
+    .url()
+    .refine(
+      isSecureOidcUrl,
+      'Policy URI must use HTTPS and must not target localhost, private, or internal hosts in production.',
+    )
+    .optional(),
+  tosUri: z
+    .string()
+    .url()
+    .refine(
+      isSecureOidcUrl,
+      'Terms URI must use HTTPS and must not target localhost, private, or internal hosts in production.',
+    )
+    .optional(),
   jwksUri: z
     .string()
     .url()
     .refine(
       isSecureOidcUrl,
-      'JWKS URI must use HTTPS, except localhost in non-production.',
+      'JWKS URI must use HTTPS and must not target localhost, private, or internal hosts in production.',
     )
     .optional(),
   idTokenSignedResponseAlg: z.enum(SUPPORTED_SIGNING_ALGORITHMS).optional(),
@@ -629,7 +717,7 @@ export class OIDCBridge {
     if (!isSecureOidcUrl(parsed.redirectUri)) {
       throw new OIDCError(
         'invalid_redirect_uri',
-        'Redirect URI must use HTTPS, except localhost in non-production.',
+        'Redirect URI must use HTTPS and must not target localhost, private, or internal hosts in production.',
       );
     }
 
@@ -1029,7 +1117,7 @@ export class OIDCBridge {
     if (insecureLogoutUri) {
       throw new OIDCError(
         'invalid_client_metadata',
-        'Registered post-logout redirect URI must use HTTPS, except localhost in non-production.',
+        'Registered post-logout redirect URI must use HTTPS and must not target localhost, private, or internal hosts in production.',
       );
     }
 
