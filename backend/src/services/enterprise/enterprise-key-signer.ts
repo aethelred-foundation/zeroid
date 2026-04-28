@@ -225,6 +225,40 @@ function redactKmsErrorPreview(value: string): string {
   );
 }
 
+function requireKmsStringField(
+  value: unknown,
+  field: string,
+  label: string,
+  errorCode: string,
+): string {
+  if (typeof value === 'string' && value.trim().length > 0) {
+    return value;
+  }
+
+  throw new EnterpriseSigningError(
+    `${label} response missing required field: ${field}`,
+    errorCode,
+    502,
+  );
+}
+
+function requireKmsObjectField(
+  value: unknown,
+  field: string,
+  label: string,
+  errorCode: string,
+): Record<string, unknown> {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+
+  throw new EnterpriseSigningError(
+    `${label} response missing required object: ${field}`,
+    errorCode,
+    502,
+  );
+}
+
 function normalizeKeyMaterial(raw: string): string {
   return raw.trim().replace(/\\n/g, '\n');
 }
@@ -618,7 +652,15 @@ export class EnterpriseKeySigner {
       'GCP KMS signing',
       this.options.kmsSignFailedCode,
     );
-    return Buffer.from(result.signature, 'base64');
+    return Buffer.from(
+      requireKmsStringField(
+        result.signature,
+        'signature',
+        'GCP KMS signing',
+        this.options.kmsSignFailedCode,
+      ),
+      'base64',
+    );
   }
 
   private async getPublicKeyFromGCP(): Promise<crypto.KeyObject> {
@@ -648,7 +690,14 @@ export class EnterpriseKeySigner {
       'GCP KMS public key',
       this.options.kmsPublicKeyFailedCode,
     );
-    return crypto.createPublicKey(result.pem);
+    return crypto.createPublicKey(
+      requireKmsStringField(
+        result.pem,
+        'pem',
+        'GCP KMS public key',
+        this.options.kmsPublicKeyFailedCode,
+      ),
+    );
   }
 
   private async getGCPAccessToken(): Promise<string> {
@@ -666,7 +715,12 @@ export class EnterpriseKeySigner {
           'GCP metadata token',
           this.options.kmsAuthFailedCode,
         );
-        return tokenData.access_token;
+        return requireKmsStringField(
+          tokenData.access_token,
+          'access_token',
+          'GCP metadata token',
+          this.options.kmsAuthFailedCode,
+        );
       }
     } catch {
       // fall through
@@ -720,7 +774,18 @@ export class EnterpriseKeySigner {
       'Azure Key Vault signing',
       this.options.kmsSignFailedCode,
     );
-    return normalizeAzureSignature(Buffer.from(result.value, 'base64url'), algorithm);
+    return normalizeAzureSignature(
+      Buffer.from(
+        requireKmsStringField(
+          result.value,
+          'value',
+          'Azure Key Vault signing',
+          this.options.kmsSignFailedCode,
+        ),
+        'base64url',
+      ),
+      algorithm,
+    );
   }
 
   private async getPublicKeyFromAzure(): Promise<crypto.KeyObject> {
@@ -758,12 +823,38 @@ export class EnterpriseKeySigner {
       'Azure Key Vault public key',
       this.options.kmsPublicKeyFailedCode,
     );
+    const key = requireKmsObjectField(
+      result.key,
+      'key',
+      'Azure Key Vault public key',
+      this.options.kmsPublicKeyFailedCode,
+    );
     return crypto.createPublicKey({
       key: {
-        kty: result.key.kty,
-        crv: result.key.crv,
-        x: result.key.x,
-        y: result.key.y,
+        kty: requireKmsStringField(
+          key.kty,
+          'key.kty',
+          'Azure Key Vault public key',
+          this.options.kmsPublicKeyFailedCode,
+        ),
+        crv: requireKmsStringField(
+          key.crv,
+          'key.crv',
+          'Azure Key Vault public key',
+          this.options.kmsPublicKeyFailedCode,
+        ),
+        x: requireKmsStringField(
+          key.x,
+          'key.x',
+          'Azure Key Vault public key',
+          this.options.kmsPublicKeyFailedCode,
+        ),
+        y: requireKmsStringField(
+          key.y,
+          'key.y',
+          'Azure Key Vault public key',
+          this.options.kmsPublicKeyFailedCode,
+        ),
       },
       format: 'jwk',
     });
@@ -784,7 +875,12 @@ export class EnterpriseKeySigner {
           'Azure managed identity token',
           this.options.kmsAuthFailedCode,
         );
-        return tokenData.access_token;
+        return requireKmsStringField(
+          tokenData.access_token,
+          'access_token',
+          'Azure managed identity token',
+          this.options.kmsAuthFailedCode,
+        );
       }
     } catch {
       // fall through

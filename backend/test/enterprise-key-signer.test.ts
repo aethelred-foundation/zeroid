@@ -55,6 +55,25 @@ describe('EnterpriseKeySigner', () => {
       statusCode: 502,
     });
   });
+
+  it('rejects malformed GCP KMS signing responses before using them', async () => {
+    process.env.GCP_ACCESS_TOKEN = 'gcp-access-token';
+    global.fetch = jest.fn().mockResolvedValue(
+      kmsResponse({ signature: '' }),
+    ) as unknown as typeof fetch;
+
+    const signer = new EnterpriseKeySigner({
+      provider: 'gcp-kms',
+      keyId: 'projects/p/locations/global/keyRings/r/cryptoKeys/k',
+      keyVersion: '1',
+      defaultVerificationMethod: 'did:aethelred:test#key-1',
+    });
+
+    await expect(signer.sign(Buffer.from('message'))).rejects.toMatchObject({
+      code: 'SIGNING_KMS_SIGN_FAILED',
+      statusCode: 502,
+    });
+  });
 });
 
 function kmsResponse(
