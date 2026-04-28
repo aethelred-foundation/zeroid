@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import * as net from 'net';
 import { logger, redis, prisma } from '../index';
 import { isProductionRuntime } from './production-safety';
 
@@ -58,6 +59,16 @@ export interface GovernmentVerificationResult {
 // ---------------------------------------------------------------------------
 const DEFAULT_UAE_PASS_BASE_URL = 'https://stg-id.uaepass.ae';
 const UAE_PASS_SCOPE = 'urn:uae:digitalid:profile:general';
+const GOVERNMENT_API_TIMEOUT_MS = 10_000;
+const PRIVATE_GOVERNMENT_HOSTNAME_SUFFIXES = [
+  '.corp',
+  '.home',
+  '.internal',
+  '.lan',
+  '.local',
+  '.localhost',
+  '.test',
+];
 
 interface UAEPassConfig {
   clientId: string;
@@ -116,6 +127,7 @@ export class GovernmentAPIService {
           client_id: config.clientId,
           client_secret: config.clientSecret,
         }),
+        signal: AbortSignal.timeout(GOVERNMENT_API_TIMEOUT_MS),
       });
 
       if (!tokenResponse.ok) {
@@ -134,6 +146,7 @@ export class GovernmentAPIService {
         headers: {
           Authorization: `Bearer ${tokenData.access_token}`,
         },
+        signal: AbortSignal.timeout(GOVERNMENT_API_TIMEOUT_MS),
       });
 
       if (!profileResponse.ok) {
@@ -250,6 +263,7 @@ export class GovernmentAPIService {
           idNumber: request.idNumber,
           dateOfBirth: request.dateOfBirth,
         }),
+        signal: AbortSignal.timeout(GOVERNMENT_API_TIMEOUT_MS),
       });
 
       if (!response.ok) {
@@ -504,10 +518,56 @@ function isTrustedProductionEndpoint(value: string): boolean {
   try {
     const url = new URL(value);
     if (url.protocol !== 'https:') return false;
-    const hostname = url.hostname.toLowerCase();
-    if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1') return false;
+    if (url.username || url.password) return false;
+    const hostname = normalizeGovernmentHostname(url.hostname);
+    if (isLocalOrPrivateGovernmentHostname(hostname)) return false;
     return !/(^|[.-])(stg|stage|staging|sandbox|test|dev)([.-]|$)/.test(hostname);
   } catch {
     return false;
   }
+}
+
+function normalizeGovernmentHostname(hostname: string): string {
+  return hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
+}
+
+function isLocalOrPrivateGovernmentHostname(hostname: string): boolean {
+  if (
+    hostname === 'localhost' ||
+    hostname === '0.0.0.0' ||
+    hostname === '127.0.0.1' ||
+    hostname === '::' ||
+    hostname === '::1' ||
+    hostname.endsWith('.localhost')
+  ) {
+    return true;
+  }
+
+  const ipVersion = net.isIP(hostname);
+  if (ipVersion === 4) {
+    const octets = hostname.split('.').map(Number);
+    return (
+      octets[0] === 0 ||
+      octets[0] === 10 ||
+      octets[0] === 127 ||
+      (octets[0] === 169 && octets[1] === 254) ||
+      (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31) ||
+      (octets[0] === 192 && octets[1] === 168)
+    );
+  }
+
+  if (ipVersion === 6) {
+    return (
+      hostname === '::' ||
+      hostname === '::1' ||
+      hostname.startsWith('fc') ||
+      hostname.startsWith('fd') ||
+      hostname.startsWith('fe80:')
+    );
+  }
+
+  return (
+    !hostname.includes('.') ||
+    PRIVATE_GOVERNMENT_HOSTNAME_SUFFIXES.some((suffix) => hostname.endsWith(suffix))
+  );
 }
