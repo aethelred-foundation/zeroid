@@ -1,3 +1,6 @@
+import { promises as dns } from 'dns';
+import crypto from 'crypto';
+
 const mockWebhookCreate = jest.fn();
 const mockWebhookFindMany = jest.fn();
 const mockWebhookFindFirst = jest.fn();
@@ -14,6 +17,18 @@ const redisSortedSets: Record<
 const redisLists: Record<string, string[]> = {};
 const originalWebhookSecretEncryptionKey = process.env.WEBHOOK_SECRET_ENCRYPTION_KEY;
 const originalNodeEnv = process.env.NODE_ENV;
+
+function encryptWebhookSecretForTest(secret: string, key = Buffer.alloc(32, 9)): string {
+  const iv = Buffer.alloc(12, 1);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+  cipher.setAAD(Buffer.from('zeroid:webhook-secret:v1'));
+  const ciphertext = Buffer.concat([
+    cipher.update(secret, 'utf8'),
+    cipher.final(),
+  ]);
+  const tag = cipher.getAuthTag();
+  return `enc:v1:${iv.toString('base64url')}:${tag.toString('base64url')}:${ciphertext.toString('base64url')}`;
+}
 
 const mockRedisEval = jest.fn(
   async (_script: string, numKeys: number, ...args: unknown[]) => {
@@ -451,6 +466,62 @@ describe('WebhookSystem persistence', () => {
     });
     expect(redisLists['enterprise:webhook-events:org-2']).toBeUndefined();
     fetchSpy.mockRestore();
+  });
+
+  it('blocks production delivery when webhook DNS resolves to private infrastructure', async () => {
+    process.env.NODE_ENV = 'production';
+    process.env.WEBHOOK_SECRET_ENCRYPTION_KEY = Buffer.alloc(32, 9).toString('base64');
+    mockWebhookFindMany.mockResolvedValue([
+      {
+        id: 'wh-private-resolution',
+        organizationId: 'org-1',
+        url: 'https://hooks.zeroid.example/private',
+        secret: encryptWebhookSecretForTest('s'.repeat(64)),
+        events: ['credential.issued'],
+        status: 'ACTIVE',
+        failureCount: 0,
+        lastDeliveredAt: null,
+        lastStatusCode: null,
+        createdAt: new Date('2026-04-21T00:00:00.000Z'),
+        updatedAt: new Date('2026-04-21T00:00:00.000Z'),
+      },
+    ]);
+    mockWebhookDeliveryUpsert.mockResolvedValue({});
+    const dnsSpy = jest.spyOn(dns, 'lookup').mockResolvedValue([
+      { address: '127.0.0.1', family: 4 },
+    ]);
+    const fetchSpy = jest
+      .spyOn(global, 'fetch')
+      .mockResolvedValue(new Response('ok', { status: 200 }));
+
+    try {
+      const deliveryIds = await webhookSystem.emit('credential.issued', {
+        credentialId: 'cred-1',
+      }, 'org-1');
+
+      expect(deliveryIds).toHaveLength(1);
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(webhookSystem.getDelivery(deliveryIds[0])).toMatchObject({
+        status: 'dead_letter',
+        attempts: 1,
+        response: expect.objectContaining({
+          statusCode: 0,
+          body: 'Webhook hostname resolved to a localhost or private network address.',
+        }),
+      });
+      expect(mockWebhookDeliveryUpsert).toHaveBeenCalledWith(expect.objectContaining({
+        create: expect.objectContaining({
+          webhookId: 'wh-private-resolution',
+          success: false,
+          responseBody: 'Webhook hostname resolved to a localhost or private network address.',
+        }),
+      }));
+    } finally {
+      dnsSpy.mockRestore();
+      fetchSpy.mockRestore();
+      process.env.NODE_ENV = 'test';
+      delete process.env.WEBHOOK_SECRET_ENCRYPTION_KEY;
+    }
   });
 
   it('persists successful delivery attempts to the durable delivery log', async () => {

@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { createLogger, format, transports } from 'winston';
 import crypto from 'crypto';
 import * as net from 'net';
+import { promises as dns } from 'dns';
 import { prisma, redis } from '../../index';
 
 // ---------------------------------------------------------------------------
@@ -23,6 +24,8 @@ const MAX_WEBHOOK_REPLAY_EVENTS = 10_000;
 const WEBHOOK_RESPONSE_PREVIEW_BYTES = 1024;
 const SAFE_WEBHOOK_ENDPOINT_MESSAGE =
   'Webhook URL must use HTTPS and must not target localhost or private network addresses in production.';
+const UNSAFE_WEBHOOK_RESOLUTION_MESSAGE =
+  'Webhook hostname resolved to a localhost or private network address.';
 const RESERVED_WEBHOOK_HEADER_MESSAGE =
   'Webhook headers must not override platform delivery headers.';
 const RESERVED_WEBHOOK_HEADER_NAMES = new Set([
@@ -726,6 +729,7 @@ export class WebhookSystem {
     const startTime = Date.now();
 
     try {
+      await this.assertSafeResolvedEndpoint(delivery.request.url);
       const response = await fetch(delivery.request.url, {
         method: 'POST',
         headers: delivery.request.headers,
@@ -763,7 +767,24 @@ export class WebhookSystem {
 
       this.updateHealth(webhook, false, delivery.response.statusCode, latencyMs);
 
-      if (delivery.attempts < delivery.maxAttempts) {
+      if (this.isNonRetryableDeliveryError(error)) {
+        delivery.status = 'dead_letter';
+        delivery.completedAt = new Date().toISOString();
+        this.deadLetterQueue.push({
+          deliveryId: delivery.deliveryId,
+          webhookId: webhook.id,
+          eventId: delivery.payload.id as string,
+          failedAt: new Date().toISOString(),
+          lastError: errorMessage,
+          attempts: delivery.attempts,
+        });
+
+        logger.error('webhook_delivery_blocked', {
+          deliveryId: delivery.deliveryId,
+          webhookId: webhook.id,
+          error: errorMessage,
+        });
+      } else if (delivery.attempts < delivery.maxAttempts) {
         // Exponential backoff: 1s, 2s, 4s, 8s, 16s
         const delayMs = Math.pow(2, delivery.attempts - 1) * 1000;
         delivery.status = 'pending';
@@ -918,6 +939,41 @@ export class WebhookSystem {
 
   getDelivery(deliveryId: string): WebhookDelivery | null {
     return this.deliveries.get(deliveryId) ?? null;
+  }
+
+  private async assertSafeResolvedEndpoint(endpointUrl: string): Promise<void> {
+    if (!isProductionRuntime()) return;
+
+    const endpoint = new URL(endpointUrl);
+    if (isLocalOrPrivateHostname(endpoint.hostname)) {
+      throw new WebhookError(
+        UNSAFE_WEBHOOK_RESOLUTION_MESSAGE,
+        'WEBHOOK_ENDPOINT_UNSAFE_RESOLUTION',
+        400,
+      );
+    }
+
+    const resolvedAddresses = await dns.lookup(endpoint.hostname, {
+      all: true,
+      verbatim: true,
+    });
+    if (
+      resolvedAddresses.length === 0 ||
+      resolvedAddresses.some((entry) => isLocalOrPrivateHostname(entry.address))
+    ) {
+      throw new WebhookError(
+        UNSAFE_WEBHOOK_RESOLUTION_MESSAGE,
+        'WEBHOOK_ENDPOINT_UNSAFE_RESOLUTION',
+        400,
+      );
+    }
+  }
+
+  private isNonRetryableDeliveryError(error: unknown): boolean {
+    return (
+      error instanceof WebhookError &&
+      error.code === 'WEBHOOK_ENDPOINT_UNSAFE_RESOLUTION'
+    );
   }
 
   // -------------------------------------------------------------------------
