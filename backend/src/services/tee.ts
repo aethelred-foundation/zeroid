@@ -133,6 +133,7 @@ const INTEL_PCS_BASE_URL =
 const TEE_DCAP_BASE_URL = process.env.TEE_DCAP_API_URL ?? INTEL_PCS_BASE_URL;
 const INTEL_PCS_API_KEY = process.env.INTEL_PCS_API_KEY ?? '';
 const TEE_COLLATERAL_FETCH_TIMEOUT_MS = 10_000;
+const TEE_COLLATERAL_RESPONSE_MAX_BYTES = 8 * 1024 * 1024;
 const ATTESTATION_VALIDITY_HOURS = parseInt(
   process.env.TEE_ATTESTATION_VALIDITY_HOURS ?? '24',
   10,
@@ -1022,13 +1023,22 @@ export class TEEAttestationService {
       logger.info('pccs_collateral_fetched', { fmspc });
 
       return {
-        pckCrl: await pckCrlRes.text(),
+        pckCrl: await this.readCollateralResponseBody(pckCrlRes, 'PCK CRL'),
         pckCrlIssuerChain,
-        rootCaCrl: await rootCaCrlRes.text(),
-        tcbInfo: await tcbInfoRes.text(),
+        rootCaCrl: await this.readCollateralResponseBody(
+          rootCaCrlRes,
+          'Root CA CRL',
+        ),
+        tcbInfo: await this.readCollateralResponseBody(
+          tcbInfoRes,
+          'TCB info',
+        ),
         tcbInfoSignature,
         tcbSigningCertChain,
-        qeIdentity: await qeIdentityRes.text(),
+        qeIdentity: await this.readCollateralResponseBody(
+          qeIdentityRes,
+          'QE identity',
+        ),
         qeIdentitySignature,
         qeIdentitySigningCertChain,
       };
@@ -1041,6 +1051,62 @@ export class TEEAttestationService {
         'TEE_COLLATERAL_UNAVAILABLE',
       );
     }
+  }
+
+  private async readCollateralResponseBody(
+    response: Response,
+    label: string,
+  ): Promise<string> {
+    const contentLength = response.headers.get('content-length');
+    if (contentLength) {
+      const parsedLength = Number(contentLength);
+      if (
+        Number.isFinite(parsedLength) &&
+        parsedLength > TEE_COLLATERAL_RESPONSE_MAX_BYTES
+      ) {
+        throw new Error(
+          `${label} response exceeded ${TEE_COLLATERAL_RESPONSE_MAX_BYTES} byte limit`,
+        );
+      }
+    }
+
+    if (!response.body) {
+      const body = await response.text();
+      this.assertCollateralResponseSize(Buffer.byteLength(body, 'utf8'), label);
+      return body;
+    }
+
+    const reader = response.body.getReader();
+    const chunks: Buffer[] = [];
+    let totalBytes = 0;
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (!value) continue;
+
+        const chunk = Buffer.from(value);
+        totalBytes += chunk.byteLength;
+        this.assertCollateralResponseSize(totalBytes, label);
+        chunks.push(chunk);
+      }
+    } catch (error) {
+      await reader.cancel().catch(() => undefined);
+      throw error;
+    } finally {
+      reader.releaseLock();
+    }
+
+    return Buffer.concat(chunks, totalBytes).toString('utf8');
+  }
+
+  private assertCollateralResponseSize(totalBytes: number, label: string): void {
+    if (totalBytes <= TEE_COLLATERAL_RESPONSE_MAX_BYTES) return;
+
+    throw new Error(
+      `${label} response exceeded ${TEE_COLLATERAL_RESPONSE_MAX_BYTES} byte limit`,
+    );
   }
 
   // -------------------------------------------------------------------------

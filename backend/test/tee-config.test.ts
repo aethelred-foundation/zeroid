@@ -1,4 +1,5 @@
 const ORIGINAL_ENV = { ...process.env };
+const ORIGINAL_FETCH = global.fetch;
 
 describe('TEE production configuration', () => {
   beforeEach(() => {
@@ -58,6 +59,7 @@ describe('TEE production configuration', () => {
     jest.dontMock('prom-client');
     jest.dontMock('../src/index');
     jest.resetModules();
+    global.fetch = ORIGINAL_FETCH;
     process.env = ORIGINAL_ENV;
   });
 
@@ -94,4 +96,54 @@ describe('TEE production configuration', () => {
       statusCode: 503,
     });
   });
+
+  it('rejects oversized collateral responses before parsing them', async () => {
+    process.env.TEE_DCAP_API_URL = 'https://collateral.example.com';
+
+    const fetchMock = jest.fn()
+      .mockResolvedValueOnce(collateralResponse('unused', {
+        'content-length': String(9 * 1024 * 1024),
+      }))
+      .mockResolvedValueOnce(collateralResponse('root-crl'))
+      .mockResolvedValueOnce(collateralResponse('{}', {
+        'sgx-tcb-info-issuer-chain': 'chain',
+        'sgx-tcb-info-signature': 'signature',
+      }))
+      .mockResolvedValueOnce(collateralResponse('{}', {
+        'sgx-enclave-identity-issuer-chain': 'chain',
+        'sgx-enclave-identity-signature': 'signature',
+      }));
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const { TEEAttestationService } = require('../src/services/tee');
+    const service = new TEEAttestationService();
+
+    await expect(
+      (service as any).fetchCollateralFromPCS('00906ea10000'),
+    ).rejects.toMatchObject({
+      code: 'TEE_COLLATERAL_UNAVAILABLE',
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
 });
+
+function collateralResponse(
+  body: string,
+  headers: Record<string, string> = {},
+): Response {
+  const normalizedHeaders = Object.fromEntries(
+    Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value]),
+  );
+
+  return {
+    ok: true,
+    status: 200,
+    headers: {
+      get: jest.fn(
+        (name: string) => normalizedHeaders[name.toLowerCase()] ?? null,
+      ),
+    },
+    body: null,
+    text: jest.fn().mockResolvedValue(body),
+  } as unknown as Response;
+}
