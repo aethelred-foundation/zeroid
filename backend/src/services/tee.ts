@@ -105,6 +105,8 @@ interface SGXReportBody {
 
 interface QuoteCertificationResult {
   fmspc: string;
+  pckLeafSerial: string;
+  pckIntermediateSerial: string;
   qeReportMrenclave: string;
   qeReportMrsigner: string;
   qeReportIsvProdId: number;
@@ -323,7 +325,7 @@ export class TEEAttestationService {
       await this.verifyCertificateChain(collateral);
 
       // 5c. Check certificate revocation against CRLs
-      this.checkCertificateRevocation(collateral);
+      this.checkCertificateRevocation(collateral, certResult);
 
       // 5d. Verify TCB info collateral signature
       this.verifyTCBInfoSignature(collateral);
@@ -900,6 +902,12 @@ export class TEEAttestationService {
 
     return {
       fmspc,
+      pckLeafSerial: this.normalizeCertificateSerial(
+        pckLeafCert.serialNumber,
+      ),
+      pckIntermediateSerial: this.normalizeCertificateSerial(
+        pckIntermediateCert.serialNumber,
+      ),
       qeReportMrenclave,
       qeReportMrsigner,
       qeReportIsvProdId,
@@ -1492,7 +1500,10 @@ export class TEEAttestationService {
   // CA (from the PCK CRL issuer chain), and the Root CA CRL is self-signed
   // by the Root CA. CRL freshness is also enforced via thisUpdate/nextUpdate.
   // -------------------------------------------------------------------------
-  private checkCertificateRevocation(collateral: PCCSCollateral): void {
+  private checkCertificateRevocation(
+    collateral: PCCSCollateral,
+    quoteCertification?: QuoteCertificationResult,
+  ): void {
     logger.info('certificate_revocation_check_start');
 
     const rootCaCert = new crypto.X509Certificate(INTEL_SGX_ROOT_CA_PEM);
@@ -1558,12 +1569,22 @@ export class TEEAttestationService {
     this.validateCrlFreshness(pckCrlDer, 'PCK CRL');
     const pckRevokedSerials = this.extractRevokedSerialsFromDer(pckCrlDer);
 
+    if (quoteCertification) {
+      this.assertQuotePckCertificatesNotRevoked(
+        quoteCertification,
+        pckRevokedSerials,
+        rootRevokedSerials,
+      );
+    }
+
     // ── Check TCB signing cert chain against both CRLs ─────────────────
     if (collateral.tcbSigningCertChain) {
       const chainCerts = this.parsePemChain(collateral.tcbSigningCertChain);
       if (chainCerts.length > 0) {
         const leafCert = new crypto.X509Certificate(chainCerts[0]);
-        const leafSerial = leafCert.serialNumber.toLowerCase();
+        const leafSerial = this.normalizeCertificateSerial(
+          leafCert.serialNumber,
+        );
 
         if (pckRevokedSerials.has(leafSerial)) {
           throw new AttestationError(
@@ -1581,8 +1602,9 @@ export class TEEAttestationService {
         // Check intermediate CA serial against root CRL
         if (chainCerts.length > 1) {
           const intermediateCert = new crypto.X509Certificate(chainCerts[1]);
-          const intermediateSerial =
-            intermediateCert.serialNumber.toLowerCase();
+          const intermediateSerial = this.normalizeCertificateSerial(
+            intermediateCert.serialNumber,
+          );
           if (rootRevokedSerials.has(intermediateSerial)) {
             throw new AttestationError(
               `Intermediate CA certificate (serial: ${intermediateSerial}) is revoked in Root CA CRL`,
@@ -1594,6 +1616,33 @@ export class TEEAttestationService {
     }
 
     logger.info('certificate_revocation_check_passed');
+  }
+
+  private assertQuotePckCertificatesNotRevoked(
+    quoteCertification: QuoteCertificationResult,
+    pckRevokedSerials: Set<string>,
+    rootRevokedSerials: Set<string>,
+  ): void {
+    if (pckRevokedSerials.has(quoteCertification.pckLeafSerial)) {
+      throw new AttestationError(
+        `Quote PCK leaf certificate (serial: ${quoteCertification.pckLeafSerial}) is revoked in PCK CRL`,
+        'TEE_CERT_REVOKED',
+      );
+    }
+
+    if (rootRevokedSerials.has(quoteCertification.pckLeafSerial)) {
+      throw new AttestationError(
+        `Quote PCK leaf certificate (serial: ${quoteCertification.pckLeafSerial}) is revoked in Root CA CRL`,
+        'TEE_CERT_REVOKED',
+      );
+    }
+
+    if (rootRevokedSerials.has(quoteCertification.pckIntermediateSerial)) {
+      throw new AttestationError(
+        `Quote PCK intermediate certificate (serial: ${quoteCertification.pckIntermediateSerial}) is revoked in Root CA CRL`,
+        'TEE_CERT_REVOKED',
+      );
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -1988,11 +2037,17 @@ export class TEEAttestationService {
           .subarray(offset, contentEnd)
           .toString('hex')
           .toLowerCase();
-        serials.add(serial);
+        serials.add(this.normalizeCertificateSerial(serial));
       }
 
       offset = contentEnd;
     }
+  }
+
+  private normalizeCertificateSerial(serialNumber: string): string {
+    const normalized = serialNumber.toLowerCase().replace(/[^0-9a-f]/g, '');
+    const trimmed = normalized.replace(/^(?:00)+/, '');
+    return trimmed.length > 0 ? trimmed : '0';
   }
 
   // -------------------------------------------------------------------------

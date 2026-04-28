@@ -555,6 +555,37 @@ describe('checkCertificateRevocation', () => {
     expect(revokedSerials.has(knownSerial)).toBe(true);
   });
 
+  it('rejects when the quote PCK leaf certificate serial is in the PCK CRL', () => {
+    const pckLeafSerial = '01' + crypto.randomBytes(15).toString('hex');
+    const collateral = buildCollateral({
+      hierarchy,
+      revokedSerials: [pckLeafSerial],
+    });
+
+    jest.spyOn(priv(), 'verifyCrlSignature').mockReturnValue(undefined);
+    jest.spyOn(priv(), 'validateCrlFreshness').mockReturnValue(undefined);
+
+    expect(() =>
+      priv().checkCertificateRevocation(
+        {
+          ...collateral,
+          pckCrlIssuerChain: '',
+        },
+        {
+          fmspc: '00906ea10000',
+          pckLeafSerial,
+          pckIntermediateSerial: '02' + crypto.randomBytes(15).toString('hex'),
+          qeReportMrenclave: 'a'.repeat(64),
+          qeReportMrsigner: 'b'.repeat(64),
+          qeReportIsvProdId: 1,
+          qeReportIsvSvn: 1,
+        },
+      ),
+    ).toThrow(expect.objectContaining({ code: 'TEE_CERT_REVOKED' }));
+
+    jest.restoreAllMocks();
+  });
+
   it('extracts revoked serials correctly from DER CRL with multiple entries', () => {
     // Use serials with high bit clear (first byte < 0x80) so DER INTEGER
     // encoding doesn't prepend a 0x00 padding byte, keeping hex representation stable.
