@@ -577,7 +577,6 @@ export class OIDCBridge {
       ],
       subject_types_supported: ['public', 'pairwise'],
       id_token_signing_alg_values_supported: [this.signingAlgorithm],
-      id_token_encryption_alg_values_supported: ['RSA-OAEP', 'A256KW'],
       token_endpoint_auth_methods_supported: tokenEndpointAuthMethodsSupported,
       claims_supported: [...new Set(Object.values(STANDARD_SCOPES).flat())],
       code_challenge_methods_supported: ['S256'],
@@ -630,6 +629,12 @@ export class OIDCBridge {
       throw new OIDCError(
         'invalid_client_metadata',
         `Only ${this.signingAlgorithm} is supported for id_token_signed_response_alg`,
+      );
+    }
+    if (parsed.idTokenEncryptedResponseAlg) {
+      throw new OIDCError(
+        'invalid_client_metadata',
+        'Encrypted ID tokens are not supported until client key resolution and JWE issuance are enabled.',
       );
     }
 

@@ -268,6 +268,31 @@ describe('OIDC multi-node correctness', () => {
     expect(discovery).not.toHaveProperty('backchannel_logout_supported');
   });
 
+  test('discovery does not advertise unsupported encrypted ID tokens', () => {
+    const discovery = bridgeA.getDiscoveryDocument();
+
+    expect(discovery).not.toHaveProperty(
+      'id_token_encryption_alg_values_supported',
+    );
+  });
+
+  test('client registration rejects encrypted ID token metadata until JWE issuance is enabled', async () => {
+    await expect(
+      bridgeA.registerClient({
+        clientName: 'Encrypted Token Client',
+        redirectUris: [REDIRECT_URI],
+        postLogoutRedirectUris: [LOGOUT_URI],
+        grantTypes: ['authorization_code'],
+        responseTypes: ['code'],
+        tokenEndpointAuthMethod: 'client_secret_basic',
+        scopes: ['openid'],
+        idTokenEncryptedResponseAlg: 'RSA-OAEP',
+      }),
+    ).rejects.toMatchObject({
+      errorCode: 'invalid_client_metadata',
+    });
+  });
+
   test('production issuer must be HTTPS and non-local', () => {
     const previousNodeEnv = process.env.NODE_ENV;
     try {
