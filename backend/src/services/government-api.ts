@@ -87,6 +87,8 @@ interface EmiratesIDConfig {
   apiSecret: string;
 }
 
+type GovernmentProvider = GovernmentVerificationResult['provider'];
+
 const GOV_VERIFICATION_CACHE_TTL = parseInt(process.env.GOV_VERIFICATION_CACHE_TTL ?? '86400', 10);
 
 // ---------------------------------------------------------------------------
@@ -258,8 +260,15 @@ export class GovernmentAPIService {
       const cacheKey = `gov:eid:${this.hashSensitiveData(request.idNumber)}`;
       const cached = await redis.get(cacheKey);
       if (cached) {
-        logger.info('emirates_id_cache_hit', { identityId: request.identityId });
-        return JSON.parse(cached) as GovernmentVerificationResult;
+        const cachedResult = await this.parseCachedVerificationResult(
+          cached,
+          cacheKey,
+          'EMIRATES_ID',
+        );
+        if (cachedResult) {
+          logger.info('emirates_id_cache_hit', { identityId: request.identityId });
+          return cachedResult;
+        }
       }
 
       // Call ICA (Federal Authority for Identity and Citizenship) API
@@ -378,12 +387,11 @@ export class GovernmentAPIService {
   // Check if government verification is still valid
   // -------------------------------------------------------------------------
   async getVerificationStatus(identityId: string): Promise<GovernmentVerificationResult | null> {
-    const cached = await redis.get(`gov:verification:${identityId}`);
+    const cacheKey = `gov:verification:${identityId}`;
+    const cached = await redis.get(cacheKey);
     if (cached) {
-      const result = JSON.parse(cached) as GovernmentVerificationResult;
-      if (new Date(result.expiresAt) > new Date()) {
-        return result;
-      }
+      const result = await this.parseCachedVerificationResult(cached, cacheKey);
+      if (result) return result;
     }
 
     // Check identity record
@@ -477,6 +485,38 @@ export class GovernmentAPIService {
         503,
       );
     }
+  }
+
+  private async parseCachedVerificationResult(
+    raw: string,
+    cacheKey: string,
+    expectedProvider?: GovernmentProvider,
+  ): Promise<GovernmentVerificationResult | null> {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      logger.warn('government_verification_cache_parse_failed', { cacheKey });
+      await redis.del(cacheKey).catch(() => undefined);
+      return null;
+    }
+
+    const result = normalizeGovernmentVerificationResult(parsed);
+    if (
+      !result ||
+      (expectedProvider && result.provider !== expectedProvider) ||
+      result.verified !== true ||
+      result.expiresAt <= new Date()
+    ) {
+      logger.warn('government_verification_cache_invalid', {
+        cacheKey,
+        expectedProvider,
+      });
+      await redis.del(cacheKey).catch(() => undefined);
+      return null;
+    }
+
+    return result;
   }
 
   private assertAllowedUAEPassRedirectUri(redirectUri: string): void {
@@ -666,6 +706,50 @@ export const governmentAPIService = new GovernmentAPIService();
 
 function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/, '');
+}
+
+function normalizeGovernmentVerificationResult(
+  value: unknown,
+): GovernmentVerificationResult | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  if (
+    typeof record.verified !== 'boolean' ||
+    !['UAE_PASS', 'EMIRATES_ID'].includes(String(record.provider)) ||
+    typeof record.referenceId !== 'string' ||
+    record.referenceId.length === 0 ||
+    !Array.isArray(record.verifiedFields) ||
+    !record.verifiedFields.every((field) => typeof field === 'string')
+  ) {
+    return null;
+  }
+
+  const verifiedAt = coerceValidDate(record.verifiedAt);
+  const expiresAt = coerceValidDate(record.expiresAt);
+  if (!verifiedAt || !expiresAt) return null;
+
+  return {
+    verified: record.verified,
+    provider: record.provider as GovernmentProvider,
+    referenceId: record.referenceId,
+    verifiedFields: record.verifiedFields,
+    verifiedAt,
+    expiresAt,
+  };
+}
+
+function coerceValidDate(value: unknown): Date | null {
+  const date =
+    value instanceof Date
+      ? value
+      : typeof value === 'string' || typeof value === 'number'
+        ? new Date(value)
+        : null;
+  if (!date || Number.isNaN(date.getTime())) return null;
+  return date;
 }
 
 function isTrustedProductionEndpoint(value: string): boolean {

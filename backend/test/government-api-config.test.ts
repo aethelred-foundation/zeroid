@@ -1,6 +1,8 @@
 const mockRedisGet = jest.fn();
 const mockRedisSet = jest.fn();
+const mockRedisDel = jest.fn();
 const mockIdentityUpdate = jest.fn();
+const mockIdentityFindUnique = jest.fn();
 const mockAuditLogCreate = jest.fn();
 
 jest.mock('../src/index', () => ({
@@ -12,11 +14,12 @@ jest.mock('../src/index', () => ({
   redis: {
     get: mockRedisGet,
     set: mockRedisSet,
+    del: mockRedisDel,
   },
   prisma: {
     identity: {
       update: mockIdentityUpdate,
-      findUnique: jest.fn(),
+      findUnique: mockIdentityFindUnique,
     },
     auditLog: {
       create: mockAuditLogCreate,
@@ -32,6 +35,9 @@ const ORIGINAL_FETCH = global.fetch;
 describe('GovernmentAPIService production configuration', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockRedisDel.mockResolvedValue(1);
+    mockRedisGet.mockResolvedValue(null);
+    mockIdentityFindUnique.mockResolvedValue(null);
     process.env = { ...ORIGINAL_ENV, NODE_ENV: 'production' };
     delete process.env.UAE_PASS_REDIRECT_URI_ALLOWLIST;
     delete process.env.GOVERNMENT_REDIRECT_URI_ALLOWLIST;
@@ -206,6 +212,53 @@ describe('GovernmentAPIService production configuration', () => {
       statusCode: 502,
     });
     expect(mockIdentityUpdate).not.toHaveBeenCalled();
+  });
+
+  it('evicts malformed Emirates ID cache entries before using them', async () => {
+    process.env.EMIRATES_ID_API_URL = 'https://eid.gov.example';
+    process.env.EMIRATES_ID_API_KEY = 'key-1';
+    process.env.EMIRATES_ID_API_SECRET = 'secret-1';
+    mockRedisGet.mockResolvedValueOnce('{bad-json');
+    global.fetch = jest.fn().mockResolvedValueOnce(governmentResponse(JSON.stringify({
+      verified: true,
+      idNumber: '784-1990-1234567-1',
+      fullName: 'Example Person',
+      nationality: 'AE',
+      expiryDate: '2030-01-01T00:00:00.000Z',
+      status: 'VALID',
+    }))) as unknown as typeof fetch;
+    const service = new GovernmentAPIService();
+
+    const result = await service.verifyEmiratesID({
+      idNumber: '784-1990-1234567-1',
+      dateOfBirth: '1990-01-01',
+      identityId: 'identity-1',
+    });
+
+    expect(result.provider).toBe('EMIRATES_ID');
+    expect(mockRedisDel).toHaveBeenCalledWith(expect.stringMatching(/^gov:eid:/));
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores malformed government verification status cache entries', async () => {
+    mockRedisGet.mockResolvedValueOnce(JSON.stringify({
+      verified: true,
+      provider: 'EMIRATES_ID',
+      referenceId: 'eid-1',
+      verifiedFields: ['idNumber'],
+      verifiedAt: 'not-a-date',
+      expiresAt: '2030-01-01T00:00:00.000Z',
+    }));
+    mockIdentityFindUnique.mockResolvedValueOnce({
+      governmentVerified: true,
+      governmentRefId: 'uaepass-ref-1',
+    });
+    const service = new GovernmentAPIService();
+
+    const result = await service.getVerificationStatus('identity-1');
+
+    expect(result?.provider).toBe('UAE_PASS');
+    expect(mockRedisDel).toHaveBeenCalledWith('gov:verification:identity-1');
   });
 });
 
