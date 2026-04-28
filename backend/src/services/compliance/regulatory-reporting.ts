@@ -239,6 +239,7 @@ export interface ReportAuthorityManifest {
 
 export interface GeneratedReport {
   reportId: string;
+  organizationId?: string;
   reportType: ReportType;
   version: number;
   status: 'draft' | 'pending_review' | 'submitted' | 'accepted' | 'rejected' | 'amended';
@@ -278,12 +279,13 @@ export class RegulatoryReportingService {
   // -------------------------------------------------------------------------
   // SAR generation
   // -------------------------------------------------------------------------
-  async generateSAR(request: SARRequest): Promise<GeneratedReport> {
+  async generateSAR(request: SARRequest, organizationId?: string): Promise<GeneratedReport> {
     const parsed = SARRequestSchema.parse(request);
     const reportId = crypto.randomUUID();
 
     const report: GeneratedReport = {
       reportId,
+      ...(organizationId ? { organizationId } : {}),
       reportType: 'SAR',
       version: 1,
       status: 'draft',
@@ -323,12 +325,13 @@ export class RegulatoryReportingService {
   // -------------------------------------------------------------------------
   // CTR generation
   // -------------------------------------------------------------------------
-  async generateCTR(request: CTRRequest): Promise<GeneratedReport> {
+  async generateCTR(request: CTRRequest, organizationId?: string): Promise<GeneratedReport> {
     const parsed = CTRRequestSchema.parse(request);
     const reportId = crypto.randomUUID();
 
     const report: GeneratedReport = {
       reportId,
+      ...(organizationId ? { organizationId } : {}),
       reportType: 'CTR',
       version: 1,
       status: 'draft',
@@ -363,12 +366,13 @@ export class RegulatoryReportingService {
   // -------------------------------------------------------------------------
   // STR generation (UAE)
   // -------------------------------------------------------------------------
-  async generateSTR(request: STRRequest): Promise<GeneratedReport> {
+  async generateSTR(request: STRRequest, organizationId?: string): Promise<GeneratedReport> {
     const parsed = STRRequestSchema.parse(request);
     const reportId = crypto.randomUUID();
 
     const report: GeneratedReport = {
       reportId,
+      ...(organizationId ? { organizationId } : {}),
       reportType: 'STR',
       version: 1,
       status: 'draft',
@@ -406,7 +410,7 @@ export class RegulatoryReportingService {
   // -------------------------------------------------------------------------
   // DSAR fulfillment
   // -------------------------------------------------------------------------
-  async fulfillDSAR(request: DSARRequest): Promise<GeneratedReport> {
+  async fulfillDSAR(request: DSARRequest, organizationId?: string): Promise<GeneratedReport> {
     const parsed = DSARRequestSchema.parse(request);
     const reportId = crypto.randomUUID();
 
@@ -423,6 +427,7 @@ export class RegulatoryReportingService {
 
     const report: GeneratedReport = {
       reportId,
+      ...(organizationId ? { organizationId } : {}),
       reportType: 'DSAR',
       version: 1,
       status: 'pending_review',
@@ -458,7 +463,7 @@ export class RegulatoryReportingService {
   // -------------------------------------------------------------------------
   // Right-to-erasure with cryptographic erasure
   // -------------------------------------------------------------------------
-  async processErasure(request: ErasureRequest): Promise<GeneratedReport> {
+  async processErasure(request: ErasureRequest, organizationId?: string): Promise<GeneratedReport> {
     const parsed = ErasureRequestSchema.parse(request);
     const reportId = crypto.randomUUID();
 
@@ -486,6 +491,7 @@ export class RegulatoryReportingService {
 
     const report: GeneratedReport = {
       reportId,
+      ...(organizationId ? { organizationId } : {}),
       reportType: 'ERASURE',
       version: 1,
       status: 'submitted',
@@ -521,18 +527,24 @@ export class RegulatoryReportingService {
   // -------------------------------------------------------------------------
   // Audit package generation
   // -------------------------------------------------------------------------
-  async generateAuditPackage(jurisdiction: string, dateRange: { start: string; end: string }): Promise<GeneratedReport> {
+  async generateAuditPackage(
+    jurisdiction: string,
+    dateRange: { start: string; end: string },
+    organizationId?: string,
+  ): Promise<GeneratedReport> {
     const reportId = crypto.randomUUID();
     const startDate = new Date(dateRange.start);
     const endDate = new Date(dateRange.end);
 
     const reportsInRange = [...this.reports.values()].filter((r) => {
+      if (organizationId && r.organizationId !== organizationId) return false;
       const genDate = new Date(r.generatedAt);
       return genDate >= startDate && genDate <= endDate && (r.filingJurisdiction === jurisdiction || jurisdiction === 'all');
     });
 
     const report: GeneratedReport = {
       reportId,
+      ...(organizationId ? { organizationId } : {}),
       reportType: 'AUDIT',
       version: 1,
       status: 'draft',
@@ -568,8 +580,8 @@ export class RegulatoryReportingService {
   // -------------------------------------------------------------------------
   // Dashboard data aggregation
   // -------------------------------------------------------------------------
-  getDashboardData(): DashboardData {
-    const allReports = [...this.reports.values()];
+  getDashboardData(organizationId?: string): DashboardData {
+    const allReports = this.getReportsForOrganization(organizationId);
     const now = Date.now();
 
     const reportsByType: Record<string, number> = {};
@@ -619,8 +631,13 @@ export class RegulatoryReportingService {
   // -------------------------------------------------------------------------
   // Report amendment
   // -------------------------------------------------------------------------
-  async amendReport(reportId: string, reason: string, changes: Record<string, unknown>): Promise<GeneratedReport> {
-    const report = this.reports.get(reportId);
+  async amendReport(
+    reportId: string,
+    reason: string,
+    changes: Record<string, unknown>,
+    organizationId?: string,
+  ): Promise<GeneratedReport> {
+    const report = this.getReportForOrganization(reportId, organizationId);
     if (!report) {
       throw new ReportingError(`Report not found: ${reportId}`, 'REPORT_NOT_FOUND', 404);
     }
@@ -645,8 +662,11 @@ export class RegulatoryReportingService {
   // -------------------------------------------------------------------------
   // Submit report to regulatory API
   // -------------------------------------------------------------------------
-  async submitReport(reportId: string): Promise<{ filingReference: string; submittedAt: string }> {
-    const report = this.reports.get(reportId);
+  async submitReport(
+    reportId: string,
+    organizationId?: string,
+  ): Promise<{ filingReference: string; submittedAt: string }> {
+    const report = this.getReportForOrganization(reportId, organizationId);
     if (!report) {
       throw new ReportingError(`Report not found: ${reportId}`, 'REPORT_NOT_FOUND', 404);
     }
@@ -670,8 +690,12 @@ export class RegulatoryReportingService {
   // -------------------------------------------------------------------------
   // Export in multiple formats
   // -------------------------------------------------------------------------
-  async exportReport(reportId: string, format: ExportFormat): Promise<{ data: string; contentType: string; filename: string }> {
-    const report = this.reports.get(reportId);
+  async exportReport(
+    reportId: string,
+    format: ExportFormat,
+    organizationId?: string,
+  ): Promise<{ data: string; contentType: string; filename: string }> {
+    const report = this.getReportForOrganization(reportId, organizationId);
     if (!report) {
       throw new ReportingError(`Report not found: ${reportId}`, 'REPORT_NOT_FOUND', 404);
     }
@@ -699,12 +723,17 @@ export class RegulatoryReportingService {
   // -------------------------------------------------------------------------
   // Retrieve reports
   // -------------------------------------------------------------------------
-  getReport(reportId: string): GeneratedReport | null {
-    return this.reports.get(reportId) ?? null;
+  getReport(reportId: string, organizationId?: string): GeneratedReport | null {
+    return this.getReportForOrganization(reportId, organizationId);
   }
 
-  listReports(filters?: { type?: ReportType; status?: string; jurisdiction?: string }): GeneratedReport[] {
-    let reports = [...this.reports.values()];
+  listReports(filters?: {
+    type?: ReportType;
+    status?: string;
+    jurisdiction?: string;
+    organizationId?: string;
+  }): GeneratedReport[] {
+    let reports = this.getReportsForOrganization(filters?.organizationId);
     if (filters?.type) reports = reports.filter((r) => r.reportType === filters.type);
     if (filters?.status) reports = reports.filter((r) => r.status === filters.status);
     if (filters?.jurisdiction) reports = reports.filter((r) => r.filingJurisdiction === filters.jurisdiction);
@@ -714,8 +743,9 @@ export class RegulatoryReportingService {
   recordEvidenceEvent(
     reportId: string,
     event: Omit<ReportEvidenceEvent, 'eventId' | 'recordedAt'>,
+    organizationId?: string,
   ): ReportEvidenceEvent {
-    const report = this.reports.get(reportId);
+    const report = this.getReportForOrganization(reportId, organizationId);
     if (!report) {
       throw new ReportingError(`Report not found: ${reportId}`, 'REPORT_NOT_FOUND', 404);
     }
@@ -739,8 +769,8 @@ export class RegulatoryReportingService {
     return entry;
   }
 
-  getEvidenceTrail(reportId: string): ReportEvidenceEvent[] {
-    const report = this.reports.get(reportId);
+  getEvidenceTrail(reportId: string, organizationId?: string): ReportEvidenceEvent[] {
+    const report = this.getReportForOrganization(reportId, organizationId);
     if (!report?.evidenceTrail) {
       return [];
     }
@@ -752,8 +782,9 @@ export class RegulatoryReportingService {
   recordAuthorityManifestEvent(
     reportId: string,
     event: Omit<ReportAuthorityManifestEvent, 'eventId' | 'recordedAt'>,
+    organizationId?: string,
   ): ReportAuthorityManifest {
-    const report = this.reports.get(reportId);
+    const report = this.getReportForOrganization(reportId, organizationId);
     if (!report) {
       throw new ReportingError(`Report not found: ${reportId}`, 'REPORT_NOT_FOUND', 404);
     }
@@ -846,14 +877,30 @@ export class RegulatoryReportingService {
     return manifest;
   }
 
-  getAuthorityManifest(reportId: string): ReportAuthorityManifest | null {
-    const report = this.reports.get(reportId);
+  getAuthorityManifest(reportId: string, organizationId?: string): ReportAuthorityManifest | null {
+    const report = this.getReportForOrganization(reportId, organizationId);
     return report?.authorityManifest ?? null;
   }
 
   // -------------------------------------------------------------------------
   // Private helpers
   // -------------------------------------------------------------------------
+  private getReportsForOrganization(organizationId?: string): GeneratedReport[] {
+    const reports = [...this.reports.values()];
+    if (!organizationId) return reports;
+    return reports.filter((report) => report.organizationId === organizationId);
+  }
+
+  private getReportForOrganization(
+    reportId: string,
+    organizationId?: string,
+  ): GeneratedReport | null {
+    const report = this.reports.get(reportId) ?? null;
+    if (!report) return null;
+    if (organizationId && report.organizationId !== organizationId) return null;
+    return report;
+  }
+
   private scheduleForFiling(reportId: string): void {
     this.filingQueue.push({
       reportId,

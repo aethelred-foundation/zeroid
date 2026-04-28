@@ -1455,12 +1455,14 @@ function assertSubmissionProfileConformance(
 
 async function buildSubmissionArtifacts(
   report: GeneratedReport,
+  organizationId: string,
 ): Promise<RegulatorySubmissionBundle['artifacts']> {
   const artifacts = await Promise.all(
     report.exportFormats.map(async (format) => {
       const exported = await regulatoryReportingService.exportReport(
         report.reportId,
         format,
+        report.organizationId ?? organizationId,
       );
       const encoding =
         format === 'pdf' ? ('base64' as const) : ('utf8' as const);
@@ -1499,7 +1501,7 @@ async function buildRegulatorySubmissionBundle(
     exportedAt,
   );
   const packageProfile = resolveSubmissionPackageProfile(report, filingPackage);
-  const artifacts = await buildSubmissionArtifacts(report);
+  const artifacts = await buildSubmissionArtifacts(report, organizationId);
   const receiptLinks = evidenceTrail
     .filter(
       (event) =>
@@ -3135,19 +3137,34 @@ router.post(
       let report: GeneratedReport;
       switch (parsed.data) {
         case 'SAR':
-          report = await regulatoryReportingService.generateSAR(req.body);
+          report = await regulatoryReportingService.generateSAR(
+            req.body,
+            context.organizationId,
+          );
           break;
         case 'CTR':
-          report = await regulatoryReportingService.generateCTR(req.body);
+          report = await regulatoryReportingService.generateCTR(
+            req.body,
+            context.organizationId,
+          );
           break;
         case 'STR':
-          report = await regulatoryReportingService.generateSTR(req.body);
+          report = await regulatoryReportingService.generateSTR(
+            req.body,
+            context.organizationId,
+          );
           break;
         case 'DSAR':
-          report = await regulatoryReportingService.fulfillDSAR(req.body);
+          report = await regulatoryReportingService.fulfillDSAR(
+            req.body,
+            context.organizationId,
+          );
           break;
         case 'ERASURE':
-          report = await regulatoryReportingService.processErasure(req.body);
+          report = await regulatoryReportingService.processErasure(
+            req.body,
+            context.organizationId,
+          );
           break;
         case 'AUDIT':
           report = await regulatoryReportingService.generateAuditPackage(
@@ -3158,10 +3175,13 @@ router.post(
               ).toISOString(),
               end: new Date().toISOString(),
             },
+            context.organizationId,
           );
           break;
         case 'DASHBOARD': {
-          const dashboard = regulatoryReportingService.getDashboardData();
+          const dashboard = regulatoryReportingService.getDashboardData(
+            context.organizationId,
+          );
           const policyContext = await policyContextService.resolvePolicyContext(
             'regulatory_dashboard',
             context.organizationId,
@@ -3325,9 +3345,11 @@ router.post(
 
       const result = await regulatoryReportingService.submitReport(
         req.params.reportId as string,
+        context.organizationId,
       );
       const submittedReport = regulatoryReportingService.getReport(
         req.params.reportId as string,
+        context.organizationId,
       );
       const submissionRecordedAt = new Date().toISOString();
       const submissionAuthority = submittedReport
@@ -3460,6 +3482,7 @@ router.post(
         req.params.reportId as string,
         req.body.reason,
         req.body.changes,
+        context.organizationId,
       );
       const amendmentRecordedAt = new Date().toISOString();
       const amendmentAuthority = resolveRegulatoryAuthority(
@@ -3601,9 +3624,11 @@ router.get(
       const exported = await regulatoryReportingService.exportReport(
         req.params.reportId as string,
         fmt.data,
+        context.organizationId,
       );
       const report = regulatoryReportingService.getReport(
         req.params.reportId as string,
+        context.organizationId,
       );
       const exportedAt = new Date().toISOString();
       const exportAuthority = report
@@ -3794,8 +3819,12 @@ router.get(
   requireEnterpriseContext(ENTERPRISE_COMPLIANCE_READ_ROLES),
   async (req: Request, res: Response): Promise<void> => {
     try {
+      const context = await requireReceiptContext(req, res);
+      if (!context) return;
+
       const report = regulatoryReportingService.getReport(
         req.params.reportId as string,
+        context.organizationId,
       );
       if (!report) {
         res
@@ -3806,6 +3835,7 @@ router.get(
 
       const manifest = regulatoryReportingService.getAuthorityManifest(
         req.params.reportId as string,
+        context.organizationId,
       );
       res.status(200).json({
         data: {
@@ -3840,6 +3870,7 @@ router.get(
 
       const report = regulatoryReportingService.getReport(
         req.params.reportId as string,
+        context.organizationId,
       );
       if (!report) {
         res
@@ -3850,6 +3881,7 @@ router.get(
 
       const evidenceTrail = regulatoryReportingService.getEvidenceTrail(
         req.params.reportId as string,
+        context.organizationId,
       );
       const submissionBundle = await buildRegulatorySubmissionBundle(
         report,
@@ -3917,6 +3949,7 @@ router.post(
 
       const report = regulatoryReportingService.getReport(
         req.params.reportId as string,
+        context.organizationId,
       );
       if (!report) {
         res
@@ -4065,8 +4098,12 @@ router.get(
   requireEnterpriseContext(ENTERPRISE_COMPLIANCE_READ_ROLES),
   async (req: Request, res: Response): Promise<void> => {
     try {
+      const context = await requireReceiptContext(req, res);
+      if (!context) return;
+
       const report = regulatoryReportingService.getReport(
         req.params.reportId as string,
+        context.organizationId,
       );
       if (!report) {
         res
@@ -4077,6 +4114,7 @@ router.get(
 
       const evidenceTrail = regulatoryReportingService.getEvidenceTrail(
         req.params.reportId as string,
+        context.organizationId,
       );
       const evaluatedAt = new Date().toISOString();
 
@@ -4311,7 +4349,7 @@ router.post(
         const baseReport = await regulatoryReportingService.processErasure({
           ...req.body,
           reportType: 'ERASURE',
-        });
+        }, context.organizationId);
         const policyExecution =
           await policyExecutionService.applyPrivacyWorkflowPolicy(
             context.organizationId,
@@ -4374,7 +4412,7 @@ router.post(
       const baseReport = await regulatoryReportingService.fulfillDSAR({
         ...req.body,
         reportType: 'DSAR',
-      });
+      }, context.organizationId);
       const policyExecution =
         await policyExecutionService.applyPrivacyWorkflowPolicy(
           context.organizationId,

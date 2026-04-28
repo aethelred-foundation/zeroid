@@ -1314,8 +1314,8 @@ describe('enterprise compliance receipt routes', () => {
       filingReference: 'SAR-20260422-abc123',
       submittedAt: '2026-04-22T10:00:00.000Z',
     });
-    expect(mockSubmitReport).toHaveBeenCalledWith('report-1');
-    expect(mockGetReport).toHaveBeenCalledWith('report-1');
+    expect(mockSubmitReport).toHaveBeenCalledWith('report-1', 'org-1');
+    expect(mockGetReport).toHaveBeenCalledWith('report-1', 'org-1');
     expect(mockCreateReceipt).toHaveBeenCalledWith(expect.objectContaining({
       receiptType: 'regulatory_report',
       policyName: 'regulatory_submission',
@@ -1413,6 +1413,7 @@ describe('enterprise compliance receipt routes', () => {
       'report-1',
       'Corrected transaction narrative',
       { narrativeDescription: 'Updated narrative' },
+      'org-1',
     );
     expect(mockCreateReceipt).toHaveBeenCalledWith(expect.objectContaining({
       receiptType: 'regulatory_report',
@@ -1550,8 +1551,8 @@ describe('enterprise compliance receipt routes', () => {
       'X-ZeroID-Receipt-Id': 'pdr_1',
       'X-ZeroID-Receipt-Hash': 'hash',
     });
-    expect(mockExportReport).toHaveBeenCalledWith('report-1', 'pdf');
-    expect(mockGetReport).toHaveBeenCalledWith('report-1');
+    expect(mockExportReport).toHaveBeenCalledWith('report-1', 'pdf', 'org-1');
+    expect(mockGetReport).toHaveBeenCalledWith('report-1', 'org-1');
     expect(mockCreateReceipt).toHaveBeenCalledWith(expect.objectContaining({
       receiptType: 'regulatory_report',
       policyName: 'regulatory_export',
@@ -1694,7 +1695,7 @@ describe('enterprise compliance receipt routes', () => {
         ]),
       }),
     });
-    expect(mockGetAuthorityManifest).toHaveBeenCalledWith('report-1');
+    expect(mockGetAuthorityManifest).toHaveBeenCalledWith('report-1', 'org-1');
   });
 
   it('exports a regulator submission bundle with related receipt evidence', async () => {
@@ -1867,9 +1868,9 @@ describe('enterprise compliance receipt routes', () => {
     expect(mockExportReceipt).toHaveBeenCalledWith('pdr-sub-1');
     expect(mockExportReceipt).toHaveBeenCalledWith('pdr-exp-1');
     expect(mockExportReceipt).toHaveBeenCalledWith('pdr-ack-1');
-    expect(mockExportReport).toHaveBeenCalledWith('report-1', 'json');
-    expect(mockExportReport).toHaveBeenCalledWith('report-1', 'xml');
-    expect(mockExportReport).toHaveBeenCalledWith('report-1', 'pdf');
+    expect(mockExportReport).toHaveBeenCalledWith('report-1', 'json', 'org-1');
+    expect(mockExportReport).toHaveBeenCalledWith('report-1', 'xml', 'org-1');
+    expect(mockExportReport).toHaveBeenCalledWith('report-1', 'pdf', 'org-1');
   });
 
   it('rejects incomplete regulator submission bundles when required artifacts are unavailable', async () => {
@@ -1919,8 +1920,8 @@ describe('enterprise compliance receipt routes', () => {
       code: 'REPORT_SUBMISSION_PACKAGE_INCOMPLETE',
     });
     expect(String(response.body.error)).toContain('missing required artifacts: xml');
-    expect(mockExportReport).toHaveBeenCalledWith('report-1', 'json');
-    expect(mockExportReport).toHaveBeenCalledWith('report-1', 'pdf');
+    expect(mockExportReport).toHaveBeenCalledWith('report-1', 'json', 'org-1');
+    expect(mockExportReport).toHaveBeenCalledWith('report-1', 'pdf', 'org-1');
   });
 
   it('verifies an untampered regulator submission bundle', async () => {
@@ -2338,7 +2339,7 @@ describe('enterprise compliance receipt routes', () => {
         ]),
       }),
     });
-    expect(mockGetEvidenceTrail).toHaveBeenCalledWith('report-1');
+    expect(mockGetEvidenceTrail).toHaveBeenCalledWith('report-1', 'org-1');
   });
 
   it('applies privacy policy execution to DSAR workflows', async () => {
