@@ -593,6 +593,37 @@ describe('ZK-01: Context-tamper verification', () => {
     expect(res.body.code).toBe('PROOF_CONTEXT_METADATA_MISMATCH');
   });
 
+  it('rejects malformed nonce records as controlled proof failures', async () => {
+    const token = await makeToken({ sub: VERIFIER_ID, did: VERIFIER_DID });
+    stubAuthFor(VERIFIER_ID, VERIFIER_DID);
+
+    const nonce = 'nonce-malformed-record';
+    const issuedAt = Date.now() - 2000;
+    const ctxField = computeContextCommitmentField(
+      nonce,
+      VERIFIER_ID,
+      SUBJECT_ID,
+      CREDENTIAL_ID,
+      issuedAt,
+    );
+    redisStore[proofNonceScopedKey('proof:nonce', nonce)] = '{not-json';
+
+    const res = await request(app as Express)
+      .post('/api/v1/verification/zk-verify')
+      .set('Authorization', `Bearer ${token}`)
+      .send(buildValidPayload({
+        nonce,
+        audience: VERIFIER_ID,
+        contextCommitment: ctxField,
+        issuedAt,
+        publicSignals: [CREDENTIAL_CLAIMS_FIELD, '2', ctxField],
+      }));
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('PROOF_NONCE_RECORD_INVALID');
+    expect(mockVerifyProof).not.toHaveBeenCalled();
+  });
+
   it('rejects when body issuedAt differs from the issuedAt stored in the nonce record', async () => {
     const token = await makeToken({ sub: VERIFIER_ID, did: VERIFIER_DID });
     stubAuthFor(VERIFIER_ID, VERIFIER_DID);

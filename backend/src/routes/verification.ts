@@ -17,6 +17,19 @@ const PROOF_NONCE_TTL_SECONDS = 300; // Nonces are valid for 5 minutes
 const PROOF_REPLAY_WINDOW_SECONDS = 86400; // Track used proofs for 24 hours
 const MAX_PROOF_AGE_MS = 5 * 60 * 1000; // Proofs expire after 5 minutes
 const PROOF_VERIFICATION_LOCK_TTL_SECONDS = 30;
+const MAX_PUBLIC_SIGNALS = 128;
+const MAX_PUBLIC_SIGNAL_LENGTH = 512;
+const MAX_CONTEXT_COMMITMENT_LENGTH = 128;
+
+type ProofNonceRecord = {
+  audience?: unknown;
+  nonce?: unknown;
+  subjectId?: unknown;
+  credentialId?: unknown;
+  issuedAt?: unknown;
+  claimsHashField?: unknown;
+  contextCommitmentField?: unknown;
+};
 
 function canonicalizeClaims(value: unknown): string {
   if (value === null || value === undefined) return JSON.stringify(value);
@@ -299,13 +312,18 @@ router.post(
 // ---------------------------------------------------------------------------
 const verifyZKProofSchema = z.object({
   proof: z.object({
-    pi_a: z.array(z.string()),
-    pi_b: z.array(z.array(z.string())),
-    pi_c: z.array(z.string()),
-    protocol: z.string(),
-    curve: z.string(),
+    pi_a: z.array(z.string().max(MAX_PUBLIC_SIGNAL_LENGTH)).max(8),
+    pi_b: z
+      .array(z.array(z.string().max(MAX_PUBLIC_SIGNAL_LENGTH)).max(8))
+      .max(8),
+    pi_c: z.array(z.string().max(MAX_PUBLIC_SIGNAL_LENGTH)).max(8),
+    protocol: z.string().min(1).max(32),
+    curve: z.string().min(1).max(32),
   }),
-  publicSignals: z.array(z.string()),
+  publicSignals: z
+    .array(z.string().min(1).max(MAX_PUBLIC_SIGNAL_LENGTH))
+    .min(1)
+    .max(MAX_PUBLIC_SIGNALS),
   circuitName: z.string().min(1).max(100),
   // Context binding — verifier must supply matching values
   nonce: z.string().min(16).max(128).describe('Nonce from proof generation'),
@@ -317,6 +335,7 @@ const verifyZKProofSchema = z.object({
   contextCommitment: z
     .string()
     .min(1)
+    .max(MAX_CONTEXT_COMMITMENT_LENGTH)
     .describe('Context commitment field element from proof generation'),
   issuedAt: z.number().int().positive().describe('Proof issuance timestamp'),
 });
@@ -443,15 +462,20 @@ router.post(
       //    record that created the public context commitment; otherwise a
       //    valid proof for one audience/timestamp could be rebound to another
       //    verifier request while still passing the public-signal check.
-      const nonceRecord = JSON.parse(nonceData) as {
-        audience?: unknown;
-        nonce?: unknown;
-        subjectId?: unknown;
-        credentialId?: unknown;
-        issuedAt?: unknown;
-        claimsHashField?: unknown;
-        contextCommitmentField?: unknown;
-      };
+      let nonceRecord: ProofNonceRecord;
+      try {
+        nonceRecord = JSON.parse(nonceData) as ProofNonceRecord;
+      } catch {
+        logger.warn('proof_nonce_record_parse_failed', {
+          nonce,
+          verifier: verifier.id,
+        });
+        res.status(400).json({
+          error: 'Nonce record is malformed',
+          code: 'PROOF_NONCE_RECORD_INVALID',
+        });
+        return;
+      }
 
       if (
         typeof nonceRecord.audience !== 'string' ||

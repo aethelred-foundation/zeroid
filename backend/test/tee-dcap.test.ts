@@ -23,7 +23,9 @@ jest.mock('prom-client', () => {
   return {
     Counter: Metric,
     Histogram: Metric,
-    Registry: jest.fn().mockImplementation(() => ({})),
+    Registry: jest.fn().mockImplementation(() => ({
+      registerMetric: jest.fn(),
+    })),
   };
 }, { virtual: true });
 
