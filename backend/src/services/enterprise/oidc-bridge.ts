@@ -678,6 +678,16 @@ export class OIDCBridge {
         'Implicit and hybrid OIDC response types are disabled. Use authorization code flow with PKCE.',
       );
     }
+    if (
+      isProductionRuntime() &&
+      parsed.grantTypes.includes('authorization_code') &&
+      parsed.requirePkce === false
+    ) {
+      throw new OIDCError(
+        'invalid_client_metadata',
+        'Production authorization-code clients must require S256 PKCE.',
+      );
+    }
     this.assertKnownRegisteredScopes(parsed.scopes);
 
     const clientId = `zeroid_${crypto.randomBytes(16).toString('hex')}`;
@@ -787,8 +797,9 @@ export class OIDCBridge {
       );
     }
 
-    // Enforce PKCE if required
-    if (client.registration.requirePkce && !parsed.codeChallenge) {
+    const pkceRequired =
+      client.registration.requirePkce !== false || isProductionRuntime();
+    if (pkceRequired && !parsed.codeChallenge) {
       throw new OIDCError('invalid_request', 'PKCE code_challenge required');
     }
 
@@ -904,20 +915,13 @@ export class OIDCBridge {
     );
     this.assertClientGrantAllowed(client, 'authorization_code');
 
-    // Atomically claim the auth code: compare-and-set used=false→true.
-    // If two requests race, only one wins; the loser gets undefined.
-    const authCode = await this.authorizationCodes.compareAndSet(
-      request.code!,
-      'used',
-      false,
-      true,
-      {
-        clientId: request.clientId,
-        redirectUri: request.redirectUri!,
-      },
-    );
-    if (!authCode) {
-      // Either the code doesn't exist, is expired, or was already consumed
+    const authCode = await this.authorizationCodes.get(request.code!);
+    if (
+      !authCode ||
+      authCode.used ||
+      authCode.clientId !== request.clientId ||
+      authCode.redirectUri !== request.redirectUri
+    ) {
       throw new OIDCError(
         'invalid_grant',
         'Authorization code not found, already used, or not bound to this client',
@@ -939,7 +943,12 @@ export class OIDCBridge {
     this.assertScopesAllowed(client, authCode.scope);
     await this.assertAuthorizationSessionActive(authCode);
 
-    // PKCE verification
+    const pkceRequired =
+      client.registration.requirePkce !== false || isProductionRuntime();
+    if (pkceRequired && !authCode.codeChallenge) {
+      throw new OIDCError('invalid_grant', 'PKCE-bound code required');
+    }
+
     if (authCode.codeChallenge) {
       if (!request.codeVerifier) {
         throw new OIDCError('invalid_grant', 'Code verifier required');
@@ -952,6 +961,27 @@ export class OIDCBridge {
       if (!verified) {
         throw new OIDCError('invalid_grant', 'PKCE verification failed');
       }
+    }
+
+    // Atomically claim the auth code only after verifier checks pass. If two
+    // valid requests race, only one wins; failed PKCE attempts do not burn the
+    // code and force the user through a fresh authorization round-trip.
+    const claimedAuthCode = await this.authorizationCodes.compareAndSet(
+      request.code!,
+      'used',
+      false,
+      true,
+      {
+        clientId: request.clientId,
+        redirectUri: request.redirectUri!,
+        sessionId: authCode.sessionId,
+      },
+    );
+    if (!claimedAuthCode) {
+      throw new OIDCError(
+        'invalid_grant',
+        'Authorization code not found, already used, or not bound to this client',
+      );
     }
 
     const accessToken = await this.generateToken(

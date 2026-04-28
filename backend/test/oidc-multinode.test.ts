@@ -429,6 +429,57 @@ describe('OIDC multi-node correctness', () => {
     }
   });
 
+  test('production client registration refuses disabled PKCE for code flow', async () => {
+    const previousNodeEnv = process.env.NODE_ENV;
+    try {
+      process.env.NODE_ENV = 'production';
+
+      await expect(
+        bridgeA.registerClient({
+          clientName: 'PKCE Disabled Client',
+          redirectUris: ['https://app.example.com/callback'],
+          postLogoutRedirectUris: ['https://app.example.com/logout'],
+          grantTypes: ['authorization_code'],
+          responseTypes: ['code'],
+          tokenEndpointAuthMethod: 'client_secret_basic',
+          scopes: ['openid'],
+          requirePkce: false,
+        }),
+      ).rejects.toMatchObject({
+        errorCode: 'invalid_client_metadata',
+      });
+    } finally {
+      process.env.NODE_ENV = previousNodeEnv;
+    }
+  });
+
+  test('production authorization requires PKCE for legacy stored clients', async () => {
+    const client = await registerTestClient(bridgeA);
+    const previousNodeEnv = process.env.NODE_ENV;
+    try {
+      process.env.NODE_ENV = 'production';
+
+      await expect(
+        bridgeB.authorize(
+          {
+            clientId: client.clientId,
+            redirectUri: REDIRECT_URI,
+            responseType: 'code',
+            scope: 'openid profile',
+            state: crypto.randomBytes(8).toString('hex'),
+            nonce: crypto.randomBytes(8).toString('hex'),
+          },
+          'user-production-pkce',
+          { name: 'PKCE User' },
+        ),
+      ).rejects.toMatchObject({
+        errorCode: 'invalid_request',
+      });
+    } finally {
+      process.env.NODE_ENV = previousNodeEnv;
+    }
+  });
+
   test('authorize rejects implicit flow even for a legacy stored client', async () => {
     const client = await registerTestClient(bridgeA);
     const storedClient = JSON.parse(
@@ -891,6 +942,43 @@ describe('OIDC multi-node correctness', () => {
       redirectUri: REDIRECT_URI,
       clientId: client.clientId,
       clientSecret: client.clientSecret,
+    });
+    expect(tokens.access_token).toBeDefined();
+  });
+
+  test('failed PKCE verification does not consume authorization codes', async () => {
+    const client = await registerTestClient(bridgeA);
+    const pair = pkce();
+    const { code } = await authorizeCode(
+      bridgeA,
+      client.clientId,
+      'user-pkce-code-preserved',
+      {
+        codeChallenge: pair.challenge,
+        codeChallengeMethod: 'S256',
+      },
+    );
+
+    await expect(
+      bridgeB.exchangeToken({
+        grantType: 'authorization_code',
+        code: code!,
+        redirectUri: REDIRECT_URI,
+        clientId: client.clientId,
+        clientSecret: client.clientSecret,
+        codeVerifier: 'wrong-verifier',
+      }),
+    ).rejects.toMatchObject({
+      errorCode: 'invalid_grant',
+    });
+
+    const tokens = await bridgeA.exchangeToken({
+      grantType: 'authorization_code',
+      code: code!,
+      redirectUri: REDIRECT_URI,
+      clientId: client.clientId,
+      clientSecret: client.clientSecret,
+      codeVerifier: pair.verifier,
     });
     expect(tokens.access_token).toBeDefined();
   });
