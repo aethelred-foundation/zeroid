@@ -1,4 +1,7 @@
-import { EnterpriseKeySigner } from '../src/services/enterprise/enterprise-key-signer';
+import {
+  assertAllowedEnterpriseKmsEndpoint,
+  EnterpriseKeySigner,
+} from '../src/services/enterprise/enterprise-key-signer';
 
 const ORIGINAL_ENV = { ...process.env };
 const ORIGINAL_FETCH = global.fetch;
@@ -73,6 +76,38 @@ describe('EnterpriseKeySigner', () => {
       code: 'SIGNING_KMS_SIGN_FAILED',
       statusCode: 502,
     });
+  });
+
+  it('allowlists only official KMS and metadata endpoints', () => {
+    expect(() =>
+      assertAllowedEnterpriseKmsEndpoint(
+        'https://cloudkms.googleapis.com/v1/projects/p/locations/global/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1:asymmetricSign',
+      ),
+    ).not.toThrow();
+    expect(() =>
+      assertAllowedEnterpriseKmsEndpoint(
+        'https://tenant-vault.vault.azure.net/keys/key-1/1/sign?api-version=7.4',
+      ),
+    ).not.toThrow();
+    expect(() =>
+      assertAllowedEnterpriseKmsEndpoint(
+        'http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token',
+      ),
+    ).not.toThrow();
+    expect(() =>
+      assertAllowedEnterpriseKmsEndpoint(
+        'http://169.254.169.254/metadata/identity/oauth2/token?api-version=2019-08-01&resource=https://vault.azure.net',
+      ),
+    ).not.toThrow();
+
+    expect(() =>
+      assertAllowedEnterpriseKmsEndpoint('https://kms.internal.local/sign'),
+    ).toThrow(expect.objectContaining({ code: 'SIGNING_KMS_CONFIG_MISSING' }));
+    expect(() =>
+      assertAllowedEnterpriseKmsEndpoint(
+        'http://metadata.google.internal.evil.example/computeMetadata/v1/instance/service-accounts/default/token',
+      ),
+    ).toThrow(expect.objectContaining({ code: 'SIGNING_KMS_CONFIG_MISSING' }));
   });
 });
 

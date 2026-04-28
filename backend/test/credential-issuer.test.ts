@@ -187,6 +187,7 @@ describe('CRED-01: Issuer-scoped credential verification', () => {
     delete process.env.KMS_KEY_VERSION;
     delete process.env.CREDENTIAL_SIGNING_PUBLIC_KEYS_JSON;
     delete process.env.ALLOW_LEGACY_HMAC_CREDENTIAL_SIGNING;
+    delete process.env.ALLOW_LEGACY_PLATFORM_CREDENTIAL_SIGNING;
 
     service = new CredentialService();
   });
@@ -373,15 +374,34 @@ describe('CRED-01: Issuer-scoped credential verification', () => {
   });
 
   // -------------------------------------------------------------------------
-  // 5. Legacy fallback works in non-production
+  // 5. Legacy platform fallback requires explicit migration opt-in
   // -------------------------------------------------------------------------
-  it('should allow legacy platform-scoped verification in non-production', async () => {
+  it('should block legacy platform-scoped verification by default outside production', async () => {
     process.env.NODE_ENV = 'test';
 
     const claimsHash = await hashClaims(CLAIMS);
     const signatureValue = signLegacyPlatformScoped(claimsHash);
 
     // No issuerDid in proof — legacy platform-scoped credential
+    const proof = buildProof({ signatureValue });
+
+    const result = await (service as any).verifyProofSignature(claimsHash, ISSUER_ID, proof);
+    expect(result).toBe(false);
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      'credential_legacy_platform_scope_disabled',
+      expect.objectContaining({
+        issuerId: ISSUER_ID,
+      }),
+    );
+  });
+
+  it('should allow legacy platform-scoped verification only with explicit non-production opt-in', async () => {
+    process.env.NODE_ENV = 'test';
+    process.env.ALLOW_LEGACY_PLATFORM_CREDENTIAL_SIGNING = 'true';
+
+    const claimsHash = await hashClaims(CLAIMS);
+    const signatureValue = signLegacyPlatformScoped(claimsHash);
+
     const proof = buildProof({ signatureValue });
 
     const result = await (service as any).verifyProofSignature(claimsHash, ISSUER_ID, proof);

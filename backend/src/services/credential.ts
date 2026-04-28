@@ -10,6 +10,10 @@ import {
 const isProductionRuntime = (): boolean =>
   process.env.NODE_ENV === 'production';
 
+const allowLegacyPlatformCredentialVerification = (): boolean =>
+  process.env.ALLOW_LEGACY_PLATFORM_CREDENTIAL_SIGNING === 'true' &&
+  !isProductionRuntime();
+
 // ---------------------------------------------------------------------------
 // Custom error (declared early so KMS classes can reference it)
 // ---------------------------------------------------------------------------
@@ -1823,22 +1827,30 @@ export class CredentialService {
       return false;
     }
 
-    try {
-      const legacyMessage = Buffer.from(claimsHash, 'hex');
-      if (this.verifyMessage(legacyMessage, signature, publicKey)) {
-        logger.warn(
-          'credential_verified_with_legacy_platform_scope_DEPRECATED',
-          {
-            issuerId,
-            note:
-              'DEPRECATION WARNING: Credential was signed with platform-scoped key without issuer-DID binding. ' +
-              'This legacy fallback will be removed in a future release. Re-issue the credential with issuer-scoped binding.',
-          },
-        );
-        return true;
+    if (allowLegacyPlatformCredentialVerification()) {
+      try {
+        const legacyMessage = Buffer.from(claimsHash, 'hex');
+        if (this.verifyMessage(legacyMessage, signature, publicKey)) {
+          logger.warn(
+            'credential_verified_with_legacy_platform_scope_DEPRECATED',
+            {
+              issuerId,
+              note:
+                'DEPRECATION WARNING: Credential was signed with platform-scoped key without issuer-DID binding. ' +
+                'This legacy fallback will be removed in a future release. Re-issue the credential with issuer-scoped binding.',
+            },
+          );
+          return true;
+        }
+      } catch {
+        // Fall through
       }
-    } catch {
-      // Fall through
+    } else {
+      logger.warn('credential_legacy_platform_scope_disabled', {
+        issuerId,
+        note:
+          'Legacy platform-scoped verification requires explicit migration opt-in outside production.',
+      });
     }
 
     // IMPORTANT: This flag MUST be removed before external audit.

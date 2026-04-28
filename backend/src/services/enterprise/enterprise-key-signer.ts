@@ -70,6 +70,10 @@ const DEFAULT_ERROR_CODES = {
 const KMS_HTTP_TIMEOUT_MS = 10_000;
 const KMS_HTTP_RESPONSE_MAX_BYTES = 1024 * 1024;
 const KMS_HTTP_ERROR_PREVIEW_BYTES = 2048;
+const GCP_METADATA_TOKEN_ENDPOINT =
+  'http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token';
+const AZURE_MANAGED_IDENTITY_TOKEN_ENDPOINT =
+  'http://169.254.169.254/metadata/identity/oauth2/token';
 
 let awsKmsClient: AwsKmsClient | null = null;
 
@@ -114,11 +118,54 @@ function getAwsKmsClient(): AwsKmsClient {
 }
 
 function fetchWithKmsTimeout(input: string, init: RequestInit = {}): Promise<Response> {
+  assertAllowedEnterpriseKmsEndpoint(input);
   return fetch(input, {
     ...init,
     redirect: 'manual',
     signal: init.signal ?? AbortSignal.timeout(KMS_HTTP_TIMEOUT_MS),
   });
+}
+
+export function assertAllowedEnterpriseKmsEndpoint(input: string): void {
+  let url: URL;
+  try {
+    url = new URL(input);
+  } catch {
+    throw new EnterpriseSigningError(
+      'KMS endpoint URL is invalid.',
+      DEFAULT_ERROR_CODES.kmsConfigMissing,
+      500,
+    );
+  }
+
+  const hostname = url.hostname.toLowerCase();
+  const isGcpKms =
+    url.protocol === 'https:' && hostname === 'cloudkms.googleapis.com';
+  const isAzureKeyVault =
+    url.protocol === 'https:' && hostname.endsWith('.vault.azure.net');
+  const isGcpMetadata =
+    url.protocol === 'http:' &&
+    hostname === 'metadata.google.internal' &&
+    url.pathname === new URL(GCP_METADATA_TOKEN_ENDPOINT).pathname;
+  const isAzureManagedIdentity =
+    url.protocol === 'http:' &&
+    hostname === '169.254.169.254' &&
+    url.pathname === new URL(AZURE_MANAGED_IDENTITY_TOKEN_ENDPOINT).pathname;
+
+  if (
+    isGcpKms ||
+    isAzureKeyVault ||
+    isGcpMetadata ||
+    isAzureManagedIdentity
+  ) {
+    return;
+  }
+
+  throw new EnterpriseSigningError(
+    `KMS endpoint is not allowlisted: ${url.origin}`,
+    DEFAULT_ERROR_CODES.kmsConfigMissing,
+    500,
+  );
 }
 
 async function readKmsJsonResponse<T>(
@@ -707,7 +754,7 @@ export class EnterpriseKeySigner {
 
     try {
       const metadataResponse = await fetchWithKmsTimeout(
-        'http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token',
+        GCP_METADATA_TOKEN_ENDPOINT,
         { headers: { 'Metadata-Flavor': 'Google' } },
       );
       if (metadataResponse.ok) {
@@ -867,7 +914,7 @@ export class EnterpriseKeySigner {
 
     try {
       const imdsResponse = await fetchWithKmsTimeout(
-        'http://169.254.169.254/metadata/identity/oauth2/token?api-version=2019-08-01&resource=https://vault.azure.net',
+        `${AZURE_MANAGED_IDENTITY_TOKEN_ENDPOINT}?api-version=2019-08-01&resource=https://vault.azure.net`,
         { headers: { Metadata: 'true' } },
       );
       if (imdsResponse.ok) {
