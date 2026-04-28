@@ -1,3 +1,5 @@
+import { promises as dns } from 'dns';
+
 const mockRedisGet = jest.fn();
 const mockRedisSet = jest.fn();
 const mockRedisDel = jest.fn();
@@ -31,6 +33,7 @@ import { GovernmentAPIService } from '../src/services/government-api';
 
 const ORIGINAL_ENV = { ...process.env };
 const ORIGINAL_FETCH = global.fetch;
+let dnsLookupSpy: jest.SpyInstance;
 
 describe('GovernmentAPIService production configuration', () => {
   beforeEach(() => {
@@ -41,9 +44,13 @@ describe('GovernmentAPIService production configuration', () => {
     process.env = { ...ORIGINAL_ENV, NODE_ENV: 'production' };
     delete process.env.UAE_PASS_REDIRECT_URI_ALLOWLIST;
     delete process.env.GOVERNMENT_REDIRECT_URI_ALLOWLIST;
+    dnsLookupSpy = jest.spyOn(dns, 'lookup').mockResolvedValue([
+      { address: '8.8.8.8', family: 4 },
+    ] as never);
   });
 
   afterEach(() => {
+    dnsLookupSpy.mockRestore();
     global.fetch = ORIGINAL_FETCH;
   });
 
@@ -196,6 +203,29 @@ describe('GovernmentAPIService production configuration', () => {
       statusCode: 503,
     });
     expect(mockRedisGet).not.toHaveBeenCalled();
+  });
+
+  it('blocks Emirates ID verification when a trusted endpoint resolves privately', async () => {
+    process.env.EMIRATES_ID_API_URL = 'https://eid.gov.example';
+    process.env.EMIRATES_ID_API_KEY = 'key-1';
+    process.env.EMIRATES_ID_API_SECRET = 'secret-1';
+    dnsLookupSpy.mockResolvedValueOnce([
+      { address: '10.0.0.9', family: 4 },
+    ] as never);
+    global.fetch = jest.fn().mockResolvedValueOnce(governmentResponse(JSON.stringify({
+      verified: true,
+    }))) as unknown as typeof fetch;
+    const service = new GovernmentAPIService();
+
+    await expect(service.verifyEmiratesID({
+      idNumber: '784-1990-1234567-1',
+      dateOfBirth: '1990-01-01',
+      identityId: 'identity-1',
+    })).rejects.toMatchObject({
+      code: 'GOV_EID_ENDPOINT_UNSAFE_RESOLUTION',
+      statusCode: 503,
+    });
+    expect(global.fetch).not.toHaveBeenCalled();
   });
 
   it('rejects oversized UAE Pass token responses before parsing', async () => {

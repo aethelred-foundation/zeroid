@@ -7,6 +7,7 @@
  * work across nodes.
  */
 import crypto from 'crypto';
+import { promises as dns } from 'dns';
 
 // ---------------------------------------------------------------------------
 // Generate a deterministic RSA-2048 key pair BEFORE any module loads
@@ -498,6 +499,35 @@ describe('OIDC multi-node correctness', () => {
       expect(result).toEqual({ notified: false });
       expect(fetchMock).not.toHaveBeenCalled();
     } finally {
+      process.env.NODE_ENV = previousNodeEnv;
+    }
+  });
+
+  test('back-channel logout blocks private DNS resolution at delivery time', async () => {
+    const client = await registerTestClient(bridgeA);
+    const { sessionId } = await authorizeCode(
+      bridgeA,
+      client.clientId,
+      'user-private-resolution',
+    );
+    const previousNodeEnv = process.env.NODE_ENV;
+    const dnsSpy = jest.spyOn(dns, 'lookup').mockResolvedValue([
+      { address: '10.0.0.9', family: 4 },
+    ]);
+
+    try {
+      process.env.NODE_ENV = 'production';
+
+      const result = await bridgeB.backChannelLogout(sessionId);
+
+      expect(result).toEqual({ notified: false });
+      expect(dnsSpy).toHaveBeenCalledWith('app.example.com', {
+        all: true,
+        verbatim: true,
+      });
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      dnsSpy.mockRestore();
       process.env.NODE_ENV = previousNodeEnv;
     }
   });

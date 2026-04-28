@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { createLogger, format, transports } from 'winston';
 import crypto from 'crypto';
 import * as net from 'net';
+import { promises as dns } from 'dns';
 import { redis } from '../../index';
 
 const PRIVATE_OIDC_HOSTNAME_SUFFIXES = [
@@ -1245,6 +1246,7 @@ export class OIDCBridge {
     }
 
     try {
+      await this.assertSafeResolvedOidcEndpoint(logoutUri);
       const response = await fetch(logoutUri, {
         method: 'POST',
         headers: {
@@ -1273,6 +1275,32 @@ export class OIDCBridge {
         error: error.message,
       });
       return { notified: false };
+    }
+  }
+
+  private async assertSafeResolvedOidcEndpoint(endpointUri: string): Promise<void> {
+    if (!isProductionRuntime()) return;
+
+    const endpoint = new URL(endpointUri);
+    if (isLocalOrPrivateOidcHost(endpoint.hostname)) {
+      throw new OIDCError(
+        'invalid_client_metadata',
+        'Back-channel logout URI resolved to localhost, private, or internal network infrastructure.',
+      );
+    }
+
+    const resolvedAddresses = await dns.lookup(endpoint.hostname, {
+      all: true,
+      verbatim: true,
+    });
+    if (
+      resolvedAddresses.length === 0 ||
+      resolvedAddresses.some((entry) => isLocalOrPrivateOidcHost(entry.address))
+    ) {
+      throw new OIDCError(
+        'invalid_client_metadata',
+        'Back-channel logout URI resolved to localhost, private, or internal network infrastructure.',
+      );
     }
   }
 

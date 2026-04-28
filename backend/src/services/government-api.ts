@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import * as net from 'net';
+import { promises as dns } from 'dns';
 import { logger, redis, prisma } from '../index';
 import { isProductionRuntime } from './production-safety';
 
@@ -122,6 +123,7 @@ export class GovernmentAPIService {
     try {
       const config = this.getUAEPassConfig();
       this.assertAllowedUAEPassRedirectUri(request.redirectUri);
+      await this.assertSafeResolvedGovernmentEndpoint(config.tokenEndpoint, 'UAE Pass', 'GOV_UAEPASS');
       // 1. Exchange authorization code for access token
       const tokenResponse = await fetch(config.tokenEndpoint, {
         method: 'POST',
@@ -153,6 +155,7 @@ export class GovernmentAPIService {
       }>(tokenResponse, 'UAE Pass token');
 
       // 2. Fetch user profile
+      await this.assertSafeResolvedGovernmentEndpoint(config.userInfoEndpoint, 'UAE Pass', 'GOV_UAEPASS');
       const profileResponse = await fetch(config.userInfoEndpoint, {
         headers: {
           Authorization: `Bearer ${tokenData.access_token}`,
@@ -274,7 +277,9 @@ export class GovernmentAPIService {
       }
 
       // Call ICA (Federal Authority for Identity and Citizenship) API
-      const response = await fetch(`${config.apiUrl}/identity/verify`, {
+      const verificationUrl = `${config.apiUrl}/identity/verify`;
+      await this.assertSafeResolvedGovernmentEndpoint(verificationUrl, 'Emirates ID', 'GOV_EID');
+      const response = await fetch(verificationUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -485,6 +490,41 @@ export class GovernmentAPIService {
       throw new GovernmentAPIError(
         `${provider} production endpoint is not allowed: ${unsafeEndpoint}`,
         `${codePrefix}_ENDPOINT_UNSAFE`,
+        503,
+      );
+    }
+  }
+
+  private async assertSafeResolvedGovernmentEndpoint(
+    endpointUrl: string,
+    provider: string,
+    codePrefix: string,
+  ): Promise<void> {
+    if (!isProductionRuntime()) return;
+
+    const endpoint = new URL(endpointUrl);
+    const hostname = normalizeGovernmentHostname(endpoint.hostname);
+    if (isLocalOrPrivateGovernmentHostname(hostname)) {
+      throw new GovernmentAPIError(
+        `${provider} endpoint resolved to localhost, private, or internal network infrastructure`,
+        `${codePrefix}_ENDPOINT_UNSAFE_RESOLUTION`,
+        503,
+      );
+    }
+
+    const resolvedAddresses = await dns.lookup(hostname, {
+      all: true,
+      verbatim: true,
+    });
+    if (
+      resolvedAddresses.length === 0 ||
+      resolvedAddresses.some((entry) =>
+        isLocalOrPrivateGovernmentHostname(normalizeGovernmentHostname(entry.address)),
+      )
+    ) {
+      throw new GovernmentAPIError(
+        `${provider} endpoint resolved to localhost, private, or internal network infrastructure`,
+        `${codePrefix}_ENDPOINT_UNSAFE_RESOLUTION`,
         503,
       );
     }
