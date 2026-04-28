@@ -67,6 +67,8 @@ const DEFAULT_ERROR_CODES = {
   kmsAuthFailed: 'SIGNING_KMS_AUTH_FAILED',
 };
 
+const KMS_HTTP_TIMEOUT_MS = 10_000;
+
 let awsKmsClient: AwsKmsClient | null = null;
 
 function getAwsKmsSdk(): {
@@ -107,6 +109,13 @@ function getAwsKmsClient(): AwsKmsClient {
     });
   }
   return awsKmsClient;
+}
+
+function fetchWithKmsTimeout(input: string, init: RequestInit = {}): Promise<Response> {
+  return fetch(input, {
+    ...init,
+    signal: init.signal ?? AbortSignal.timeout(KMS_HTTP_TIMEOUT_MS),
+  });
 }
 
 function normalizeKeyMaterial(raw: string): string {
@@ -474,7 +483,7 @@ export class EnterpriseKeySigner {
       : `${this.keyId}/cryptoKeyVersions/${this.keyVersion}`;
     const endpoint = `https://cloudkms.googleapis.com/v1/${keyName}:asymmetricSign`;
     const digest = crypto.createHash('sha256').update(message).digest();
-    const response = await fetch(endpoint, {
+    const response = await fetchWithKmsTimeout(endpoint, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -506,7 +515,7 @@ export class EnterpriseKeySigner {
       ? this.keyId
       : `${this.keyId}/cryptoKeyVersions/${this.keyVersion}`;
     const endpoint = `https://cloudkms.googleapis.com/v1/${keyName}:getPublicKey`;
-    const response = await fetch(endpoint, {
+    const response = await fetchWithKmsTimeout(endpoint, {
       method: 'GET',
       headers: {
         Authorization: `Bearer ${await this.getGCPAccessToken()}`,
@@ -532,7 +541,7 @@ export class EnterpriseKeySigner {
     if (envToken) return envToken;
 
     try {
-      const metadataResponse = await fetch(
+      const metadataResponse = await fetchWithKmsTimeout(
         'http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token',
         { headers: { 'Metadata-Flavor': 'Google' } },
       );
@@ -565,7 +574,7 @@ export class EnterpriseKeySigner {
     const algorithm = process.env[this.options.azureAlgorithmEnvKey ?? 'AZURE_KMS_ALGORITHM'] || 'ES256';
     const digest = crypto.createHash('sha256').update(message).digest();
     const endpoint = `https://${vaultName}.vault.azure.net/keys/${keyName}/${this.keyVersion}/sign?api-version=7.4`;
-    const response = await fetch(endpoint, {
+    const response = await fetchWithKmsTimeout(endpoint, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -602,7 +611,7 @@ export class EnterpriseKeySigner {
       );
     }
     const endpoint = `https://${vaultName}.vault.azure.net/keys/${keyName}/${this.keyVersion}?api-version=7.4`;
-    const response = await fetch(endpoint, {
+    const response = await fetchWithKmsTimeout(endpoint, {
       method: 'GET',
       headers: {
         Authorization: `Bearer ${await this.getAzureAccessToken()}`,
@@ -636,7 +645,7 @@ export class EnterpriseKeySigner {
     if (envToken) return envToken;
 
     try {
-      const imdsResponse = await fetch(
+      const imdsResponse = await fetchWithKmsTimeout(
         'http://169.254.169.254/metadata/identity/oauth2/token?api-version=2019-08-01&resource=https://vault.azure.net',
         { headers: { Metadata: 'true' } },
       );
