@@ -1,5 +1,6 @@
 import { logger, redis, prisma, metricsRegistry } from '../index';
 import * as crypto from 'crypto';
+import * as net from 'net';
 import { Counter, Histogram } from 'prom-client';
 
 // ---------------------------------------------------------------------------
@@ -131,11 +132,21 @@ const INTEL_PCS_BASE_URL =
   'https://api.trustedservices.intel.com/sgx/certification/v4';
 const TEE_DCAP_BASE_URL = process.env.TEE_DCAP_API_URL ?? INTEL_PCS_BASE_URL;
 const INTEL_PCS_API_KEY = process.env.INTEL_PCS_API_KEY ?? '';
+const TEE_COLLATERAL_FETCH_TIMEOUT_MS = 10_000;
 const ATTESTATION_VALIDITY_HOURS = parseInt(
   process.env.TEE_ATTESTATION_VALIDITY_HOURS ?? '24',
   10,
 );
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
+const PRIVATE_COLLATERAL_HOSTNAME_SUFFIXES = [
+  '.corp',
+  '.home',
+  '.internal',
+  '.lan',
+  '.local',
+  '.localhost',
+  '.test',
+];
 
 // Maximum age for collateral before it is considered stale (30 days)
 const MAX_COLLATERAL_AGE_MS = 30 * 24 * 60 * 60 * 1000;
@@ -959,12 +970,16 @@ export class TEEAttestationService {
     };
 
     try {
+      const requestOptions = {
+        headers,
+        signal: AbortSignal.timeout(TEE_COLLATERAL_FETCH_TIMEOUT_MS),
+      };
       const [pckCrlRes, rootCaCrlRes, tcbInfoRes, qeIdentityRes] =
         await Promise.all([
-          fetch(`${TEE_DCAP_BASE_URL}/pckcrl?ca=processor`, { headers }),
-          fetch(`${TEE_DCAP_BASE_URL}/rootcacrl`, { headers }),
-          fetch(`${TEE_DCAP_BASE_URL}/tcb?fmspc=${fmspc}`, { headers }),
-          fetch(`${TEE_DCAP_BASE_URL}/qe/identity`, { headers }),
+          fetch(`${TEE_DCAP_BASE_URL}/pckcrl?ca=processor`, requestOptions),
+          fetch(`${TEE_DCAP_BASE_URL}/rootcacrl`, requestOptions),
+          fetch(`${TEE_DCAP_BASE_URL}/tcb?fmspc=${fmspc}`, requestOptions),
+          fetch(`${TEE_DCAP_BASE_URL}/qe/identity`, requestOptions),
         ]);
 
       if (!pckCrlRes.ok) {
@@ -2142,6 +2157,14 @@ export class TEEAttestationService {
         503,
       );
     }
+
+    if (IS_PRODUCTION && !isTrustedCollateralProviderUrl(TEE_DCAP_BASE_URL)) {
+      throw new AttestationError(
+        'TEE collateral provider URL must use HTTPS and must not target localhost, private, or internal hosts in production.',
+        'TEE_COLLATERAL_PROVIDER_UNSAFE',
+        503,
+      );
+    }
   }
 
   private enforceTCBPolicy(status: TCBStatus): void {
@@ -2344,6 +2367,87 @@ export class AttestationError extends Error {
     this.code = code;
     this.statusCode = statusCode;
   }
+}
+
+function isTrustedCollateralProviderUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'https:') return false;
+    if (url.username || url.password) return false;
+    return !isLocalOrPrivateCollateralHostname(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
+function normalizeCollateralHostname(hostname: string): string {
+  return hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
+}
+
+function isLocalOrPrivateCollateralHostname(hostname: string): boolean {
+  const normalized = normalizeCollateralHostname(hostname);
+  if (
+    normalized === 'localhost' ||
+    normalized === '0.0.0.0' ||
+    normalized === '127.0.0.1' ||
+    normalized === '::' ||
+    normalized === '::1' ||
+    normalized.endsWith('.localhost')
+  ) {
+    return true;
+  }
+
+  const ipVersion = net.isIP(normalized);
+  if (ipVersion === 4) {
+    return isPrivateIpv4Address(normalized);
+  }
+
+  if (ipVersion === 6) {
+    const mappedIpv4 = extractIpv4MappedAddress(normalized);
+    if (mappedIpv4) return isPrivateIpv4Address(mappedIpv4);
+
+    return (
+      normalized === '::' ||
+      normalized === '::1' ||
+      normalized.startsWith('fc') ||
+      normalized.startsWith('fd') ||
+      normalized.startsWith('fe80:')
+    );
+  }
+
+  return (
+    !normalized.includes('.') ||
+    PRIVATE_COLLATERAL_HOSTNAME_SUFFIXES.some((suffix) => normalized.endsWith(suffix))
+  );
+}
+
+function isPrivateIpv4Address(value: string): boolean {
+  const octets = value.split('.').map(Number);
+  return (
+    octets[0] === 0 ||
+    octets[0] === 10 ||
+    octets[0] === 127 ||
+    (octets[0] === 169 && octets[1] === 254) ||
+    (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31) ||
+    (octets[0] === 192 && octets[1] === 168)
+  );
+}
+
+function extractIpv4MappedAddress(value: string): string | null {
+  const dotted = value.match(/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i);
+  if (dotted && net.isIP(dotted[1]) === 4) return dotted[1];
+
+  const hexadecimal = value.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
+  if (!hexadecimal) return null;
+
+  const high = parseInt(hexadecimal[1], 16);
+  const low = parseInt(hexadecimal[2], 16);
+  return [
+    (high >> 8) & 0xff,
+    high & 0xff,
+    (low >> 8) & 0xff,
+    low & 0xff,
+  ].join('.');
 }
 
 export const teeService = new TEEAttestationService();

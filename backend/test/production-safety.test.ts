@@ -378,6 +378,30 @@ describe('production safety controls', () => {
     })).toEqual([
       expect.objectContaining({ control: 'TEE_COLLATERAL_PROVIDER_URL' }),
     ]);
+
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      METRICS_PUBLIC_DISABLED: 'true',
+      TEE_DCAP_API_URL: 'https://10.0.0.5',
+    })).toEqual([
+      expect.objectContaining({ control: 'TEE_COLLATERAL_PROVIDER_URL' }),
+    ]);
+
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      METRICS_PUBLIC_DISABLED: 'true',
+      TEE_DCAP_API_URL: 'https://metadata.google.internal',
+    })).toEqual([
+      expect.objectContaining({ control: 'TEE_COLLATERAL_PROVIDER_URL' }),
+    ]);
+
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      METRICS_PUBLIC_DISABLED: 'true',
+      TEE_DCAP_API_URL: 'https://[::ffff:0a00:0005]',
+    })).toEqual([
+      expect.objectContaining({ control: 'TEE_COLLATERAL_PROVIDER_URL' }),
+    ]);
   });
 
   it('requires explicit trusted TEE signer and ISV SVN policies in production', () => {
