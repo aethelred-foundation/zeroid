@@ -408,6 +408,7 @@ interface RefreshTokenRecord {
   clientId: string;
   subjectId: string;
   scope: string;
+  claims?: Record<string, unknown>;
   sessionId?: string;
 }
 
@@ -1009,6 +1010,7 @@ export class OIDCBridge {
           authCode.clientId,
           authCode.subjectId,
           authCode.scope,
+          authCode.claims,
           authCode.sessionId,
         )
       : undefined;
@@ -1110,7 +1112,11 @@ export class OIDCBridge {
       request.clientAuthMethod,
     );
     this.assertClientGrantAllowed(client, 'refresh_token');
-    this.assertScopesAllowed(client, refreshData.scope);
+    const requestedRefreshScopes = this.resolveRefreshScopes(
+      client,
+      refreshData,
+      request.scope,
+    );
     await this.assertRefreshSessionActive(refreshData, refreshStorageKey);
 
     // Atomically consume the refresh token: getAndDelete ensures only one
@@ -1127,7 +1133,21 @@ export class OIDCBridge {
     if (consumedRefreshData.clientId !== request.clientId) {
       throw new OIDCError('invalid_grant', 'Client mismatch');
     }
-    this.assertScopesAllowed(client, consumedRefreshData.scope);
+    const consumedRefreshScopes = this.resolveRefreshScopes(
+      client,
+      consumedRefreshData,
+      request.scope,
+    );
+    const refreshScope = consumedRefreshScopes.join(' ');
+    const refreshClaims = this.buildClaims(
+      consumedRefreshScopes,
+      consumedRefreshData.subjectId,
+      consumedRefreshData.claims ?? {},
+    );
+
+    if (requestedRefreshScopes.join(' ') !== refreshScope) {
+      throw new OIDCError('invalid_scope', 'Refresh token scope changed');
+    }
 
     if (consumedRefreshData.sessionId) {
       await redis.srem(
@@ -1144,16 +1164,17 @@ export class OIDCBridge {
     const newAccessToken = await this.generateToken(
       consumedRefreshData.clientId,
       consumedRefreshData.subjectId,
-      {},
+      refreshClaims,
       'access_token',
       3600,
-      consumedRefreshData.scope,
+      refreshScope,
       consumedRefreshData.sessionId,
     );
     const newRefreshToken = await this.generateRefreshToken(
       consumedRefreshData.clientId,
       consumedRefreshData.subjectId,
-      consumedRefreshData.scope,
+      refreshScope,
+      refreshClaims,
       consumedRefreshData.sessionId,
     );
 
@@ -1164,7 +1185,7 @@ export class OIDCBridge {
       token_type: 'Bearer',
       expires_in: 3600,
       refresh_token: newRefreshToken,
-      scope: consumedRefreshData.scope,
+      scope: refreshScope,
     };
   }
 
@@ -1487,6 +1508,29 @@ export class OIDCBridge {
     return claims;
   }
 
+  private resolveRefreshScopes(
+    client: RegisteredClient,
+    refreshData: RefreshTokenRecord,
+    requestedScope?: string,
+  ): string[] {
+    const originalScopes = this.assertScopesAllowed(client, refreshData.scope);
+    const requestedScopes = requestedScope
+      ? this.assertScopesAllowed(client, requestedScope)
+      : originalScopes;
+    const originalScopeSet = new Set(originalScopes);
+    const unauthorizedScope = requestedScopes.find(
+      (scope) => !originalScopeSet.has(scope),
+    );
+    if (unauthorizedScope) {
+      throw new OIDCError(
+        'invalid_scope',
+        `Refresh token cannot expand scope: ${unauthorizedScope}`,
+      );
+    }
+
+    return requestedScopes;
+  }
+
   private async generateToken(
     clientId: string,
     subjectId: string,
@@ -1560,6 +1604,7 @@ export class OIDCBridge {
     clientId: string,
     subjectId: string,
     scope: string,
+    claims: Record<string, unknown>,
     sessionId?: string,
   ): Promise<string> {
     const refreshToken = crypto.randomBytes(48).toString('base64url');
@@ -1569,6 +1614,7 @@ export class OIDCBridge {
       clientId,
       subjectId,
       scope,
+      claims,
       sessionId,
     });
     if (sessionId) {

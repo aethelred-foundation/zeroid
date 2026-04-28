@@ -769,6 +769,92 @@ describe('OIDC multi-node correctness', () => {
     expect(refreshed.refresh_token).not.toBe(tokens.refresh_token);
   });
 
+  test('refresh token rotation preserves authorized userinfo claims', async () => {
+    const client = await registerTestClient(bridgeA);
+    const { code } = await authorizeCode(
+      bridgeA,
+      client.clientId,
+      'user-refresh-claims',
+    );
+
+    const tokens = await bridgeA.exchangeToken({
+      grantType: 'authorization_code',
+      code: code!,
+      redirectUri: REDIRECT_URI,
+      clientId: client.clientId,
+      clientSecret: client.clientSecret,
+    });
+
+    const refreshed = await bridgeB.exchangeToken({
+      grantType: 'refresh_token',
+      refreshToken: tokens.refresh_token,
+      clientId: client.clientId,
+      clientSecret: client.clientSecret,
+    });
+
+    const userInfo = await bridgeA.getUserInfo(refreshed.access_token);
+    expect(userInfo).toMatchObject({
+      sub: 'user-refresh-claims',
+      name: 'Alice',
+      email: 'alice@example.com',
+      email_verified: true,
+    });
+  });
+
+  test('refresh token downscoping cannot be expanded again', async () => {
+    const client = await registerTestClient(bridgeA);
+    const { code } = await authorizeCode(
+      bridgeA,
+      client.clientId,
+      'user-refresh-downscope',
+    );
+
+    const tokens = await bridgeA.exchangeToken({
+      grantType: 'authorization_code',
+      code: code!,
+      redirectUri: REDIRECT_URI,
+      clientId: client.clientId,
+      clientSecret: client.clientSecret,
+    });
+
+    const downscoped = await bridgeB.exchangeToken({
+      grantType: 'refresh_token',
+      refreshToken: tokens.refresh_token,
+      clientId: client.clientId,
+      clientSecret: client.clientSecret,
+      scope: 'openid',
+    });
+    expect(downscoped.scope).toBe('openid');
+
+    const downscopedUserInfo = await bridgeA.getUserInfo(
+      downscoped.access_token,
+    );
+    expect(downscopedUserInfo.sub).toBe('user-refresh-downscope');
+    expect(downscopedUserInfo.name).toBeUndefined();
+    expect(downscopedUserInfo.email).toBeUndefined();
+
+    await expect(
+      bridgeA.exchangeToken({
+        grantType: 'refresh_token',
+        refreshToken: downscoped.refresh_token,
+        clientId: client.clientId,
+        clientSecret: client.clientSecret,
+        scope: 'openid email',
+      }),
+    ).rejects.toMatchObject({
+      errorCode: 'invalid_scope',
+    });
+
+    const stillUsable = await bridgeB.exchangeToken({
+      grantType: 'refresh_token',
+      refreshToken: downscoped.refresh_token,
+      clientId: client.clientId,
+      clientSecret: client.clientSecret,
+      scope: 'openid',
+    });
+    expect(stillUsable.scope).toBe('openid');
+  });
+
   test('failed client authentication does not consume refresh token', async () => {
     const client = await registerTestClient(bridgeA);
     const { code } = await authorizeCode(
