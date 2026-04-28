@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { identityService } from '../services/identity';
 import { governmentAPIService } from '../services/government-api';
+import { teeService } from '../services/tee';
 import { authMiddleware, AuthenticatedRequest, optionalAuthMiddleware } from '../middleware/auth';
 import {
   validate,
@@ -10,7 +11,7 @@ import {
   recoveryHashSchema,
 } from '../middleware/validation';
 import { apiRateLimiter, authRateLimiter } from '../middleware/rateLimit';
-import { logger } from '../index';
+import { logger, prisma } from '../index';
 import { asRouteError, sendRouteError } from '../utils/route-error';
 import { z } from 'zod';
 
@@ -68,10 +69,15 @@ router.get(
 
       // Fetch government verification status
       const govStatus = await governmentAPIService.getVerificationStatus(req.identity!.id);
+      const teeAttested = await getCurrentTeeAttestationStatus(identity.id);
 
       res.json({
         data: {
           ...identity,
+          teeAttested,
+          teeAttestation: teeAttested
+            ? { verified: true }
+            : null,
           governmentVerification: govStatus
             ? { verified: govStatus.verified, provider: govStatus.provider, expiresAt: govStatus.expiresAt }
             : null,
@@ -93,12 +99,29 @@ router.get(
   async (req: Request, res: Response): Promise<void> => {
     try {
       const did = decodeURIComponent(req.params.did as string);
-      const identity = await identityService.getIdentity(did);
+      const identity = await prisma.identity.findUnique({
+        where: { did },
+        select: {
+          id: true,
+          did: true,
+          publicKey: true,
+          status: true,
+          teeAttestationId: true,
+          createdAt: true,
+        },
+      });
 
       if (!identity) {
         res.status(404).json({ error: 'DID not found', code: 'DID_NOT_FOUND' });
         return;
       }
+
+      const [teeAttested, govStatus] = await Promise.all([
+        identity.teeAttestationId
+          ? teeService.isAttestationValid(identity.teeAttestationId)
+          : Promise.resolve(false),
+        governmentAPIService.getVerificationStatus(identity.id),
+      ]);
 
       // Public resolution: return limited fields
       res.json({
@@ -106,8 +129,20 @@ router.get(
           did: identity.did,
           publicKey: identity.publicKey,
           status: identity.status,
-          teeAttested: identity.teeAttested,
-          governmentVerified: identity.governmentVerified,
+          teeAttested,
+          governmentVerified: Boolean(govStatus),
+          verificationEvidence: {
+            tee: teeAttested
+              ? { verified: true }
+              : null,
+            government: govStatus
+              ? {
+                  verified: true,
+                  provider: govStatus.provider,
+                  expiresAt: govStatus.expiresAt,
+                }
+              : null,
+          },
           createdAt: identity.createdAt,
         },
       });
@@ -116,6 +151,16 @@ router.get(
     }
   },
 );
+
+async function getCurrentTeeAttestationStatus(identityId: string): Promise<boolean> {
+  const identity = await prisma.identity.findUnique({
+    where: { id: identityId },
+    select: { teeAttestationId: true },
+  });
+  return identity?.teeAttestationId
+    ? teeService.isAttestationValid(identity.teeAttestationId)
+    : false;
+}
 
 // ---------------------------------------------------------------------------
 // POST /api/v1/identity/recover — Recover identity with recovery proof
