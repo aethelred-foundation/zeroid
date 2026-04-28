@@ -52,7 +52,14 @@ export interface TEEAttestationRequest {
   publicKey: string;
   enclaveType: 'SGX';
   quote: string; // base64-encoded attestation quote
+  challenge: string;
   userData?: string;
+}
+
+export interface TEEAttestationChallenge {
+  challenge: string;
+  reportData: string;
+  expiresAt: Date;
 }
 
 export interface TEEAttestationResult {
@@ -125,6 +132,17 @@ interface CachedCollateral {
   refreshStatus: 'fresh' | 'refreshing' | 'stale';
 }
 
+interface AttestationChallengeRecord {
+  challenge: string;
+  identityId: string;
+  did: string;
+  publicKeyHash: string;
+  challengeCommitment: string;
+  audience: 'zeroid:tee-attestation-challenge:v1';
+  issuedAt: number;
+  expiresAt: number;
+}
+
 // ---------------------------------------------------------------------------
 // Intel SGX PCCS / DCAP configuration
 // ---------------------------------------------------------------------------
@@ -133,6 +151,9 @@ const INTEL_PCS_BASE_URL =
   'https://api.trustedservices.intel.com/sgx/certification/v4';
 const TEE_DCAP_BASE_URL = process.env.TEE_DCAP_API_URL ?? INTEL_PCS_BASE_URL;
 const INTEL_PCS_API_KEY = process.env.INTEL_PCS_API_KEY ?? '';
+const TEE_ATTESTATION_CHALLENGE_TTL_SECONDS = 300;
+const TEE_ATTESTATION_CHALLENGE_AUDIENCE =
+  'zeroid:tee-attestation-challenge:v1';
 const TEE_COLLATERAL_FETCH_TIMEOUT_MS = 10_000;
 const TEE_COLLATERAL_RESPONSE_MAX_BYTES = 8 * 1024 * 1024;
 const ATTESTATION_VALIDITY_HOURS = parseInt(
@@ -206,6 +227,54 @@ AiEA4J0lrHoMs+Xo5o/sX6O9QWxHRAvZUGOdRQ7cvqRXaqI=
 // TEE Attestation Service
 // ---------------------------------------------------------------------------
 export class TEEAttestationService {
+  async issueAttestationChallenge(input: {
+    identityId: string;
+    did: string;
+    publicKey: string;
+  }): Promise<TEEAttestationChallenge> {
+    const challenge = crypto.randomBytes(32).toString('base64url');
+    const publicKeyHash = this.hashPublicKey(input.publicKey);
+    const challengeCommitment = this.computeChallengeCommitment({
+      challenge,
+      identityId: input.identityId,
+      did: input.did,
+      publicKeyHash,
+    });
+    const issuedAt = Date.now();
+    const expiresAt = issuedAt + TEE_ATTESTATION_CHALLENGE_TTL_SECONDS * 1000;
+    const record: AttestationChallengeRecord = {
+      challenge,
+      identityId: input.identityId,
+      did: input.did,
+      publicKeyHash,
+      challengeCommitment,
+      audience: TEE_ATTESTATION_CHALLENGE_AUDIENCE,
+      issuedAt,
+      expiresAt,
+    };
+
+    const reserved = await redis.set(
+      this.attestationChallengeKey(challenge),
+      JSON.stringify(record),
+      'EX',
+      TEE_ATTESTATION_CHALLENGE_TTL_SECONDS,
+      'NX',
+    );
+    if (reserved !== 'OK') {
+      throw new AttestationError(
+        'Unable to reserve TEE attestation challenge',
+        'TEE_CHALLENGE_RESERVATION_FAILED',
+        503,
+      );
+    }
+
+    return {
+      challenge,
+      reportData: publicKeyHash + challengeCommitment,
+      expiresAt: new Date(expiresAt),
+    };
+  }
+
   // -------------------------------------------------------------------------
   // Verify an SGX/DCAP attestation quote
   // -------------------------------------------------------------------------
@@ -231,8 +300,15 @@ export class TEEAttestationService {
       // 2. Verify quote structure
       this.validateQuoteStructure(header, reportBody);
 
-      // 3. Verify user data binding (public key is bound into the enclave report)
-      this.verifyUserDataBinding(reportBody, request.publicKey);
+      // 3. Verify one-time challenge and user data binding. The enclave report
+      // binds both the identity key and the server-issued challenge, preventing
+      // a previously captured quote for the same key from refreshing attestation.
+      const challengeRecord = await this.consumeAttestationChallenge(request);
+      this.verifyUserDataBinding(
+        reportBody,
+        request.publicKey,
+        challengeRecord,
+      );
 
       // 4. Verify the full DCAP certification chain embedded in the quote.
       //    This establishes trust from Intel Root CA → PCK cert → QE Report →
@@ -484,9 +560,9 @@ export class TEEAttestationService {
   private verifyUserDataBinding(
     reportBody: SGXReportBody,
     publicKey: string,
+    challengeRecord?: AttestationChallengeRecord,
   ): void {
-    const keyBuffer = Buffer.from(publicKey, 'base64');
-    const expectedHash = this.sha256Hex(keyBuffer).slice(0, 64);
+    const expectedHash = this.hashPublicKey(publicKey);
 
     if (reportBody.reportData.slice(0, 64) !== expectedHash) {
       throw new AttestationError(
@@ -494,6 +570,117 @@ export class TEEAttestationService {
         'TEE_USER_DATA_MISMATCH',
       );
     }
+
+    if (
+      challengeRecord &&
+      reportBody.reportData.slice(64, 128) !==
+        challengeRecord.challengeCommitment
+    ) {
+      throw new AttestationError(
+        'Report data does not match the server-issued attestation challenge',
+        'TEE_CHALLENGE_MISMATCH',
+      );
+    }
+  }
+
+  private async consumeAttestationChallenge(
+    request: TEEAttestationRequest,
+  ): Promise<AttestationChallengeRecord> {
+    if (!request.challenge) {
+      throw new AttestationError(
+        'TEE attestation challenge is required',
+        'TEE_CHALLENGE_REQUIRED',
+      );
+    }
+
+    const challengeKey = this.attestationChallengeKey(request.challenge);
+    const raw =
+      typeof (redis as any).getdel === 'function'
+        ? await (redis as any).getdel(challengeKey)
+        : await this.getAndDeleteChallengeFallback(challengeKey);
+    if (!raw) {
+      throw new AttestationError(
+        'TEE attestation challenge is missing, expired, or already used',
+        'TEE_CHALLENGE_INVALID',
+      );
+    }
+
+    let record: AttestationChallengeRecord;
+    try {
+      record = JSON.parse(raw) as AttestationChallengeRecord;
+    } catch {
+      throw new AttestationError(
+        'TEE attestation challenge record is malformed',
+        'TEE_CHALLENGE_INVALID',
+      );
+    }
+
+    const publicKeyHash = this.hashPublicKey(request.publicKey);
+    const expectedCommitment = this.computeChallengeCommitment({
+      challenge: request.challenge,
+      identityId: request.identityId,
+      did: request.did,
+      publicKeyHash,
+    });
+    if (
+      record.challenge !== request.challenge ||
+      record.identityId !== request.identityId ||
+      record.did !== request.did ||
+      record.publicKeyHash !== publicKeyHash ||
+      record.challengeCommitment !== expectedCommitment ||
+      record.audience !== TEE_ATTESTATION_CHALLENGE_AUDIENCE
+    ) {
+      throw new AttestationError(
+        'TEE attestation challenge does not match the authenticated identity',
+        'TEE_CHALLENGE_MISMATCH',
+      );
+    }
+
+    if (record.expiresAt <= Date.now()) {
+      throw new AttestationError(
+        'TEE attestation challenge has expired',
+        'TEE_CHALLENGE_EXPIRED',
+      );
+    }
+
+    return record;
+  }
+
+  private async getAndDeleteChallengeFallback(
+    challengeKey: string,
+  ): Promise<string | null> {
+    const raw = await redis.get(challengeKey);
+    if (raw) {
+      await redis.del(challengeKey);
+    }
+    return raw;
+  }
+
+  private attestationChallengeKey(challenge: string): string {
+    return `tee:challenge:${this.sha256Hex(Buffer.from(challenge))}`;
+  }
+
+  private hashPublicKey(publicKey: string): string {
+    return this.sha256Hex(Buffer.from(publicKey, 'base64')).slice(0, 64);
+  }
+
+  private computeChallengeCommitment(input: {
+    challenge: string;
+    identityId: string;
+    did: string;
+    publicKeyHash: string;
+  }): string {
+    return this.sha256Hex(
+      Buffer.from(
+        [
+          TEE_ATTESTATION_CHALLENGE_AUDIENCE,
+          input.challenge,
+          input.identityId,
+          input.did,
+          input.publicKeyHash,
+        ].join(':'),
+      ),
+    ).slice(0, 64);
   }
 
   // -------------------------------------------------------------------------

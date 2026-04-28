@@ -716,11 +716,39 @@ router.post(
 );
 
 // ---------------------------------------------------------------------------
+// POST /api/v1/verification/tee-challenge — Issue one-time TEE challenge
+// ---------------------------------------------------------------------------
+router.post(
+  '/tee-challenge',
+  verificationLimiter,
+  async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    try {
+      const identity = req.identity!;
+      const challenge = await teeService.issueAttestationChallenge({
+        identityId: identity.id,
+        did: identity.did,
+        publicKey: identity.publicKey,
+      });
+
+      res.status(201).json({
+        data: challenge,
+        message: 'TEE attestation challenge issued successfully',
+      });
+    } catch (err) {
+      const error = asRouteError(err);
+      logger.error('tee_challenge_error', { error: error.message });
+      sendRouteError(res, error, 'TEE_CHALLENGE_FAILED');
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
 // POST /api/v1/verification/tee-attest — Submit TEE attestation
 // ---------------------------------------------------------------------------
 const teeAttestSchema = z.object({
   enclaveType: z.enum(['SGX']),
   quote: z.string().min(100).max(10000),
+  challenge: z.string().min(32).max(128),
   userData: z.string().optional(),
 });
 
@@ -731,7 +759,7 @@ router.post(
   async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
       const identity = req.identity!;
-      const { enclaveType, quote, userData } = req.body;
+      const { enclaveType, quote, challenge, userData } = req.body;
 
       const result = await teeService.verifyAttestation({
         identityId: identity.id,
@@ -739,6 +767,7 @@ router.post(
         publicKey: identity.publicKey,
         enclaveType,
         quote,
+        challenge,
         userData,
       });
 

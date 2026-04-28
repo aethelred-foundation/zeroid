@@ -62,6 +62,7 @@ jest.mock('../src/index', () => {
     redis: {
       get: jest.fn().mockResolvedValue(null),
       set: jest.fn().mockResolvedValue('OK'),
+      getdel: jest.fn().mockResolvedValue(null),
       del: jest.fn().mockResolvedValue(1),
     },
     prisma: {
@@ -92,6 +93,8 @@ beforeAll(() => {
 const priv = () => service as any;
 const mockedRedis = redis as unknown as {
   get: jest.Mock;
+  set: jest.Mock;
+  getdel: jest.Mock;
   del: jest.Mock;
 };
 const mockedIdentity = prisma.identity as unknown as {
@@ -101,6 +104,8 @@ const mockedIdentity = prisma.identity as unknown as {
 describe('isAttestationValid', () => {
   beforeEach(() => {
     mockedRedis.get.mockResolvedValue(null);
+    mockedRedis.set.mockResolvedValue('OK');
+    mockedRedis.getdel.mockResolvedValue(null);
     mockedRedis.del.mockResolvedValue(1);
     mockedIdentity.findFirst.mockResolvedValue(null);
   });
@@ -154,6 +159,122 @@ describe('isAttestationValid', () => {
     mockedRedis.get.mockResolvedValueOnce('{not-json');
     await expect(service.isAttestationValid('attestation-bad')).resolves.toBe(false);
     expect(mockedRedis.del).toHaveBeenCalledWith('tee:attestation:attestation-bad');
+  });
+});
+
+describe('TEE attestation challenge binding', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockedRedis.get.mockResolvedValue(null);
+    mockedRedis.set.mockResolvedValue('OK');
+    mockedRedis.getdel.mockResolvedValue(null);
+    mockedRedis.del.mockResolvedValue(1);
+  });
+
+  it('issues a one-time challenge with the expected reportData commitment', async () => {
+    const keyPair = generateP256KeyPair();
+    const publicKeyDer = keyPair.publicKey.export({ format: 'der', type: 'spki' }) as Buffer;
+    const publicKey = publicKeyDer.toString('base64');
+
+    const challenge = await service.issueAttestationChallenge({
+      identityId: 'identity-1',
+      did: 'did:zero:identity-1',
+      publicKey,
+    });
+
+    expect(challenge.challenge).toHaveLength(43);
+    expect(challenge.reportData).toHaveLength(128);
+    expect(challenge.reportData.slice(0, 64)).toBe(
+      crypto.createHash('sha256').update(publicKeyDer).digest('hex'),
+    );
+    expect(mockedRedis.set).toHaveBeenCalledWith(
+      expect.stringMatching(/^tee:challenge:/),
+      expect.any(String),
+      'EX',
+      300,
+      'NX',
+    );
+  });
+
+  it('consumes a challenge once and validates identity binding', async () => {
+    const keyPair = generateP256KeyPair();
+    const publicKeyDer = keyPair.publicKey.export({ format: 'der', type: 'spki' }) as Buffer;
+    const publicKey = publicKeyDer.toString('base64');
+    const issued = await service.issueAttestationChallenge({
+      identityId: 'identity-1',
+      did: 'did:zero:identity-1',
+      publicKey,
+    });
+    const storedRecord = mockedRedis.set.mock.calls[0][1];
+    mockedRedis.getdel.mockResolvedValueOnce(storedRecord);
+
+    const consumed = await priv().consumeAttestationChallenge({
+      identityId: 'identity-1',
+      did: 'did:zero:identity-1',
+      publicKey,
+      enclaveType: 'SGX',
+      quote: 'unused',
+      challenge: issued.challenge,
+    });
+
+    expect(consumed.challenge).toBe(issued.challenge);
+    expect(consumed.publicKeyHash).toBe(issued.reportData.slice(0, 64));
+    expect(consumed.challengeCommitment).toBe(issued.reportData.slice(64));
+    expect(mockedRedis.getdel).toHaveBeenCalledWith(
+      expect.stringMatching(/^tee:challenge:/),
+    );
+
+    mockedRedis.getdel.mockResolvedValueOnce(null);
+    await expect(
+      priv().consumeAttestationChallenge({
+        identityId: 'identity-1',
+        did: 'did:zero:identity-1',
+        publicKey,
+        enclaveType: 'SGX',
+        quote: 'unused',
+        challenge: issued.challenge,
+      }),
+    ).rejects.toMatchObject({ code: 'TEE_CHALLENGE_INVALID' });
+  });
+
+  it('requires reportData to include the challenge commitment suffix', async () => {
+    const keyPair = generateP256KeyPair();
+    const publicKeyDer = keyPair.publicKey.export({ format: 'der', type: 'spki' }) as Buffer;
+    const publicKey = publicKeyDer.toString('base64');
+    const issued = await service.issueAttestationChallenge({
+      identityId: 'identity-1',
+      did: 'did:zero:identity-1',
+      publicKey,
+    });
+    const storedRecord = JSON.parse(mockedRedis.set.mock.calls[0][1]);
+    const reportBody = { reportData: issued.reportData };
+
+    expect(() =>
+      priv().verifyUserDataBinding(reportBody, publicKey, storedRecord),
+    ).not.toThrow();
+
+    expect(() =>
+      priv().verifyUserDataBinding(
+        { reportData: issued.reportData.slice(0, 64) + '00'.repeat(32) },
+        publicKey,
+        storedRecord,
+      ),
+    ).toThrow(expect.objectContaining({ code: 'TEE_CHALLENGE_MISMATCH' }));
+  });
+
+  it('rejects full attestation requests that omit the server challenge', async () => {
+    const q = buildQuote({ hierarchy });
+
+    await expect(
+      service.verifyAttestation({
+        identityId: 'identity-1',
+        did: 'did:zero:identity-1',
+        publicKey: q.boundPublicKey,
+        enclaveType: 'SGX',
+        quote: q.quoteBase64,
+        challenge: '',
+      }),
+    ).rejects.toMatchObject({ code: 'TEE_CHALLENGE_REQUIRED' });
   });
 });
 
@@ -959,6 +1080,20 @@ describe('verifyAttestation — integrated error paths', () => {
           tcbStatus: 'UpToDate',
         },
       ],
+    });
+
+    jest.spyOn(priv(), 'consumeAttestationChallenge').mockResolvedValue({
+      challenge: 'challenge-test-value',
+      identityId: 'id-1',
+      did: 'did:zero:test',
+      publicKeyHash: crypto
+        .createHash('sha256')
+        .update(Buffer.from(q.boundPublicKey, 'base64'))
+        .digest('hex'),
+      challengeCommitment: '00'.repeat(32),
+      audience: 'zeroid:tee-attestation-challenge:v1',
+      issuedAt: Date.now(),
+      expiresAt: Date.now() + 60_000,
     });
   });
 
