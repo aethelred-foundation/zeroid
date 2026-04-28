@@ -379,19 +379,20 @@ export class TEEAttestationService {
   // Check if an attestation is still valid
   // -------------------------------------------------------------------------
   async isAttestationValid(attestationId: string): Promise<boolean> {
-    // Check cache first
     const cached = await redis.get(`tee:attestation:${attestationId}`);
-    if (cached) {
-      const result = JSON.parse(cached) as TEEAttestationResult;
-      return result.verified && new Date(result.expiresAt) > new Date();
+    if (!cached) {
+      return false;
     }
 
-    // Fall back to identity lookup
-    const identity = await prisma.identity.findFirst({
-      where: { teeAttestationId: attestationId, teeAttested: true },
-    });
-
-    return identity !== null;
+    try {
+      const result = JSON.parse(cached) as TEEAttestationResult;
+      const expiresAt = new Date(result.expiresAt).getTime();
+      return result.verified === true && Number.isFinite(expiresAt) && expiresAt > Date.now();
+    } catch {
+      logger.warn('tee_attestation_cache_invalid', { attestationId });
+      await redis.del(`tee:attestation:${attestationId}`).catch(() => undefined);
+      return false;
+    }
   }
 
   // -------------------------------------------------------------------------

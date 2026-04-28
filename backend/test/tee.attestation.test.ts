@@ -20,6 +20,7 @@
  */
 import * as crypto from 'crypto';
 import { TEEAttestationService, AttestationError, TCBStatus } from '../src/services/tee';
+import { prisma, redis } from '../src/index';
 import {
   buildQuote,
   buildCollateral,
@@ -89,6 +90,72 @@ beforeAll(() => {
 // Helper: call private methods via (service as any)
 // ---------------------------------------------------------------------------
 const priv = () => service as any;
+const mockedRedis = redis as unknown as {
+  get: jest.Mock;
+  del: jest.Mock;
+};
+const mockedIdentity = prisma.identity as unknown as {
+  findFirst: jest.Mock;
+};
+
+describe('isAttestationValid', () => {
+  beforeEach(() => {
+    mockedRedis.get.mockResolvedValue(null);
+    mockedRedis.del.mockResolvedValue(1);
+    mockedIdentity.findFirst.mockResolvedValue(null);
+  });
+
+  it('fails closed instead of trusting identity flags after the attestation cache expires', async () => {
+    mockedIdentity.findFirst.mockResolvedValue({
+      id: 'identity-1',
+      teeAttested: true,
+      teeAttestationId: 'attestation-expired',
+    });
+
+    await expect(service.isAttestationValid('attestation-expired')).resolves.toBe(false);
+    expect(mockedIdentity.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('accepts only verified cached attestations that are still within their validity window', async () => {
+    mockedRedis.get.mockResolvedValue(JSON.stringify({
+      attestationId: 'attestation-valid',
+      verified: true,
+      enclaveType: 'SGX',
+      mrsigner: 'a'.repeat(64),
+      mrenclave: 'b'.repeat(64),
+      isvProdId: 1,
+      isvSvn: 1,
+      tcbStatus: TCBStatus.UP_TO_DATE,
+      advisoryIds: [],
+      timestamp: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    }));
+
+    await expect(service.isAttestationValid('attestation-valid')).resolves.toBe(true);
+  });
+
+  it('rejects expired or malformed cached attestations', async () => {
+    mockedRedis.get.mockResolvedValueOnce(JSON.stringify({
+      attestationId: 'attestation-old',
+      verified: true,
+      enclaveType: 'SGX',
+      mrsigner: 'a'.repeat(64),
+      mrenclave: 'b'.repeat(64),
+      isvProdId: 1,
+      isvSvn: 1,
+      tcbStatus: TCBStatus.UP_TO_DATE,
+      advisoryIds: [],
+      timestamp: new Date(Date.now() - 120_000).toISOString(),
+      expiresAt: new Date(Date.now() - 60_000).toISOString(),
+    }));
+
+    await expect(service.isAttestationValid('attestation-old')).resolves.toBe(false);
+
+    mockedRedis.get.mockResolvedValueOnce('{not-json');
+    await expect(service.isAttestationValid('attestation-bad')).resolves.toBe(false);
+    expect(mockedRedis.del).toHaveBeenCalledWith('tee:attestation:attestation-bad');
+  });
+});
 
 // ---------------------------------------------------------------------------
 // 1. QUOTE CERTIFICATION CHAIN — CERT HIERARCHY TESTS
