@@ -112,11 +112,18 @@ const redisMock = {
     const field = args[1];
     const expectedStr = args[2];
     const newValueJson = args[3];
+    const additionalExpectedJson = args[4];
 
     const raw = store.get(redisKey);
     if (!raw) return null;
     const obj = JSON.parse(raw);
     if (String(obj[field]) !== expectedStr) return null;
+    const additionalExpected = additionalExpectedJson
+      ? JSON.parse(additionalExpectedJson)
+      : {};
+    for (const [expectedField, expectedValue] of Object.entries(additionalExpected)) {
+      if (String(obj[expectedField]) !== String(expectedValue)) return null;
+    }
     obj[field] = JSON.parse(newValueJson);
     store.set(redisKey, JSON.stringify(obj));
     return JSON.stringify(obj);
@@ -501,6 +508,12 @@ describe('OIDC multi-node correctness', () => {
     expect(stored.clientSecret).toBeUndefined();
     expect(stored.clientSecretHash).toMatch(/^sha256:/);
     expect(stored.clientSecretHash).not.toContain(client.clientSecret);
+    expect(stored.clientSecretExpiresAt).toBe(client.clientSecretExpiresAt);
+
+    const clientSetCall = redisMock.set.mock.calls.find(
+      ([key]) => key === `oidc:clients:${client.clientId}`,
+    );
+    expect(clientSetCall).toHaveLength(2);
 
     const { code } = await authorizeCode(
       bridgeB,
@@ -543,6 +556,93 @@ describe('OIDC multi-node correctness', () => {
     const migrated = JSON.parse(store.get(clientKey)!);
     expect(migrated.clientSecret).toBeUndefined();
     expect(migrated.clientSecretHash).toMatch(/^sha256:/);
+  });
+
+  test('expired client secrets cannot redeem authorization codes', async () => {
+    const client = await registerTestClient(bridgeA);
+    const { code } = await authorizeCode(
+      bridgeA,
+      client.clientId,
+      'user-expired-client-secret',
+    );
+
+    const clientKey = `oidc:clients:${client.clientId}`;
+    const stored = JSON.parse(store.get(clientKey)!);
+    stored.clientSecretExpiresAt = Math.floor(Date.now() / 1000) - 1;
+    store.set(clientKey, JSON.stringify(stored));
+
+    await expect(
+      bridgeB.exchangeToken({
+        grantType: 'authorization_code',
+        code: code!,
+        redirectUri: REDIRECT_URI,
+        clientId: client.clientId,
+        clientSecret: client.clientSecret,
+      }),
+    ).rejects.toMatchObject({
+      errorCode: 'invalid_client',
+    });
+  });
+
+  test('failed client authentication does not consume authorization codes', async () => {
+    const client = await registerTestClient(bridgeA);
+    const { code } = await authorizeCode(
+      bridgeA,
+      client.clientId,
+      'user-auth-code-preserved',
+    );
+
+    await expect(
+      bridgeB.exchangeToken({
+        grantType: 'authorization_code',
+        code: code!,
+        redirectUri: REDIRECT_URI,
+        clientId: client.clientId,
+        clientSecret: 'wrong-secret',
+      }),
+    ).rejects.toMatchObject({
+      errorCode: 'invalid_client',
+    });
+
+    const tokens = await bridgeA.exchangeToken({
+      grantType: 'authorization_code',
+      code: code!,
+      redirectUri: REDIRECT_URI,
+      clientId: client.clientId,
+      clientSecret: client.clientSecret,
+    });
+    expect(tokens.access_token).toBeDefined();
+  });
+
+  test('authorization code claims require the registered client and redirect binding', async () => {
+    const clientA = await registerTestClient(bridgeA);
+    const clientB = await registerTestClient(bridgeA);
+    const { code } = await authorizeCode(
+      bridgeA,
+      clientA.clientId,
+      'user-code-binding',
+    );
+
+    await expect(
+      bridgeB.exchangeToken({
+        grantType: 'authorization_code',
+        code: code!,
+        redirectUri: REDIRECT_URI,
+        clientId: clientB.clientId,
+        clientSecret: clientB.clientSecret,
+      }),
+    ).rejects.toMatchObject({
+      errorCode: 'invalid_grant',
+    });
+
+    const tokens = await bridgeA.exchangeToken({
+      grantType: 'authorization_code',
+      code: code!,
+      redirectUri: REDIRECT_URI,
+      clientId: clientA.clientId,
+      clientSecret: clientA.clientSecret,
+    });
+    expect(tokens.access_token).toBeDefined();
   });
 
   test('production rejects legacy plaintext client secrets instead of migrating them', async () => {

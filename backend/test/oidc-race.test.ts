@@ -110,11 +110,18 @@ const redisMock = {
     const field = args[1];
     const expectedStr = args[2];
     const newValueJson = args[3];
+    const additionalExpectedJson = args[4];
 
     const raw = store.get(redisKey);
     if (!raw) return null;
     const obj = JSON.parse(raw);
     if (String(obj[field]) !== expectedStr) return null;
+    const additionalExpected = additionalExpectedJson
+      ? JSON.parse(additionalExpectedJson)
+      : {};
+    for (const [expectedField, expectedValue] of Object.entries(additionalExpected)) {
+      if (String(obj[expectedField]) !== String(expectedValue)) return null;
+    }
     obj[field] = JSON.parse(newValueJson);
     store.set(redisKey, JSON.stringify(obj));
     return JSON.stringify(obj);

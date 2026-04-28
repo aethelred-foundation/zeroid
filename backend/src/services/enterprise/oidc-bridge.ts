@@ -209,6 +209,7 @@ export interface RegisteredClient {
   clientSecret?: string;
   clientSecretHash?: string;
   clientSecretHashAlg?: 'sha256';
+  clientSecretExpiresAt?: number;
   registration: OIDCClientRegistration;
   createdAt: string;
   active: boolean;
@@ -284,12 +285,17 @@ class RedisStore<T> {
 
   async set(key: string, value: T, ttl?: number): Promise<void> {
     const effectiveTtl = ttl ?? this.defaultTtl;
-    await redis.set(
-      this.redisKey(key),
-      JSON.stringify(value),
-      'EX',
-      effectiveTtl,
-    );
+    if (effectiveTtl > 0) {
+      await redis.set(
+        this.redisKey(key),
+        JSON.stringify(value),
+        'EX',
+        effectiveTtl,
+      );
+      return;
+    }
+
+    await redis.set(this.redisKey(key), JSON.stringify(value));
   }
 
   async get(key: string): Promise<T | undefined> {
@@ -328,12 +334,17 @@ class RedisStore<T> {
     field: string,
     expectedValue: unknown,
     newValue: unknown,
+    additionalExpectedFields: Record<string, unknown> = {},
   ): Promise<T | undefined> {
     const lua = `
       local raw = redis.call('GET', KEYS[1])
       if not raw then return nil end
       local obj = cjson.decode(raw)
       if tostring(obj[ARGV[1]]) ~= ARGV[2] then return nil end
+      local expected = cjson.decode(ARGV[4])
+      for key, value in pairs(expected) do
+        if tostring(obj[key]) ~= tostring(value) then return nil end
+      end
       obj[ARGV[1]] = cjson.decode(ARGV[3])
       local ttl = redis.call('TTL', KEYS[1])
       if ttl > 0 then
@@ -350,17 +361,19 @@ class RedisStore<T> {
       field,
       String(expectedValue),
       JSON.stringify(newValue),
+      JSON.stringify(additionalExpectedFields),
     );
     return result ? (JSON.parse(result) as T) : undefined;
   }
 }
 
 // TTL constants for OIDC state (seconds)
-const OIDC_CLIENT_TTL = 90 * 24 * 3600; // Registered clients: 90 days
+const OIDC_CLIENT_TTL = 0; // Registered clients are durable until explicitly revoked.
 const OIDC_AUTH_CODE_TTL = 600; // Authorization codes: 10 minutes
 const OIDC_SESSION_TTL = 24 * 3600; // Sessions: 24 hours
 const OIDC_TOKEN_TTL = 3600; // Access/ID tokens: 1 hour
 const OIDC_REFRESH_TOKEN_TTL = 30 * 24 * 3600; // Refresh tokens: 30 days
+const OIDC_CLIENT_SECRET_TTL = 365 * 24 * 3600; // Client secrets: 1 year
 
 // Redis set key for tracking tokens per session (for bulk revocation on logout).
 // Keyed by sessionId so that logging out of one session does NOT revoke tokens
@@ -524,7 +537,8 @@ export class OIDCBridge {
     const clientSecret = crypto.randomBytes(32).toString('base64url');
     const autoActivate =
       !ownership?.organizationId || ownership.registeredByRole === 'admin';
-    const createdAt = new Date().toISOString();
+    const now = Math.floor(Date.now() / 1000);
+    const createdAt = new Date(now * 1000).toISOString();
     const status: OIDCClientStatus = autoActivate
       ? 'active'
       : 'pending_approval';
@@ -533,6 +547,7 @@ export class OIDCBridge {
       clientId,
       clientSecretHash: this.hashClientSecret(clientSecret),
       clientSecretHashAlg: 'sha256',
+      clientSecretExpiresAt: now + OIDC_CLIENT_SECRET_TTL,
       registration: {
         ...parsed,
         idTokenSignedResponseAlg: requestedSigningAlg,
@@ -553,7 +568,9 @@ export class OIDCBridge {
     if (ownership?.organizationId) {
       const orgKey = organizationClientSetKey(ownership.organizationId);
       await redis.sadd(orgKey, clientId);
-      await redis.expire(orgKey, OIDC_CLIENT_TTL);
+      if (OIDC_CLIENT_TTL > 0) {
+        await redis.expire(orgKey, OIDC_CLIENT_TTL);
+      }
     }
 
     logger.info('oidc_client_registered', {
@@ -569,8 +586,8 @@ export class OIDCBridge {
     return {
       clientId,
       clientSecret,
-      clientIdIssuedAt: Math.floor(Date.now() / 1000),
-      clientSecretExpiresAt: Math.floor(Date.now() / 1000) + 365 * 24 * 60 * 60,
+      clientIdIssuedAt: now,
+      clientSecretExpiresAt: now + OIDC_CLIENT_SECRET_TTL,
       status,
       approvalRequired: status === 'pending_approval',
     };
@@ -733,6 +750,12 @@ export class OIDCBridge {
     refresh_token?: string;
     scope: string;
   }> {
+    const client = await this.authenticateClient(
+      request.clientId,
+      request.clientSecret,
+    );
+    this.assertClientGrantAllowed(client, 'authorization_code');
+
     // Atomically claim the auth code: compare-and-set used=false→true.
     // If two requests race, only one wins; the loser gets undefined.
     const authCode = await this.authorizationCodes.compareAndSet(
@@ -740,12 +763,16 @@ export class OIDCBridge {
       'used',
       false,
       true,
+      {
+        clientId: request.clientId,
+        redirectUri: request.redirectUri!,
+      },
     );
     if (!authCode) {
       // Either the code doesn't exist, is expired, or was already consumed
       throw new OIDCError(
         'invalid_grant',
-        'Authorization code not found or already used',
+        'Authorization code not found, already used, or not bound to this client',
       );
     }
 
@@ -776,13 +803,6 @@ export class OIDCBridge {
         throw new OIDCError('invalid_grant', 'PKCE verification failed');
       }
     }
-
-    // Client authentication
-    const client = await this.authenticateClient(
-      request.clientId,
-      request.clientSecret,
-    );
-    this.assertClientGrantAllowed(client, 'authorization_code');
 
     const accessToken = await this.generateToken(
       authCode.clientId,
@@ -1310,6 +1330,7 @@ export class OIDCBridge {
         throw new OIDCError('invalid_client', 'Client authentication failed');
       }
 
+      this.assertClientSecretFresh(client);
       const verification = this.verifyClientSecret(client, clientSecret);
       if (!verification.valid) {
         throw new OIDCError('invalid_client', 'Client authentication failed');
@@ -1357,6 +1378,29 @@ export class OIDCBridge {
         'unauthorized_client',
         `Client is not registered for ${grantType} grant`,
       );
+    }
+  }
+
+  private assertClientSecretFresh(client: RegisteredClient): void {
+    const expiresAt = client.clientSecretExpiresAt;
+    if (typeof expiresAt !== 'number') {
+      if (process.env.NODE_ENV === 'production') {
+        logger.error('oidc_client_secret_expiry_missing', {
+          clientId: client.clientId,
+        });
+        throw new OIDCError(
+          'invalid_client',
+          'Client secret expiration is missing',
+        );
+      }
+      return;
+    }
+
+    if (expiresAt <= Math.floor(Date.now() / 1000)) {
+      logger.warn('oidc_client_secret_expired', {
+        clientId: client.clientId,
+      });
+      throw new OIDCError('invalid_client', 'Client secret expired');
     }
   }
 
