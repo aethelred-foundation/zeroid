@@ -79,6 +79,9 @@ export type FalsePositiveDecision = z.infer<typeof FalsePositiveDecisionSchema>;
 // ---------------------------------------------------------------------------
 export interface SanctionsMatch {
   matchId: string;
+  screeningId?: string;
+  organizationId?: string;
+  entityId?: string;
   listSource: string;
   listEntryId: string;
   matchedName: string;
@@ -96,6 +99,7 @@ export interface SanctionsMatch {
 
 export interface ScreeningResult {
   screeningId: string;
+  organizationId?: string;
   entityId: string;
   timestamp: string;
   overallRisk: 'clear' | 'potential_match' | 'confirmed_match';
@@ -108,11 +112,18 @@ export interface ScreeningResult {
 export interface AuditEntry {
   id: string;
   screeningId: string;
+  organizationId?: string;
   action: string;
   performedBy: string;
   timestamp: string;
   details: Record<string, unknown>;
 }
+
+type ScopedFalsePositiveDecision = FalsePositiveDecision & {
+  organizationId?: string;
+  screeningId: string;
+  entityId: string;
+};
 
 export interface SanctionsListReadiness {
   listName: SanctionsListName;
@@ -176,7 +187,7 @@ export class SanctionsScreeningService {
   private sanctionsListMetadata: Map<string, SanctionsListMetadata> = new Map();
   private screeningResults: Map<string, ScreeningResult> = new Map();
   private auditLog: AuditEntry[] = [];
-  private falsePositives: Map<string, FalsePositiveDecision> = new Map();
+  private falsePositives: Map<string, ScopedFalsePositiveDecision> = new Map();
   private continuousMonitoringEntities: Set<string> = new Set();
   private matchThreshold: number;
   private listMaxAgeMs: number;
@@ -197,8 +208,9 @@ export class SanctionsScreeningService {
   // -------------------------------------------------------------------------
   // Single entity screening
   // -------------------------------------------------------------------------
-  async screenEntity(request: ScreeningRequest): Promise<ScreeningResult> {
+  async screenEntity(request: ScreeningRequest, organizationId?: string): Promise<ScreeningResult> {
     const parsed = ScreeningRequestSchema.parse(request);
+    const scopeOrganizationId = this.normalizeOrganizationId(organizationId);
     if (isSanctionsScreeningDisabled()) {
       const error = new Error('Sanctions screening is disabled by deployment configuration');
       (error as Error & { code: string }).code = 'SANCTIONS_SCREENING_DISABLED';
@@ -221,11 +233,17 @@ export class SanctionsScreeningService {
 
     // Apply false-positive resolutions
     const resolved = deduped.map((m) => {
-      const fp = this.falsePositives.get(m.matchId);
+      const scopedMatch: SanctionsMatch = {
+        ...m,
+        screeningId,
+        entityId: parsed.entityId,
+        ...(scopeOrganizationId ? { organizationId: scopeOrganizationId } : {}),
+      };
+      const fp = this.falsePositives.get(this.matchDecisionKey(scopedMatch.matchId, scopeOrganizationId));
       if (fp) {
-        m.status = fp.decision === 'false_positive' ? 'false_positive' : fp.decision === 'confirmed_match' ? 'confirmed_match' : 'escalated';
+        scopedMatch.status = this.statusFromDecision(fp.decision);
       }
-      return m;
+      return scopedMatch;
     });
 
     const activeMatches = resolved.filter((m) => m.status !== 'false_positive');
@@ -238,6 +256,7 @@ export class SanctionsScreeningService {
 
     const result: ScreeningResult = {
       screeningId,
+      ...(scopeOrganizationId ? { organizationId: scopeOrganizationId } : {}),
       entityId: parsed.entityId,
       timestamp: new Date().toISOString(),
       overallRisk,
@@ -252,15 +271,20 @@ export class SanctionsScreeningService {
       entityId: parsed.entityId,
       matchCount: resolved.length,
       overallRisk,
-    });
+    }, scopeOrganizationId);
 
-    if (this.continuousMonitoringEntities.has(parsed.entityId)) {
-      logger.info('continuous_monitoring_screening', { entityId: parsed.entityId, screeningId });
+    if (this.continuousMonitoringEntities.has(this.entityScopeKey(parsed.entityId, scopeOrganizationId))) {
+      logger.info('continuous_monitoring_screening', {
+        entityId: parsed.entityId,
+        screeningId,
+        organizationId: scopeOrganizationId,
+      });
     }
 
     logger.info('screening_complete', {
       screeningId,
       entityId: parsed.entityId,
+      organizationId: scopeOrganizationId,
       overallRisk,
       matchCount: resolved.length,
       durationMs: result.processingTimeMs,
@@ -272,7 +296,7 @@ export class SanctionsScreeningService {
   // -------------------------------------------------------------------------
   // Batch screening
   // -------------------------------------------------------------------------
-  async screenBatch(batchRequest: BatchScreeningRequest): Promise<{
+  async screenBatch(batchRequest: BatchScreeningRequest, organizationId?: string): Promise<{
     batchId: string;
     totalEntities: number;
     results: ScreeningResult[];
@@ -280,10 +304,16 @@ export class SanctionsScreeningService {
     processingTimeMs: number;
   }> {
     const parsed = BatchScreeningRequestSchema.parse(batchRequest);
+    const scopeOrganizationId = this.normalizeOrganizationId(organizationId);
     const batchId = crypto.randomUUID();
     const startTime = Date.now();
 
-    logger.info('batch_screening_started', { batchId, clientId: parsed.clientId, count: parsed.requests.length });
+    logger.info('batch_screening_started', {
+      batchId,
+      clientId: parsed.clientId,
+      count: parsed.requests.length,
+      organizationId: scopeOrganizationId,
+    });
 
     const results: ScreeningResult[] = [];
     const summary = { clear: 0, potentialMatch: 0, confirmedMatch: 0 };
@@ -292,7 +322,7 @@ export class SanctionsScreeningService {
     const chunkSize = 50;
     for (let i = 0; i < parsed.requests.length; i += chunkSize) {
       const chunk = parsed.requests.slice(i, i + chunkSize);
-      const chunkResults = await Promise.all(chunk.map((req) => this.screenEntity(req)));
+      const chunkResults = await Promise.all(chunk.map((req) => this.screenEntity(req, scopeOrganizationId)));
       for (const result of chunkResults) {
         results.push(result);
         if (result.overallRisk === 'clear') summary.clear++;
@@ -302,7 +332,12 @@ export class SanctionsScreeningService {
     }
 
     const processingTimeMs = Date.now() - startTime;
-    logger.info('batch_screening_complete', { batchId, summary, durationMs: processingTimeMs });
+    logger.info('batch_screening_complete', {
+      batchId,
+      summary,
+      durationMs: processingTimeMs,
+      organizationId: scopeOrganizationId,
+    });
 
     return { batchId, totalEntities: results.length, results, summary, processingTimeMs };
   }
@@ -555,33 +590,56 @@ export class SanctionsScreeningService {
   // -------------------------------------------------------------------------
   // False positive management
   // -------------------------------------------------------------------------
-  async resolveMatch(decision: FalsePositiveDecision): Promise<void> {
+  async resolveMatch(decision: FalsePositiveDecision, organizationId?: string): Promise<void> {
     const parsed = FalsePositiveDecisionSchema.parse(decision);
-    this.falsePositives.set(parsed.matchId, parsed);
+    const scopeOrganizationId = this.normalizeOrganizationId(organizationId);
+    const owner = this.findMatchOwner(parsed.matchId, scopeOrganizationId);
+    if (!owner) {
+      const error = new Error('Sanctions match not found for this organization');
+      (error as Error & { code: string; statusCode: number }).code = 'SANCTIONS_MATCH_NOT_FOUND';
+      (error as Error & { code: string; statusCode: number }).statusCode = 404;
+      throw error;
+    }
 
-    this.logAudit(parsed.matchId, `match_${parsed.decision}`, parsed.decidedBy, {
+    owner.match.status = this.statusFromDecision(parsed.decision);
+    owner.result.overallRisk = this.calculateOverallRisk(owner.result.matches);
+    this.falsePositives.set(this.matchDecisionKey(parsed.matchId, scopeOrganizationId), {
+      ...parsed,
+      ...(scopeOrganizationId ? { organizationId: scopeOrganizationId } : {}),
+      screeningId: owner.result.screeningId,
+      entityId: owner.result.entityId,
+    });
+
+    this.logAudit(owner.result.screeningId, `match_${parsed.decision}`, parsed.decidedBy, {
+      matchId: parsed.matchId,
+      entityId: owner.result.entityId,
       reason: parsed.reason,
       evidenceRefs: parsed.evidenceRefs,
-    });
+    }, scopeOrganizationId);
 
     logger.info('match_resolved', {
       matchId: parsed.matchId,
       decision: parsed.decision,
       decidedBy: parsed.decidedBy,
+      screeningId: owner.result.screeningId,
+      entityId: owner.result.entityId,
+      organizationId: scopeOrganizationId,
     });
   }
 
   // -------------------------------------------------------------------------
   // Continuous monitoring
   // -------------------------------------------------------------------------
-  enableContinuousMonitoring(entityId: string): void {
-    this.continuousMonitoringEntities.add(entityId);
-    logger.info('continuous_monitoring_enabled', { entityId });
+  enableContinuousMonitoring(entityId: string, organizationId?: string): void {
+    const scopeOrganizationId = this.normalizeOrganizationId(organizationId);
+    this.continuousMonitoringEntities.add(this.entityScopeKey(entityId, scopeOrganizationId));
+    logger.info('continuous_monitoring_enabled', { entityId, organizationId: scopeOrganizationId });
   }
 
-  disableContinuousMonitoring(entityId: string): void {
-    this.continuousMonitoringEntities.delete(entityId);
-    logger.info('continuous_monitoring_disabled', { entityId });
+  disableContinuousMonitoring(entityId: string, organizationId?: string): void {
+    const scopeOrganizationId = this.normalizeOrganizationId(organizationId);
+    this.continuousMonitoringEntities.delete(this.entityScopeKey(entityId, scopeOrganizationId));
+    logger.info('continuous_monitoring_disabled', { entityId, organizationId: scopeOrganizationId });
   }
 
   async onListUpdate(
@@ -594,13 +652,14 @@ export class SanctionsScreeningService {
 
     // Re-screen all continuously monitored entities
     const results: ScreeningResult[] = [];
-    for (const entityId of this.continuousMonitoringEntities) {
+    for (const entityScope of this.continuousMonitoringEntities) {
+      const { entityId, organizationId } = this.parseEntityScopeKey(entityScope);
       const lastResult = [...this.screeningResults.values()]
-        .filter((r) => r.entityId === entityId)
+        .filter((r) => r.entityId === entityId && this.resultMatchesOrganization(r, organizationId))
         .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0];
 
       if (lastResult) {
-        logger.info('re_screening_on_list_update', { entityId, listName });
+        logger.info('re_screening_on_list_update', { entityId, organizationId, listName });
       }
     }
 
@@ -640,27 +699,43 @@ export class SanctionsScreeningService {
   // -------------------------------------------------------------------------
   // Retrieve results
   // -------------------------------------------------------------------------
-  getScreeningResult(screeningId: string): ScreeningResult | null {
-    return this.screeningResults.get(screeningId) ?? null;
+  getScreeningResult(screeningId: string, organizationId?: string): ScreeningResult | null {
+    const result = this.screeningResults.get(screeningId);
+    if (!result || !this.resultMatchesOrganization(result, this.normalizeOrganizationId(organizationId))) {
+      return null;
+    }
+    return result;
   }
 
-  getEntityScreenings(entityId: string): ScreeningResult[] {
+  getEntityScreenings(entityId: string, organizationId?: string): ScreeningResult[] {
+    const scopeOrganizationId = this.normalizeOrganizationId(organizationId);
     return [...this.screeningResults.values()]
-      .filter((r) => r.entityId === entityId)
+      .filter((r) => r.entityId === entityId && this.resultMatchesOrganization(r, scopeOrganizationId))
       .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
   }
 
   // -------------------------------------------------------------------------
   // Audit trail
   // -------------------------------------------------------------------------
-  getAuditTrail(screeningId: string): AuditEntry[] {
-    return this.auditLog.filter((e) => e.screeningId === screeningId);
+  getAuditTrail(screeningId: string, organizationId?: string): AuditEntry[] {
+    const scopeOrganizationId = this.normalizeOrganizationId(organizationId);
+    return this.auditLog.filter((e) => (
+      e.screeningId === screeningId &&
+      this.auditEntryMatchesOrganization(e, scopeOrganizationId)
+    ));
   }
 
-  private logAudit(screeningId: string, action: string, performedBy: string, details: Record<string, unknown>): void {
+  private logAudit(
+    screeningId: string,
+    action: string,
+    performedBy: string,
+    details: Record<string, unknown>,
+    organizationId?: string,
+  ): void {
     this.auditLog.push({
       id: crypto.randomUUID(),
       screeningId,
+      ...(organizationId ? { organizationId } : {}),
       action,
       performedBy,
       timestamp: new Date().toISOString(),
@@ -677,6 +752,76 @@ export class SanctionsScreeningService {
     }
     this.matchThreshold = threshold;
     logger.info('match_threshold_updated', { threshold });
+  }
+
+  private normalizeOrganizationId(organizationId?: string): string | undefined {
+    const trimmed = organizationId?.trim();
+    return trimmed ? trimmed : undefined;
+  }
+
+  private scopeKey(organizationId?: string): string {
+    return organizationId ?? 'global';
+  }
+
+  private scopedKey(organizationId: string | undefined, resourceId: string): string {
+    return JSON.stringify([this.scopeKey(organizationId), resourceId]);
+  }
+
+  private matchDecisionKey(matchId: string, organizationId?: string): string {
+    return this.scopedKey(organizationId, matchId);
+  }
+
+  private entityScopeKey(entityId: string, organizationId?: string): string {
+    return this.scopedKey(organizationId, entityId);
+  }
+
+  private parseEntityScopeKey(entityScopeKey: string): { entityId: string; organizationId?: string } {
+    try {
+      const [scope, entityId] = JSON.parse(entityScopeKey) as [string, string];
+      return {
+        entityId,
+        ...(scope && scope !== 'global' ? { organizationId: scope } : {}),
+      };
+    } catch {
+      return { entityId: entityScopeKey };
+    }
+  }
+
+  private resultMatchesOrganization(result: ScreeningResult, organizationId?: string): boolean {
+    return organizationId ? result.organizationId === organizationId : !result.organizationId;
+  }
+
+  private auditEntryMatchesOrganization(entry: AuditEntry, organizationId?: string): boolean {
+    return organizationId ? entry.organizationId === organizationId : !entry.organizationId;
+  }
+
+  private findMatchOwner(
+    matchId: string,
+    organizationId?: string,
+  ): { result: ScreeningResult; match: SanctionsMatch } | null {
+    for (const result of this.screeningResults.values()) {
+      if (!this.resultMatchesOrganization(result, organizationId)) continue;
+      const match = result.matches.find((candidate) => candidate.matchId === matchId);
+      if (match) return { result, match };
+    }
+    return null;
+  }
+
+  private statusFromDecision(decision: FalsePositiveDecision['decision']): SanctionsMatch['status'] {
+    if (decision === 'false_positive') return 'false_positive';
+    if (decision === 'confirmed_match') return 'confirmed_match';
+    return 'escalated';
+  }
+
+  private calculateOverallRisk(matches: SanctionsMatch[]): ScreeningResult['overallRisk'] {
+    const activeMatches = matches.filter((match) => match.status !== 'false_positive');
+    if (activeMatches.some((match) => match.status === 'confirmed_match')) {
+      return 'confirmed_match';
+    }
+    if (activeMatches.some((match) => match.status === 'pending_review' || match.status === 'escalated')) {
+      return 'potential_match';
+    }
+    return 'clear';
   }
 
   private assertScreeningListsReady(screenAgainst: SanctionsListName[]): void {

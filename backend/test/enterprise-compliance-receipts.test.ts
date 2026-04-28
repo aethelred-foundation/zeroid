@@ -17,6 +17,8 @@ const mockApplyCrossBorderPolicy = jest.fn();
 const mockApplyReportingPolicy = jest.fn();
 const mockApplyPrivacyWorkflowPolicy = jest.fn();
 const mockScreenBatch = jest.fn();
+const mockResolveMatch = jest.fn();
+const mockGetEntityScreenings = jest.fn();
 const mockAssessCrossBorder = jest.fn();
 const mockAssessCrossBorderTransfer = jest.fn();
 const mockGenerateSAR = jest.fn();
@@ -111,8 +113,8 @@ jest.mock('../src/services/compliance/sanctions-screening', () => ({
   sanctionsScreeningService: {
     screenEntity: mockScreenEntity,
     screenBatch: mockScreenBatch,
-    resolveMatch: jest.fn(),
-    getEntityScreenings: jest.fn(),
+    resolveMatch: mockResolveMatch,
+    getEntityScreenings: mockGetEntityScreenings,
   },
 }));
 
@@ -438,6 +440,8 @@ describe('enterprise compliance receipt routes', () => {
       summary: { clear: 2, potentialMatch: 0, confirmedMatch: 0 },
       processingTimeMs: 20,
     });
+    mockResolveMatch.mockResolvedValue(undefined);
+    mockGetEntityScreenings.mockReturnValue([]);
     mockAssessCrossBorder.mockReturnValue({
       allowed: true,
       sourceJurisdiction: 'AE-ADGM',
@@ -1085,6 +1089,12 @@ describe('enterprise compliance receipt routes', () => {
       policyDefinitionId: 'policy-7',
       directives: ['pep_review_requirement'],
     });
+    expect(mockScreenEntity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entityId: 'entity-9',
+      }),
+      'org-1',
+    );
     expect(mockCreateReceipt).toHaveBeenCalledWith(expect.objectContaining({
       receiptType: 'sanctions_screening',
       decisionSummary: 'screening_result:potential_match',
@@ -1100,6 +1110,53 @@ describe('enterprise compliance receipt routes', () => {
         }),
       }),
     }));
+  });
+
+  it('passes organization scope to batch screening, match resolution, and screening history', async () => {
+    const batchResponse = await invokeRoute('POST', '/screen/batch', {
+      body: {
+        clientId: 'client-1',
+        requests: [
+          {
+            entityId: 'entity-9',
+            entityType: 'individual',
+            names: [{ fullName: 'Jane Doe', nameType: 'primary' }],
+          },
+        ],
+      },
+    });
+
+    expect(batchResponse.statusCode).toBe(200);
+    expect(mockScreenBatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        clientId: 'client-1',
+      }),
+      'org-1',
+    );
+
+    const resolveResponse = await invokeRoute('POST', '/screen/resolve', {
+      body: {
+        matchId: '11111111-1111-4111-8111-111111111111',
+        decision: 'false_positive',
+        reason: 'Reviewed source documentation and cleared',
+        decidedBy: 'client-supplied-reviewer',
+      },
+    });
+
+    expect(resolveResponse.statusCode).toBe(200);
+    expect(mockResolveMatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        matchId: '11111111-1111-4111-8111-111111111111',
+        decidedBy: 'actor-1',
+      }),
+      'org-1',
+    );
+
+    await invokeRoute('GET', '/status/:entityId', {
+      params: { entityId: 'entity-9' },
+    });
+
+    expect(mockGetEntityScreenings).toHaveBeenCalledWith('entity-9', 'org-1');
   });
 
   it('applies policy execution to cross-border transfer assessments', async () => {

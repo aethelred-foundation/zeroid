@@ -125,6 +125,54 @@ describe('SanctionsScreeningService readiness', () => {
     ]);
   });
 
+  it('keeps screening results and match resolution scoped by organization', async () => {
+    const service = new SanctionsScreeningService();
+    service.updateSanctionsList('ofac_sdn', [listEntry]);
+
+    const orgAResult = await service.screenEntity(request, 'org-a');
+    const orgBResult = await service.screenEntity(request, 'org-b');
+    const orgAMatch = orgAResult.matches[0];
+
+    expect(orgAResult.organizationId).toBe('org-a');
+    expect(orgBResult.organizationId).toBe('org-b');
+    expect(service.getScreeningResult(orgAResult.screeningId, 'org-b')).toBeNull();
+    expect(service.getEntityScreenings('entity-1', 'org-a')).toHaveLength(1);
+    expect(service.getEntityScreenings('entity-1', 'org-b')).toHaveLength(1);
+
+    await expect(
+      service.resolveMatch({
+        matchId: orgAMatch.matchId,
+        decision: 'false_positive',
+        reason: 'Attempt to resolve a match from a different organization',
+        decidedBy: 'reviewer-b',
+      }, 'org-b'),
+    ).rejects.toMatchObject({
+      code: 'SANCTIONS_MATCH_NOT_FOUND',
+      statusCode: 404,
+    });
+
+    await service.resolveMatch({
+      matchId: orgAMatch.matchId,
+      decision: 'false_positive',
+      reason: 'Reviewed against source documents and cleared',
+      decidedBy: 'reviewer-a',
+    }, 'org-a');
+
+    expect(orgAResult.matches[0].status).toBe('false_positive');
+    expect(orgAResult.overallRisk).toBe('clear');
+    expect(orgBResult.matches[0].status).toBe('pending_review');
+    expect(orgBResult.overallRisk).toBe('potential_match');
+    expect(service.getAuditTrail(orgAResult.screeningId, 'org-a')).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          action: 'match_false_positive',
+          organizationId: 'org-a',
+        }),
+      ]),
+    );
+    expect(service.getAuditTrail(orgAResult.screeningId, 'org-b')).toEqual([]);
+  });
+
   it('blocks production screening when list metadata is stale', async () => {
     process.env.NODE_ENV = 'production';
     process.env.SANCTIONS_LIST_MAX_AGE_HOURS = '1';

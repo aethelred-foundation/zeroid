@@ -2832,7 +2832,10 @@ router.post(
           subjectEntityId: req.body.entityId,
         },
       );
-      const baseResult = await sanctionsScreeningService.screenEntity(req.body);
+      const baseResult = await sanctionsScreeningService.screenEntity(
+        req.body,
+        context.organizationId,
+      );
       const policyExecution = await policyExecutionService.applyScreeningPolicy(
         context.organizationId,
         policyContext,
@@ -2900,7 +2903,10 @@ router.post(
         'batch_sanctions_screening',
         context.organizationId,
       );
-      const baseResult = await sanctionsScreeningService.screenBatch(req.body);
+      const baseResult = await sanctionsScreeningService.screenBatch(
+        req.body,
+        context.organizationId,
+      );
       const policyExecution =
         await policyExecutionService.applyBatchScreeningPolicy(
           context.organizationId,
@@ -2956,7 +2962,16 @@ router.post(
   validate(FalsePositiveDecisionSchema),
   async (req: Request, res: Response): Promise<void> => {
     try {
-      await sanctionsScreeningService.resolveMatch(req.body);
+      const context = await requireReceiptContext(req, res);
+      if (!context) return;
+
+      await sanctionsScreeningService.resolveMatch(
+        {
+          ...req.body,
+          decidedBy: context.actorIdentityId,
+        },
+        context.organizationId,
+      );
       res.status(200).json({ message: 'Match resolution recorded' });
     } catch (err) {
       const error = err as Error & { statusCode?: number; code?: string };
@@ -2978,6 +2993,8 @@ router.get(
     try {
       const { entityId } = req.params;
       const jurisdiction = req.query.jurisdiction as string | undefined;
+      const context = await requireReceiptContext(req, res);
+      if (!context) return;
 
       if (jurisdiction) {
         const parsed = JurisdictionCodeSchema.safeParse(jurisdiction);
@@ -3005,6 +3022,7 @@ router.get(
       // Return screening history
       const screenings = sanctionsScreeningService.getEntityScreenings(
         entityId as string,
+        context.organizationId,
       );
       res.status(200).json({ data: { entityId, screenings } });
     } catch (err) {
