@@ -1,7 +1,9 @@
 import { promises as dns } from 'dns';
+import { EventEmitter } from 'events';
 
 const ORIGINAL_ENV = { ...process.env };
 const ORIGINAL_FETCH = global.fetch;
+const httpsRequestMock = jest.fn();
 let dnsLookupSpy: jest.SpyInstance;
 
 describe('TEE production configuration', () => {
@@ -16,6 +18,11 @@ describe('TEE production configuration', () => {
     dnsLookupSpy = jest.spyOn(dns, 'lookup').mockResolvedValue([
       { address: '8.8.8.8', family: 4 },
     ] as never);
+    httpsRequestMock.mockReset();
+
+    jest.doMock('https', () => ({
+      request: httpsRequestMock,
+    }));
 
     jest.doMock('prom-client', () => {
       const Metric = jest.fn().mockImplementation(() => ({
@@ -63,6 +70,7 @@ describe('TEE production configuration', () => {
 
   afterEach(() => {
     dnsLookupSpy.mockRestore();
+    jest.dontMock('https');
     jest.dontMock('prom-client');
     jest.dontMock('../src/index');
     jest.resetModules();
@@ -107,19 +115,28 @@ describe('TEE production configuration', () => {
   it('rejects oversized collateral responses before parsing them', async () => {
     process.env.TEE_DCAP_API_URL = 'https://collateral.example.com';
 
-    const fetchMock = jest.fn()
-      .mockResolvedValueOnce(collateralResponse('unused', {
-        'content-length': String(9 * 1024 * 1024),
-      }))
-      .mockResolvedValueOnce(collateralResponse('root-crl'))
-      .mockResolvedValueOnce(collateralResponse('{}', {
-        'sgx-tcb-info-issuer-chain': 'chain',
-        'sgx-tcb-info-signature': 'signature',
-      }))
-      .mockResolvedValueOnce(collateralResponse('{}', {
-        'sgx-enclave-identity-issuer-chain': 'chain',
-        'sgx-enclave-identity-signature': 'signature',
-      }));
+    mockCollateralHttpsResponses([
+      {
+        body: 'unused',
+        headers: { 'content-length': String(9 * 1024 * 1024) },
+      },
+      { body: 'root-crl' },
+      {
+        body: '{}',
+        headers: {
+          'sgx-tcb-info-issuer-chain': 'chain',
+          'sgx-tcb-info-signature': 'signature',
+        },
+      },
+      {
+        body: '{}',
+        headers: {
+          'sgx-enclave-identity-issuer-chain': 'chain',
+          'sgx-enclave-identity-signature': 'signature',
+        },
+      },
+    ]);
+    const fetchMock = jest.fn();
     global.fetch = fetchMock as unknown as typeof fetch;
 
     const { TEEAttestationService } = require('../src/services/tee');
@@ -130,7 +147,8 @@ describe('TEE production configuration', () => {
     ).rejects.toMatchObject({
       code: 'TEE_COLLATERAL_UNAVAILABLE',
     });
-    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(httpsRequestMock).toHaveBeenCalledTimes(4);
   });
 
   it('blocks collateral fetches when the provider resolves privately in production', async () => {
@@ -151,6 +169,78 @@ describe('TEE production configuration', () => {
       statusCode: 503,
     });
     expect(fetchMock).not.toHaveBeenCalled();
+    expect(httpsRequestMock).not.toHaveBeenCalled();
+  });
+
+  it('pins vetted DNS address during production collateral fetches', async () => {
+    process.env.TEE_DCAP_API_URL = 'https://collateral.example.com';
+    const capturedOptions: Array<{
+      url: URL;
+      options: { servername?: string; lookup?: unknown };
+    }> = [];
+    mockCollateralHttpsResponses(
+      [
+        { body: 'pck-crl', headers: { 'sgx-pck-crl-issuer-chain': 'pck-chain' } },
+        { body: 'root-crl' },
+        {
+          body: '{}',
+          headers: {
+            'sgx-tcb-info-issuer-chain': 'tcb-chain',
+            'sgx-tcb-info-signature': 'tcb-signature',
+          },
+        },
+        {
+          body: '{}',
+          headers: {
+            'sgx-enclave-identity-issuer-chain': 'qe-chain',
+            'sgx-enclave-identity-signature': 'qe-signature',
+          },
+        },
+      ],
+      (url, options) => capturedOptions.push({ url, options }),
+    );
+    const fetchMock = jest.fn();
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const { TEEAttestationService } = require('../src/services/tee');
+    const service = new TEEAttestationService();
+
+    const collateral = await (service as any).fetchCollateralFromPCS('00906ea10000');
+
+    expect(collateral).toMatchObject({
+      pckCrl: 'pck-crl',
+      pckCrlIssuerChain: 'pck-chain',
+      rootCaCrl: 'root-crl',
+      tcbInfo: '{}',
+      tcbInfoSignature: 'tcb-signature',
+      tcbSigningCertChain: 'tcb-chain',
+      qeIdentity: '{}',
+      qeIdentitySignature: 'qe-signature',
+      qeIdentitySigningCertChain: 'qe-chain',
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(httpsRequestMock).toHaveBeenCalledTimes(4);
+    expect(capturedOptions.map(({ url }) => url.pathname + url.search)).toEqual([
+      '/pckcrl?ca=processor',
+      '/rootcacrl',
+      '/tcb?fmspc=00906ea10000',
+      '/qe/identity',
+    ]);
+    expect(capturedOptions.every(({ options }) => options.servername === 'collateral.example.com')).toBe(true);
+
+    const lookup = capturedOptions[0].options.lookup as any;
+    await new Promise<void>((resolve, reject) => {
+      lookup('collateral.example.com', {}, (err: Error | null, address: string, family: number) => {
+        try {
+          expect(err).toBeNull();
+          expect(address).toBe('8.8.8.8');
+          expect(family).toBe(4);
+          resolve();
+        } catch (lookupErr) {
+          reject(lookupErr);
+        }
+      });
+    });
   });
 });
 
@@ -173,4 +263,42 @@ function collateralResponse(
     body: null,
     text: jest.fn().mockResolvedValue(body),
   } as unknown as Response;
+}
+
+function mockCollateralHttpsResponses(
+  responses: Array<{
+    body: string;
+    statusCode?: number;
+    headers?: Record<string, string>;
+  }>,
+  onRequest?: (
+    url: URL,
+    options: { servername?: string; lookup?: unknown },
+  ) => void,
+): void {
+  httpsRequestMock.mockImplementation(
+    (url: URL, options: { servername?: string; lookup?: unknown }, callback: (response: any) => void) => {
+      const responseSpec = responses.shift();
+      if (!responseSpec) {
+        throw new Error(`Unexpected TEE collateral request to ${url.href}`);
+      }
+
+      const request = new EventEmitter() as any;
+      request.end = jest.fn(() => {
+        onRequest?.(url, options);
+        const response = new EventEmitter() as any;
+        response.statusCode = responseSpec.statusCode ?? 200;
+        response.headers = responseSpec.headers ?? {};
+        process.nextTick(() => {
+          callback(response);
+          response.emit('data', responseSpec.body);
+          response.emit('end');
+        });
+      });
+      request.destroy = jest.fn((err?: Error) => {
+        if (err) request.emit('error', err);
+      });
+      return request;
+    },
+  );
 }

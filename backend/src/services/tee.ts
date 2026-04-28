@@ -1,5 +1,6 @@
 import { logger, redis, prisma, metricsRegistry } from '../index';
 import * as crypto from 'crypto';
+import * as https from 'https';
 import * as net from 'net';
 import { promises as dns } from 'dns';
 import { Counter, Histogram } from 'prom-client';
@@ -143,6 +144,16 @@ interface AttestationChallengeRecord {
   audience: 'zeroid:tee-attestation-challenge:v1';
   issuedAt: number;
   expiresAt: number;
+}
+
+interface ResolvedCollateralAddress {
+  address: string;
+  family: number;
+}
+
+interface ResolvedCollateralEndpoint {
+  baseUrl: URL;
+  pinnedAddress?: ResolvedCollateralAddress;
 }
 
 // ---------------------------------------------------------------------------
@@ -1171,18 +1182,25 @@ export class TEEAttestationService {
     };
 
     try {
-      await this.assertSafeResolvedCollateralEndpoint();
-      const requestOptions: RequestInit = {
-        headers,
-        redirect: 'manual',
-        signal: AbortSignal.timeout(TEE_COLLATERAL_FETCH_TIMEOUT_MS),
-      };
+      const resolvedEndpoint = await this.resolveSafeCollateralEndpoint();
       const [pckCrlRes, rootCaCrlRes, tcbInfoRes, qeIdentityRes] =
         await Promise.all([
-          fetch(`${TEE_DCAP_BASE_URL}/pckcrl?ca=processor`, requestOptions),
-          fetch(`${TEE_DCAP_BASE_URL}/rootcacrl`, requestOptions),
-          fetch(`${TEE_DCAP_BASE_URL}/tcb?fmspc=${fmspc}`, requestOptions),
-          fetch(`${TEE_DCAP_BASE_URL}/qe/identity`, requestOptions),
+          this.fetchCollateralEndpoint(
+            resolvedEndpoint,
+            'pckcrl?ca=processor',
+            headers,
+          ),
+          this.fetchCollateralEndpoint(resolvedEndpoint, 'rootcacrl', headers),
+          this.fetchCollateralEndpoint(
+            resolvedEndpoint,
+            `tcb?fmspc=${encodeURIComponent(fmspc)}`,
+            headers,
+          ),
+          this.fetchCollateralEndpoint(
+            resolvedEndpoint,
+            'qe/identity',
+            headers,
+          ),
         ]);
 
       if (!pckCrlRes.ok) {
@@ -2525,11 +2543,15 @@ export class TEEAttestationService {
     }
   }
 
-  private async assertSafeResolvedCollateralEndpoint(): Promise<void> {
-    if (!IS_PRODUCTION) return;
+  private async resolveSafeCollateralEndpoint(): Promise<ResolvedCollateralEndpoint> {
+    const baseUrl = new URL(
+      TEE_DCAP_BASE_URL.endsWith('/')
+        ? TEE_DCAP_BASE_URL
+        : `${TEE_DCAP_BASE_URL}/`,
+    );
+    if (!IS_PRODUCTION) return { baseUrl };
 
-    const endpoint = new URL(TEE_DCAP_BASE_URL);
-    const hostname = normalizeCollateralHostname(endpoint.hostname);
+    const hostname = normalizeCollateralHostname(baseUrl.hostname);
     if (isLocalOrPrivateCollateralHostname(hostname)) {
       throw new AttestationError(
         'TEE collateral provider URL resolved to localhost, private, or internal network infrastructure.',
@@ -2554,6 +2576,92 @@ export class TEEAttestationService {
         503,
       );
     }
+
+    return { baseUrl, pinnedAddress: resolvedAddresses[0] };
+  }
+
+  private async fetchCollateralEndpoint(
+    resolvedEndpoint: ResolvedCollateralEndpoint,
+    path: string,
+    headers: Record<string, string>,
+  ): Promise<Response> {
+    const endpoint = new URL(path, resolvedEndpoint.baseUrl);
+    if (!resolvedEndpoint.pinnedAddress) {
+      return fetch(endpoint.toString(), {
+        headers,
+        redirect: 'manual',
+        signal: AbortSignal.timeout(TEE_COLLATERAL_FETCH_TIMEOUT_MS),
+      });
+    }
+
+    return this.fetchCollateralEndpointWithPinnedAddress(
+      endpoint,
+      resolvedEndpoint.pinnedAddress,
+      headers,
+    );
+  }
+
+  private async fetchCollateralEndpointWithPinnedAddress(
+    endpoint: URL,
+    pinnedAddress: ResolvedCollateralAddress,
+    headers: Record<string, string>,
+  ): Promise<Response> {
+    return new Promise((resolve, reject) => {
+      const request = https.request(
+        endpoint,
+        {
+          method: 'GET',
+          headers,
+          lookup: (_hostname, _options, callback) => {
+            callback(null, pinnedAddress.address, pinnedAddress.family);
+          },
+          servername: endpoint.hostname,
+          timeout: TEE_COLLATERAL_FETCH_TIMEOUT_MS,
+        },
+        (response) => {
+          const status = response.statusCode ?? 502;
+          const responseHeaders = new Headers();
+          for (const [header, value] of Object.entries(response.headers)) {
+            if (Array.isArray(value)) {
+              for (const item of value) responseHeaders.append(header, item);
+            } else if (value !== undefined) {
+              responseHeaders.set(header, String(value));
+            }
+          }
+
+          const chunks: Buffer[] = [];
+          let totalBytes = 0;
+          response.on('data', (chunk: Buffer | string) => {
+            const chunkBuffer = Buffer.isBuffer(chunk)
+              ? chunk
+              : Buffer.from(chunk);
+            totalBytes += chunkBuffer.byteLength;
+            if (totalBytes > TEE_COLLATERAL_RESPONSE_MAX_BYTES) {
+              request.destroy(
+                new Error(
+                  `TEE collateral response exceeded ${TEE_COLLATERAL_RESPONSE_MAX_BYTES} byte limit`,
+                ),
+              );
+              return;
+            }
+            chunks.push(chunkBuffer);
+          });
+          response.on('end', () => {
+            resolve(new Response(Buffer.concat(chunks, totalBytes), {
+              status,
+              headers: responseHeaders,
+            }));
+          });
+          response.on('error', reject);
+        },
+      );
+
+      request.on('timeout', () => {
+        request.destroy(new Error('TEE collateral request timed out'));
+      });
+      request.on('error', reject);
+      request.end();
+    });
   }
 
   private enforceTCBPolicy(status: TCBStatus): void {
