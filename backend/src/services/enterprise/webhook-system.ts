@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { createLogger, format, transports } from 'winston';
 import crypto from 'crypto';
+import * as net from 'net';
 import { prisma, redis } from '../../index';
 
 // ---------------------------------------------------------------------------
@@ -19,6 +20,97 @@ const ENCRYPTED_WEBHOOK_SECRET_PREFIX = 'enc:v1:';
 const LOCAL_WEBHOOK_SECRET_PREFIX = 'local:v1:';
 const WEBHOOK_REPLAY_EVENT_LOG_KEY = 'enterprise:webhook-events';
 const MAX_WEBHOOK_REPLAY_EVENTS = 10_000;
+const SAFE_WEBHOOK_ENDPOINT_MESSAGE =
+  'Webhook URL must use HTTPS and must not target localhost or private network addresses in production.';
+const RESERVED_WEBHOOK_HEADER_MESSAGE =
+  'Webhook headers must not override platform delivery headers.';
+const RESERVED_WEBHOOK_HEADER_NAMES = new Set([
+  'content-type',
+  'user-agent',
+  'x-zeroid-delivery',
+  'x-zeroid-event',
+  'x-zeroid-signature',
+  'x-zeroid-timestamp',
+]);
+const PRIVATE_WEBHOOK_HOSTNAME_SUFFIXES = [
+  '.corp',
+  '.home',
+  '.internal',
+  '.lan',
+  '.local',
+  '.localhost',
+];
+
+const isProductionRuntime = (): boolean => process.env.NODE_ENV === 'production';
+
+function isSafeWebhookEndpoint(value: string): boolean {
+  try {
+    const endpoint = new URL(value);
+    if (isProductionRuntime()) {
+      return (
+        endpoint.protocol === 'https:' &&
+        endpoint.username === '' &&
+        endpoint.password === '' &&
+        !isLocalOrPrivateHostname(endpoint.hostname)
+      );
+    }
+    return endpoint.protocol === 'http:' || endpoint.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+function isLocalOrPrivateHostname(hostname: string): boolean {
+  const normalized = hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
+  if (
+    normalized === 'localhost' ||
+    normalized === '0.0.0.0' ||
+    normalized === '127.0.0.1' ||
+    normalized === '::' ||
+    normalized === '::1' ||
+    normalized.endsWith('.localhost')
+  ) {
+    return true;
+  }
+
+  const ipVersion = net.isIP(normalized);
+  if (ipVersion === 4) {
+    const octets = normalized.split('.').map(Number);
+    return (
+      octets[0] === 0 ||
+      octets[0] === 10 ||
+      octets[0] === 127 ||
+      (octets[0] === 169 && octets[1] === 254) ||
+      (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31) ||
+      (octets[0] === 192 && octets[1] === 168)
+    );
+  }
+
+  if (ipVersion === 6) {
+    return (
+      normalized === '::' ||
+      normalized === '::1' ||
+      normalized.startsWith('fc') ||
+      normalized.startsWith('fd') ||
+      normalized.startsWith('fe80:')
+    );
+  }
+
+  return (
+    !normalized.includes('.') ||
+    PRIVATE_WEBHOOK_HOSTNAME_SUFFIXES.some((suffix) => normalized.endsWith(suffix))
+  );
+}
+
+function hasOnlySafeCustomWebhookHeaders(headers: Record<string, string>): boolean {
+  return Object.keys(headers).every((header) => !RESERVED_WEBHOOK_HEADER_NAMES.has(header.toLowerCase()));
+}
+
+function safeCustomWebhookHeaders(headers: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(headers).filter(([header]) => !RESERVED_WEBHOOK_HEADER_NAMES.has(header.toLowerCase())),
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Zod Schemas
@@ -44,7 +136,7 @@ export const WebhookEventTypeSchema = z.enum([
 export type WebhookEventType = z.infer<typeof WebhookEventTypeSchema>;
 
 export const WebhookRegistrationSchema = z.object({
-  url: z.string().url(),
+  url: z.string().url().refine(isSafeWebhookEndpoint, SAFE_WEBHOOK_ENDPOINT_MESSAGE),
   events: z.array(WebhookEventTypeSchema).min(1),
   secret: z.string().min(32).optional(),
   description: z.string().optional(),
@@ -52,18 +144,24 @@ export const WebhookRegistrationSchema = z.object({
   metadata: z.record(z.string()).default({}),
   batchDelivery: z.boolean().default(false),
   batchIntervalMs: z.number().int().min(1000).max(60000).default(5000),
-  headers: z.record(z.string()).default({}),
+  headers: z.record(z.string()).refine(
+    hasOnlySafeCustomWebhookHeaders,
+    RESERVED_WEBHOOK_HEADER_MESSAGE,
+  ).default({}),
 });
 
 export type WebhookRegistration = z.infer<typeof WebhookRegistrationSchema>;
 
 export const WebhookUpdateSchema = z.object({
-  url: z.string().url().optional(),
+  url: z.string().url().refine(isSafeWebhookEndpoint, SAFE_WEBHOOK_ENDPOINT_MESSAGE).optional(),
   events: z.array(WebhookEventTypeSchema).min(1).optional(),
   active: z.boolean().optional(),
   description: z.string().optional(),
   metadata: z.record(z.string()).optional(),
-  headers: z.record(z.string()).optional(),
+  headers: z.record(z.string()).refine(
+    hasOnlySafeCustomWebhookHeaders,
+    RESERVED_WEBHOOK_HEADER_MESSAGE,
+  ).optional(),
 });
 
 export type WebhookUpdate = z.infer<typeof WebhookUpdateSchema>;
@@ -500,13 +598,13 @@ export class WebhookSystem {
     const signature = this.signPayload(body, webhook.secret);
 
     const headers: Record<string, string> = {
+      ...safeCustomWebhookHeaders(webhook.headers),
       'Content-Type': 'application/json',
       'X-ZeroID-Signature': signature,
       'X-ZeroID-Event': event.eventType,
       'X-ZeroID-Delivery': deliveryId,
       'X-ZeroID-Timestamp': event.timestamp,
       'User-Agent': 'ZeroID-Webhook/1.0',
-      ...webhook.headers,
     };
 
     const delivery: WebhookDelivery = {

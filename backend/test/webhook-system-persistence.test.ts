@@ -13,6 +13,7 @@ const redisSortedSets: Record<
 > = {};
 const redisLists: Record<string, string[]> = {};
 const originalWebhookSecretEncryptionKey = process.env.WEBHOOK_SECRET_ENCRYPTION_KEY;
+const originalNodeEnv = process.env.NODE_ENV;
 
 const mockRedisEval = jest.fn(
   async (_script: string, numKeys: number, ...args: unknown[]) => {
@@ -99,6 +100,7 @@ describe('WebhookSystem persistence', () => {
     for (const key of Object.keys(redisSortedSets)) delete redisSortedSets[key];
     for (const key of Object.keys(redisLists)) delete redisLists[key];
     delete process.env.WEBHOOK_SECRET_ENCRYPTION_KEY;
+    process.env.NODE_ENV = 'test';
   });
 
   afterAll(() => {
@@ -106,6 +108,11 @@ describe('WebhookSystem persistence', () => {
       delete process.env.WEBHOOK_SECRET_ENCRYPTION_KEY;
     } else {
       process.env.WEBHOOK_SECRET_ENCRYPTION_KEY = originalWebhookSecretEncryptionKey;
+    }
+    if (originalNodeEnv === undefined) {
+      delete process.env.NODE_ENV;
+    } else {
+      process.env.NODE_ENV = originalNodeEnv;
     }
   });
 
@@ -146,6 +153,54 @@ describe('WebhookSystem persistence', () => {
       metadata: { owner: 'platform' },
       headers: { 'x-tenant': 'org-1' },
     });
+  });
+
+  it('rejects unsafe production webhook endpoints before persistence', async () => {
+    process.env.NODE_ENV = 'production';
+
+    await expect(webhookSystem.register('org-1', {
+      url: 'http://hooks.zeroid.example/ingest',
+      events: ['verification.completed'],
+    })).rejects.toThrow(/Webhook URL/);
+
+    await expect(webhookSystem.register('org-1', {
+      url: 'https://127.0.0.1/internal',
+      events: ['verification.completed'],
+    })).rejects.toThrow(/Webhook URL/);
+
+    await expect(webhookSystem.register('org-1', {
+      url: 'https://[::1]/internal',
+      events: ['verification.completed'],
+    })).rejects.toThrow(/Webhook URL/);
+
+    await expect(webhookSystem.register('org-1', {
+      url: 'https://metadata.google.internal/compute',
+      events: ['verification.completed'],
+    })).rejects.toThrow(/Webhook URL/);
+
+    await expect(webhookSystem.register('org-1', {
+      url: 'https://webhook/ingest',
+      events: ['verification.completed'],
+    })).rejects.toThrow(/Webhook URL/);
+
+    await expect(webhookSystem.register('org-1', {
+      url: 'https://user:pass@hooks.zeroid.com/ingest',
+      events: ['verification.completed'],
+    })).rejects.toThrow(/Webhook URL/);
+
+    expect(mockWebhookCreate).not.toHaveBeenCalled();
+  });
+
+  it('rejects custom headers that would override delivery authenticity metadata', async () => {
+    await expect(webhookSystem.register('org-1', {
+      url: 'https://hooks.zeroid.example/ingest',
+      events: ['credential.issued'],
+      headers: {
+        'X-ZeroID-Signature': 'override',
+      },
+    })).rejects.toThrow(/platform delivery headers/);
+
+    expect(mockWebhookCreate).not.toHaveBeenCalled();
   });
 
   it('encrypts new webhook secrets when an envelope key is configured', async () => {
@@ -373,6 +428,65 @@ describe('WebhookSystem persistence', () => {
         success: true,
       }),
     }));
+    fetchSpy.mockRestore();
+  });
+
+  it('keeps platform delivery headers authoritative over persisted custom headers', async () => {
+    mockWebhookFindMany.mockResolvedValue([
+      {
+        id: 'wh-headers',
+        organizationId: 'org-1',
+        url: 'https://hooks.zeroid.example/ingest',
+        secret: 's'.repeat(64),
+        events: ['credential.issued'],
+        status: 'ACTIVE',
+        failureCount: 0,
+        lastDeliveredAt: null,
+        lastStatusCode: null,
+        createdAt: new Date('2026-04-21T00:00:00.000Z'),
+        updatedAt: new Date('2026-04-21T00:00:00.000Z'),
+      },
+    ]);
+    redisStore['enterprise:webhook-config:wh-headers'] = JSON.stringify({
+      description: 'primary sink',
+      metadata: {},
+      batchDelivery: false,
+      batchIntervalMs: 5000,
+      headers: {
+        'content-type': 'text/plain',
+        'x-tenant': 'org-1',
+        'x-zeroid-signature': 'override',
+      },
+      health: {
+        consecutiveFailures: 0,
+        lastSuccessAt: null,
+        lastFailureAt: null,
+        lastStatusCode: null,
+        totalDelivered: 0,
+        totalFailed: 0,
+        averageLatencyMs: 0,
+        disabled: false,
+        disabledReason: null,
+      },
+    });
+    mockWebhookDeliveryUpsert.mockResolvedValue({});
+    const fetchSpy = jest
+      .spyOn(global, 'fetch')
+      .mockResolvedValue(new Response('ok', { status: 200 }));
+
+    const deliveryIds = await webhookSystem.emit('credential.issued', {
+      credentialId: 'cred-1',
+    });
+
+    const request = fetchSpy.mock.calls[0][1] as RequestInit;
+    const headers = request.headers as Record<string, string>;
+    expect(deliveryIds).toHaveLength(1);
+    expect(headers['x-tenant']).toBe('org-1');
+    expect(headers['content-type']).toBeUndefined();
+    expect(headers['x-zeroid-signature']).toBeUndefined();
+    expect(headers['Content-Type']).toBe('application/json');
+    expect(headers['X-ZeroID-Signature']).toMatch(/^t=\d+,v1=[0-9a-f]+$/);
+    expect(headers['X-ZeroID-Delivery']).toBe(deliveryIds[0]);
     fetchSpy.mockRestore();
   });
 
