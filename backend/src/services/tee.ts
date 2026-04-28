@@ -971,8 +971,9 @@ export class TEEAttestationService {
     };
 
     try {
-      const requestOptions = {
+      const requestOptions: RequestInit = {
         headers,
+        redirect: 'manual',
         signal: AbortSignal.timeout(TEE_COLLATERAL_FETCH_TIMEOUT_MS),
       };
       const [pckCrlRes, rootCaCrlRes, tcbInfoRes, qeIdentityRes] =

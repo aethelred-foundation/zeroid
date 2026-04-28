@@ -217,14 +217,18 @@ async function authorizeCode(
   bridge: OIDCBridge,
   clientId: string,
   subjectId: string,
-  opts?: { codeChallenge?: string; codeChallengeMethod?: 'S256' },
+  opts?: {
+    codeChallenge?: string;
+    codeChallengeMethod?: 'S256';
+    scope?: string;
+  },
 ) {
   const result = await bridge.authorize(
     {
       clientId,
       redirectUri: REDIRECT_URI,
       responseType: 'code',
-      scope: 'openid profile email',
+      scope: opts?.scope ?? 'openid profile email',
       state: crypto.randomBytes(8).toString('hex'),
       nonce: crypto.randomBytes(8).toString('hex'),
       codeChallenge: opts?.codeChallenge,
@@ -314,6 +318,18 @@ describe('OIDC multi-node correctness', () => {
         bridgeA.registerClient({
           clientName: 'Private Redirect Client',
           redirectUris: ['https://10.0.0.5/callback'],
+          postLogoutRedirectUris: ['https://app.example.com/logout'],
+          grantTypes: ['authorization_code'],
+          responseTypes: ['code'],
+          tokenEndpointAuthMethod: 'client_secret_basic',
+          scopes: ['openid'],
+        }),
+      ).rejects.toThrow(/Redirect URI/);
+
+      await expect(
+        bridgeA.registerClient({
+          clientName: 'Shared Address Space Client',
+          redirectUris: ['https://100.64.0.5/callback'],
           postLogoutRedirectUris: ['https://app.example.com/logout'],
           grantTypes: ['authorization_code'],
           responseTypes: ['code'],
@@ -423,6 +439,7 @@ describe('OIDC multi-node correctness', () => {
       BACKCHANNEL_LOGOUT_URI,
       expect.objectContaining({
         method: 'POST',
+        redirect: 'manual',
         body: expect.any(String),
       }),
     );
@@ -503,6 +520,27 @@ describe('OIDC multi-node correctness', () => {
     expect(tokens.refresh_token).toBeDefined();
     expect(tokens.token_type).toBe('Bearer');
     expect(tokens.scope).toBe('openid profile email');
+  });
+
+  test('authorization rejects scopes outside the client registration', async () => {
+    const client = await registerTestClient(bridgeA);
+
+    await expect(
+      bridgeA.authorize(
+        {
+          clientId: client.clientId,
+          redirectUri: REDIRECT_URI,
+          responseType: 'code',
+          scope: 'openid profile zeroid:kyc_status',
+          state: crypto.randomBytes(8).toString('hex'),
+          nonce: crypto.randomBytes(8).toString('hex'),
+        },
+        'user-scope-escalation',
+        { name: 'Scope User', kyc_level: 'government_verified' },
+      ),
+    ).rejects.toMatchObject({
+      errorCode: 'invalid_scope',
+    });
   });
 
   // 3. Cross-instance token validation
@@ -969,6 +1007,7 @@ describe('OIDC multi-node correctness', () => {
       bridgeB,
       client.clientId,
       'user-no-refresh-grant',
+      { scope: 'openid profile' },
     );
 
     const tokens = await bridgeA.exchangeToken({
@@ -1018,6 +1057,17 @@ describe('OIDC multi-node correctness', () => {
 
     expect(token.access_token).toBeDefined();
     expect(token.token_type).toBe('Bearer');
+
+    await expect(
+      bridgeB.exchangeToken({
+        grantType: 'client_credentials',
+        clientId: machineClient.clientId,
+        clientSecret: machineClient.clientSecret,
+        scope: 'openid zeroid:kyc_status',
+      }),
+    ).rejects.toMatchObject({
+      errorCode: 'invalid_scope',
+    });
   });
 
   test('token endpoint rejects grant requests missing required fields', async () => {
@@ -1174,6 +1224,29 @@ describe('OIDC multi-node correctness', () => {
     // Attempting another frontChannelLogout should still work (session exists but inactive).
     const secondLogout = await bridgeB.frontChannelLogout(sessionId);
     expect(secondLogout.logoutUrls).toContain(LOGOUT_URI);
+  });
+
+  test('front-channel logout blocks pending authorization code redemption', async () => {
+    const client = await registerTestClient(bridgeA);
+    const { sessionId, code } = await authorizeCode(
+      bridgeA,
+      client.clientId,
+      'user-logout-before-exchange',
+    );
+
+    await bridgeB.frontChannelLogout(sessionId);
+
+    await expect(
+      bridgeA.exchangeToken({
+        grantType: 'authorization_code',
+        code: code!,
+        redirectUri: REDIRECT_URI,
+        clientId: client.clientId,
+        clientSecret: client.clientSecret,
+      }),
+    ).rejects.toMatchObject({
+      errorCode: 'invalid_grant',
+    });
   });
 
   // 10. JWKS consistency

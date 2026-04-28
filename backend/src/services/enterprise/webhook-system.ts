@@ -100,13 +100,21 @@ function isLocalOrPrivateHostname(hostname: string): boolean {
 
 function isPrivateIpv4Address(value: string): boolean {
   const octets = value.split('.').map(Number);
+  const first = octets[0];
+  const second = octets[1];
   return (
-    octets[0] === 0 ||
-    octets[0] === 10 ||
-    octets[0] === 127 ||
-    (octets[0] === 169 && octets[1] === 254) ||
-    (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31) ||
-    (octets[0] === 192 && octets[1] === 168)
+    first === 0 ||
+    first === 10 ||
+    first === 127 ||
+    (first === 100 && second >= 64 && second <= 127) ||
+    (first === 169 && second === 254) ||
+    (first === 172 && second >= 16 && second <= 31) ||
+    (first === 192 && second === 0) ||
+    (first === 192 && second === 168) ||
+    (first === 198 && (second === 18 || second === 19)) ||
+    (first === 198 && second === 51) ||
+    (first === 203 && second === 0) ||
+    first >= 224
   );
 }
 
@@ -694,6 +702,7 @@ export class WebhookSystem {
         method: 'POST',
         headers: delivery.request.headers,
         body: delivery.request.body,
+        redirect: 'manual',
         signal: AbortSignal.timeout(30000),
       });
 

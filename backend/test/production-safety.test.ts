@@ -330,6 +330,14 @@ describe('production safety controls', () => {
     expect(collectProductionSafetyViolations({
       ...PROD_BASE_ENV,
       METRICS_PUBLIC_DISABLED: 'true',
+      OIDC_ISSUER_URL: 'https://100.64.0.5/enterprise/oidc',
+    })).toEqual([
+      expect.objectContaining({ control: 'OIDC_ISSUER_URL' }),
+    ]);
+
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      METRICS_PUBLIC_DISABLED: 'true',
       OIDC_ISSUER_URL: 'https://metadata.google.internal/enterprise/oidc',
     })).toEqual([
       expect.objectContaining({ control: 'OIDC_ISSUER_URL' }),
@@ -383,6 +391,14 @@ describe('production safety controls', () => {
       ...PROD_BASE_ENV,
       METRICS_PUBLIC_DISABLED: 'true',
       TEE_DCAP_API_URL: 'https://10.0.0.5',
+    })).toEqual([
+      expect.objectContaining({ control: 'TEE_COLLATERAL_PROVIDER_URL' }),
+    ]);
+
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      METRICS_PUBLIC_DISABLED: 'true',
+      TEE_DCAP_API_URL: 'https://100.64.0.5',
     })).toEqual([
       expect.objectContaining({ control: 'TEE_COLLATERAL_PROVIDER_URL' }),
     ]);

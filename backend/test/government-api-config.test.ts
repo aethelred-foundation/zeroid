@@ -79,6 +79,11 @@ describe('GovernmentAPIService production configuration', () => {
       expect.objectContaining({ code: 'GOV_UAEPASS_ENDPOINT_UNSAFE' }),
     );
 
+    process.env.UAE_PASS_API_URL = 'https://100.64.0.5';
+    expect(() => service.getUAEPassAuthUrl('https://zeroid.example/callback', 'state-1')).toThrow(
+      expect.objectContaining({ code: 'GOV_UAEPASS_ENDPOINT_UNSAFE' }),
+    );
+
     process.env.UAE_PASS_API_URL = 'https://metadata.google.internal';
     expect(() => service.getUAEPassAuthUrl('https://zeroid.example/callback', 'state-1')).toThrow(
       expect.objectContaining({ code: 'GOV_UAEPASS_ENDPOINT_UNSAFE' }),

@@ -59,13 +59,21 @@ function isLocalOrPrivateOidcHost(hostname: string): boolean {
 
 function isPrivateIpv4Address(value: string): boolean {
   const octets = value.split('.').map(Number);
+  const first = octets[0];
+  const second = octets[1];
   return (
-    octets[0] === 0 ||
-    octets[0] === 10 ||
-    octets[0] === 127 ||
-    (octets[0] === 169 && octets[1] === 254) ||
-    (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31) ||
-    (octets[0] === 192 && octets[1] === 168)
+    first === 0 ||
+    first === 10 ||
+    first === 127 ||
+    (first === 100 && second >= 64 && second <= 127) ||
+    (first === 169 && second === 254) ||
+    (first === 172 && second >= 16 && second <= 31) ||
+    (first === 192 && second === 0) ||
+    (first === 192 && second === 168) ||
+    (first === 198 && (second === 18 || second === 19)) ||
+    (first === 198 && second === 51) ||
+    (first === 203 && second === 0) ||
+    first >= 224
   );
 }
 
@@ -644,6 +652,7 @@ export class OIDCBridge {
         'Implicit and hybrid OIDC response types are disabled. Use authorization code flow with PKCE.',
       );
     }
+    this.assertKnownRegisteredScopes(parsed.scopes);
 
     const clientId = `zeroid_${crypto.randomBytes(16).toString('hex')}`;
     const clientSecret = crypto.randomBytes(32).toString('base64url');
@@ -773,8 +782,8 @@ export class OIDCBridge {
       active: true,
     });
 
-    // Build claims based on requested scopes
-    const requestedScopes = parsed.scope.split(' ');
+    // Build claims based only on scopes registered for this client.
+    const requestedScopes = this.assertScopesAllowed(client, parsed.scope);
     const claims = this.buildClaims(requestedScopes, subjectId, subjectClaims);
 
     if (parsed.responseType === 'code') {
@@ -900,6 +909,8 @@ export class OIDCBridge {
     if (authCode.redirectUri !== request.redirectUri) {
       throw new OIDCError('invalid_grant', 'Redirect URI mismatch');
     }
+    this.assertScopesAllowed(client, authCode.scope);
+    await this.assertAuthorizationSessionActive(authCode);
 
     // PKCE verification
     if (authCode.codeChallenge) {
@@ -972,7 +983,11 @@ export class OIDCBridge {
     );
     this.assertClientGrantAllowed(client, 'client_credentials');
 
-    const scope = request.scope ?? 'openid';
+    const requestedScopes = this.assertScopesAllowed(
+      client,
+      request.scope ?? 'openid',
+    );
+    const scope = requestedScopes.join(' ');
     const accessToken = await this.generateToken(
       request.clientId,
       request.clientId,
@@ -1036,6 +1051,7 @@ export class OIDCBridge {
       request.clientSecret,
     );
     this.assertClientGrantAllowed(client, 'refresh_token');
+    this.assertScopesAllowed(client, refreshData.scope);
     await this.assertRefreshSessionActive(refreshData, refreshStorageKey);
 
     // Atomically consume the refresh token: getAndDelete ensures only one
@@ -1052,6 +1068,7 @@ export class OIDCBridge {
     if (consumedRefreshData.clientId !== request.clientId) {
       throw new OIDCError('invalid_grant', 'Client mismatch');
     }
+    this.assertScopesAllowed(client, consumedRefreshData.scope);
 
     if (consumedRefreshData.sessionId) {
       await redis.srem(
@@ -1228,6 +1245,7 @@ export class OIDCBridge {
           'content-type': 'application/x-www-form-urlencoded',
         },
         body: new URLSearchParams({ logout_token: logoutToken }).toString(),
+        redirect: 'manual',
         signal: AbortSignal.timeout(5000),
       });
 
@@ -1497,6 +1515,74 @@ export class OIDCBridge {
       throw new OIDCError(
         'unauthorized_client',
         `Client is not registered for ${grantType} grant`,
+      );
+    }
+  }
+
+  private assertKnownRegisteredScopes(scopes: string[]): void {
+    if (scopes.length === 0) {
+      throw new OIDCError(
+        'invalid_client_metadata',
+        'At least one registered scope is required',
+      );
+    }
+
+    const unknownScope = scopes.find((scope) => !STANDARD_SCOPES[scope]);
+    if (unknownScope) {
+      throw new OIDCError(
+        'invalid_client_metadata',
+        `Unsupported registered scope: ${unknownScope}`,
+      );
+    }
+  }
+
+  private parseScopeString(scope: string): string[] {
+    const scopes = [...new Set(scope.split(/\s+/).filter(Boolean))];
+    if (scopes.length === 0) {
+      throw new OIDCError('invalid_scope', 'At least one scope is required');
+    }
+
+    const unknownScope = scopes.find((item) => !STANDARD_SCOPES[item]);
+    if (unknownScope) {
+      throw new OIDCError('invalid_scope', `Unsupported scope: ${unknownScope}`);
+    }
+
+    return scopes;
+  }
+
+  private assertScopesAllowed(
+    client: RegisteredClient,
+    scope: string,
+  ): string[] {
+    this.assertKnownRegisteredScopes(client.registration.scopes);
+    const requestedScopes = this.parseScopeString(scope);
+    const registeredScopes = new Set(client.registration.scopes);
+    const unauthorizedScope = requestedScopes.find(
+      (item) => !registeredScopes.has(item),
+    );
+    if (unauthorizedScope) {
+      throw new OIDCError(
+        'invalid_scope',
+        `Scope is not registered for this client: ${unauthorizedScope}`,
+      );
+    }
+
+    return requestedScopes;
+  }
+
+  private async assertAuthorizationSessionActive(
+    authCode: AuthorizationCode,
+  ): Promise<void> {
+    const session = await this.sessions.get(authCode.sessionId);
+    if (
+      !session ||
+      !session.active ||
+      session.clientId !== authCode.clientId ||
+      session.subjectId !== authCode.subjectId
+    ) {
+      throw new OIDCError(
+        'invalid_grant',
+        'Authorization code session is no longer active',
       );
     }
   }

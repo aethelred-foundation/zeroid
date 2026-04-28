@@ -116,6 +116,7 @@ function getAwsKmsClient(): AwsKmsClient {
 function fetchWithKmsTimeout(input: string, init: RequestInit = {}): Promise<Response> {
   return fetch(input, {
     ...init,
+    redirect: 'manual',
     signal: init.signal ?? AbortSignal.timeout(KMS_HTTP_TIMEOUT_MS),
   });
 }

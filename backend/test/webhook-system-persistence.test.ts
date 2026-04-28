@@ -169,6 +169,11 @@ describe('WebhookSystem persistence', () => {
     })).rejects.toThrow(/Webhook URL/);
 
     await expect(webhookSystem.register('org-1', {
+      url: 'https://100.64.0.5/internal',
+      events: ['verification.completed'],
+    })).rejects.toThrow(/Webhook URL/);
+
+    await expect(webhookSystem.register('org-1', {
       url: 'https://[::1]/internal',
       events: ['verification.completed'],
     })).rejects.toThrow(/Webhook URL/);
@@ -416,7 +421,9 @@ describe('WebhookSystem persistence', () => {
       credentialId: 'cred-1',
     });
 
+    const request = fetchSpy.mock.calls[0][1] as RequestInit;
     expect(deliveryIds).toHaveLength(1);
+    expect(request.redirect).toBe('manual');
     expect(mockWebhookDeliveryUpsert).toHaveBeenCalledWith(expect.objectContaining({
       where: { id: deliveryIds[0] },
       create: expect.objectContaining({
