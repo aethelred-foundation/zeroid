@@ -9,6 +9,7 @@ export interface ProductionSafetyViolation {
 const MIN_METRICS_TOKEN_LENGTH = 32;
 const MIN_JWT_SECRET_LENGTH = 48;
 const MIN_POLICY_RECEIPT_SECRET_LENGTH = 48;
+const MIN_ENTERPRISE_SECRET_HASH_PEPPER_LENGTH = 48;
 const DEFAULT_DEVELOPMENT_CORS_ORIGINS = ['http://localhost:3000'];
 const REQUIRED_SECRET_KEY_BYTES = 32;
 const MAX_PRODUCTION_SANCTIONS_LIST_AGE_HOURS = 24;
@@ -137,6 +138,7 @@ export function checkedProductionSafetyControls(): string[] {
     'SANCTIONS_LIST_MAX_AGE_HOURS',
     'WEBHOOK_SECRET_ENCRYPTION_KEY',
     'POLICY_RECEIPT_SIGNING_SECRET',
+    'ENTERPRISE_SECRET_HASH_PEPPER',
     'OIDC_ISSUER_URL',
     'OIDC_SIGNING_KEYPAIR',
     'CREDENTIAL_SIGNING_KMS',
@@ -299,6 +301,26 @@ export function collectProductionSafetyViolations(
     violations.push({
       control: 'POLICY_RECEIPT_SIGNING_SECRET',
       risk: 'Policy receipt signing secret must not use a known development or test placeholder',
+    });
+  }
+
+  const enterpriseSecretHashPepper = env.ENTERPRISE_SECRET_HASH_PEPPER?.trim();
+  if (!enterpriseSecretHashPepper) {
+    violations.push({
+      control: 'ENTERPRISE_SECRET_HASH_PEPPER',
+      risk: 'Production enterprise API keys and OAuth client secrets require a deployment pepper to resist offline verification after datastore disclosure',
+    });
+  } else if (
+    enterpriseSecretHashPepper.length < MIN_ENTERPRISE_SECRET_HASH_PEPPER_LENGTH
+  ) {
+    violations.push({
+      control: 'ENTERPRISE_SECRET_HASH_PEPPER',
+      risk: `Enterprise secret hash pepper must be at least ${MIN_ENTERPRISE_SECRET_HASH_PEPPER_LENGTH} characters`,
+    });
+  } else if (isKnownUnsafeJwtSecret(enterpriseSecretHashPepper)) {
+    violations.push({
+      control: 'ENTERPRISE_SECRET_HASH_PEPPER',
+      risk: 'Enterprise secret hash pepper must not use a known development or test placeholder',
     });
   }
 

@@ -30,6 +30,7 @@ const PROD_BASE_ENV: NodeJS.ProcessEnv = {
   SANCTIONS_LIST_MAX_AGE_HOURS: '24',
   WEBHOOK_SECRET_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64'),
   POLICY_RECEIPT_SIGNING_SECRET: 'r'.repeat(64),
+  ENTERPRISE_SECRET_HASH_PEPPER: 'e'.repeat(64),
   OIDC_ISSUER_URL: 'https://id.zeroid.example/enterprise/oidc',
   OIDC_SIGNING_PRIVATE_KEY: oidcPrivateKey,
   OIDC_SIGNING_PUBLIC_KEY: oidcPublicKey,
@@ -277,6 +278,32 @@ describe('production safety controls', () => {
       POLICY_RECEIPT_SIGNING_SECRET: 'change-me',
     })).toEqual([
       expect.objectContaining({ control: 'POLICY_RECEIPT_SIGNING_SECRET' }),
+    ]);
+  });
+
+  it('requires a strong enterprise secret hash pepper in production', () => {
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      METRICS_PUBLIC_DISABLED: 'true',
+      ENTERPRISE_SECRET_HASH_PEPPER: '',
+    })).toEqual([
+      expect.objectContaining({ control: 'ENTERPRISE_SECRET_HASH_PEPPER' }),
+    ]);
+
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      METRICS_PUBLIC_DISABLED: 'true',
+      ENTERPRISE_SECRET_HASH_PEPPER: 'short-pepper',
+    })).toEqual([
+      expect.objectContaining({ control: 'ENTERPRISE_SECRET_HASH_PEPPER' }),
+    ]);
+
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      METRICS_PUBLIC_DISABLED: 'true',
+      ENTERPRISE_SECRET_HASH_PEPPER: 'change-me',
+    })).toEqual([
+      expect.objectContaining({ control: 'ENTERPRISE_SECRET_HASH_PEPPER' }),
     ]);
   });
 

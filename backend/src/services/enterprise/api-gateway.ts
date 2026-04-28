@@ -13,6 +13,9 @@ const logger = createLogger({
   transports: [new transports.Console()],
 });
 
+const ENTERPRISE_SECRET_HASH_PEPPER_ENV = 'ENTERPRISE_SECRET_HASH_PEPPER';
+const MIN_ENTERPRISE_SECRET_HASH_PEPPER_LENGTH = 48;
+
 // ---------------------------------------------------------------------------
 // Zod Schemas
 // ---------------------------------------------------------------------------
@@ -134,6 +137,7 @@ interface OAuth2Token {
 interface OAuth2ClientRecord {
   clientId: string;
   clientSecretHash: string;
+  clientSecretHashAlg?: 'sha256' | 'hmac-sha256-v2';
   scopes: APIKeyScope[];
   environment: string;
 }
@@ -164,7 +168,11 @@ export class APIGateway {
   }
 
   private oauth2TokenKey(accessToken: string): string {
-    return `enterprise:oauth2-token:${this.hashOAuth2AccessToken(accessToken)}`;
+    return this.oauth2TokenKeyForHash(this.hashOAuth2AccessToken(accessToken));
+  }
+
+  private oauth2TokenKeyForHash(tokenHash: string): string {
+    return `enterprise:oauth2-token:${tokenHash}`;
   }
 
   private rateLimitKey(apiKeyId: string): string {
@@ -248,7 +256,7 @@ export class APIGateway {
     const parsed = CreateAPIKeySchema.parse(options);
     const id = crypto.randomUUID();
     const rawKey = `zid_${parsed.environment === 'sandbox' ? 'test' : 'live'}_${crypto.randomBytes(24).toString('base64url')}`;
-    const keyHash = crypto.createHash('sha256').update(rawKey).digest('hex');
+    const keyHash = this.hashAPIKey(rawKey);
     const keyPrefix = rawKey.substring(0, 12);
     const expiresAt = new Date(
       Date.now() + parsed.expiresInDays * 24 * 60 * 60 * 1000,
@@ -359,10 +367,7 @@ export class APIGateway {
     environment: string;
     scopes: APIKeyScope[];
   }> {
-    const keyHash = crypto.createHash('sha256').update(rawKey).digest('hex');
-    const keyRecord = await prisma.aPIKey.findUnique({
-      where: { keyHash },
-    });
+    const keyRecord = await this.findAPIKeyByPresentedSecret(rawKey);
     if (!keyRecord) {
       throw new GatewayError('Invalid API key', 'INVALID_KEY', 401);
     }
@@ -437,6 +442,9 @@ export class APIGateway {
     const client: OAuth2ClientRecord = {
       clientId,
       clientSecretHash: this.hashOAuth2ClientSecret(clientSecret),
+      clientSecretHashAlg: this.getEnterpriseSecretHashPepper()
+        ? 'hmac-sha256-v2'
+        : 'sha256',
       scopes,
       environment,
     };
@@ -460,17 +468,7 @@ export class APIGateway {
       );
     }
 
-    const secretHash = crypto
-      .createHash('sha256')
-      .update(parsed.clientSecret)
-      .digest('hex');
-    if (
-      !this.timingSafeStringEqual(
-        this.hashOAuth2ClientSecret(parsed.clientSecret),
-        client.clientSecretHash,
-      ) &&
-      !this.timingSafeStringEqual(secretHash, client.clientSecretHash)
-    ) {
+    if (!this.oauth2ClientSecretMatches(parsed.clientSecret, client)) {
       throw new GatewayError(
         'Invalid client credentials',
         'INVALID_CLIENT',
@@ -563,7 +561,19 @@ export class APIGateway {
   private async getOAuth2Token(
     accessToken: string,
   ): Promise<OAuth2TokenRecord | null> {
-    const raw = await redis.get(this.oauth2TokenKey(accessToken));
+    const keys = [this.oauth2TokenKey(accessToken)];
+    if (this.allowLegacySecretHashFallback()) {
+      const legacyKey = this.oauth2TokenKeyForHash(
+        this.legacyOAuth2AccessTokenHash(accessToken),
+      );
+      if (!keys.includes(legacyKey)) keys.push(legacyKey);
+    }
+
+    let raw: string | null = null;
+    for (const key of keys) {
+      raw = await redis.get(key);
+      if (raw) break;
+    }
     if (!raw) return null;
 
     try {
@@ -573,7 +583,44 @@ export class APIGateway {
     }
   }
 
+  private async findAPIKeyByPresentedSecret(rawKey: string): Promise<any | null> {
+    const keyHashes = [this.hashAPIKey(rawKey)];
+    if (this.allowLegacySecretHashFallback()) {
+      const legacyHash = this.legacyAPIKeyHash(rawKey);
+      if (!keyHashes.includes(legacyHash)) keyHashes.push(legacyHash);
+    }
+
+    for (const keyHash of keyHashes) {
+      const keyRecord = await prisma.aPIKey.findUnique({
+        where: { keyHash },
+      });
+      if (keyRecord) return keyRecord;
+    }
+
+    return null;
+  }
+
+  private hashAPIKey(rawKey: string): string {
+    return this.hashEnterpriseSecret(
+      'enterprise-api-key',
+      rawKey,
+      () => this.legacyAPIKeyHash(rawKey),
+    );
+  }
+
+  private legacyAPIKeyHash(rawKey: string): string {
+    return crypto.createHash('sha256').update(rawKey).digest('hex');
+  }
+
   private hashOAuth2ClientSecret(clientSecret: string): string {
+    return this.hashEnterpriseSecret(
+      'enterprise-oauth2-client-secret',
+      clientSecret,
+      () => this.legacyOAuth2ClientSecretHash(clientSecret),
+    );
+  }
+
+  private legacyOAuth2ClientSecretHash(clientSecret: string): string {
     return crypto
       .createHash('sha256')
       .update('zeroid:enterprise-oauth2-client-secret:v1:')
@@ -582,11 +629,75 @@ export class APIGateway {
   }
 
   private hashOAuth2AccessToken(accessToken: string): string {
+    return this.hashEnterpriseSecret(
+      'enterprise-oauth2-access-token',
+      accessToken,
+      () => this.legacyOAuth2AccessTokenHash(accessToken),
+    );
+  }
+
+  private legacyOAuth2AccessTokenHash(accessToken: string): string {
     return crypto
       .createHash('sha256')
       .update('zeroid:enterprise-oauth2-access-token:v1:')
       .update(accessToken)
       .digest('hex');
+  }
+
+  private oauth2ClientSecretMatches(
+    presentedSecret: string,
+    client: OAuth2ClientRecord,
+  ): boolean {
+    const candidateHashes = [this.hashOAuth2ClientSecret(presentedSecret)];
+    if (this.allowLegacySecretHashFallback()) {
+      const legacyHash = this.legacyOAuth2ClientSecretHash(presentedSecret);
+      if (!candidateHashes.includes(legacyHash)) candidateHashes.push(legacyHash);
+      const legacyRawHash = crypto
+        .createHash('sha256')
+        .update(presentedSecret)
+        .digest('hex');
+      if (!candidateHashes.includes(legacyRawHash)) candidateHashes.push(legacyRawHash);
+    }
+
+    return candidateHashes.some((hash) =>
+      this.timingSafeStringEqual(hash, client.clientSecretHash),
+    );
+  }
+
+  private hashEnterpriseSecret(
+    context: string,
+    secret: string,
+    legacyFallback: () => string,
+  ): string {
+    const pepper = this.getEnterpriseSecretHashPepper();
+    if (!pepper) return legacyFallback();
+
+    return crypto
+      .createHmac('sha256', pepper)
+      .update(`zeroid:${context}:v2:`)
+      .update(secret)
+      .digest('hex');
+  }
+
+  private getEnterpriseSecretHashPepper(): string | null {
+    const pepper = process.env[ENTERPRISE_SECRET_HASH_PEPPER_ENV]?.trim();
+    if (pepper && pepper.length >= MIN_ENTERPRISE_SECRET_HASH_PEPPER_LENGTH) {
+      return pepper;
+    }
+
+    if (process.env.NODE_ENV === 'production') {
+      throw new GatewayError(
+        `${ENTERPRISE_SECRET_HASH_PEPPER_ENV} must be configured in production and contain at least ${MIN_ENTERPRISE_SECRET_HASH_PEPPER_LENGTH} characters`,
+        'SECRET_HASH_PEPPER_MISSING',
+        500,
+      );
+    }
+
+    return null;
+  }
+
+  private allowLegacySecretHashFallback(): boolean {
+    return process.env.NODE_ENV !== 'production';
   }
 
   private timingSafeStringEqual(left: string, right: string): boolean {

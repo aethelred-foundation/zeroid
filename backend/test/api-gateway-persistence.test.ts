@@ -9,6 +9,7 @@ const mockApiUsageLogCreate = jest.fn();
 const mockApiUsageLogFindMany = jest.fn();
 
 const redisStore: Record<string, string> = {};
+const ORIGINAL_ENV = { ...process.env };
 
 const mockRedisEval = jest.fn(
   async (_script: string, numKeys: number, ...args: unknown[]) => {
@@ -105,6 +106,7 @@ import { APIGateway, apiGateway } from '../src/services/enterprise/api-gateway';
 
 describe('APIGateway persistence', () => {
   beforeEach(() => {
+    process.env = { ...ORIGINAL_ENV };
     jest.clearAllMocks();
     for (const key of Object.keys(redisStore)) delete redisStore[key];
   });
@@ -142,6 +144,98 @@ describe('APIGateway persistence', () => {
       metadata: { owner: 'platform' },
       revokedAt: null,
       revokedReason: null,
+    });
+  });
+
+  it('uses a deployment pepper for production API key hashes', async () => {
+    process.env.NODE_ENV = 'production';
+    process.env.ENTERPRISE_SECRET_HASH_PEPPER = 'p'.repeat(64);
+    mockApiKeyCreate.mockResolvedValue({});
+    mockApiKeyUpdate.mockResolvedValue({});
+
+    const result = await apiGateway.createAPIKey('org-peppered', {
+      name: 'Peppered production key',
+      scopes: ['credentials:read'],
+      environment: 'production',
+      expiresInDays: 30,
+      ipAllowlist: [],
+      dailyQuota: 1000,
+      monthlyQuota: 50000,
+      rateLimit: { requestsPerSecond: 100, burstSize: 100 },
+      metadata: {},
+    });
+
+    const expectedHash = hmacEnterpriseSecret(
+      'enterprise-api-key',
+      result.apiKey,
+    );
+    const legacyHash = crypto
+      .createHash('sha256')
+      .update(result.apiKey)
+      .digest('hex');
+
+    expect(mockApiKeyCreate).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        keyHash: expectedHash,
+      }),
+    }));
+    expect(expectedHash).not.toBe(legacyHash);
+
+    mockApiKeyFindUnique.mockResolvedValue({
+      id: result.apiKeyId,
+      organizationId: 'org-peppered',
+      name: 'Peppered production key',
+      keyHash: expectedHash,
+      keyPrefix: result.apiKey.substring(0, 12),
+      scopes: ['credentials:read'],
+      environment: 'production',
+      rateLimitPerMinute: 6000,
+      ipAllowlist: [],
+      expiresAt: new Date(result.expiresAt),
+      isActive: true,
+      lastUsedAt: null,
+      createdAt: new Date(),
+    });
+
+    await expect(
+      apiGateway.authenticateRequest(result.apiKey, '10.0.0.1', [
+        'credentials:read',
+      ]),
+    ).resolves.toMatchObject({
+      apiKeyId: result.apiKeyId,
+      clientId: 'org-peppered',
+    });
+    expect(mockApiKeyFindUnique).toHaveBeenCalledWith({
+      where: { keyHash: expectedHash },
+    });
+  });
+
+  it('blocks production API and OAuth secret hashing without a deployment pepper', async () => {
+    process.env.NODE_ENV = 'production';
+    delete process.env.ENTERPRISE_SECRET_HASH_PEPPER;
+
+    await expect(apiGateway.createAPIKey('org-no-pepper', {
+      name: 'Missing pepper key',
+      scopes: ['credentials:read'],
+      environment: 'production',
+      expiresInDays: 30,
+      ipAllowlist: [],
+      dailyQuota: 1000,
+      monthlyQuota: 50000,
+      rateLimit: { requestsPerSecond: 100, burstSize: 100 },
+      metadata: {},
+    })).rejects.toMatchObject({
+      code: 'SECRET_HASH_PEPPER_MISSING',
+      statusCode: 500,
+    });
+
+    await expect(apiGateway.registerOAuth2Client(
+      'oauth-client-no-pepper',
+      ['credentials:read'],
+      'production',
+    )).rejects.toMatchObject({
+      code: 'SECRET_HASH_PEPPER_MISSING',
+      statusCode: 500,
     });
   });
 
@@ -234,6 +328,46 @@ describe('APIGateway persistence', () => {
     });
 
     expect(token.scope).toBe('credentials:read');
+    await expect(apiGateway.validateOAuth2Token(token.accessToken)).resolves.toMatchObject({
+      clientId: client.clientId,
+      scopes: ['credentials:read'],
+      environment: 'production',
+    });
+  });
+
+  it('uses peppered OAuth2 client secrets and access token keys in production', async () => {
+    process.env.NODE_ENV = 'production';
+    process.env.ENTERPRISE_SECRET_HASH_PEPPER = 'p'.repeat(64);
+
+    const client = await apiGateway.registerOAuth2Client(
+      'oauth-client-peppered',
+      ['credentials:read'],
+      'production',
+    );
+
+    const storedClient = JSON.parse(
+      redisStore[`enterprise:oauth2-client:${client.clientId}`] as string,
+    );
+    expect(storedClient.clientSecretHashAlg).toBe('hmac-sha256-v2');
+    expect(storedClient.clientSecretHash).toBe(
+      hmacEnterpriseSecret(
+        'enterprise-oauth2-client-secret',
+        client.clientSecret,
+      ),
+    );
+
+    const token = await apiGateway.issueOAuth2Token({
+      grantType: 'client_credentials',
+      clientId: client.clientId,
+      clientSecret: client.clientSecret,
+      scope: 'credentials:read',
+    });
+
+    const expectedTokenKey = `enterprise:oauth2-token:${hmacEnterpriseSecret(
+      'enterprise-oauth2-access-token',
+      token.accessToken,
+    )}`;
+    expect(redisStore[expectedTokenKey]).toBeDefined();
     await expect(apiGateway.validateOAuth2Token(token.accessToken)).resolves.toMatchObject({
       clientId: client.clientId,
       scopes: ['credentials:read'],
@@ -593,3 +727,14 @@ describe('APIGateway persistence', () => {
     expect(mockApiKeyFindUnique).not.toHaveBeenCalled();
   });
 });
+
+function hmacEnterpriseSecret(context: string, secret: string): string {
+  return crypto
+    .createHmac(
+      'sha256',
+      process.env.ENTERPRISE_SECRET_HASH_PEPPER as string,
+    )
+    .update(`zeroid:${context}:v2:`)
+    .update(secret)
+    .digest('hex');
+}
