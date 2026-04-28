@@ -1069,6 +1069,51 @@ describe('OIDC multi-node correctness', () => {
     expect(tokens.access_token).toBeDefined();
   });
 
+  test('legacy plain PKCE authorization codes cannot be redeemed', async () => {
+    const client = await registerTestClient(bridgeA);
+    const pair = pkce();
+    const { code } = await authorizeCode(
+      bridgeA,
+      client.clientId,
+      'user-plain-pkce-rejected',
+      {
+        codeChallenge: pair.challenge,
+        codeChallengeMethod: 'S256',
+      },
+    );
+    const codeKey = `oidc:authcodes:${code}`;
+    const storedCode = JSON.parse(store.get(codeKey)!);
+    storedCode.codeChallenge = 'plain-verifier';
+    storedCode.codeChallengeMethod = 'plain';
+    store.set(codeKey, JSON.stringify(storedCode));
+
+    await expect(
+      bridgeB.exchangeToken({
+        grantType: 'authorization_code',
+        code: code!,
+        redirectUri: REDIRECT_URI,
+        clientId: client.clientId,
+        clientSecret: client.clientSecret,
+        codeVerifier: 'plain-verifier',
+      }),
+    ).rejects.toMatchObject({
+      errorCode: 'invalid_grant',
+    });
+
+    storedCode.codeChallenge = pair.challenge;
+    storedCode.codeChallengeMethod = 'S256';
+    store.set(codeKey, JSON.stringify(storedCode));
+    const tokens = await bridgeA.exchangeToken({
+      grantType: 'authorization_code',
+      code: code!,
+      redirectUri: REDIRECT_URI,
+      clientId: client.clientId,
+      clientSecret: client.clientSecret,
+      codeVerifier: pair.verifier,
+    });
+    expect(tokens.access_token).toBeDefined();
+  });
+
   test('authorization code claims require the registered client and redirect binding', async () => {
     const clientA = await registerTestClient(bridgeA);
     const clientB = await registerTestClient(bridgeA);

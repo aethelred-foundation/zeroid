@@ -951,13 +951,20 @@ export class OIDCBridge {
     }
 
     if (authCode.codeChallenge) {
+      const codeChallengeMethod = authCode.codeChallengeMethod ?? 'S256';
+      if (codeChallengeMethod !== 'S256') {
+        throw new OIDCError(
+          'invalid_grant',
+          'Only S256 PKCE authorization codes can be redeemed',
+        );
+      }
       if (!request.codeVerifier) {
         throw new OIDCError('invalid_grant', 'Code verifier required');
       }
       const verified = this.verifyPKCE(
         request.codeVerifier,
         authCode.codeChallenge,
-        authCode.codeChallengeMethod ?? 'S256',
+        codeChallengeMethod,
       );
       if (!verified) {
         throw new OIDCError('invalid_grant', 'PKCE verification failed');
@@ -1630,10 +1637,9 @@ export class OIDCBridge {
     codeChallenge: string,
     method: string,
   ): boolean {
-    if (method === 'plain') {
-      return codeVerifier === codeChallenge;
+    if (method !== 'S256') {
+      return false;
     }
-    // S256
     const hash = crypto
       .createHash('sha256')
       .update(codeVerifier)
