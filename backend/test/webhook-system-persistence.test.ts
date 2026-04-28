@@ -1,5 +1,7 @@
 import { promises as dns } from 'dns';
 import crypto from 'crypto';
+import { EventEmitter } from 'events';
+import * as https from 'https';
 
 const mockWebhookCreate = jest.fn();
 const mockWebhookFindMany = jest.fn();
@@ -105,6 +107,10 @@ jest.mock('winston', () => {
     transports: { Console: jest.fn() },
   };
 }, { virtual: true });
+
+jest.mock('https', () => ({
+  request: jest.fn(),
+}));
 
 import { WebhookSystem, webhookSystem } from '../src/services/enterprise/webhook-system';
 
@@ -517,6 +523,101 @@ describe('WebhookSystem persistence', () => {
         }),
       }));
     } finally {
+      dnsSpy.mockRestore();
+      fetchSpy.mockRestore();
+      process.env.NODE_ENV = 'test';
+      delete process.env.WEBHOOK_SECRET_ENCRYPTION_KEY;
+    }
+  });
+
+  it('pins vetted DNS address during production webhook delivery', async () => {
+    process.env.NODE_ENV = 'production';
+    process.env.WEBHOOK_SECRET_ENCRYPTION_KEY = Buffer.alloc(32, 9).toString('base64');
+    mockWebhookFindMany.mockResolvedValue([
+      {
+        id: 'wh-pinned-resolution',
+        organizationId: 'org-1',
+        url: 'https://hooks.zeroid.example/pinned',
+        secret: encryptWebhookSecretForTest('s'.repeat(64)),
+        events: ['credential.issued'],
+        status: 'ACTIVE',
+        failureCount: 0,
+        lastDeliveredAt: null,
+        lastStatusCode: null,
+        createdAt: new Date('2026-04-21T00:00:00.000Z'),
+        updatedAt: new Date('2026-04-21T00:00:00.000Z'),
+      },
+    ]);
+    mockWebhookDeliveryUpsert.mockResolvedValue({});
+    const dnsSpy = jest.spyOn(dns, 'lookup').mockResolvedValue([
+      { address: '93.184.216.34', family: 4 },
+    ]);
+    const fetchSpy = jest
+      .spyOn(global, 'fetch')
+      .mockResolvedValue(new Response('ok', { status: 200 }));
+    const httpsRequestMock = https.request as jest.Mock;
+    let capturedOptions: https.RequestOptions | undefined;
+    let capturedBody = '';
+    httpsRequestMock.mockImplementation(
+      (url: URL, options: https.RequestOptions, callback: (response: any) => void) => {
+        expect(url.href).toBe('https://hooks.zeroid.example/pinned');
+        capturedOptions = options;
+
+        const request = new EventEmitter() as any;
+        request.write = jest.fn((chunk: string | Buffer) => {
+          capturedBody += chunk.toString();
+          return true;
+        });
+        request.end = jest.fn(() => {
+          const response = new EventEmitter() as any;
+          response.statusCode = 200;
+          process.nextTick(() => {
+            callback(response);
+            response.emit('data', 'ok');
+            response.emit('end');
+          });
+        });
+        request.destroy = jest.fn((err?: Error) => {
+          if (err) request.emit('error', err);
+        });
+        return request;
+      },
+    );
+
+    try {
+      const deliveryIds = await webhookSystem.emit('credential.issued', {
+        credentialId: 'cred-1',
+      }, 'org-1');
+
+      expect(deliveryIds).toHaveLength(1);
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(httpsRequestMock).toHaveBeenCalledTimes(1);
+      expect(capturedBody).toContain('"credentialId":"cred-1"');
+      expect(capturedOptions?.servername).toBe('hooks.zeroid.example');
+      expect(capturedOptions?.lookup).toEqual(expect.any(Function));
+
+      const lookup = capturedOptions!.lookup as any;
+      await new Promise<void>((resolve, reject) => {
+        lookup('hooks.zeroid.example', {}, (err: Error | null, address: string, family: number) => {
+          try {
+            expect(err).toBeNull();
+            expect(address).toBe('93.184.216.34');
+            expect(family).toBe(4);
+            resolve();
+          } catch (lookupErr) {
+            reject(lookupErr);
+          }
+        });
+      });
+      expect(webhookSystem.getDelivery(deliveryIds[0])).toMatchObject({
+        status: 'delivered',
+        response: expect.objectContaining({
+          statusCode: 200,
+          body: 'ok',
+        }),
+      });
+    } finally {
+      httpsRequestMock.mockReset();
       dnsSpy.mockRestore();
       fetchSpy.mockRestore();
       process.env.NODE_ENV = 'test';

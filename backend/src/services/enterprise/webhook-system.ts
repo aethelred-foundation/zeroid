@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { createLogger, format, transports } from 'winston';
 import crypto from 'crypto';
+import * as https from 'https';
 import * as net from 'net';
 import { promises as dns } from 'dns';
 import { prisma, redis } from '../../index';
@@ -136,6 +137,22 @@ function extractIpv4MappedAddress(value: string): string | null {
     (low >> 8) & 0xff,
     low & 0xff,
   ].join('.');
+}
+
+interface ResolvedWebhookAddress {
+  address: string;
+  family: number;
+}
+
+interface ResolvedWebhookEndpoint {
+  endpoint: URL;
+  pinnedAddress?: ResolvedWebhookAddress;
+}
+
+interface WebhookDeliveryHttpResponse {
+  ok: boolean;
+  status: number;
+  body: string;
 }
 
 function hasOnlySafeCustomWebhookHeaders(headers: Record<string, string>): boolean {
@@ -729,21 +746,23 @@ export class WebhookSystem {
     const startTime = Date.now();
 
     try {
-      await this.assertSafeResolvedEndpoint(delivery.request.url);
-      const response = await fetch(delivery.request.url, {
-        method: 'POST',
-        headers: delivery.request.headers,
-        body: delivery.request.body,
-        redirect: 'manual',
-        signal: AbortSignal.timeout(30000),
-      });
+      const resolvedEndpoint = await this.resolveSafeEndpoint(
+        delivery.request.url,
+      );
+      const response = resolvedEndpoint.pinnedAddress
+        ? await this.postWebhookWithPinnedAddress(
+            resolvedEndpoint.endpoint,
+            resolvedEndpoint.pinnedAddress,
+            delivery.request.headers,
+            delivery.request.body,
+          )
+        : await this.postWebhookWithFetch(delivery);
 
       const latencyMs = Date.now() - startTime;
-      const responseBody = await readWebhookResponsePreview(response).catch(() => '');
 
       delivery.response = {
         statusCode: response.status,
-        body: responseBody,
+        body: response.body,
         latencyMs,
       };
 
@@ -753,7 +772,7 @@ export class WebhookSystem {
         this.updateHealth(webhook, true, response.status, latencyMs);
         logger.info('webhook_delivered', { deliveryId: delivery.deliveryId, webhookId: webhook.id, latencyMs });
       } else {
-        throw new Error(`HTTP ${response.status}: ${responseBody.substring(0, 200)}`);
+        throw new Error(`HTTP ${response.status}: ${response.body.substring(0, 200)}`);
       }
     } catch (error) {
       const latencyMs = Date.now() - startTime;
@@ -941,10 +960,12 @@ export class WebhookSystem {
     return this.deliveries.get(deliveryId) ?? null;
   }
 
-  private async assertSafeResolvedEndpoint(endpointUrl: string): Promise<void> {
-    if (!isProductionRuntime()) return;
-
+  private async resolveSafeEndpoint(
+    endpointUrl: string,
+  ): Promise<ResolvedWebhookEndpoint> {
     const endpoint = new URL(endpointUrl);
+    if (!isProductionRuntime()) return { endpoint };
+
     if (isLocalOrPrivateHostname(endpoint.hostname)) {
       throw new WebhookError(
         UNSAFE_WEBHOOK_RESOLUTION_MESSAGE,
@@ -967,6 +988,81 @@ export class WebhookSystem {
         400,
       );
     }
+
+    return { endpoint, pinnedAddress: resolvedAddresses[0] };
+  }
+
+  private async postWebhookWithFetch(
+    delivery: WebhookDelivery,
+  ): Promise<WebhookDeliveryHttpResponse> {
+    const response = await fetch(delivery.request.url, {
+      method: 'POST',
+      headers: delivery.request.headers,
+      body: delivery.request.body,
+      redirect: 'manual',
+      signal: AbortSignal.timeout(30000),
+    });
+    return {
+      ok: response.ok,
+      status: response.status,
+      body: await readWebhookResponsePreview(response).catch(() => ''),
+    };
+  }
+
+  private async postWebhookWithPinnedAddress(
+    endpoint: URL,
+    pinnedAddress: ResolvedWebhookAddress,
+    headers: Record<string, string>,
+    body: string,
+  ): Promise<WebhookDeliveryHttpResponse> {
+    return new Promise((resolve, reject) => {
+      const request = https.request(
+        endpoint,
+        {
+          method: 'POST',
+          headers: {
+            ...headers,
+            'Content-Length': Buffer.byteLength(body),
+          },
+          lookup: (_hostname, _options, callback) => {
+            callback(null, pinnedAddress.address, pinnedAddress.family);
+          },
+          servername: endpoint.hostname,
+          timeout: 30000,
+        },
+        (response) => {
+          const status = response.statusCode ?? 0;
+          const chunks: Buffer[] = [];
+          let totalBytes = 0;
+
+          response.on('data', (chunk: Buffer | string) => {
+            if (totalBytes >= WEBHOOK_RESPONSE_PREVIEW_BYTES) return;
+            const chunkBuffer = Buffer.isBuffer(chunk)
+              ? chunk
+              : Buffer.from(chunk);
+            const remaining = WEBHOOK_RESPONSE_PREVIEW_BYTES - totalBytes;
+            const previewChunk = chunkBuffer.subarray(0, remaining);
+            chunks.push(previewChunk);
+            totalBytes += previewChunk.byteLength;
+          });
+          response.on('end', () => {
+            resolve({
+              ok: status >= 200 && status < 300,
+              status,
+              body: Buffer.concat(chunks, totalBytes).toString('utf8'),
+            });
+          });
+          response.on('error', reject);
+        },
+      );
+
+      request.on('timeout', () => {
+        request.destroy(new Error('Webhook delivery timed out.'));
+      });
+      request.on('error', reject);
+      request.write(body);
+      request.end();
+    });
   }
 
   private isNonRetryableDeliveryError(error: unknown): boolean {
