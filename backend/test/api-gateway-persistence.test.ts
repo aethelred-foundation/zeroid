@@ -301,6 +301,60 @@ describe('APIGateway persistence', () => {
     ).toBe(true);
   });
 
+  it('invalidates OAuth2 access tokens when the backing client is removed', async () => {
+    const client = await apiGateway.registerOAuth2Client(
+      'oauth-client-revoked',
+      ['credentials:read'],
+      'production',
+    );
+    const token = await apiGateway.issueOAuth2Token({
+      grantType: 'client_credentials',
+      clientId: client.clientId,
+      clientSecret: client.clientSecret,
+      scope: 'credentials:read',
+    });
+
+    delete redisStore[`enterprise:oauth2-client:${client.clientId}`];
+
+    await expect(apiGateway.validateOAuth2Token(token.accessToken)).rejects.toMatchObject({
+      code: 'CLIENT_REVOKED',
+      statusCode: 401,
+    });
+    expect(
+      Object.keys(redisStore).some((key) =>
+        key.startsWith('enterprise:oauth2-token:'),
+      ),
+    ).toBe(false);
+  });
+
+  it('invalidates OAuth2 access tokens whose scopes exceed the current client grant', async () => {
+    const client = await apiGateway.registerOAuth2Client(
+      'oauth-client-reduced-scope',
+      ['credentials:read', 'verification:write'],
+      'production',
+    );
+    const token = await apiGateway.issueOAuth2Token({
+      grantType: 'client_credentials',
+      clientId: client.clientId,
+      clientSecret: client.clientSecret,
+      scope: 'verification:write',
+    });
+    const clientKey = `enterprise:oauth2-client:${client.clientId}`;
+    const storedClient = JSON.parse(redisStore[clientKey] as string);
+    storedClient.scopes = ['credentials:read'];
+    redisStore[clientKey] = JSON.stringify(storedClient);
+
+    await expect(apiGateway.validateOAuth2Token(token.accessToken)).rejects.toMatchObject({
+      code: 'INVALID_TOKEN_SCOPE',
+      statusCode: 401,
+    });
+    expect(
+      Object.keys(redisStore).some((key) =>
+        key.startsWith('enterprise:oauth2-token:'),
+      ),
+    ).toBe(false);
+  });
+
   it('enforces API key quotas through redis across gateway instances', async () => {
     mockApiKeyCreate.mockResolvedValue({});
     mockApiKeyUpdate.mockResolvedValue({});

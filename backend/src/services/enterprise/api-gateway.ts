@@ -518,10 +518,32 @@ export class APIGateway {
     }
 
     const client = await this.getOAuth2Client(tokenData.clientId);
+    if (!client) {
+      await redis.del(this.oauth2TokenKey(accessToken));
+      throw new GatewayError(
+        'OAuth2 client is no longer active',
+        'CLIENT_REVOKED',
+        401,
+      );
+    }
+
+    const currentScopes = new Set(client.scopes);
+    const unauthorizedScope = tokenData.scopes.find(
+      (scope) => !currentScopes.has(scope),
+    );
+    if (unauthorizedScope) {
+      await redis.del(this.oauth2TokenKey(accessToken));
+      throw new GatewayError(
+        'Access token scope is no longer authorized for this client',
+        'INVALID_TOKEN_SCOPE',
+        401,
+      );
+    }
+
     return {
       clientId: tokenData.clientId,
       scopes: tokenData.scopes,
-      environment: client?.environment ?? 'sandbox',
+      environment: client.environment,
     };
   }
 
