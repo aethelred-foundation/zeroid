@@ -41,23 +41,6 @@ function sendCredentialRouteError(
   });
 }
 
-function sanitizeCredentialEvidenceExport(
-  exported: Awaited<
-    ReturnType<typeof credentialService.exportCredentialEvidence>
-  >,
-) {
-  return {
-    ...exported,
-    credential: {
-      id: exported.credential.id,
-      credentialType: exported.credential.credentialType,
-      status: exported.credential.status,
-      issuedAt: exported.credential.issuedAt,
-      expiresAt: exported.credential.expiresAt,
-    },
-  };
-}
-
 // ---------------------------------------------------------------------------
 // POST /api/v1/credentials — Issue a new credential
 // ---------------------------------------------------------------------------
@@ -285,18 +268,25 @@ router.get(
   async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
       const identity = req.identity!;
+      const credential = await credentialService.getCredential(req.params.id as string);
+      if (!credential) {
+        sendCredentialNotFound(res);
+        return;
+      }
+
+      const isAuthorized =
+        credential.issuerId === identity.id ||
+        credential.subjectId === identity.id;
+
+      if (!isAuthorized) {
+        sendCredentialNotFound(res);
+        return;
+      }
+
       const exported = await credentialService.exportCredentialEvidence(
         req.params.id as string,
       );
-      const isAuthorized =
-        exported.credential.issuerId === identity.id ||
-        exported.credential.subjectId === identity.id;
-
-      res.json({
-        data: isAuthorized
-          ? exported
-          : sanitizeCredentialEvidenceExport(exported),
-      });
+      res.json({ data: exported });
     } catch (err) {
       const error = err as CredentialRouteError;
       sendCredentialRouteError(res, error, 'CREDENTIAL_EVIDENCE_FAILED');

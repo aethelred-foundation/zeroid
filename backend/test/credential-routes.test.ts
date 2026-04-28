@@ -2,6 +2,7 @@ import express from 'express';
 import request from 'supertest';
 
 const mockExportCredentialEvidence = jest.fn();
+const mockGetCredential = jest.fn();
 
 jest.mock('../src/middleware/rateLimit', () => ({
   apiRateLimiter: (_req: unknown, _res: unknown, next: () => void) => next(),
@@ -11,6 +12,7 @@ jest.mock('../src/middleware/rateLimit', () => ({
 jest.mock('../src/services/credential', () => ({
   credentialService: {
     exportCredentialEvidence: mockExportCredentialEvidence,
+    getCredential: mockGetCredential,
   },
 }));
 
@@ -50,6 +52,15 @@ function createApp() {
 describe('credential evidence routes', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockGetCredential.mockResolvedValue({
+      id: '11111111-1111-1111-1111-111111111111',
+      credentialType: 'KYC_LEVEL_2',
+      issuerId: 'issuer-1',
+      subjectId: 'subject-1',
+      status: 'ACTIVE',
+      issuedAt: '2026-04-21T00:00:00.000Z',
+      expiresAt: '2027-04-21T00:00:00.000Z',
+    });
     mockExportCredentialEvidence.mockResolvedValue({
       formatVersion: 'zeroid.credential_evidence_export.v1',
       exportedAt: '2026-04-21T00:00:00.000Z',
@@ -108,26 +119,23 @@ describe('credential evidence routes', () => {
     });
   });
 
-  it('sanitizes credential claims and proof for non-owner verifiers', async () => {
-    const response = await request(createApp())
+  it('hides credential evidence from non-owner verifiers', async () => {
+    await request(createApp())
       .get('/credentials/11111111-1111-1111-1111-111111111111/evidence')
       .set('x-test-identity-id', 'verifier-9')
-      .expect(200);
+      .expect(404);
 
-    expect(response.body.data).toMatchObject({
-      formatVersion: 'zeroid.credential_evidence_export.v1',
-      credential: {
-        id: '11111111-1111-1111-1111-111111111111',
-        credentialType: 'KYC_LEVEL_2',
-        status: 'ACTIVE',
-        issuedAt: '2026-04-21T00:00:00.000Z',
-        expiresAt: '2027-04-21T00:00:00.000Z',
-      },
-      trustLineage: expect.objectContaining({
-        enforced: true,
-      }),
-    });
-    expect(response.body.data.credential.claims).toBeUndefined();
-    expect(response.body.data.credential.proof).toBeUndefined();
+    expect(mockExportCredentialEvidence).not.toHaveBeenCalled();
+  });
+
+  it('does not reveal whether missing credentials differ from unauthorized credentials', async () => {
+    mockGetCredential.mockResolvedValueOnce(null);
+
+    await request(createApp())
+      .get('/credentials/11111111-1111-1111-1111-111111111111/evidence')
+      .set('x-test-identity-id', 'issuer-1')
+      .expect(404);
+
+    expect(mockExportCredentialEvidence).not.toHaveBeenCalled();
   });
 });

@@ -105,9 +105,14 @@ router.get(
         return;
       }
 
-      // Verify access
-      if (log.identityId && log.identityId !== identity.id) {
-        res.status(403).json({ error: 'Access denied', code: 'AUDIT_ACCESS_DENIED' });
+      const ownsLog = log.identityId === identity.id;
+      const hasResourceAccess =
+        typeof log.resourceType === 'string' &&
+        typeof log.resourceId === 'string' &&
+        await verifyResourceAccess(identity.id, log.resourceType, log.resourceId);
+
+      if (!ownsLog && !hasResourceAccess) {
+        res.status(404).json({ error: 'Audit log not found', code: 'AUDIT_NOT_FOUND' });
         return;
       }
 
