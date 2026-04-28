@@ -533,6 +533,30 @@ describe('verifyTCBInfoSignature', () => {
   });
 });
 
+describe('verifyCollateralFmspcBinding', () => {
+  it('accepts signed TCB info for the quote FMSPC', () => {
+    const collateral = buildCollateral({
+      hierarchy,
+      fmspc: '00906ea10000',
+    });
+
+    expect(() =>
+      priv().verifyCollateralFmspcBinding(collateral, '00906ea10000'),
+    ).not.toThrow();
+  });
+
+  it('rejects signed TCB info for a different platform FMSPC', () => {
+    const collateral = buildCollateral({
+      hierarchy,
+      fmspc: '001122334455',
+    });
+
+    expect(() =>
+      priv().verifyCollateralFmspcBinding(collateral, '00906ea10000'),
+    ).toThrow(expect.objectContaining({ code: 'TEE_TCB_FMSPC_MISMATCH' }));
+  });
+});
+
 // ---------------------------------------------------------------------------
 // 4. CERTIFICATE REVOCATION (CRL) CHECKS
 // ---------------------------------------------------------------------------
@@ -1213,6 +1237,43 @@ describe('verifyAttestation — integrated error paths', () => {
 
     await expect(service.verifyAttestation(request)).rejects.toMatchObject({
       code: 'TEE_COLLATERAL_STALE',
+    });
+
+    jest.restoreAllMocks();
+  });
+
+  it('TCB collateral FMSPC mismatch triggers TEE_TCB_FMSPC_MISMATCH via full pipeline', async () => {
+    const mismatchedCollateral = buildCollateral({
+      hierarchy,
+      fmspc: '001122334455',
+      qeMrsigner: q.qeMrsigner,
+      qeIsvProdId: q.qeIsvProdId,
+    });
+
+    jest.spyOn(priv(), 'verifyQuoteCertificationChain').mockReturnValue({
+      fmspc: '00906ea10000',
+      pckLeafSerial: '01' + crypto.randomBytes(15).toString('hex'),
+      pckIntermediateSerial: '02' + crypto.randomBytes(15).toString('hex'),
+      qeReportMrenclave: q.qeMrenclave,
+      qeReportMrsigner: q.qeMrsigner,
+      qeReportIsvProdId: q.qeIsvProdId,
+      qeReportIsvSvn: q.qeIsvSvn,
+    });
+    jest.spyOn(priv(), 'fetchCollateral').mockResolvedValue(mismatchedCollateral);
+    jest.spyOn(priv(), 'verifyCertificateChain').mockResolvedValue(undefined);
+    jest.spyOn(priv(), 'checkCertificateRevocation').mockReturnValue(undefined);
+
+    const request = {
+      identityId: 'id-1',
+      did: 'did:zero:test',
+      publicKey: q.boundPublicKey,
+      enclaveType: 'SGX' as const,
+      quote: q.quoteBase64,
+      challenge: 'challenge-test-value',
+    };
+
+    await expect(service.verifyAttestation(request)).rejects.toMatchObject({
+      code: 'TEE_TCB_FMSPC_MISMATCH',
     });
 
     jest.restoreAllMocks();

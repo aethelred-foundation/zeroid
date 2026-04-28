@@ -330,13 +330,16 @@ export class TEEAttestationService {
       // 5d. Verify TCB info collateral signature
       this.verifyTCBInfoSignature(collateral);
 
-      // 5e. Verify QE identity collateral signature
+      // 5e. Bind signed collateral back to the verified quote platform.
+      this.verifyCollateralFmspcBinding(collateral, certResult.fmspc);
+
+      // 5f. Verify QE identity collateral signature
       this.verifyQEIdentitySignature(collateral);
 
-      // 5f. Validate collateral freshness
+      // 5g. Validate collateral freshness
       this.validateCollateralFreshness(collateral);
 
-      // 5g. Verify QE Report identity against authenticated QE Identity collateral
+      // 5h. Verify QE Report identity against authenticated QE Identity collateral
       this.verifyQEReportIdentity(collateral, certResult);
 
       // 6. Check TCB status (compares all 16 SGX component SVNs + pceSvn)
@@ -2118,6 +2121,47 @@ export class TEEAttestationService {
     }
 
     logger.info('tcb_info_signature_verified');
+  }
+
+  // -------------------------------------------------------------------------
+  // Internal: Bind signed TCB collateral to the quote platform
+  //
+  // The FMSPC is extracted from the verified PCK certificate in the quote and
+  // used to fetch collateral. After the TCB info signature is verified, require
+  // the signed payload to name that same FMSPC before using its TCB levels.
+  // -------------------------------------------------------------------------
+  private verifyCollateralFmspcBinding(
+    collateral: PCCSCollateral,
+    expectedFmspc: string,
+  ): void {
+    let tcbInfoWrapper: any;
+    try {
+      tcbInfoWrapper = JSON.parse(collateral.tcbInfo);
+    } catch (err) {
+      throw new AttestationError(
+        `Invalid tcbInfo JSON: ${(err as Error).message}`,
+        'TEE_INVALID_TCB_INFO',
+      );
+    }
+
+    const actualFmspc = String(
+      tcbInfoWrapper?.tcbInfo?.fmspc ?? '',
+    ).toLowerCase();
+    const expected = expectedFmspc.toLowerCase();
+
+    if (!actualFmspc) {
+      throw new AttestationError(
+        'TCB info payload missing FMSPC',
+        'TEE_TCB_FMSPC_MISSING',
+      );
+    }
+
+    if (actualFmspc !== expected) {
+      throw new AttestationError(
+        `TCB info FMSPC ${actualFmspc} does not match quote FMSPC ${expected}`,
+        'TEE_TCB_FMSPC_MISMATCH',
+      );
+    }
   }
 
   // -------------------------------------------------------------------------
