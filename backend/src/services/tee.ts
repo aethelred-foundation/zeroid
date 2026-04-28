@@ -1,6 +1,7 @@
 import { logger, redis, prisma, metricsRegistry } from '../index';
 import * as crypto from 'crypto';
 import * as net from 'net';
+import { promises as dns } from 'dns';
 import { Counter, Histogram } from 'prom-client';
 
 // ---------------------------------------------------------------------------
@@ -972,6 +973,7 @@ export class TEEAttestationService {
     };
 
     try {
+      await this.assertSafeResolvedCollateralEndpoint();
       const requestOptions: RequestInit = {
         headers,
         redirect: 'manual',
@@ -1045,6 +1047,8 @@ export class TEEAttestationService {
         qeIdentitySigningCertChain,
       };
     } catch (err) {
+      if (err instanceof AttestationError) throw err;
+
       logger.error('pccs_collateral_fetch_failed', {
         error: (err as Error).message,
       });
@@ -2230,6 +2234,37 @@ export class TEEAttestationService {
       throw new AttestationError(
         'TEE collateral provider URL must use HTTPS and must not target localhost, private, or internal hosts in production.',
         'TEE_COLLATERAL_PROVIDER_UNSAFE',
+        503,
+      );
+    }
+  }
+
+  private async assertSafeResolvedCollateralEndpoint(): Promise<void> {
+    if (!IS_PRODUCTION) return;
+
+    const endpoint = new URL(TEE_DCAP_BASE_URL);
+    const hostname = normalizeCollateralHostname(endpoint.hostname);
+    if (isLocalOrPrivateCollateralHostname(hostname)) {
+      throw new AttestationError(
+        'TEE collateral provider URL resolved to localhost, private, or internal network infrastructure.',
+        'TEE_COLLATERAL_PROVIDER_UNSAFE_RESOLUTION',
+        503,
+      );
+    }
+
+    const resolvedAddresses = await dns.lookup(hostname, {
+      all: true,
+      verbatim: true,
+    });
+    if (
+      resolvedAddresses.length === 0 ||
+      resolvedAddresses.some((entry) =>
+        isLocalOrPrivateCollateralHostname(normalizeCollateralHostname(entry.address)),
+      )
+    ) {
+      throw new AttestationError(
+        'TEE collateral provider URL resolved to localhost, private, or internal network infrastructure.',
+        'TEE_COLLATERAL_PROVIDER_UNSAFE_RESOLUTION',
         503,
       );
     }

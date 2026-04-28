@@ -1,5 +1,8 @@
+import { promises as dns } from 'dns';
+
 const ORIGINAL_ENV = { ...process.env };
 const ORIGINAL_FETCH = global.fetch;
+let dnsLookupSpy: jest.SpyInstance;
 
 describe('TEE production configuration', () => {
   beforeEach(() => {
@@ -10,6 +13,9 @@ describe('TEE production configuration', () => {
       INTEL_PCS_API_KEY: 'pcs-key-1',
       TEE_DCAP_API_URL: 'https://10.0.0.5',
     };
+    dnsLookupSpy = jest.spyOn(dns, 'lookup').mockResolvedValue([
+      { address: '8.8.8.8', family: 4 },
+    ] as never);
 
     jest.doMock('prom-client', () => {
       const Metric = jest.fn().mockImplementation(() => ({
@@ -56,6 +62,7 @@ describe('TEE production configuration', () => {
   });
 
   afterEach(() => {
+    dnsLookupSpy.mockRestore();
     jest.dontMock('prom-client');
     jest.dontMock('../src/index');
     jest.resetModules();
@@ -124,6 +131,26 @@ describe('TEE production configuration', () => {
       code: 'TEE_COLLATERAL_UNAVAILABLE',
     });
     expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+
+  it('blocks collateral fetches when the provider resolves privately in production', async () => {
+    process.env.TEE_DCAP_API_URL = 'https://collateral.example.com';
+    dnsLookupSpy.mockResolvedValueOnce([
+      { address: '10.0.0.9', family: 4 },
+    ] as never);
+    const fetchMock = jest.fn().mockResolvedValue(collateralResponse('unused'));
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const { TEEAttestationService } = require('../src/services/tee');
+    const service = new TEEAttestationService();
+
+    await expect(
+      (service as any).fetchCollateralFromPCS('00906ea10000'),
+    ).rejects.toMatchObject({
+      code: 'TEE_COLLATERAL_PROVIDER_UNSAFE_RESOLUTION',
+      statusCode: 503,
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 
