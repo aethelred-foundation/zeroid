@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import * as net from 'net';
 import { promises as dns } from 'dns';
+import type { Prisma } from '@prisma/client';
 import { logger, redis, prisma } from '../index';
 import { isProductionRuntime } from './production-safety';
 
@@ -262,7 +263,7 @@ export class GovernmentAPIService {
     try {
       const config = this.getEmiratesIDConfig();
       // Check cache first
-      const cacheKey = `gov:eid:${this.hashSensitiveData(request.idNumber)}`;
+      const cacheKey = `gov:eid:${this.hashSensitiveData(`${request.idNumber}:${request.dateOfBirth}`)}`;
       const cached = await redis.get(cacheKey);
       if (cached) {
         const cachedResult = await this.parseCachedVerificationResult(
@@ -271,8 +272,19 @@ export class GovernmentAPIService {
           'EMIRATES_ID',
         );
         if (cachedResult) {
+          const result = this.createIdentityScopedCachedVerificationResult(
+            cachedResult,
+            'eid',
+          );
+          await this.markIdentityGovernmentVerified(request.identityId, result);
+          await this.cacheIdentityVerificationStatus(request.identityId, result);
+          await this.auditGovernmentVerification(
+            request.identityId,
+            result,
+            { provider: 'EMIRATES_ID', verified: true, cached: true },
+          );
           logger.info('emirates_id_cache_hit', { identityId: request.identityId });
-          return cachedResult;
+          return result;
         }
       }
 
@@ -354,20 +366,13 @@ export class GovernmentAPIService {
 
       // Cache result
       await redis.set(cacheKey, JSON.stringify(result), 'EX', GOV_VERIFICATION_CACHE_TTL);
+      await this.cacheIdentityVerificationStatus(request.identityId, result);
 
       // Audit log
-      await prisma.auditLog.create({
-        data: {
-          identityId: request.identityId,
-          action: 'GOV_API_CALLED',
-          resourceType: 'government_verification',
-          resourceId: referenceId,
-          details: {
-            provider: 'EMIRATES_ID',
-            verified: true,
-            verifiedFields: result.verifiedFields,
-          },
-        },
+      await this.auditGovernmentVerification(request.identityId, result, {
+        provider: 'EMIRATES_ID',
+        verified: true,
+        verifiedFields: result.verifiedFields,
       });
 
       logger.info('emirates_id_verified', {
@@ -402,24 +407,8 @@ export class GovernmentAPIService {
       if (result) return result;
     }
 
-    // Check identity record
-    const identity = await prisma.identity.findUnique({
-      where: { id: identityId },
-      select: { governmentVerified: true, governmentRefId: true },
-    });
-
-    if (!identity?.governmentVerified || !identity.governmentRefId) {
-      return null;
-    }
-
-    return {
-      verified: identity.governmentVerified,
-      provider: identity.governmentRefId.startsWith('uaepass-') ? 'UAE_PASS' : 'EMIRATES_ID',
-      referenceId: identity.governmentRefId,
-      verifiedFields: [],
-      verifiedAt: new Date(), // Exact timestamp not available from DB alone
-      expiresAt: new Date(Date.now() + 365 * 24 * 3600_000),
-    };
+    logger.warn('government_verification_status_missing', { identityId });
+    return null;
   }
 
   // -------------------------------------------------------------------------
@@ -727,6 +716,58 @@ export class GovernmentAPIService {
 
   private hashSensitiveData(data: string): string {
     return crypto.createHash('sha256').update(data).digest('hex').slice(0, 16);
+  }
+
+  private createIdentityScopedCachedVerificationResult(
+    cachedResult: GovernmentVerificationResult,
+    referencePrefix: 'eid',
+  ): GovernmentVerificationResult {
+    return {
+      ...cachedResult,
+      referenceId: `${referencePrefix}-${crypto.randomUUID()}`,
+      verifiedAt: new Date(),
+    };
+  }
+
+  private async markIdentityGovernmentVerified(
+    identityId: string,
+    result: GovernmentVerificationResult,
+  ): Promise<void> {
+    await prisma.identity.update({
+      where: { id: identityId },
+      data: {
+        governmentVerified: true,
+        governmentRefId: result.referenceId,
+      },
+    });
+  }
+
+  private async cacheIdentityVerificationStatus(
+    identityId: string,
+    result: GovernmentVerificationResult,
+  ): Promise<void> {
+    await redis.set(
+      `gov:verification:${identityId}`,
+      JSON.stringify(result),
+      'EX',
+      GOV_VERIFICATION_CACHE_TTL,
+    );
+  }
+
+  private async auditGovernmentVerification(
+    identityId: string,
+    result: GovernmentVerificationResult,
+    details: Prisma.InputJsonObject,
+  ): Promise<void> {
+    await prisma.auditLog.create({
+      data: {
+        identityId,
+        action: 'GOV_API_CALLED',
+        resourceType: 'government_verification',
+        resourceId: result.referenceId,
+        details,
+      },
+    });
   }
 }
 

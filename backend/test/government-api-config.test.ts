@@ -1,4 +1,5 @@
 import { promises as dns } from 'dns';
+import crypto from 'crypto';
 
 const mockRedisGet = jest.fn();
 const mockRedisSet = jest.fn();
@@ -275,7 +276,7 @@ describe('GovernmentAPIService production configuration', () => {
     expect(global.fetch).toHaveBeenCalledTimes(1);
   });
 
-  it('ignores malformed government verification status cache entries', async () => {
+  it('fails closed on malformed identity-scoped government verification status cache entries', async () => {
     mockRedisGet.mockResolvedValueOnce(JSON.stringify({
       verified: true,
       provider: 'EMIRATES_ID',
@@ -292,8 +293,61 @@ describe('GovernmentAPIService production configuration', () => {
 
     const result = await service.getVerificationStatus('identity-1');
 
-    expect(result?.provider).toBe('UAE_PASS');
+    expect(result).toBeNull();
     expect(mockRedisDel).toHaveBeenCalledWith('gov:verification:identity-1');
+    expect(mockIdentityFindUnique).not.toHaveBeenCalled();
+  });
+
+  it('binds Emirates ID cache hits to date of birth and identity-scoped status', async () => {
+    process.env.EMIRATES_ID_API_URL = 'https://eid.gov.example';
+    process.env.EMIRATES_ID_API_KEY = 'key-1';
+    process.env.EMIRATES_ID_API_SECRET = 'secret-1';
+    mockRedisGet.mockResolvedValueOnce(JSON.stringify({
+      verified: true,
+      provider: 'EMIRATES_ID',
+      referenceId: 'eid-cached-status',
+      verifiedFields: ['idNumber', 'expiryDate'],
+      verifiedAt: '2026-04-01T00:00:00.000Z',
+      expiresAt: '2030-01-01T00:00:00.000Z',
+    }));
+    global.fetch = jest.fn() as unknown as typeof fetch;
+    const service = new GovernmentAPIService();
+
+    const result = await service.verifyEmiratesID({
+      idNumber: '784-1990-1234567-1',
+      dateOfBirth: '1990-01-01',
+      identityId: 'identity-1',
+    });
+
+    const fullInputHash = crypto
+      .createHash('sha256')
+      .update('784-1990-1234567-1:1990-01-01')
+      .digest('hex')
+      .slice(0, 16);
+    const idOnlyHash = crypto
+      .createHash('sha256')
+      .update('784-1990-1234567-1')
+      .digest('hex')
+      .slice(0, 16);
+
+    expect(mockRedisGet).toHaveBeenCalledWith(`gov:eid:${fullInputHash}`);
+    expect(mockRedisGet).not.toHaveBeenCalledWith(`gov:eid:${idOnlyHash}`);
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(result.referenceId).toMatch(/^eid-/);
+    expect(result.referenceId).not.toBe('eid-cached-status');
+    expect(mockIdentityUpdate).toHaveBeenCalledWith({
+      where: { id: 'identity-1' },
+      data: {
+        governmentVerified: true,
+        governmentRefId: result.referenceId,
+      },
+    });
+    expect(mockRedisSet).toHaveBeenCalledWith(
+      'gov:verification:identity-1',
+      expect.any(String),
+      'EX',
+      expect.any(Number),
+    );
   });
 });
 

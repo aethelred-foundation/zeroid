@@ -3,6 +3,8 @@ import { AuthenticatedRequest } from '../middleware/auth';
 import { validate, createSchemaSchema, uuidSchema, paginationSchema } from '../middleware/validation';
 import { governanceLimiter } from '../middleware/rateLimit';
 import { prisma, logger } from '../index';
+import { governmentAPIService } from '../services/government-api';
+import { teeService } from '../services/tee';
 import { asRouteError, sendRouteError } from '../utils/route-error';
 import { z } from 'zod';
 
@@ -129,9 +131,18 @@ router.post(
         return;
       }
 
-      // Only TEE-attested or government-verified identities can vote
-      const voter = await prisma.identity.findUnique({ where: { id: identity.id } });
-      if (!voter?.teeAttested && !voter?.governmentVerified) {
+      // Only identities with current verification evidence can vote.
+      const voter = await prisma.identity.findUnique({
+        where: { id: identity.id },
+        select: { teeAttestationId: true },
+      });
+      const [teeValid, governmentStatus] = await Promise.all([
+        voter?.teeAttestationId
+          ? teeService.isAttestationValid(voter.teeAttestationId)
+          : Promise.resolve(false),
+        governmentAPIService.getVerificationStatus(identity.id),
+      ]);
+      if (!teeValid && !governmentStatus) {
         res.status(403).json({
           error: 'Must be TEE-attested or government-verified to vote',
           code: 'SCHEMA_VOTER_UNVERIFIED',
