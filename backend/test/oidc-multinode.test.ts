@@ -337,6 +337,18 @@ describe('OIDC multi-node correctness', () => {
 
       await expect(
         bridgeA.registerClient({
+          clientName: 'Mapped Private Redirect Client',
+          redirectUris: ['https://[::ffff:0a00:0005]/callback'],
+          postLogoutRedirectUris: ['https://app.example.com/logout'],
+          grantTypes: ['authorization_code'],
+          responseTypes: ['code'],
+          tokenEndpointAuthMethod: 'client_secret_basic',
+          scopes: ['openid'],
+        }),
+      ).rejects.toThrow(/Redirect URI/);
+
+      await expect(
+        bridgeA.registerClient({
           clientName: 'Credentialed JWKS Client',
           redirectUris: ['https://app.example.com/callback'],
           postLogoutRedirectUris: ['https://app.example.com/logout'],
@@ -445,6 +457,32 @@ describe('OIDC multi-node correctness', () => {
         Buffer.from(encodedSignature, 'base64url'),
       ),
     ).toBe(true);
+  });
+
+  test('back-channel logout refuses unsafe legacy stored logout URIs', async () => {
+    const client = await registerTestClient(bridgeA);
+    const storedClient = JSON.parse(
+      store.get(`oidc:clients:${client.clientId}`)!,
+    );
+    storedClient.registration.backchannelLogoutUri = 'https://[::ffff:0a00:0005]/logout';
+    store.set(`oidc:clients:${client.clientId}`, JSON.stringify(storedClient));
+
+    const { sessionId } = await authorizeCode(
+      bridgeA,
+      client.clientId,
+      'user-unsafe-logout',
+    );
+    const previousNodeEnv = process.env.NODE_ENV;
+    try {
+      process.env.NODE_ENV = 'production';
+
+      const result = await bridgeB.backChannelLogout(sessionId);
+
+      expect(result).toEqual({ notified: false });
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      process.env.NODE_ENV = previousNodeEnv;
+    }
   });
 
   // 2. Cross-instance auth code exchange

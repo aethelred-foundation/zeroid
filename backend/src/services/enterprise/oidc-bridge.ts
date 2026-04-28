@@ -35,18 +35,13 @@ function isLocalOrPrivateOidcHost(hostname: string): boolean {
 
   const ipVersion = net.isIP(normalized);
   if (ipVersion === 4) {
-    const octets = normalized.split('.').map(Number);
-    return (
-      octets[0] === 0 ||
-      octets[0] === 10 ||
-      octets[0] === 127 ||
-      (octets[0] === 169 && octets[1] === 254) ||
-      (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31) ||
-      (octets[0] === 192 && octets[1] === 168)
-    );
+    return isPrivateIpv4Address(normalized);
   }
 
   if (ipVersion === 6) {
+    const mappedIpv4 = extractIpv4MappedAddress(normalized);
+    if (mappedIpv4) return isPrivateIpv4Address(mappedIpv4);
+
     return (
       normalized === '::' ||
       normalized === '::1' ||
@@ -60,6 +55,35 @@ function isLocalOrPrivateOidcHost(hostname: string): boolean {
     !normalized.includes('.') ||
     PRIVATE_OIDC_HOSTNAME_SUFFIXES.some((suffix) => normalized.endsWith(suffix))
   );
+}
+
+function isPrivateIpv4Address(value: string): boolean {
+  const octets = value.split('.').map(Number);
+  return (
+    octets[0] === 0 ||
+    octets[0] === 10 ||
+    octets[0] === 127 ||
+    (octets[0] === 169 && octets[1] === 254) ||
+    (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31) ||
+    (octets[0] === 192 && octets[1] === 168)
+  );
+}
+
+function extractIpv4MappedAddress(value: string): string | null {
+  const dotted = value.match(/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i);
+  if (dotted && net.isIP(dotted[1]) === 4) return dotted[1];
+
+  const hexadecimal = value.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
+  if (!hexadecimal) return null;
+
+  const high = parseInt(hexadecimal[1], 16);
+  const low = parseInt(hexadecimal[2], 16);
+  return [
+    (high >> 8) & 0xff,
+    high & 0xff,
+    (low >> 8) & 0xff,
+    low & 0xff,
+  ].join('.');
 }
 
 const isLoopbackHost = (url: URL): boolean =>
@@ -1188,6 +1212,14 @@ export class OIDCBridge {
     sessionId: string,
     clientId: string,
   ): Promise<{ notified: boolean; status?: number }> {
+    if (!isSecureOidcUrl(logoutUri)) {
+      logger.warn('back_channel_logout_uri_unsafe', {
+        sessionId,
+        clientId,
+      });
+      return { notified: false };
+    }
+
     try {
       const response = await fetch(logoutUri, {
         method: 'POST',
