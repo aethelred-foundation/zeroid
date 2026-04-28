@@ -46,7 +46,12 @@ function loadJWTSecret(): Uint8Array {
 const JWT_SECRET = loadJWTSecret();
 const JWT_ISSUER = 'zeroid-api';
 const JWT_AUDIENCE = 'zeroid-client';
+const JWT_ALGORITHM = 'HS256';
 const TOKEN_EXPIRY = '24h';
+
+function isAcceptedJwtHeader(header: jose.JWTHeaderParameters): boolean {
+  return header.alg === JWT_ALGORITHM && header.typ === 'JWT';
+}
 
 // ---------------------------------------------------------------------------
 // Token generation
@@ -55,7 +60,7 @@ export async function generateToken(identityId: string, did: string): Promise<{ 
   const sessionId = crypto.randomUUID();
 
   const token = await new jose.SignJWT({ did } as unknown as jose.JWTPayload)
-    .setProtectedHeader({ alg: 'HS256', typ: 'JWT' })
+    .setProtectedHeader({ alg: JWT_ALGORITHM, typ: 'JWT' })
     .setSubject(identityId)
     .setIssuedAt()
     .setExpirationTime(TOKEN_EXPIRY)
@@ -166,10 +171,16 @@ export async function authMiddleware(
     const tokenHash = await hashToken(token);
 
     // Verify JWT signature and claims
-    const { payload } = await jose.jwtVerify(token, JWT_SECRET, {
+    const { payload, protectedHeader } = await jose.jwtVerify(token, JWT_SECRET, {
       issuer: JWT_ISSUER,
       audience: JWT_AUDIENCE,
+      algorithms: [JWT_ALGORITHM],
     });
+
+    if (!isAcceptedJwtHeader(protectedHeader)) {
+      res.status(401).json({ error: 'Invalid token header', code: 'AUTH_CLAIMS_INVALID' });
+      return;
+    }
 
     const jwtPayload = payload as unknown as JWTPayload;
     const sessionId = jwtPayload.jti;
@@ -259,6 +270,10 @@ export async function authMiddleware(
       res.status(401).json({ error: 'Invalid token claims', code: 'AUTH_CLAIMS_INVALID' });
       return;
     }
+    if ((err as Error).name === 'JOSEAlgNotAllowed') {
+      res.status(401).json({ error: 'Invalid token header', code: 'AUTH_CLAIMS_INVALID' });
+      return;
+    }
 
     logger.error('auth_error', { error: (err as Error).message });
     res.status(401).json({ error: 'Authentication failed', code: 'AUTH_FAILED' });
@@ -282,10 +297,16 @@ export async function optionalAuthMiddleware(
   try {
     const token = authHeader.slice(7);
     const tokenHash = await hashToken(token);
-    const { payload } = await jose.jwtVerify(token, JWT_SECRET, {
+    const { payload, protectedHeader } = await jose.jwtVerify(token, JWT_SECRET, {
       issuer: JWT_ISSUER,
       audience: JWT_AUDIENCE,
+      algorithms: [JWT_ALGORITHM],
     });
+
+    if (!isAcceptedJwtHeader(protectedHeader)) {
+      next();
+      return;
+    }
 
     const jwtPayload = payload as unknown as JWTPayload;
     const sessionId = jwtPayload.jti;

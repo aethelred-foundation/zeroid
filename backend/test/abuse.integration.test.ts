@@ -547,6 +547,46 @@ describe('2 - Auth bypass attempts', () => {
     expect(res.body.code).toBe('AUTH_FAILED');
   });
 
+  it('should reject a token signed with an unapproved JWT algorithm', async () => {
+    const token = await new jose.SignJWT({ did: 'did:aethelred:alice' } as unknown as jose.JWTPayload)
+      .setProtectedHeader({ alg: 'HS512', typ: 'JWT' })
+      .setSubject('identity-1')
+      .setIssuedAt()
+      .setExpirationTime('1h')
+      .setIssuer(JWT_ISSUER)
+      .setAudience(JWT_AUDIENCE)
+      .setJti('session-hs512')
+      .sign(JWT_SECRET);
+
+    const res = await request(app as Express)
+      .post('/api/v1/credentials')
+      .set('Authorization', `Bearer ${token}`)
+      .send({});
+
+    expect(res.status).toBe(401);
+    expect(res.body.code).toBe('AUTH_CLAIMS_INVALID');
+  });
+
+  it('should reject a token missing the expected JWT typ header', async () => {
+    const token = await new jose.SignJWT({ did: 'did:aethelred:alice' } as unknown as jose.JWTPayload)
+      .setProtectedHeader({ alg: 'HS256' })
+      .setSubject('identity-1')
+      .setIssuedAt()
+      .setExpirationTime('1h')
+      .setIssuer(JWT_ISSUER)
+      .setAudience(JWT_AUDIENCE)
+      .setJti('session-no-typ')
+      .sign(JWT_SECRET);
+
+    const res = await request(app as Express)
+      .post('/api/v1/credentials')
+      .set('Authorization', `Bearer ${token}`)
+      .send({});
+
+    expect(res.status).toBe(401);
+    expect(res.body.code).toBe('AUTH_CLAIMS_INVALID');
+  });
+
   it('should reject a token with wrong issuer claim', async () => {
     const token = await makeToken({ iss: 'malicious-issuer' });
 
