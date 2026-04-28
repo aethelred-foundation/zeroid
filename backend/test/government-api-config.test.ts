@@ -1,5 +1,7 @@
 import { promises as dns } from 'dns';
 import crypto from 'crypto';
+import { EventEmitter } from 'events';
+import * as https from 'https';
 
 const mockRedisGet = jest.fn();
 const mockRedisSet = jest.fn();
@@ -30,6 +32,10 @@ jest.mock('../src/index', () => ({
   },
 }));
 
+jest.mock('https', () => ({
+  request: jest.fn(),
+}));
+
 import { GovernmentAPIService } from '../src/services/government-api';
 
 const ORIGINAL_ENV = { ...process.env };
@@ -52,6 +58,7 @@ describe('GovernmentAPIService production configuration', () => {
 
   afterEach(() => {
     dnsLookupSpy.mockRestore();
+    (https.request as jest.Mock).mockReset();
     global.fetch = ORIGINAL_FETCH;
   });
 
@@ -227,6 +234,63 @@ describe('GovernmentAPIService production configuration', () => {
       statusCode: 503,
     });
     expect(global.fetch).not.toHaveBeenCalled();
+    expect(https.request).not.toHaveBeenCalled();
+  });
+
+  it('pins vetted DNS address during Emirates ID verification', async () => {
+    process.env.EMIRATES_ID_API_URL = 'https://eid.gov.example';
+    process.env.EMIRATES_ID_API_KEY = 'key-1';
+    process.env.EMIRATES_ID_API_SECRET = 'secret-1';
+    global.fetch = jest.fn() as unknown as typeof fetch;
+    let capturedOptions: https.RequestOptions | undefined;
+    let capturedBody = '';
+    mockGovernmentHttpsResponses(
+      [
+        {
+          body: JSON.stringify({
+            verified: true,
+            idNumber: '784-1990-1234567-1',
+            fullName: 'Example Person',
+            nationality: 'AE',
+            expiryDate: '2030-01-01T00:00:00.000Z',
+            status: 'VALID',
+          }),
+        },
+      ],
+      (url, options, body) => {
+        expect(url.href).toBe('https://eid.gov.example/identity/verify');
+        capturedOptions = options;
+        capturedBody = body;
+      },
+    );
+    const service = new GovernmentAPIService();
+
+    const result = await service.verifyEmiratesID({
+      idNumber: '784-1990-1234567-1',
+      dateOfBirth: '1990-01-01',
+      identityId: 'identity-1',
+    });
+
+    expect(result.provider).toBe('EMIRATES_ID');
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(https.request).toHaveBeenCalledTimes(1);
+    expect(capturedBody).toContain('"idNumber":"784-1990-1234567-1"');
+    expect(capturedOptions?.servername).toBe('eid.gov.example');
+    expect(capturedOptions?.lookup).toEqual(expect.any(Function));
+
+    const lookup = capturedOptions!.lookup as any;
+    await new Promise<void>((resolve, reject) => {
+      lookup('eid.gov.example', {}, (err: Error | null, address: string, family: number) => {
+        try {
+          expect(err).toBeNull();
+          expect(address).toBe('8.8.8.8');
+          expect(family).toBe(4);
+          resolve();
+        } catch (lookupErr) {
+          reject(lookupErr);
+        }
+      });
+    });
   });
 
   it('rejects oversized UAE Pass token responses before parsing', async () => {
@@ -234,9 +298,13 @@ describe('GovernmentAPIService production configuration', () => {
     process.env.UAE_PASS_CLIENT_SECRET = 'secret-1';
     process.env.UAE_PASS_API_URL = 'https://id.uaepass.ae';
     process.env.UAE_PASS_REDIRECT_URI_ALLOWLIST = 'https://zeroid.example/callback';
-    global.fetch = jest.fn().mockResolvedValueOnce(governmentResponse('{}', {
-      'content-length': String(3 * 1024 * 1024),
-    })) as unknown as typeof fetch;
+    global.fetch = jest.fn() as unknown as typeof fetch;
+    mockGovernmentHttpsResponses([
+      {
+        body: '{}',
+        headers: { 'content-length': String(3 * 1024 * 1024) },
+      },
+    ]);
     const service = new GovernmentAPIService();
 
     await expect(service.authenticateWithUAEPass({
@@ -248,6 +316,7 @@ describe('GovernmentAPIService production configuration', () => {
       statusCode: 502,
     });
     expect(mockIdentityUpdate).not.toHaveBeenCalled();
+    expect(global.fetch).not.toHaveBeenCalled();
   });
 
   it('evicts malformed Emirates ID cache entries before using them', async () => {
@@ -255,14 +324,19 @@ describe('GovernmentAPIService production configuration', () => {
     process.env.EMIRATES_ID_API_KEY = 'key-1';
     process.env.EMIRATES_ID_API_SECRET = 'secret-1';
     mockRedisGet.mockResolvedValueOnce('{bad-json');
-    global.fetch = jest.fn().mockResolvedValueOnce(governmentResponse(JSON.stringify({
-      verified: true,
-      idNumber: '784-1990-1234567-1',
-      fullName: 'Example Person',
-      nationality: 'AE',
-      expiryDate: '2030-01-01T00:00:00.000Z',
-      status: 'VALID',
-    }))) as unknown as typeof fetch;
+    global.fetch = jest.fn() as unknown as typeof fetch;
+    mockGovernmentHttpsResponses([
+      {
+        body: JSON.stringify({
+          verified: true,
+          idNumber: '784-1990-1234567-1',
+          fullName: 'Example Person',
+          nationality: 'AE',
+          expiryDate: '2030-01-01T00:00:00.000Z',
+          status: 'VALID',
+        }),
+      },
+    ]);
     const service = new GovernmentAPIService();
 
     const result = await service.verifyEmiratesID({
@@ -273,7 +347,8 @@ describe('GovernmentAPIService production configuration', () => {
 
     expect(result.provider).toBe('EMIRATES_ID');
     expect(mockRedisDel).toHaveBeenCalledWith(expect.stringMatching(/^gov:eid:/));
-    expect(global.fetch).toHaveBeenCalledTimes(1);
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(https.request).toHaveBeenCalledTimes(1);
   });
 
   it('fails closed on malformed identity-scoped government verification status cache entries', async () => {
@@ -370,4 +445,46 @@ function governmentResponse(
     body: null,
     text: jest.fn().mockResolvedValue(body),
   } as unknown as Response;
+}
+
+function mockGovernmentHttpsResponses(
+  responses: Array<{
+    body: string;
+    statusCode?: number;
+    headers?: Record<string, string>;
+  }>,
+  onRequest?: (url: URL, options: https.RequestOptions, body: string) => void,
+): jest.Mock {
+  const httpsRequestMock = https.request as jest.Mock;
+  httpsRequestMock.mockImplementation(
+    (url: URL, options: https.RequestOptions, callback: (response: any) => void) => {
+      const responseSpec = responses.shift();
+      if (!responseSpec) {
+        throw new Error(`Unexpected government HTTPS request to ${url.href}`);
+      }
+
+      let requestBody = '';
+      const request = new EventEmitter() as any;
+      request.write = jest.fn((chunk: string | Buffer) => {
+        requestBody += chunk.toString();
+        return true;
+      });
+      request.end = jest.fn(() => {
+        onRequest?.(url, options, requestBody);
+        const response = new EventEmitter() as any;
+        response.statusCode = responseSpec.statusCode ?? 200;
+        response.headers = responseSpec.headers ?? {};
+        process.nextTick(() => {
+          callback(response);
+          response.emit('data', responseSpec.body);
+          response.emit('end');
+        });
+      });
+      request.destroy = jest.fn((err?: Error) => {
+        if (err) request.emit('error', err);
+      });
+      return request;
+    },
+  );
+  return httpsRequestMock;
 }

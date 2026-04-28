@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import * as https from 'https';
 import * as net from 'net';
 import { promises as dns } from 'dns';
 import type { Prisma } from '@prisma/client';
@@ -91,6 +92,22 @@ interface EmiratesIDConfig {
 
 type GovernmentProvider = GovernmentVerificationResult['provider'];
 
+interface ResolvedGovernmentAddress {
+  address: string;
+  family: number;
+}
+
+interface ResolvedGovernmentEndpoint {
+  endpoint: URL;
+  pinnedAddress?: ResolvedGovernmentAddress;
+}
+
+interface GovernmentFetchOptions {
+  method?: string;
+  headers?: Record<string, string>;
+  body?: string;
+}
+
 const GOV_VERIFICATION_CACHE_TTL = parseInt(process.env.GOV_VERIFICATION_CACHE_TTL ?? '86400', 10);
 
 // ---------------------------------------------------------------------------
@@ -124,9 +141,8 @@ export class GovernmentAPIService {
     try {
       const config = this.getUAEPassConfig();
       this.assertAllowedUAEPassRedirectUri(request.redirectUri);
-      await this.assertSafeResolvedGovernmentEndpoint(config.tokenEndpoint, 'UAE Pass', 'GOV_UAEPASS');
       // 1. Exchange authorization code for access token
-      const tokenResponse = await fetch(config.tokenEndpoint, {
+      const tokenResponse = await this.fetchGovernmentEndpoint(config.tokenEndpoint, 'UAE Pass', 'GOV_UAEPASS', {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: new URLSearchParams({
@@ -135,9 +151,7 @@ export class GovernmentAPIService {
           redirect_uri: request.redirectUri,
           client_id: config.clientId,
           client_secret: config.clientSecret,
-        }),
-        redirect: 'manual',
-        signal: AbortSignal.timeout(GOVERNMENT_API_TIMEOUT_MS),
+        }).toString(),
       });
 
       if (!tokenResponse.ok) {
@@ -156,13 +170,10 @@ export class GovernmentAPIService {
       }>(tokenResponse, 'UAE Pass token');
 
       // 2. Fetch user profile
-      await this.assertSafeResolvedGovernmentEndpoint(config.userInfoEndpoint, 'UAE Pass', 'GOV_UAEPASS');
-      const profileResponse = await fetch(config.userInfoEndpoint, {
+      const profileResponse = await this.fetchGovernmentEndpoint(config.userInfoEndpoint, 'UAE Pass', 'GOV_UAEPASS', {
         headers: {
           Authorization: `Bearer ${tokenData.access_token}`,
         },
-        redirect: 'manual',
-        signal: AbortSignal.timeout(GOVERNMENT_API_TIMEOUT_MS),
       });
 
       if (!profileResponse.ok) {
@@ -290,8 +301,7 @@ export class GovernmentAPIService {
 
       // Call ICA (Federal Authority for Identity and Citizenship) API
       const verificationUrl = `${config.apiUrl}/identity/verify`;
-      await this.assertSafeResolvedGovernmentEndpoint(verificationUrl, 'Emirates ID', 'GOV_EID');
-      const response = await fetch(verificationUrl, {
+      const response = await this.fetchGovernmentEndpoint(verificationUrl, 'Emirates ID', 'GOV_EID', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -302,8 +312,6 @@ export class GovernmentAPIService {
           idNumber: request.idNumber,
           dateOfBirth: request.dateOfBirth,
         }),
-        redirect: 'manual',
-        signal: AbortSignal.timeout(GOVERNMENT_API_TIMEOUT_MS),
       });
 
       if (!response.ok) {
@@ -484,14 +492,43 @@ export class GovernmentAPIService {
     }
   }
 
-  private async assertSafeResolvedGovernmentEndpoint(
+  private async fetchGovernmentEndpoint(
     endpointUrl: string,
     provider: string,
     codePrefix: string,
-  ): Promise<void> {
-    if (!isProductionRuntime()) return;
+    options: GovernmentFetchOptions = {},
+  ): Promise<Response> {
+    const resolved = await this.resolveSafeGovernmentEndpoint(
+      endpointUrl,
+      provider,
+      codePrefix,
+    );
 
+    if (!resolved.pinnedAddress) {
+      return fetch(endpointUrl, {
+        method: options.method,
+        headers: options.headers,
+        body: options.body,
+        redirect: 'manual',
+        signal: AbortSignal.timeout(GOVERNMENT_API_TIMEOUT_MS),
+      });
+    }
+
+    return this.fetchGovernmentEndpointWithPinnedAddress(
+      resolved.endpoint,
+      resolved.pinnedAddress,
+      options,
+    );
+  }
+
+  private async resolveSafeGovernmentEndpoint(
+    endpointUrl: string,
+    provider: string,
+    codePrefix: string,
+  ): Promise<ResolvedGovernmentEndpoint> {
     const endpoint = new URL(endpointUrl);
+    if (!isProductionRuntime()) return { endpoint };
+
     const hostname = normalizeGovernmentHostname(endpoint.hostname);
     if (isLocalOrPrivateGovernmentHostname(hostname)) {
       throw new GovernmentAPIError(
@@ -517,6 +554,82 @@ export class GovernmentAPIService {
         503,
       );
     }
+
+    return { endpoint, pinnedAddress: resolvedAddresses[0] };
+  }
+
+  private async fetchGovernmentEndpointWithPinnedAddress(
+    endpoint: URL,
+    pinnedAddress: ResolvedGovernmentAddress,
+    options: GovernmentFetchOptions,
+  ): Promise<Response> {
+    return new Promise((resolve, reject) => {
+      const body = options.body;
+      const headers = {
+        ...(options.headers ?? {}),
+        ...(body !== undefined
+          ? { 'Content-Length': Buffer.byteLength(body).toString() }
+          : {}),
+      };
+      const request = https.request(
+        endpoint,
+        {
+          method: options.method ?? 'GET',
+          headers,
+          lookup: (_hostname, _options, callback) => {
+            callback(null, pinnedAddress.address, pinnedAddress.family);
+          },
+          servername: endpoint.hostname,
+          timeout: GOVERNMENT_API_TIMEOUT_MS,
+        },
+        (response) => {
+          const status = response.statusCode ?? 502;
+          const responseHeaders = new Headers();
+          for (const [header, value] of Object.entries(response.headers)) {
+            if (Array.isArray(value)) {
+              for (const item of value) responseHeaders.append(header, item);
+            } else if (value !== undefined) {
+              responseHeaders.set(header, String(value));
+            }
+          }
+
+          const chunks: Buffer[] = [];
+          let totalBytes = 0;
+
+          response.on('data', (chunk: Buffer | string) => {
+            const chunkBuffer = Buffer.isBuffer(chunk)
+              ? chunk
+              : Buffer.from(chunk);
+            totalBytes += chunkBuffer.byteLength;
+            if (totalBytes > GOVERNMENT_RESPONSE_MAX_BYTES) {
+              request.destroy(
+                new GovernmentAPIError(
+                  `Government API response exceeded ${GOVERNMENT_RESPONSE_MAX_BYTES} byte limit`,
+                  'GOV_RESPONSE_TOO_LARGE',
+                  502,
+                ),
+              );
+              return;
+            }
+            chunks.push(chunkBuffer);
+          });
+          response.on('end', () => {
+            resolve(new Response(Buffer.concat(chunks, totalBytes), {
+              status,
+              headers: responseHeaders,
+            }));
+          });
+          response.on('error', reject);
+        },
+      );
+
+      request.on('timeout', () => {
+        request.destroy(new Error('Government API request timed out'));
+      });
+      request.on('error', reject);
+      if (body !== undefined) request.write(body);
+      request.end();
+    });
   }
 
   private async parseCachedVerificationResult(
