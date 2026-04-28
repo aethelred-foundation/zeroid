@@ -122,6 +122,68 @@ function normalizeOAuthErrorCode(code: string): string {
     .replace(/[^a-z0-9_]+/g, '_');
 }
 
+function buildOAuthRouteError(
+  errorCode: string,
+  message: string,
+  statusCode: number,
+): PublicOAuthRouteError {
+  return Object.assign(new Error(message), {
+    errorCode,
+    statusCode,
+  });
+}
+
+function decodeBasicClientAuthPart(value: string): string {
+  try {
+    return decodeURIComponent(value.replace(/\+/g, ' '));
+  } catch {
+    throw buildOAuthRouteError(
+      'invalid_client',
+      'Malformed client authentication',
+      401,
+    );
+  }
+}
+
+function parseBasicClientAuth(
+  authorizationHeader: string | undefined,
+): { clientId: string; clientSecret: string } | null {
+  if (!authorizationHeader) return null;
+  const [scheme, encoded] = authorizationHeader.split(/\s+/, 2);
+  if (scheme?.toLowerCase() !== 'basic' || !encoded) {
+    throw buildOAuthRouteError(
+      'invalid_client',
+      'Unsupported client authentication method',
+      401,
+    );
+  }
+
+  let decoded: string;
+  try {
+    decoded = Buffer.from(encoded, 'base64').toString('utf8');
+  } catch {
+    throw buildOAuthRouteError(
+      'invalid_client',
+      'Malformed client authentication',
+      401,
+    );
+  }
+
+  const separator = decoded.indexOf(':');
+  if (separator <= 0) {
+    throw buildOAuthRouteError(
+      'invalid_client',
+      'Malformed client authentication',
+      401,
+    );
+  }
+
+  return {
+    clientId: decodeBasicClientAuthPart(decoded.slice(0, separator)),
+    clientSecret: decodeBasicClientAuthPart(decoded.slice(separator + 1)),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Middleware: strip spoofable identity headers at the enterprise edge
 //
@@ -2493,13 +2555,36 @@ oidcPublicRouter.post(
   '/oidc/token',
   async (req: Request, res: Response): Promise<void> => {
     try {
+      const basicAuth = parseBasicClientAuth(req.headers.authorization);
+      const bodyClientId = req.body.client_id ?? req.body.clientId;
+      const bodyClientSecret = req.body.client_secret ?? req.body.clientSecret;
+      if (
+        basicAuth &&
+        (bodyClientSecret || (bodyClientId && bodyClientId !== basicAuth.clientId))
+      ) {
+        throw buildOAuthRouteError(
+          'invalid_request',
+          'Client credentials must use exactly one authentication method',
+          400,
+        );
+      }
+      const clientAuthMethod:
+        | 'client_secret_basic'
+        | 'client_secret_post'
+        | 'none' = basicAuth
+        ? 'client_secret_basic'
+        : bodyClientSecret
+          ? 'client_secret_post'
+          : 'none';
+
       // Map snake_case from standard OIDC to camelCase
       const tokenRequest = {
         grantType: req.body.grant_type ?? req.body.grantType,
         code: req.body.code,
         redirectUri: req.body.redirect_uri ?? req.body.redirectUri,
-        clientId: req.body.client_id ?? req.body.clientId,
-        clientSecret: req.body.client_secret ?? req.body.clientSecret,
+        clientId: basicAuth?.clientId ?? bodyClientId,
+        clientSecret: basicAuth?.clientSecret ?? bodyClientSecret,
+        clientAuthMethod,
         codeVerifier: req.body.code_verifier ?? req.body.codeVerifier,
         refreshToken: req.body.refresh_token ?? req.body.refreshToken,
         scope: req.body.scope,

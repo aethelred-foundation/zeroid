@@ -1070,6 +1070,62 @@ describe('OIDC multi-node correctness', () => {
     });
   });
 
+  test('token exchange enforces the registered client authentication method', async () => {
+    const basicClient = await bridgeA.registerClient({
+      clientName: 'Basic Auth Machine Client',
+      redirectUris: [REDIRECT_URI],
+      grantTypes: ['client_credentials'],
+      responseTypes: ['code'],
+      tokenEndpointAuthMethod: 'client_secret_basic',
+      scopes: ['openid'],
+      requirePkce: false,
+    });
+
+    await expect(
+      bridgeB.exchangeToken({
+        grantType: 'client_credentials',
+        clientId: basicClient.clientId,
+        clientSecret: basicClient.clientSecret,
+        clientAuthMethod: 'client_secret_post',
+        scope: 'openid',
+      }),
+    ).rejects.toMatchObject({
+      errorCode: 'invalid_client',
+    });
+
+    const postClient = await bridgeA.registerClient({
+      clientName: 'Post Auth Machine Client',
+      redirectUris: [REDIRECT_URI],
+      grantTypes: ['client_credentials'],
+      responseTypes: ['code'],
+      tokenEndpointAuthMethod: 'client_secret_post',
+      scopes: ['openid'],
+      requirePkce: false,
+    });
+
+    await expect(
+      bridgeB.exchangeToken({
+        grantType: 'client_credentials',
+        clientId: postClient.clientId,
+        clientSecret: postClient.clientSecret,
+        clientAuthMethod: 'client_secret_basic',
+        scope: 'openid',
+      }),
+    ).rejects.toMatchObject({
+      errorCode: 'invalid_client',
+    });
+
+    const token = await bridgeB.exchangeToken({
+      grantType: 'client_credentials',
+      clientId: postClient.clientId,
+      clientSecret: postClient.clientSecret,
+      clientAuthMethod: 'client_secret_post',
+      scope: 'openid',
+    });
+
+    expect(token.access_token).toBeDefined();
+  });
+
   test('token endpoint rejects grant requests missing required fields', async () => {
     const client = await registerTestClient(bridgeA);
 

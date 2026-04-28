@@ -68,6 +68,9 @@ export class IdentityService {
     if (!this.isValidPublicKey(request.publicKey)) {
       throw new IdentityError('Invalid public key format', 'IDENTITY_INVALID_KEY');
     }
+    if (!this.isValidRecoveryHash(request.recoveryHash)) {
+      throw new IdentityError('Invalid recovery hash format', 'IDENTITY_INVALID_RECOVERY_HASH');
+    }
 
     // Create identity
     const identity = await prisma.identity.create({
@@ -209,6 +212,36 @@ export class IdentityService {
     const identity = await prisma.identity.findUnique({ where: { did: request.did } });
     if (!identity) {
       throw new IdentityError('Identity not found', 'IDENTITY_NOT_FOUND', 404);
+    }
+    if (!this.isRecoverableStatus(identity.status)) {
+      logger.warn('identity_recovery_blocked', {
+        did: request.did,
+        status: identity.status,
+      });
+      await prisma.auditLog.create({
+        data: {
+          identityId: identity.id,
+          action: 'IDENTITY_RECOVERED',
+          resourceType: 'identity',
+          resourceId: identity.id,
+          details: {
+            success: false,
+            reason: 'identity_status_not_recoverable',
+            status: identity.status,
+          },
+        },
+      });
+      throw new IdentityError(
+        'Identity status does not allow self-service recovery',
+        'IDENTITY_RECOVERY_BLOCKED',
+        403,
+      );
+    }
+    if (!this.isValidPublicKey(request.newPublicKey)) {
+      throw new IdentityError('Invalid public key format', 'IDENTITY_INVALID_KEY');
+    }
+    if (!this.isValidRecoveryHash(request.newRecoveryHash)) {
+      throw new IdentityError('Invalid recovery hash format', 'IDENTITY_INVALID_RECOVERY_HASH');
     }
 
     // Verify recovery proof against stored hash
@@ -407,6 +440,14 @@ export class IdentityService {
     } catch {
       return false;
     }
+  }
+
+  private isValidRecoveryHash(value: string): boolean {
+    return /^[0-9a-f]{64}$/i.test(value);
+  }
+
+  private isRecoverableStatus(status: IdentityStatus): boolean {
+    return status === 'ACTIVE' || status === 'PENDING' || status === 'RECOVERED';
   }
 
   private async hashRecoveryProof(proof: string): Promise<string> {

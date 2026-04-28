@@ -266,6 +266,9 @@ export const TokenRequestSchema = z.object({
   redirectUri: z.string().url().optional(),
   clientId: z.string(),
   clientSecret: z.string().optional(),
+  clientAuthMethod: z
+    .enum(SUPPORTED_CLIENT_AUTH_METHODS)
+    .optional(),
   codeVerifier: z.string().optional(),
   refreshToken: z.string().optional(),
   scope: z.string().optional(),
@@ -273,6 +276,7 @@ export const TokenRequestSchema = z.object({
 
 export type TokenRequest = z.infer<typeof TokenRequestSchema>;
 type OIDCGrantType = TokenRequest['grantType'];
+type OIDCClientAuthMethod = TokenRequest['clientAuthMethod'];
 
 export interface OIDCClientRegistrationResult {
   clientId: string;
@@ -874,6 +878,7 @@ export class OIDCBridge {
     const client = await this.authenticateClient(
       request.clientId,
       request.clientSecret,
+      request.clientAuthMethod,
     );
     this.assertClientGrantAllowed(client, 'authorization_code');
 
@@ -980,6 +985,7 @@ export class OIDCBridge {
     const client = await this.authenticateClient(
       request.clientId,
       request.clientSecret,
+      request.clientAuthMethod,
     );
     this.assertClientGrantAllowed(client, 'client_credentials');
 
@@ -1049,6 +1055,7 @@ export class OIDCBridge {
     const client = await this.authenticateClient(
       request.clientId,
       request.clientSecret,
+      request.clientAuthMethod,
     );
     this.assertClientGrantAllowed(client, 'refresh_token');
     this.assertScopesAllowed(client, refreshData.scope);
@@ -1451,6 +1458,7 @@ export class OIDCBridge {
   private async authenticateClient(
     clientId: string,
     clientSecret?: string,
+    presentedAuthMethod?: OIDCClientAuthMethod,
   ): Promise<RegisteredClient> {
     const client = await this.getNormalizedClient(clientId);
     if (!client) {
@@ -1463,7 +1471,20 @@ export class OIDCBridge {
         `Client is not active (${lifecycleState})`,
       );
     }
-    if (client.registration.tokenEndpointAuthMethod !== 'none') {
+    const registeredAuthMethod = client.registration.tokenEndpointAuthMethod;
+    const effectiveAuthMethod = presentedAuthMethod ?? registeredAuthMethod;
+    if (effectiveAuthMethod !== registeredAuthMethod) {
+      throw new OIDCError(
+        'invalid_client',
+        'Client authentication method does not match registration',
+      );
+    }
+
+    if (registeredAuthMethod === 'none') {
+      if (clientSecret) {
+        throw new OIDCError('invalid_client', 'Client authentication failed');
+      }
+    } else {
       if (!clientSecret) {
         throw new OIDCError('invalid_client', 'Client authentication failed');
       }

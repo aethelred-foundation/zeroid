@@ -83,6 +83,12 @@ function rejectUnboundCircuitIfNeeded(
   return true;
 }
 
+function isCredentialExpired(expiresAt: Date | string | null | undefined): boolean {
+  if (!expiresAt) return false;
+  const date = expiresAt instanceof Date ? expiresAt : new Date(expiresAt);
+  return Number.isNaN(date.getTime()) || date <= new Date();
+}
+
 const router = Router();
 router.use(verificationLimiter);
 
@@ -142,6 +148,13 @@ router.post(
         res.status(403).json({
           error: 'Can only generate proofs for own credentials',
           code: 'PROOF_ACCESS_DENIED',
+        });
+        return;
+      }
+      if (credential.status !== 'ACTIVE' || isCredentialExpired(credential.expiresAt)) {
+        res.status(400).json({
+          error: 'Credential is not active or has expired',
+          code: 'CRED_NOT_ACTIVE',
         });
         return;
       }
@@ -526,7 +539,8 @@ router.post(
 
       if (
         credential.status !== 'ACTIVE' ||
-        credential.subjectId !== nonceRecord.subjectId
+        credential.subjectId !== nonceRecord.subjectId ||
+        isCredentialExpired(credential.expiresAt)
       ) {
         logger.warn('proof_credential_context_mismatch', {
           nonce,
@@ -534,6 +548,7 @@ router.post(
           credentialStatus: credential.status,
           credentialSubjectId: credential.subjectId,
           nonceSubjectId: nonceRecord.subjectId,
+          credentialExpiresAt: credential.expiresAt,
         });
         res.status(400).json({
           error: 'Credential no longer matches the proof issuance context',

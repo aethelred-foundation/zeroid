@@ -2,7 +2,13 @@ import { Router, Request, Response } from 'express';
 import { identityService } from '../services/identity';
 import { governmentAPIService } from '../services/government-api';
 import { authMiddleware, AuthenticatedRequest, optionalAuthMiddleware } from '../middleware/auth';
-import { validate, registerIdentitySchema, didSchema } from '../middleware/validation';
+import {
+  validate,
+  registerIdentitySchema,
+  didSchema,
+  publicKeySchema,
+  recoveryHashSchema,
+} from '../middleware/validation';
 import { apiRateLimiter, authRateLimiter } from '../middleware/rateLimit';
 import { logger } from '../index';
 import { asRouteError, sendRouteError } from '../utils/route-error';
@@ -117,8 +123,8 @@ router.get(
 const recoverSchema = z.object({
   did: didSchema,
   recoveryProof: z.string().min(32).max(1024),
-  newPublicKey: z.string().min(32).max(512),
-  newRecoveryHash: z.string().min(64).max(128),
+  newPublicKey: publicKeySchema,
+  newRecoveryHash: recoveryHashSchema,
 });
 
 router.post(

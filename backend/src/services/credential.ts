@@ -725,9 +725,14 @@ export class CredentialService {
     credentialId: string,
   ): Promise<CredentialResponse | null> {
     // Check cache
-    const cached = await redis.get(`cred:${credentialId}`);
+    const cacheKey = `cred:${credentialId}`;
+    const cached = await redis.get(cacheKey);
     if (cached) {
-      return JSON.parse(cached) as CredentialResponse;
+      const cachedCredential = this.parseCachedCredential(cached);
+      if (cachedCredential) {
+        return this.enforceCredentialExpiry(credentialId, cachedCredential);
+      }
+      await redis.del(cacheKey);
     }
 
     const credential = await prisma.credential.findUnique({
@@ -751,13 +756,10 @@ export class CredentialService {
 
     const formatted = this.formatCredential(credential);
 
-    // Cache for 5 minutes
-    await redis.set(
-      `cred:${credentialId}`,
-      JSON.stringify(formatted),
-      'EX',
-      300,
-    );
+    const cacheTtl = this.getCredentialCacheTtl(formatted);
+    if (cacheTtl > 0) {
+      await redis.set(cacheKey, JSON.stringify(formatted), 'EX', cacheTtl);
+    }
 
     return formatted;
   }
@@ -1032,6 +1034,107 @@ export class CredentialService {
       issuedAt: credential.issuedAt,
       expiresAt: credential.expiresAt,
     };
+  }
+
+  private parseCachedCredential(raw: string): CredentialResponse | null {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return null;
+    }
+
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return null;
+    }
+    const record = parsed as Record<string, unknown>;
+    const issuedAt = this.coerceDate(record.issuedAt);
+    const expiresAt =
+      record.expiresAt === null || record.expiresAt === undefined
+        ? null
+        : this.coerceDate(record.expiresAt);
+    if (
+      typeof record.id !== 'string' ||
+      typeof record.credentialType !== 'string' ||
+      typeof record.issuerId !== 'string' ||
+      typeof record.subjectId !== 'string' ||
+      typeof record.claimsHash !== 'string' ||
+      typeof record.status !== 'string' ||
+      !issuedAt ||
+      (record.expiresAt !== null && record.expiresAt !== undefined && !expiresAt) ||
+      !record.claims ||
+      typeof record.claims !== 'object' ||
+      Array.isArray(record.claims)
+    ) {
+      return null;
+    }
+
+    return {
+      id: record.id,
+      credentialType: record.credentialType,
+      issuerId: record.issuerId,
+      subjectId: record.subjectId,
+      claims: record.claims as Record<string, unknown>,
+      claimsHash: record.claimsHash,
+      proof: record.proof,
+      status: record.status,
+      issuedAt,
+      expiresAt,
+    };
+  }
+
+  private async enforceCredentialExpiry(
+    credentialId: string,
+    credential: CredentialResponse,
+  ): Promise<CredentialResponse> {
+    if (
+      credential.expiresAt &&
+      credential.expiresAt <= new Date() &&
+      credential.status === 'ACTIVE'
+    ) {
+      await prisma.credential.update({
+        where: { id: credentialId },
+        data: { status: 'EXPIRED' },
+      }).catch((error: Error) => {
+        logger.warn('credential_expiry_status_update_failed', {
+          credentialId,
+          error: error.message,
+        });
+      });
+      const expiredCredential = { ...credential, status: 'EXPIRED' };
+      await redis.set(
+        `cred:${credentialId}`,
+        JSON.stringify(expiredCredential),
+        'EX',
+        300,
+      );
+      return expiredCredential;
+    }
+
+    return credential;
+  }
+
+  private getCredentialCacheTtl(credential: CredentialResponse): number {
+    const defaultTtl = 300;
+    if (!credential.expiresAt || credential.status !== 'ACTIVE') {
+      return defaultTtl;
+    }
+
+    const secondsUntilExpiry = Math.floor(
+      (credential.expiresAt.getTime() - Date.now()) / 1000,
+    );
+    return Math.max(0, Math.min(defaultTtl, secondsUntilExpiry));
+  }
+
+  private coerceDate(value: unknown): Date | null {
+    const date =
+      value instanceof Date
+        ? value
+        : typeof value === 'string' || typeof value === 'number'
+          ? new Date(value)
+          : null;
+    if (!date || Number.isNaN(date.getTime())) return null;
+    return date;
   }
 
   private async evaluateCredentialVerification(credential: {

@@ -99,6 +99,10 @@ export const publicKeySchema = z
   .max(512)
   .regex(/^[A-Za-z0-9+/=]+$/, 'Public key must be base64-encoded');
 
+export const recoveryHashSchema = z
+  .string()
+  .regex(/^[0-9a-f]{64}$/i, 'Recovery hash must be a SHA-256 hex digest');
+
 export const credentialTypeSchema = z.enum([
   'NATIONAL_ID',
   'PASSPORT',
@@ -160,7 +164,7 @@ export function parseOrThrow<T>(
 export const registerIdentitySchema = z.object({
   did: didSchema,
   publicKey: publicKeySchema,
-  recoveryHash: z.string().min(64).max(128),
+  recoveryHash: recoveryHashSchema,
   displayName: z.string().min(1).max(100).optional(),
   metadata: z.record(z.unknown()).optional(),
 });
