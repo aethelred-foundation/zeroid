@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import * as net from 'net';
 
 export interface ProductionSafetyViolation {
   control: string;
@@ -13,6 +14,15 @@ const REQUIRED_SECRET_KEY_BYTES = 32;
 const MAX_PRODUCTION_SANCTIONS_LIST_AGE_HOURS = 24;
 const SUPPORTED_OIDC_SIGNING_ALGORITHMS = new Set(['RS256', 'PS256']);
 const PRODUCTION_KMS_PROVIDERS = new Set(['aws-kms', 'gcp-kms', 'azure-kms']);
+const PRIVATE_HOSTNAME_SUFFIXES = [
+  '.corp',
+  '.home',
+  '.internal',
+  '.lan',
+  '.local',
+  '.localhost',
+  '.test',
+];
 const SGX_MRSIGNER_PATTERN = /^[0-9a-f]{64}$/i;
 const KNOWN_TEE_TCB_STATUSES = new Set([
   'UpToDate',
@@ -301,7 +311,7 @@ export function collectProductionSafetyViolations(
   } else if (!isTrustedHttpsUrl(oidcIssuerUrl)) {
     violations.push({
       control: 'OIDC_ISSUER_URL',
-      risk: 'Production OIDC issuer URL must use HTTPS and must not target localhost',
+      risk: 'Production OIDC issuer URL must use HTTPS and must not target localhost, private, or internal hosts',
     });
   }
 
@@ -648,6 +658,7 @@ function isTrustedHttpsUrl(value: string): boolean {
   try {
     const url = new URL(value);
     if (url.protocol !== 'https:') return false;
+    if (url.username || url.password) return false;
     return !isLocalHostname(url.hostname.toLowerCase());
   } catch {
     return false;
@@ -673,13 +684,43 @@ function isLocalHostname(hostname: string): boolean {
     .replace(/^\[|\]$/g, '')
     .replace(/\.$/, '');
 
-  return (
+  if (
     normalized === 'localhost' ||
     normalized === '127.0.0.1' ||
     normalized === '0.0.0.0' ||
     normalized === '::1' ||
     normalized === '::' ||
     normalized.endsWith('.localhost')
+  ) {
+    return true;
+  }
+
+  const ipVersion = net.isIP(normalized);
+  if (ipVersion === 4) {
+    const octets = normalized.split('.').map(Number);
+    return (
+      octets[0] === 0 ||
+      octets[0] === 10 ||
+      octets[0] === 127 ||
+      (octets[0] === 169 && octets[1] === 254) ||
+      (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31) ||
+      (octets[0] === 192 && octets[1] === 168)
+    );
+  }
+
+  if (ipVersion === 6) {
+    return (
+      normalized === '::' ||
+      normalized === '::1' ||
+      normalized.startsWith('fc') ||
+      normalized.startsWith('fd') ||
+      normalized.startsWith('fe80:')
+    );
+  }
+
+  return (
+    !normalized.includes('.') ||
+    PRIVATE_HOSTNAME_SUFFIXES.some((suffix) => normalized.endsWith(suffix))
   );
 }
 
