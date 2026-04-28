@@ -13,14 +13,11 @@ describe('EnterpriseKeySigner', () => {
   it('adds bounded timeouts to GCP KMS signing calls', async () => {
     process.env.GCP_ACCESS_TOKEN = 'gcp-access-token';
     const signature = Buffer.from('kms-signature');
-    const fetchMock = jest.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: jest.fn().mockResolvedValue({
+    const fetchMock = jest.fn().mockResolvedValue(
+      kmsResponse({
         signature: signature.toString('base64'),
       }),
-      text: jest.fn().mockResolvedValue(''),
-    });
+    );
     global.fetch = fetchMock as unknown as typeof fetch;
 
     const signer = new EnterpriseKeySigner({
@@ -36,4 +33,36 @@ describe('EnterpriseKeySigner', () => {
     expect(requestInit.signal).toBeDefined();
     expect((requestInit.signal as AbortSignal).aborted).toBe(false);
   });
+
+  it('rejects oversized GCP KMS signing responses before parsing', async () => {
+    process.env.GCP_ACCESS_TOKEN = 'gcp-access-token';
+    const fetchMock = jest.fn().mockResolvedValue(
+      kmsResponse({}, {
+        'content-length': String(2 * 1024 * 1024),
+      }),
+    );
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const signer = new EnterpriseKeySigner({
+      provider: 'gcp-kms',
+      keyId: 'projects/p/locations/global/keyRings/r/cryptoKeys/k',
+      keyVersion: '1',
+      defaultVerificationMethod: 'did:aethelred:test#key-1',
+    });
+
+    await expect(signer.sign(Buffer.from('message'))).rejects.toMatchObject({
+      code: 'SIGNING_KMS_SIGN_FAILED',
+      statusCode: 502,
+    });
+  });
 });
+
+function kmsResponse(
+  body: Record<string, unknown>,
+  headers: Record<string, string> = {},
+): Response {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers,
+  });
+}

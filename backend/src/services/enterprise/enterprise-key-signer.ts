@@ -68,6 +68,8 @@ const DEFAULT_ERROR_CODES = {
 };
 
 const KMS_HTTP_TIMEOUT_MS = 10_000;
+const KMS_HTTP_RESPONSE_MAX_BYTES = 1024 * 1024;
+const KMS_HTTP_ERROR_PREVIEW_BYTES = 2048;
 
 let awsKmsClient: AwsKmsClient | null = null;
 
@@ -116,6 +118,111 @@ function fetchWithKmsTimeout(input: string, init: RequestInit = {}): Promise<Res
     ...init,
     signal: init.signal ?? AbortSignal.timeout(KMS_HTTP_TIMEOUT_MS),
   });
+}
+
+async function readKmsJsonResponse<T>(
+  response: Response,
+  label: string,
+  errorCode: string,
+): Promise<T> {
+  const body = await readKmsResponseBody(
+    response,
+    label,
+    errorCode,
+    KMS_HTTP_RESPONSE_MAX_BYTES,
+  );
+
+  try {
+    return JSON.parse(body) as T;
+  } catch {
+    throw new EnterpriseSigningError(
+      `${label} response was not valid JSON`,
+      errorCode,
+      502,
+    );
+  }
+}
+
+async function readKmsErrorPreview(response: Response): Promise<string> {
+  try {
+    const preview = await readKmsResponseBody(
+      response,
+      'KMS error',
+      DEFAULT_ERROR_CODES.kmsSignFailed,
+      KMS_HTTP_ERROR_PREVIEW_BYTES,
+    );
+    return redactKmsErrorPreview(preview);
+  } catch {
+    return '[unavailable]';
+  }
+}
+
+async function readKmsResponseBody(
+  response: Response,
+  label: string,
+  errorCode: string,
+  maxBytes: number,
+): Promise<string> {
+  const contentLength = response.headers.get('content-length');
+  if (contentLength) {
+    const parsedLength = Number(contentLength);
+    if (Number.isFinite(parsedLength) && parsedLength > maxBytes) {
+      throw new EnterpriseSigningError(
+        `${label} response exceeded ${maxBytes} byte limit`,
+        errorCode,
+        502,
+      );
+    }
+  }
+
+  if (!response.body) {
+    const body = await response.text();
+    if (Buffer.byteLength(body, 'utf8') > maxBytes) {
+      throw new EnterpriseSigningError(
+        `${label} response exceeded ${maxBytes} byte limit`,
+        errorCode,
+        502,
+      );
+    }
+    return body;
+  }
+
+  const reader = response.body.getReader();
+  const chunks: Buffer[] = [];
+  let totalBytes = 0;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+
+      const chunk = Buffer.from(value);
+      totalBytes += chunk.byteLength;
+      if (totalBytes > maxBytes) {
+        throw new EnterpriseSigningError(
+          `${label} response exceeded ${maxBytes} byte limit`,
+          errorCode,
+          502,
+        );
+      }
+      chunks.push(chunk);
+    }
+  } catch (error) {
+    await reader.cancel().catch(() => undefined);
+    throw error;
+  } finally {
+    reader.releaseLock();
+  }
+
+  return Buffer.concat(chunks, totalBytes).toString('utf8');
+}
+
+function redactKmsErrorPreview(value: string): string {
+  return value.replace(
+    /(["']?(?:access_token|refresh_token|id_token|client_secret|api[_-]?key|api[_-]?secret|authorization)["']?\s*[:=]\s*)(["'][^"']+["']|[^,\s&}]+)/gi,
+    '$1[redacted]',
+  );
 }
 
 function normalizeKeyMaterial(raw: string): string {
@@ -497,7 +604,7 @@ export class EnterpriseKeySigner {
     });
 
     if (!response.ok) {
-      const errorText = await response.text();
+      const errorText = await readKmsErrorPreview(response);
       this.options.logger?.error?.('gcp_kms_sign_failed', { status: response.status, error: errorText });
       throw new EnterpriseSigningError(
         `GCP KMS signing failed: ${response.status}`,
@@ -506,7 +613,11 @@ export class EnterpriseKeySigner {
       );
     }
 
-    const result = (await response.json()) as { signature: string };
+    const result = await readKmsJsonResponse<{ signature: string }>(
+      response,
+      'GCP KMS signing',
+      this.options.kmsSignFailedCode,
+    );
     return Buffer.from(result.signature, 'base64');
   }
 
@@ -523,7 +634,7 @@ export class EnterpriseKeySigner {
     });
 
     if (!response.ok) {
-      const errorText = await response.text();
+      const errorText = await readKmsErrorPreview(response);
       this.options.logger?.error?.('gcp_kms_get_public_key_failed', { status: response.status, error: errorText });
       throw new EnterpriseSigningError(
         `GCP KMS GetPublicKey failed: ${response.status}`,
@@ -532,7 +643,11 @@ export class EnterpriseKeySigner {
       );
     }
 
-    const result = (await response.json()) as { pem: string };
+    const result = await readKmsJsonResponse<{ pem: string }>(
+      response,
+      'GCP KMS public key',
+      this.options.kmsPublicKeyFailedCode,
+    );
     return crypto.createPublicKey(result.pem);
   }
 
@@ -546,7 +661,11 @@ export class EnterpriseKeySigner {
         { headers: { 'Metadata-Flavor': 'Google' } },
       );
       if (metadataResponse.ok) {
-        const tokenData = (await metadataResponse.json()) as { access_token: string };
+        const tokenData = await readKmsJsonResponse<{ access_token: string }>(
+          metadataResponse,
+          'GCP metadata token',
+          this.options.kmsAuthFailedCode,
+        );
         return tokenData.access_token;
       }
     } catch {
@@ -587,7 +706,7 @@ export class EnterpriseKeySigner {
     });
 
     if (!response.ok) {
-      const errorText = await response.text();
+      const errorText = await readKmsErrorPreview(response);
       this.options.logger?.error?.('azure_kms_sign_failed', { status: response.status, error: errorText });
       throw new EnterpriseSigningError(
         `Azure Key Vault signing failed: ${response.status}`,
@@ -596,7 +715,11 @@ export class EnterpriseKeySigner {
       );
     }
 
-    const result = (await response.json()) as { value: string };
+    const result = await readKmsJsonResponse<{ value: string }>(
+      response,
+      'Azure Key Vault signing',
+      this.options.kmsSignFailedCode,
+    );
     return normalizeAzureSignature(Buffer.from(result.value, 'base64url'), algorithm);
   }
 
@@ -619,7 +742,7 @@ export class EnterpriseKeySigner {
     });
 
     if (!response.ok) {
-      const errorText = await response.text();
+      const errorText = await readKmsErrorPreview(response);
       this.options.logger?.error?.('azure_kms_get_key_failed', { status: response.status, error: errorText });
       throw new EnterpriseSigningError(
         `Azure Key Vault GetKey failed: ${response.status}`,
@@ -628,7 +751,13 @@ export class EnterpriseKeySigner {
       );
     }
 
-    const result = (await response.json()) as { key: { x: string; y: string; crv: string; kty: string } };
+    const result = await readKmsJsonResponse<{
+      key: { x: string; y: string; crv: string; kty: string };
+    }>(
+      response,
+      'Azure Key Vault public key',
+      this.options.kmsPublicKeyFailedCode,
+    );
     return crypto.createPublicKey({
       key: {
         kty: result.key.kty,
@@ -650,7 +779,11 @@ export class EnterpriseKeySigner {
         { headers: { Metadata: 'true' } },
       );
       if (imdsResponse.ok) {
-        const tokenData = (await imdsResponse.json()) as { access_token: string };
+        const tokenData = await readKmsJsonResponse<{ access_token: string }>(
+          imdsResponse,
+          'Azure managed identity token',
+          this.options.kmsAuthFailedCode,
+        );
         return tokenData.access_token;
       }
     } catch {
