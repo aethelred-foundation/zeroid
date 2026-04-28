@@ -1,4 +1,7 @@
 import crypto from 'crypto';
+import * as https from 'https';
+import * as net from 'net';
+import { promises as dns } from 'dns';
 
 export type EnterpriseKmsProvider = 'aws-kms' | 'gcp-kms' | 'azure-kms' | 'local';
 export type EnterpriseSigningAlgorithm = 'RS256' | 'PS256' | 'ES256' | 'EdDSA';
@@ -77,6 +80,11 @@ const AZURE_MANAGED_IDENTITY_TOKEN_ENDPOINT =
 
 let awsKmsClient: AwsKmsClient | null = null;
 
+interface ResolvedKmsAddress {
+  address: string;
+  family: number;
+}
+
 function getAwsKmsSdk(): {
   KMSClient: new (config: { region: string }) => AwsKmsClient;
   GetPublicKeyCommand: new (input: { KeyId: string }) => unknown;
@@ -117,13 +125,23 @@ function getAwsKmsClient(): AwsKmsClient {
   return awsKmsClient;
 }
 
-function fetchWithKmsTimeout(input: string, init: RequestInit = {}): Promise<Response> {
+async function fetchWithKmsTimeout(input: string, init: RequestInit = {}): Promise<Response> {
   assertAllowedEnterpriseKmsEndpoint(input);
+  const endpoint = new URL(input);
+  if (shouldPinKmsEndpoint(endpoint)) {
+    const pinnedAddress = await resolveSafeKmsEndpointAddress(endpoint);
+    return fetchKmsEndpointWithPinnedAddress(endpoint, pinnedAddress, init);
+  }
+
   return fetch(input, {
     ...init,
     redirect: 'manual',
     signal: init.signal ?? AbortSignal.timeout(KMS_HTTP_TIMEOUT_MS),
   });
+}
+
+function shouldPinKmsEndpoint(endpoint: URL): boolean {
+  return process.env.NODE_ENV === 'production' && endpoint.protocol === 'https:';
 }
 
 export function assertAllowedEnterpriseKmsEndpoint(input: string): void {
@@ -153,10 +171,14 @@ export function assertAllowedEnterpriseKmsEndpoint(input: string): void {
     url.pathname === new URL(AZURE_MANAGED_IDENTITY_TOKEN_ENDPOINT).pathname;
 
   if (
-    isGcpKms ||
-    isAzureKeyVault ||
-    isGcpMetadata ||
-    isAzureManagedIdentity
+    url.username === '' &&
+    url.password === '' &&
+    (
+      isGcpKms ||
+      isAzureKeyVault ||
+      isGcpMetadata ||
+      isAzureManagedIdentity
+    )
   ) {
     return;
   }
@@ -166,6 +188,237 @@ export function assertAllowedEnterpriseKmsEndpoint(input: string): void {
     DEFAULT_ERROR_CODES.kmsConfigMissing,
     500,
   );
+}
+
+async function resolveSafeKmsEndpointAddress(endpoint: URL): Promise<ResolvedKmsAddress> {
+  const hostname = normalizeKmsHostname(endpoint.hostname);
+  if (isLocalOrPrivateKmsHostname(hostname)) {
+    throw new EnterpriseSigningError(
+      'KMS endpoint resolved to localhost, private, or internal network infrastructure.',
+      DEFAULT_ERROR_CODES.kmsConfigMissing,
+      500,
+    );
+  }
+
+  let resolvedAddresses: ResolvedKmsAddress[];
+  try {
+    resolvedAddresses = await dns.lookup(hostname, {
+      all: true,
+      verbatim: true,
+    });
+  } catch (error) {
+    throw new EnterpriseSigningError(
+      `KMS endpoint DNS resolution failed: ${(error as Error).message}`,
+      DEFAULT_ERROR_CODES.kmsConfigMissing,
+      502,
+    );
+  }
+
+  if (
+    resolvedAddresses.length === 0 ||
+    resolvedAddresses.some((entry) =>
+      isLocalOrPrivateKmsHostname(normalizeKmsHostname(entry.address)),
+    )
+  ) {
+    throw new EnterpriseSigningError(
+      'KMS endpoint resolved to localhost, private, or internal network infrastructure.',
+      DEFAULT_ERROR_CODES.kmsConfigMissing,
+      500,
+    );
+  }
+
+  return resolvedAddresses[0];
+}
+
+function fetchKmsEndpointWithPinnedAddress(
+  endpoint: URL,
+  pinnedAddress: ResolvedKmsAddress,
+  init: RequestInit,
+): Promise<Response> {
+  return new Promise((resolve, reject) => {
+    const body = serializeKmsRequestBody(init.body);
+    const headers = normalizeKmsRequestHeaders(init.headers);
+    if (body && !hasHeader(headers, 'content-length')) {
+      headers['content-length'] = Buffer.byteLength(body).toString();
+    }
+
+    const request = https.request(
+      endpoint,
+      {
+        method: init.method ?? 'GET',
+        headers,
+        lookup: (_hostname, _options, callback) => {
+          callback(null, pinnedAddress.address, pinnedAddress.family);
+        },
+        servername: endpoint.hostname,
+        timeout: KMS_HTTP_TIMEOUT_MS,
+        signal: init.signal ?? AbortSignal.timeout(KMS_HTTP_TIMEOUT_MS),
+      },
+      (response) => {
+        const status = response.statusCode ?? 502;
+        const responseHeaders = new Headers();
+        for (const [header, value] of Object.entries(response.headers)) {
+          if (Array.isArray(value)) {
+            for (const item of value) responseHeaders.append(header, item);
+          } else if (value !== undefined) {
+            responseHeaders.set(header, String(value));
+          }
+        }
+
+        const chunks: Buffer[] = [];
+        let totalBytes = 0;
+
+        response.on('data', (chunk: Buffer | string) => {
+          const chunkBuffer = Buffer.isBuffer(chunk)
+            ? chunk
+            : Buffer.from(chunk);
+          totalBytes += chunkBuffer.byteLength;
+          if (totalBytes > KMS_HTTP_RESPONSE_MAX_BYTES) {
+            request.destroy(
+              new EnterpriseSigningError(
+                `KMS response exceeded ${KMS_HTTP_RESPONSE_MAX_BYTES} byte limit`,
+                DEFAULT_ERROR_CODES.kmsSignFailed,
+                502,
+              ),
+            );
+            return;
+          }
+          chunks.push(chunkBuffer);
+        });
+        response.on('end', () => {
+          resolve(new Response(Buffer.concat(chunks, totalBytes), {
+            status,
+            headers: responseHeaders,
+          }));
+        });
+        response.on('error', reject);
+      },
+    );
+
+    request.on('timeout', () => {
+      request.destroy(
+        new EnterpriseSigningError(
+          'KMS HTTP request timed out',
+          DEFAULT_ERROR_CODES.kmsSignFailed,
+          504,
+        ),
+      );
+    });
+    request.on('error', reject);
+    if (body) request.write(body);
+    request.end();
+  });
+}
+
+function serializeKmsRequestBody(body: RequestInit['body']): string | Buffer | undefined {
+  if (body === undefined || body === null) return undefined;
+  if (typeof body === 'string' || Buffer.isBuffer(body)) return body;
+  if (body instanceof URLSearchParams) return body.toString();
+  if (body instanceof ArrayBuffer) return Buffer.from(body);
+  if (ArrayBuffer.isView(body)) {
+    return Buffer.from(body.buffer, body.byteOffset, body.byteLength);
+  }
+
+  throw new EnterpriseSigningError(
+    'Unsupported KMS request body type for pinned HTTPS transport.',
+    DEFAULT_ERROR_CODES.kmsSignFailed,
+    500,
+  );
+}
+
+function normalizeKmsRequestHeaders(headers: RequestInit['headers']): Record<string, string> {
+  if (!headers) return {};
+  if (headers instanceof Headers) {
+    const normalized: Record<string, string> = {};
+    headers.forEach((value, key) => {
+      normalized[key] = value;
+    });
+    return normalized;
+  }
+  if (Array.isArray(headers)) {
+    return Object.fromEntries(headers.map(([key, value]) => [key, value]));
+  }
+  return Object.fromEntries(
+    Object.entries(headers).map(([key, value]) => [key, String(value)]),
+  );
+}
+
+function hasHeader(headers: Record<string, string>, expected: string): boolean {
+  return Object.keys(headers).some((header) => header.toLowerCase() === expected);
+}
+
+function normalizeKmsHostname(hostname: string): string {
+  return hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
+}
+
+function isLocalOrPrivateKmsHostname(hostname: string): boolean {
+  if (
+    hostname === 'localhost' ||
+    hostname === '0.0.0.0' ||
+    hostname === '127.0.0.1' ||
+    hostname === '::' ||
+    hostname === '::1' ||
+    hostname.endsWith('.localhost')
+  ) {
+    return true;
+  }
+
+  const ipVersion = net.isIP(hostname);
+  if (ipVersion === 4) {
+    return isPrivateIpv4Address(hostname);
+  }
+
+  if (ipVersion === 6) {
+    const mappedIpv4 = extractIpv4MappedAddress(hostname);
+    if (mappedIpv4) return isPrivateIpv4Address(mappedIpv4);
+
+    return (
+      hostname === '::' ||
+      hostname === '::1' ||
+      hostname.startsWith('fc') ||
+      hostname.startsWith('fd') ||
+      hostname.startsWith('fe80:')
+    );
+  }
+
+  return !hostname.includes('.') || hostname.endsWith('.localhost');
+}
+
+function isPrivateIpv4Address(value: string): boolean {
+  const octets = value.split('.').map(Number);
+  const first = octets[0];
+  const second = octets[1];
+  return (
+    first === 0 ||
+    first === 10 ||
+    first === 127 ||
+    (first === 100 && second >= 64 && second <= 127) ||
+    (first === 169 && second === 254) ||
+    (first === 172 && second >= 16 && second <= 31) ||
+    (first === 192 && second === 0) ||
+    (first === 192 && second === 168) ||
+    (first === 198 && (second === 18 || second === 19)) ||
+    (first === 198 && second === 51) ||
+    (first === 203 && second === 0) ||
+    first >= 224
+  );
+}
+
+function extractIpv4MappedAddress(value: string): string | null {
+  const dotted = value.match(/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i);
+  if (dotted && net.isIP(dotted[1]) === 4) return dotted[1];
+
+  const hexadecimal = value.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
+  if (!hexadecimal) return null;
+
+  const high = parseInt(hexadecimal[1], 16);
+  const low = parseInt(hexadecimal[2], 16);
+  return [
+    (high >> 8) & 0xff,
+    high & 0xff,
+    (low >> 8) & 0xff,
+    low & 0xff,
+  ].join('.');
 }
 
 async function readKmsJsonResponse<T>(

@@ -1,7 +1,15 @@
+import { EventEmitter } from 'events';
+import * as https from 'https';
+import { promises as dns } from 'dns';
 import {
   assertAllowedEnterpriseKmsEndpoint,
   EnterpriseKeySigner,
 } from '../src/services/enterprise/enterprise-key-signer';
+
+jest.mock('https', () => ({
+  ...jest.requireActual('https'),
+  request: jest.fn(),
+}));
 
 const ORIGINAL_ENV = { ...process.env };
 const ORIGINAL_FETCH = global.fetch;
@@ -10,6 +18,7 @@ describe('EnterpriseKeySigner', () => {
   afterEach(() => {
     process.env = { ...ORIGINAL_ENV };
     global.fetch = ORIGINAL_FETCH;
+    (https.request as jest.Mock).mockReset();
     jest.restoreAllMocks();
   });
 
@@ -35,6 +44,64 @@ describe('EnterpriseKeySigner', () => {
     const requestInit = fetchMock.mock.calls[0][1] as RequestInit;
     expect(requestInit.signal).toBeDefined();
     expect((requestInit.signal as AbortSignal).aborted).toBe(false);
+  });
+
+  it('pins production GCP KMS signing calls to a vetted DNS address', async () => {
+    process.env.NODE_ENV = 'production';
+    process.env.GCP_ACCESS_TOKEN = 'gcp-access-token';
+    global.fetch = jest.fn() as unknown as typeof fetch;
+    jest.spyOn(dns, 'lookup').mockResolvedValue([{ address: '8.8.8.8', family: 4 }] as any);
+
+    const signature = Buffer.from('kms-signature');
+    const requestSpy = mockHttpsJsonResponse({
+      signature: signature.toString('base64'),
+    });
+
+    const signer = new EnterpriseKeySigner({
+      provider: 'gcp-kms',
+      keyId: 'projects/p/locations/global/keyRings/r/cryptoKeys/k',
+      keyVersion: '1',
+      defaultVerificationMethod: 'did:aethelred:test#key-1',
+    });
+
+    await expect(signer.sign(Buffer.from('message'))).resolves.toEqual(signature);
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(dns.lookup).toHaveBeenCalledWith('cloudkms.googleapis.com', {
+      all: true,
+      verbatim: true,
+    });
+
+    const requestOptions = requestSpy.mock.calls[0][1] as {
+      lookup: (hostname: string, options: unknown, callback: (...args: unknown[]) => void) => void;
+      servername: string;
+    };
+    const lookupCallback = jest.fn();
+    requestOptions.lookup('cloudkms.googleapis.com', {}, lookupCallback);
+    expect(lookupCallback).toHaveBeenCalledWith(null, '8.8.8.8', 4);
+    expect(requestOptions.servername).toBe('cloudkms.googleapis.com');
+  });
+
+  it('rejects production KMS endpoints that resolve to private addresses', async () => {
+    process.env.NODE_ENV = 'production';
+    process.env.GCP_ACCESS_TOKEN = 'gcp-access-token';
+    jest.spyOn(dns, 'lookup').mockResolvedValue([{ address: '127.0.0.1', family: 4 }] as any);
+    const requestMock = https.request as jest.Mock;
+    requestMock.mockImplementation(() => {
+      throw new Error('https.request should not be called for unsafe KMS resolution');
+    });
+
+    const signer = new EnterpriseKeySigner({
+      provider: 'gcp-kms',
+      keyId: 'projects/p/locations/global/keyRings/r/cryptoKeys/k',
+      keyVersion: '1',
+      defaultVerificationMethod: 'did:aethelred:test#key-1',
+    });
+
+    await expect(signer.sign(Buffer.from('message'))).rejects.toMatchObject({
+      code: 'SIGNING_KMS_CONFIG_MISSING',
+      statusCode: 500,
+    });
+    expect(requestMock).not.toHaveBeenCalled();
   });
 
   it('rejects oversized GCP KMS signing responses before parsing', async () => {
@@ -108,6 +175,11 @@ describe('EnterpriseKeySigner', () => {
         'http://metadata.google.internal.evil.example/computeMetadata/v1/instance/service-accounts/default/token',
       ),
     ).toThrow(expect.objectContaining({ code: 'SIGNING_KMS_CONFIG_MISSING' }));
+    expect(() =>
+      assertAllowedEnterpriseKmsEndpoint(
+        'https://user:pass@cloudkms.googleapis.com/v1/projects/p/locations/global/keyRings/r/cryptoKeys/k/cryptoKeyVersions/1:asymmetricSign',
+      ),
+    ).toThrow(expect.objectContaining({ code: 'SIGNING_KMS_CONFIG_MISSING' }));
   });
 });
 
@@ -119,4 +191,37 @@ function kmsResponse(
     status: 200,
     headers,
   });
+}
+
+function mockHttpsJsonResponse(
+  body: Record<string, unknown>,
+  status = 200,
+): jest.Mock {
+  const requestMock = https.request as jest.Mock;
+  requestMock.mockImplementation(
+    (_url: any, _options: any, callback?: (response: any) => void) => {
+      const request = new EventEmitter() as EventEmitter & {
+        write: jest.Mock;
+        end: jest.Mock;
+        destroy: jest.Mock;
+      };
+      request.write = jest.fn();
+      request.destroy = jest.fn((error?: Error) => {
+        if (error) request.emit('error', error);
+      });
+      request.end = jest.fn(() => {
+        const response = new EventEmitter() as EventEmitter & {
+          statusCode: number;
+          headers: Record<string, string>;
+        };
+        response.statusCode = status;
+        response.headers = { 'content-type': 'application/json' };
+        callback?.(response);
+        response.emit('data', Buffer.from(JSON.stringify(body)));
+        response.emit('end');
+      });
+      return request as unknown as ReturnType<typeof https.request>;
+    },
+  );
+  return requestMock;
 }
