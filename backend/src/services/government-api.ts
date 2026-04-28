@@ -60,6 +60,8 @@ export interface GovernmentVerificationResult {
 const DEFAULT_UAE_PASS_BASE_URL = 'https://stg-id.uaepass.ae';
 const UAE_PASS_SCOPE = 'urn:uae:digitalid:profile:general';
 const GOVERNMENT_API_TIMEOUT_MS = 10_000;
+const GOVERNMENT_RESPONSE_MAX_BYTES = 2 * 1024 * 1024;
+const GOVERNMENT_ERROR_PREVIEW_BYTES = 2 * 1024;
 const PRIVATE_GOVERNMENT_HOSTNAME_SUFFIXES = [
   '.corp',
   '.home',
@@ -96,6 +98,7 @@ export class GovernmentAPIService {
   // -------------------------------------------------------------------------
   getUAEPassAuthUrl(redirectUri: string, state: string): string {
     const config = this.getUAEPassConfig();
+    this.assertAllowedUAEPassRedirectUri(redirectUri);
     const params = new URLSearchParams({
       response_type: 'code',
       client_id: config.clientId,
@@ -116,6 +119,7 @@ export class GovernmentAPIService {
 
     try {
       const config = this.getUAEPassConfig();
+      this.assertAllowedUAEPassRedirectUri(request.redirectUri);
       // 1. Exchange authorization code for access token
       const tokenResponse = await fetch(config.tokenEndpoint, {
         method: 'POST',
@@ -131,15 +135,19 @@ export class GovernmentAPIService {
       });
 
       if (!tokenResponse.ok) {
-        const errorBody = await tokenResponse.text();
+        const errorBodyPreview = await this.readGovernmentErrorPreview(tokenResponse);
         logger.error('uaepass_token_exchange_failed', {
           status: tokenResponse.status,
-          body: errorBody,
+          bodyPreview: redactGovernmentErrorPreview(errorBodyPreview),
         });
         throw new GovernmentAPIError('UAE Pass token exchange failed', 'GOV_UAEPASS_TOKEN_FAILED');
       }
 
-      const tokenData = await tokenResponse.json() as { access_token: string; token_type: string; expires_in: number };
+      const tokenData = await this.readGovernmentJsonResponse<{
+        access_token: string;
+        token_type: string;
+        expires_in: number;
+      }>(tokenResponse, 'UAE Pass token');
 
       // 2. Fetch user profile
       const profileResponse = await fetch(config.userInfoEndpoint, {
@@ -153,7 +161,10 @@ export class GovernmentAPIService {
         throw new GovernmentAPIError('UAE Pass profile fetch failed', 'GOV_UAEPASS_PROFILE_FAILED');
       }
 
-      const profile = await profileResponse.json() as UAEPassProfile;
+      const profile = await this.readGovernmentJsonResponse<UAEPassProfile>(
+        profileResponse,
+        'UAE Pass profile',
+      );
 
       // 3. Validate profile data
       this.validateUAEPassProfile(profile);
@@ -274,7 +285,11 @@ export class GovernmentAPIService {
         throw new GovernmentAPIError('Emirates ID verification API error', 'GOV_EID_API_ERROR');
       }
 
-      const verificationData = await response.json() as EmiratesIDVerificationResult;
+      const verificationData =
+        await this.readGovernmentJsonResponse<EmiratesIDVerificationResult>(
+          response,
+          'Emirates ID verification',
+        );
 
       // Check card validity
       if (verificationData.status !== 'VALID') {
@@ -464,6 +479,145 @@ export class GovernmentAPIService {
     }
   }
 
+  private assertAllowedUAEPassRedirectUri(redirectUri: string): void {
+    if (!isProductionRuntime()) return;
+
+    const normalizedRedirectUri = normalizeTrustedRedirectUri(redirectUri);
+    if (!normalizedRedirectUri) {
+      throw new GovernmentAPIError(
+        'UAE Pass redirect URI must be a trusted HTTPS URL in production',
+        'GOV_UAEPASS_REDIRECT_URI_UNSAFE',
+        400,
+      );
+    }
+
+    const allowedRedirectUris = parseCsv(
+      process.env.UAE_PASS_REDIRECT_URI_ALLOWLIST
+        ?? process.env.GOVERNMENT_REDIRECT_URI_ALLOWLIST,
+    )
+      .map(normalizeTrustedRedirectUri)
+      .filter((value): value is string => Boolean(value));
+
+    if (allowedRedirectUris.length === 0) {
+      throw new GovernmentAPIError(
+        'UAE Pass production redirect URI allowlist is not configured',
+        'GOV_UAEPASS_REDIRECT_URI_ALLOWLIST_MISSING',
+        503,
+      );
+    }
+
+    if (!allowedRedirectUris.includes(normalizedRedirectUri)) {
+      throw new GovernmentAPIError(
+        'UAE Pass redirect URI is not registered in the production allowlist',
+        'GOV_UAEPASS_REDIRECT_URI_UNTRUSTED',
+        400,
+      );
+    }
+  }
+
+  private async readGovernmentJsonResponse<T>(
+    response: Response,
+    label: string,
+  ): Promise<T> {
+    const body = await this.readGovernmentResponseBody(response, label);
+    try {
+      return JSON.parse(body) as T;
+    } catch {
+      throw new GovernmentAPIError(
+        `${label} response was not valid JSON`,
+        'GOV_RESPONSE_INVALID_JSON',
+        502,
+      );
+    }
+  }
+
+  private async readGovernmentResponseBody(
+    response: Response,
+    label: string,
+  ): Promise<string> {
+    const contentLength = response.headers.get('content-length');
+    if (contentLength) {
+      const parsedLength = Number(contentLength);
+      if (
+        Number.isFinite(parsedLength) &&
+        parsedLength > GOVERNMENT_RESPONSE_MAX_BYTES
+      ) {
+        throw new GovernmentAPIError(
+          `${label} response exceeded ${GOVERNMENT_RESPONSE_MAX_BYTES} byte limit`,
+          'GOV_RESPONSE_TOO_LARGE',
+          502,
+        );
+      }
+    }
+
+    return this.readBoundedGovernmentResponse(
+      response,
+      label,
+      GOVERNMENT_RESPONSE_MAX_BYTES,
+    );
+  }
+
+  private async readGovernmentErrorPreview(response: Response): Promise<string> {
+    try {
+      return await this.readBoundedGovernmentResponse(
+        response,
+        'government API error',
+        GOVERNMENT_ERROR_PREVIEW_BYTES,
+      );
+    } catch {
+      return '[unavailable]';
+    }
+  }
+
+  private async readBoundedGovernmentResponse(
+    response: Response,
+    label: string,
+    maxBytes: number,
+  ): Promise<string> {
+    if (!response.body) {
+      const body = await response.text();
+      const totalBytes = Buffer.byteLength(body, 'utf8');
+      if (totalBytes > maxBytes) {
+        throw new GovernmentAPIError(
+          `${label} response exceeded ${maxBytes} byte limit`,
+          'GOV_RESPONSE_TOO_LARGE',
+          502,
+        );
+      }
+      return body;
+    }
+
+    const reader = response.body.getReader();
+    const chunks: Buffer[] = [];
+    let totalBytes = 0;
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (!value) continue;
+
+        const chunk = Buffer.from(value);
+        totalBytes += chunk.byteLength;
+        if (totalBytes > maxBytes) {
+          throw new GovernmentAPIError(
+            `${label} response exceeded ${maxBytes} byte limit`,
+            'GOV_RESPONSE_TOO_LARGE',
+            502,
+          );
+        }
+        chunks.push(chunk);
+      }
+    } catch (error) {
+      await reader.cancel().catch(() => undefined);
+      throw error;
+    } finally {
+      reader.releaseLock();
+    }
+
+    return Buffer.concat(chunks, totalBytes).toString('utf8');
+  }
+
   private validateUAEPassProfile(profile: UAEPassProfile): void {
     if (!profile.uuid || !profile.fullNameEN || !profile.idCardNumber) {
       throw new GovernmentAPIError(
@@ -527,6 +681,24 @@ function isTrustedProductionEndpoint(value: string): boolean {
   }
 }
 
+function normalizeTrustedRedirectUri(value: string): string | null {
+  try {
+    const url = new URL(value);
+    if (url.hash) return null;
+    if (!isTrustedProductionEndpoint(value)) return null;
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
+function redactGovernmentErrorPreview(value: string): string {
+  return value.replace(
+    /(["']?(?:access_token|refresh_token|id_token|client_secret|api[_-]?key|api[_-]?secret)["']?\s*[:=]\s*)(["'][^"']+["']|[^,\s&}]+)/gi,
+    '$1[redacted]',
+  );
+}
+
 function normalizeGovernmentHostname(hostname: string): string {
   return hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
 }
@@ -545,18 +717,13 @@ function isLocalOrPrivateGovernmentHostname(hostname: string): boolean {
 
   const ipVersion = net.isIP(hostname);
   if (ipVersion === 4) {
-    const octets = hostname.split('.').map(Number);
-    return (
-      octets[0] === 0 ||
-      octets[0] === 10 ||
-      octets[0] === 127 ||
-      (octets[0] === 169 && octets[1] === 254) ||
-      (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31) ||
-      (octets[0] === 192 && octets[1] === 168)
-    );
+    return isPrivateIpv4Address(hostname);
   }
 
   if (ipVersion === 6) {
+    const mappedIpv4 = extractIpv4MappedAddress(hostname);
+    if (mappedIpv4) return isPrivateIpv4Address(mappedIpv4);
+
     return (
       hostname === '::' ||
       hostname === '::1' ||
@@ -570,4 +737,40 @@ function isLocalOrPrivateGovernmentHostname(hostname: string): boolean {
     !hostname.includes('.') ||
     PRIVATE_GOVERNMENT_HOSTNAME_SUFFIXES.some((suffix) => hostname.endsWith(suffix))
   );
+}
+
+function isPrivateIpv4Address(value: string): boolean {
+  const octets = value.split('.').map(Number);
+  return (
+    octets[0] === 0 ||
+    octets[0] === 10 ||
+    octets[0] === 127 ||
+    (octets[0] === 169 && octets[1] === 254) ||
+    (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31) ||
+    (octets[0] === 192 && octets[1] === 168)
+  );
+}
+
+function extractIpv4MappedAddress(value: string): string | null {
+  const dotted = value.match(/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i);
+  if (dotted && net.isIP(dotted[1]) === 4) return dotted[1];
+
+  const hexadecimal = value.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
+  if (!hexadecimal) return null;
+
+  const high = parseInt(hexadecimal[1], 16);
+  const low = parseInt(hexadecimal[2], 16);
+  return [
+    (high >> 8) & 0xff,
+    high & 0xff,
+    (low >> 8) & 0xff,
+    low & 0xff,
+  ].join('.');
+}
+
+function parseCsv(value: string | undefined): string[] {
+  return (value ?? '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
 }
