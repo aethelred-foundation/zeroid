@@ -290,6 +290,21 @@ describe('enterprise issuer trust routes', () => {
       metadata: { hsm: 'aws-kms' },
       createdAt: new Date('2026-04-21T00:00:00.000Z'),
     });
+
+    mockRecordIssuerKeyVersion.mockResolvedValue({
+      id: 'hist-2',
+      issuerIdentityId: 'issuer-1',
+      issuerDid: 'did:aethelred:issuer:alpha',
+      keyVersion: '2',
+      keyAlgorithm: 'ES256',
+      verificationMethod: 'did:aethelred:issuer:alpha#assertion-key-2',
+      status: 'active',
+      validFrom: new Date('2026-04-21T00:00:00.000Z'),
+      validUntil: null,
+      rotatedByIdentityId: 'admin-1',
+      metadata: { hsm: 'aws-kms' },
+      createdAt: new Date('2026-04-21T00:00:00.000Z'),
+    });
   });
 
   it('exports issuer trust governance evidence bundles', async () => {
@@ -362,5 +377,29 @@ describe('enterprise issuer trust routes', () => {
         status: 'active',
       }),
     });
+  });
+
+  it('passes enterprise organization context when recording issuer key versions', async () => {
+    const body = {
+      keyVersion: '2',
+      keyAlgorithm: 'ES256',
+      publicKey: '-----BEGIN PUBLIC KEY-----mock-key-----END PUBLIC KEY-----',
+      verificationMethod: 'did:aethelred:issuer:alpha#assertion-key-2',
+      status: 'active',
+      metadata: { hsm: 'aws-kms' },
+    };
+
+    const response = await invokeRoute('POST', '/trust/issuers/:issuerIdentityId/keys', {
+      params: { issuerIdentityId: 'issuer-1' },
+      body,
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(mockRecordIssuerKeyVersion).toHaveBeenCalledWith(
+      'org-1',
+      'issuer-1',
+      'admin-1',
+      body,
+    );
   });
 });

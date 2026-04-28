@@ -1,0 +1,279 @@
+const routeRegistry: Record<
+  string,
+  Array<(req: any, res: any, next: (err?: unknown) => void) => unknown>
+> = {};
+
+const mockExchangeToken = jest.fn();
+
+jest.mock('express', () => {
+  const createRouter = () => {
+    const router: any = {
+      use: jest.fn(() => router),
+      get: jest.fn(
+        (
+          path: string,
+          ...handlers: Array<
+            (req: any, res: any, next: (err?: unknown) => void) => unknown
+          >
+        ) => {
+          routeRegistry[`GET ${path}`] = handlers;
+          return router;
+        },
+      ),
+      post: jest.fn(
+        (
+          path: string,
+          ...handlers: Array<
+            (req: any, res: any, next: (err?: unknown) => void) => unknown
+          >
+        ) => {
+          routeRegistry[`POST ${path}`] = handlers;
+          return router;
+        },
+      ),
+      patch: jest.fn(() => router),
+      delete: jest.fn(() => router),
+    };
+    return router;
+  };
+
+  return {
+    Router: jest.fn(() => createRouter()),
+  };
+}, { virtual: true });
+
+jest.mock('winston', () => {
+  const noop = jest.fn();
+  return {
+    createLogger: jest.fn(() => ({
+      info: noop,
+      warn: noop,
+      error: noop,
+      debug: noop,
+    })),
+    format: {
+      combine: jest.fn(),
+      timestamp: jest.fn(),
+      json: jest.fn(),
+    },
+    transports: { Console: jest.fn() },
+  };
+}, { virtual: true });
+
+jest.mock('../src/middleware/enterprise', () => ({
+  requireEnterpriseContext: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+}));
+
+jest.mock('../src/middleware/rateLimit', () => ({
+  createRateLimiter: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+}));
+
+jest.mock('../src/services/enterprise/webhook-system', () => ({
+  webhookSystem: {},
+  WebhookRegistrationSchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
+  WebhookUpdateSchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
+}));
+
+jest.mock('../src/services/enterprise/api-gateway', () => ({
+  apiGateway: {},
+  CreateAPIKeySchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
+}));
+
+jest.mock('../src/services/enterprise/oidc-bridge', () => ({
+  oidcBridge: {
+    getDiscoveryDocument: jest.fn(),
+    getJWKS: jest.fn(),
+    exchangeToken: mockExchangeToken,
+  },
+  OIDCClientRegistrationSchema: {
+    safeParse: (value: unknown) => ({ success: true, data: value }),
+  },
+}));
+
+jest.mock('../src/services/enterprise/sla-monitor', () => ({
+  slaMonitor: {},
+  SLADefinitionSchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
+}));
+
+jest.mock('../src/services/enterprise/organization-service', () => ({
+  CreateOrganizationSchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
+  AddOrganizationMemberSchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
+  UpdateOrganizationGovernanceSchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
+  enterpriseOrganizationService: {},
+}));
+
+jest.mock('../src/services/enterprise/policy-governance-service', () => ({
+  policyGovernanceService: {},
+}));
+
+jest.mock('../src/services/enterprise/issuer-trust-service', () => ({
+  issuerTrustRegistryService: {},
+  RegisterIssuerTrustSchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
+  RecordIssuerKeySchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
+}));
+
+jest.mock('../src/services/enterprise/policy-registry-service', () => ({
+  POLICY_APPROVAL_MODES: ['single_admin', 'separation_of_duties', 'dual_control'],
+  CreatePolicyDefinitionSchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
+  DeprecatePolicyDefinitionSchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
+  RevokePolicyDefinitionSchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
+  policyRegistryService: {},
+}));
+
+jest.mock('../src/services/enterprise/policy-exception-service', () => ({
+  CreatePolicyExceptionSchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
+  RevokePolicyExceptionSchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
+  policyExceptionService: {},
+}));
+
+jest.mock('../src/index', () => ({
+  prisma: {},
+}));
+
+import '../src/routes/enterprise/integration';
+
+async function invokeRoute(
+  method: 'POST',
+  path: string,
+  options: {
+    body?: Record<string, unknown>;
+    headers?: Record<string, string>;
+  } = {},
+): Promise<{ statusCode: number; body: any }> {
+  const handlers = routeRegistry[`${method} ${path}`];
+  if (!handlers) {
+    throw new Error(`Route not registered: ${method} ${path}`);
+  }
+
+  const req: Record<string, any> = {
+    body: options.body ?? {},
+    headers: options.headers ?? {},
+    params: {},
+    query: {},
+    path,
+  };
+
+  let statusCode = 200;
+  let responseBody: any;
+  let ended = false;
+
+  const res: Record<string, any> = {
+    status(code: number) {
+      statusCode = code;
+      return res;
+    },
+    json(payload: any) {
+      responseBody = payload;
+      ended = true;
+      return res;
+    },
+  };
+
+  for (const handler of handlers) {
+    if (ended) break;
+    await new Promise<void>((resolve, reject) => {
+      let nextCalled = false;
+      const next = (err?: unknown) => {
+        nextCalled = true;
+        if (err) reject(err);
+        else resolve();
+      };
+
+      try {
+        const result = handler(req, res, next);
+        if (result && typeof (result as Promise<unknown>).then === 'function') {
+          (result as Promise<unknown>)
+            .then(() => {
+              if (!nextCalled) resolve();
+            })
+            .catch(reject);
+          return;
+        }
+        if (!nextCalled) resolve();
+      } catch (error) {
+        reject(error);
+      }
+    });
+  }
+
+  return { statusCode, body: responseBody };
+}
+
+function basicAuth(clientId: string, clientSecret: string): string {
+  return `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`;
+}
+
+describe('OIDC token route client authentication', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockExchangeToken.mockResolvedValue({
+      access_token: 'access-token',
+      token_type: 'Bearer',
+      expires_in: 3600,
+      scope: 'openid',
+    });
+  });
+
+  it('rejects Basic auth mixed with body client credentials', async () => {
+    const response = await invokeRoute('POST', '/oidc/token', {
+      headers: {
+        authorization: basicAuth('client-1', 'secret-1'),
+      },
+      body: {
+        grant_type: 'authorization_code',
+        code: 'code-1',
+        redirect_uri: 'https://app.example.com/callback',
+        client_id: 'client-1',
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.body).toMatchObject({
+      error: 'invalid_request',
+    });
+    expect(mockExchangeToken).not.toHaveBeenCalled();
+  });
+
+  it('rejects conflicting body credential aliases', async () => {
+    const response = await invokeRoute('POST', '/oidc/token', {
+      body: {
+        grant_type: 'client_credentials',
+        client_id: 'client-1',
+        clientId: 'client-2',
+        client_secret: 'secret-1',
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.body).toMatchObject({
+      error: 'invalid_request',
+    });
+    expect(mockExchangeToken).not.toHaveBeenCalled();
+  });
+
+  it('passes a pure Basic auth token request to the bridge', async () => {
+    const response = await invokeRoute('POST', '/oidc/token', {
+      headers: {
+        authorization: basicAuth('client-1', 'secret-1'),
+      },
+      body: {
+        grant_type: 'authorization_code',
+        code: 'code-1',
+        redirect_uri: 'https://app.example.com/callback',
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(mockExchangeToken).toHaveBeenCalledWith({
+      grantType: 'authorization_code',
+      code: 'code-1',
+      redirectUri: 'https://app.example.com/callback',
+      clientId: 'client-1',
+      clientSecret: 'secret-1',
+      clientAuthMethod: 'client_secret_basic',
+      codeVerifier: undefined,
+      refreshToken: undefined,
+      scope: undefined,
+    });
+  });
+});

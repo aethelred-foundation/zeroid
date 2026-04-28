@@ -53,18 +53,6 @@ export async function buildTrustedOIDCClaims(
     }
   }
 
-  for (const field of [
-    'email_verified',
-    'phone_number_verified',
-    'age_over_18',
-    'age_over_21',
-  ] as const) {
-    const value = metadata[field];
-    if (typeof value === 'boolean') {
-      claims[field] = value;
-    }
-  }
-
   if (governmentStatus) {
     claims.kyc_level = 'government_verified';
     claims.kyc_provider = String(governmentStatus.provider).toLowerCase();

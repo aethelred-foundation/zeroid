@@ -14,6 +14,7 @@ import {
   oidcBridge,
   OIDCClientRegistrationSchema,
   RegisteredClient,
+  type TokenRequest,
 } from '../../services/enterprise/oidc-bridge';
 import { buildTrustedOIDCClaims } from '../../services/enterprise/oidc-claims';
 import {
@@ -183,6 +184,36 @@ function parseBasicClientAuth(
     clientId: decodeBasicClientAuthPart(decoded.slice(0, separator)),
     clientSecret: decodeBasicClientAuthPart(decoded.slice(separator + 1)),
   };
+}
+
+function hasBodyField(body: Record<string, unknown>, field: string): boolean {
+  return (
+    Object.prototype.hasOwnProperty.call(body, field) &&
+    body[field] !== undefined
+  );
+}
+
+function getAliasedBodyField(
+  body: Record<string, unknown>,
+  primaryField: string,
+  alternateField: string,
+  fieldLabel: string,
+): unknown {
+  const hasPrimary = hasBodyField(body, primaryField);
+  const hasAlternate = hasBodyField(body, alternateField);
+  if (
+    hasPrimary &&
+    hasAlternate &&
+    body[primaryField] !== body[alternateField]
+  ) {
+    throw buildOAuthRouteError(
+      'invalid_request',
+      `Conflicting ${fieldLabel} aliases are not allowed`,
+      400,
+    );
+  }
+
+  return hasPrimary ? body[primaryField] : body[alternateField];
 }
 
 // ---------------------------------------------------------------------------
@@ -2116,8 +2147,9 @@ router.post(
   async (req: Request, res: Response): Promise<void> => {
     try {
       const enterpriseReq = req as EnterpriseAuthenticatedRequest;
+      const organizationId = enterpriseReq.enterpriseContext?.organizationId;
       const actorIdentityId = enterpriseReq.identity?.id;
-      if (!actorIdentityId) {
+      if (!organizationId || !actorIdentityId) {
         res.status(401).json({
           error: 'Authenticated enterprise admin required',
           code: 'ENTERPRISE_AUTH_REQUIRED',
@@ -2126,6 +2158,7 @@ router.post(
       }
 
       const record = await issuerTrustRegistryService.recordIssuerKeyVersion(
+        organizationId,
         req.params.issuerIdentityId as string,
         actorIdentityId,
         req.body,
@@ -2486,11 +2519,28 @@ oidcPublicRouter.post(
   async (req: Request, res: Response): Promise<void> => {
     try {
       const basicAuth = parseBasicClientAuth(req.headers.authorization);
-      const bodyClientId = req.body.client_id ?? req.body.clientId;
-      const bodyClientSecret = req.body.client_secret ?? req.body.clientSecret;
+      const requestBody =
+        req.body && typeof req.body === 'object'
+          ? (req.body as Record<string, unknown>)
+          : {};
+      const bodyClientId = getAliasedBodyField(
+        requestBody,
+        'client_id',
+        'clientId',
+        'client_id',
+      );
+      const bodyClientSecret = getAliasedBodyField(
+        requestBody,
+        'client_secret',
+        'clientSecret',
+        'client_secret',
+      );
       if (
         basicAuth &&
-        (bodyClientSecret || (bodyClientId && bodyClientId !== basicAuth.clientId))
+        (hasBodyField(requestBody, 'client_id') ||
+          hasBodyField(requestBody, 'clientId') ||
+          hasBodyField(requestBody, 'client_secret') ||
+          hasBodyField(requestBody, 'clientSecret'))
       ) {
         throw buildOAuthRouteError(
           'invalid_request',
@@ -2509,16 +2559,16 @@ oidcPublicRouter.post(
 
       // Map snake_case from standard OIDC to camelCase
       const tokenRequest = {
-        grantType: req.body.grant_type ?? req.body.grantType,
-        code: req.body.code,
-        redirectUri: req.body.redirect_uri ?? req.body.redirectUri,
+        grantType: requestBody.grant_type ?? requestBody.grantType,
+        code: requestBody.code,
+        redirectUri: requestBody.redirect_uri ?? requestBody.redirectUri,
         clientId: basicAuth?.clientId ?? bodyClientId,
         clientSecret: basicAuth?.clientSecret ?? bodyClientSecret,
         clientAuthMethod,
-        codeVerifier: req.body.code_verifier ?? req.body.codeVerifier,
-        refreshToken: req.body.refresh_token ?? req.body.refreshToken,
-        scope: req.body.scope,
-      };
+        codeVerifier: requestBody.code_verifier ?? requestBody.codeVerifier,
+        refreshToken: requestBody.refresh_token ?? requestBody.refreshToken,
+        scope: requestBody.scope,
+      } as TokenRequest;
 
       const result = await oidcBridge.exchangeToken(tokenRequest);
       res.status(200).json(result);

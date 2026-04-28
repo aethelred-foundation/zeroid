@@ -241,6 +241,7 @@ describe('IssuerTrustRegistryService', () => {
       issuerIdentityId: 'issuer-1',
       issuerDid: 'did:aethelred:issuer:alpha',
       status: 'PENDING_REVIEW',
+      proposedByIdentityId: 'admin-1',
       issuer: { displayName: 'Alpha Registry Authority' },
     });
 
@@ -255,8 +256,33 @@ describe('IssuerTrustRegistryService', () => {
     expect(result.status).toBe('accredited');
   });
 
+  it('rejects issuer trust self-approval by the proposer', async () => {
+    mockIssuerTrustFindFirst.mockResolvedValueOnce({
+      id: 'trust-1',
+      organizationId: 'org-1',
+      issuerIdentityId: 'issuer-1',
+      issuerDid: 'did:aethelred:issuer:alpha',
+      status: 'PENDING_REVIEW',
+      proposedByIdentityId: 'admin-1',
+      issuer: { displayName: 'Alpha Registry Authority' },
+    });
+
+    await expect(
+      issuerTrustRegistryService.accreditIssuer('trust-1', 'org-1', 'admin-1'),
+    ).rejects.toMatchObject<Partial<IssuerTrustRegistryError>>({
+      code: 'ISSUER_TRUST_DUAL_CONTROL_REQUIRED',
+      statusCode: 409,
+    });
+    expect(mockIssuerTrustUpdate).not.toHaveBeenCalled();
+  });
+
   it('records issuer key history and updates the live identity key material', async () => {
-    const result = await issuerTrustRegistryService.recordIssuerKeyVersion('issuer-1', 'admin-2', {
+    mockIssuerTrustFindFirst.mockResolvedValueOnce({
+      id: 'trust-1',
+      issuerDid: 'did:aethelred:issuer:alpha',
+    });
+
+    const result = await issuerTrustRegistryService.recordIssuerKeyVersion('org-1', 'issuer-1', 'admin-2', {
       keyVersion: '2',
       keyAlgorithm: 'ES256',
       publicKey: '-----BEGIN PUBLIC KEY-----mock-key-----END PUBLIC KEY-----',
@@ -266,6 +292,17 @@ describe('IssuerTrustRegistryService', () => {
     });
 
     expect(mockIssuerKeyHistoryUpdateMany).toHaveBeenCalled();
+    expect(mockIssuerTrustFindFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        organizationId: 'org-1',
+        issuerIdentityId: 'issuer-1',
+        status: 'ACCREDITED',
+      }),
+      select: {
+        id: true,
+        issuerDid: true,
+      },
+    }));
     expect(mockIssuerKeyHistoryCreate).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({
         issuerIdentityId: 'issuer-1',
@@ -280,6 +317,25 @@ describe('IssuerTrustRegistryService', () => {
       }),
     }));
     expect(result.status).toBe('active');
+  });
+
+  it('rejects issuer key rotation outside the organization accredited trust registry', async () => {
+    mockIssuerTrustFindFirst.mockResolvedValueOnce(null);
+
+    await expect(
+      issuerTrustRegistryService.recordIssuerKeyVersion('org-2', 'issuer-1', 'admin-2', {
+        keyVersion: '2',
+        keyAlgorithm: 'ES256',
+        publicKey: '-----BEGIN PUBLIC KEY-----mock-key-----END PUBLIC KEY-----',
+        verificationMethod: 'did:aethelred:issuer:alpha#assertion-key-2',
+        status: 'active',
+      }),
+    ).rejects.toMatchObject<Partial<IssuerTrustRegistryError>>({
+      code: 'ISSUER_KEY_TRUST_INVALID',
+      statusCode: 403,
+    });
+    expect(mockIssuerKeyHistoryCreate).not.toHaveBeenCalled();
+    expect(mockIdentityUpdate).not.toHaveBeenCalled();
   });
 
   it('lists issuer key history only when the issuer is trusted by the organization', async () => {

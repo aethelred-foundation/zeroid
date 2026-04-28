@@ -216,6 +216,13 @@ export class IssuerTrustRegistryService {
         409,
       );
     }
+    if (record.proposedByIdentityId === accreditedByIdentityId) {
+      throw new IssuerTrustRegistryError(
+        'Issuer trust accreditation requires a different approver than the proposer',
+        'ISSUER_TRUST_DUAL_CONTROL_REQUIRED',
+        409,
+      );
+    }
 
     const updated = await trustModel.update({
       where: { id: trustRecordId },
@@ -294,6 +301,7 @@ export class IssuerTrustRegistryService {
   }
 
   async recordIssuerKeyVersion(
+    organizationId: string,
     issuerIdentityId: string,
     rotatedByIdentityId: string,
     input: RecordIssuerKeyInput,
@@ -313,6 +321,17 @@ export class IssuerTrustRegistryService {
         'Issuer identity not found or inactive',
         'ISSUER_KEY_IDENTITY_INVALID',
         404,
+      );
+    }
+    const trustRecord = await this.getAccreditedIssuerTrustForOrganization(
+      organizationId,
+      issuerIdentityId,
+    );
+    if (trustRecord.issuerDid !== identity.did) {
+      throw new IssuerTrustRegistryError(
+        'Issuer identity no longer matches the accredited trust record',
+        'ISSUER_KEY_TRUST_INVALID',
+        409,
       );
     }
 
@@ -366,6 +385,8 @@ export class IssuerTrustRegistryService {
         resourceType: 'issuer_key_history',
         resourceId: record.id,
         details: {
+          organizationId,
+          trustRecordId: trustRecord.id,
           issuerIdentityId,
           issuerDid: identity.did,
           keyVersion: parsed.keyVersion,
@@ -473,6 +494,34 @@ export class IssuerTrustRegistryService {
     }
 
     return record;
+  }
+
+  private async getAccreditedIssuerTrustForOrganization(
+    organizationId: string,
+    issuerIdentityId: string,
+  ): Promise<{ id: string; issuerDid: string }> {
+    const trustRecord = await this.getTrustModel().findFirst({
+      where: {
+        organizationId,
+        issuerIdentityId,
+        status: 'ACCREDITED',
+        OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
+      },
+      select: {
+        id: true,
+        issuerDid: true,
+      },
+    });
+
+    if (!trustRecord) {
+      throw new IssuerTrustRegistryError(
+        'Issuer key rotation requires an active accredited trust record for this organization',
+        'ISSUER_KEY_TRUST_INVALID',
+        403,
+      );
+    }
+
+    return trustRecord;
   }
 
   private async assertIssuerTrustedForOrganization(
