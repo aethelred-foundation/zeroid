@@ -369,6 +369,13 @@ export class CredentialService {
       evaluatedJurisdictions,
     );
     if (trustPolicy.enforced && !trustPolicy.accredited) {
+      if (trustPolicy.denialReason === 'no_trust_record') {
+        throw new CredentialError(
+          'Issuer has no active trust accreditation for credential issuance',
+          'CRED_ISSUER_NOT_TRUSTED',
+          403,
+        );
+      }
       if (trustPolicy.denialReason === 'jurisdiction_not_accredited') {
         throw new CredentialError(
           'Issuer is not accredited to issue this credential in the requested jurisdiction',
@@ -496,16 +503,25 @@ export class CredentialService {
     matchedJurisdictions: string[];
     evaluatedJurisdictions: string[];
     denialReason?:
+      | 'no_trust_record'
       | 'credential_type_not_accredited'
       | 'jurisdiction_not_accredited';
   }> {
     const issuerTrustModel = (prisma as any).issuerTrustRecord;
     if (!issuerTrustModel?.findMany) {
+      logger.warn('credential_issuer_trust_policy_denied', {
+        issuerId,
+        credentialType,
+        evaluatedJurisdictions,
+        denialReason: 'no_trust_record',
+      });
+
       return {
-        enforced: false,
-        accredited: true,
+        enforced: true,
+        accredited: false,
         matchedJurisdictions: [],
         evaluatedJurisdictions,
+        denialReason: 'no_trust_record',
       };
     }
 
@@ -519,11 +535,19 @@ export class CredentialService {
     });
 
     if (!Array.isArray(records) || records.length === 0) {
+      logger.warn('credential_issuer_trust_policy_denied', {
+        issuerId,
+        credentialType,
+        evaluatedJurisdictions,
+        denialReason: 'no_trust_record',
+      });
+
       return {
-        enforced: false,
-        accredited: true,
+        enforced: true,
+        accredited: false,
         matchedJurisdictions: [],
         evaluatedJurisdictions,
+        denialReason: 'no_trust_record',
       };
     }
 
@@ -695,8 +719,7 @@ export class CredentialService {
         ({ record, matchedJurisdictions }) =>
           matchedJurisdictions.length > 0 ||
           !Array.isArray(record.allowedJurisdictions) ||
-          record.allowedJurisdictions.length === 0 ||
-          evaluatedJurisdictions.length === 0,
+          record.allowedJurisdictions.length === 0,
       )
       .sort((left, right) => {
         const assuranceDelta =

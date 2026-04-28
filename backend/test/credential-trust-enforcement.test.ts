@@ -130,6 +130,20 @@ function signCredentialBinding(
     .toString('base64url');
 }
 
+function buildTrustRecord(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'trust-1',
+    status: 'ACCREDITED',
+    accreditationScope: 'ENTERPRISE',
+    assuranceLevel: 'ADVANCED',
+    allowedCredentialTypes: ['kyc_enhanced', 'proof_of_residency'],
+    allowedJurisdictions: ['UAE', 'EU'],
+    expiresAt: null,
+    updatedAt: new Date('2026-04-21T00:00:00.000Z'),
+    ...overrides,
+  };
+}
+
 describe('Credential trust enforcement', () => {
   let service: CredentialService;
 
@@ -171,7 +185,7 @@ describe('Credential trust enforcement', () => {
     }));
     mockSchemaFindUnique.mockResolvedValue(null);
     mockAuditLogCreate.mockResolvedValue({});
-    mockIssuerTrustFindMany.mockResolvedValue([]);
+    mockIssuerTrustFindMany.mockResolvedValue([buildTrustRecord()]);
     mockRedisDel.mockResolvedValue(1);
 
     service = new CredentialService();
@@ -204,10 +218,17 @@ describe('Credential trust enforcement', () => {
     };
   }
 
-  it('allows issuance when no issuer trust records exist yet', async () => {
-    const credential = await service.issueCredential(baseRequest);
+  it('rejects issuance when no issuer trust records exist', async () => {
+    mockIssuerTrustFindMany.mockResolvedValue([]);
+
+    await expect(service.issueCredential(baseRequest)).rejects.toMatchObject<
+      Partial<CredentialError>
+    >({
+      code: 'CRED_ISSUER_NOT_TRUSTED',
+      statusCode: 403,
+    });
     expect(mockIssuerTrustFindMany).toHaveBeenCalled();
-    expect(credential.id).toBe('cred-1');
+    expect(mockCredentialCreate).not.toHaveBeenCalled();
   });
 
   it('stores an issuer-submitted credential proof validated against the issuer key', async () => {
@@ -371,6 +392,30 @@ describe('Credential trust enforcement', () => {
     await expect(service.issueCredential(baseRequest)).rejects.toMatchObject<
       Partial<CredentialError>
     >({
+      code: 'CRED_ISSUER_NOT_ACCREDITED_FOR_JURISDICTION',
+      statusCode: 403,
+    });
+  });
+
+  it('rejects issuance when a jurisdiction-scoped trust record cannot be matched to credential claims', async () => {
+    mockIssuerTrustFindMany.mockResolvedValue([
+      buildTrustRecord({
+        id: 'trust-jurisdiction-scoped',
+        accreditationScope: 'SOVEREIGN',
+        assuranceLevel: 'QUALIFIED',
+        allowedCredentialTypes: ['kyc_enhanced'],
+        allowedJurisdictions: ['UAE'],
+      }),
+    ]);
+
+    await expect(
+      service.issueCredential({
+        ...baseRequest,
+        claims: {
+          level: 'enhanced',
+        },
+      }),
+    ).rejects.toMatchObject<Partial<CredentialError>>({
       code: 'CRED_ISSUER_NOT_ACCREDITED_FOR_JURISDICTION',
       statusCode: 403,
     });
