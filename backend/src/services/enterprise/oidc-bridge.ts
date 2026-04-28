@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { createLogger, format, transports } from 'winston';
 import crypto from 'crypto';
+import * as https from 'https';
 import * as net from 'net';
 import { promises as dns } from 'dns';
 import { redis } from '../../index';
@@ -117,6 +118,21 @@ const isSecureOidcUrl = (value: string): boolean => {
     return false;
   }
 };
+
+interface ResolvedOidcAddress {
+  address: string;
+  family: number;
+}
+
+interface ResolvedOidcEndpoint {
+  endpoint: URL;
+  pinnedAddress?: ResolvedOidcAddress;
+}
+
+interface BackChannelDeliveryResponse {
+  ok: boolean;
+  status: number;
+}
 
 const isTrustedProductionIssuer = (value: string): boolean => {
   try {
@@ -1251,17 +1267,14 @@ export class OIDCBridge {
     }
 
     try {
-      await this.assertSafeResolvedOidcEndpoint(logoutUri);
-      const response = await fetch(logoutUri, {
-        method: 'POST',
-        headers: {
-          accept: 'application/json, text/plain, */*',
-          'content-type': 'application/x-www-form-urlencoded',
-        },
-        body: new URLSearchParams({ logout_token: logoutToken }).toString(),
-        redirect: 'manual',
-        signal: AbortSignal.timeout(5000),
-      });
+      const resolvedEndpoint = await this.resolveSafeOidcEndpoint(logoutUri);
+      const response = resolvedEndpoint.pinnedAddress
+        ? await this.postBackChannelLogoutWithPinnedAddress(
+            resolvedEndpoint.endpoint,
+            resolvedEndpoint.pinnedAddress,
+            logoutToken,
+          )
+        : await this.postBackChannelLogoutWithFetch(logoutUri, logoutToken);
 
       if (!response.ok) {
         logger.warn('back_channel_logout_delivery_failed', {
@@ -1283,10 +1296,12 @@ export class OIDCBridge {
     }
   }
 
-  private async assertSafeResolvedOidcEndpoint(endpointUri: string): Promise<void> {
-    if (!isProductionRuntime()) return;
-
+  private async resolveSafeOidcEndpoint(
+    endpointUri: string,
+  ): Promise<ResolvedOidcEndpoint> {
     const endpoint = new URL(endpointUri);
+    if (!isProductionRuntime()) return { endpoint };
+
     if (isLocalOrPrivateOidcHost(endpoint.hostname)) {
       throw new OIDCError(
         'invalid_client_metadata',
@@ -1307,6 +1322,68 @@ export class OIDCBridge {
         'Back-channel logout URI resolved to localhost, private, or internal network infrastructure.',
       );
     }
+
+    return { endpoint, pinnedAddress: resolvedAddresses[0] };
+  }
+
+  private async postBackChannelLogoutWithFetch(
+    logoutUri: string,
+    logoutToken: string,
+  ): Promise<BackChannelDeliveryResponse> {
+    const response = await fetch(logoutUri, {
+      method: 'POST',
+      headers: {
+        accept: 'application/json, text/plain, */*',
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      body: new URLSearchParams({ logout_token: logoutToken }).toString(),
+      redirect: 'manual',
+      signal: AbortSignal.timeout(5000),
+    });
+    return { ok: response.ok, status: response.status };
+  }
+
+  private async postBackChannelLogoutWithPinnedAddress(
+    endpoint: URL,
+    pinnedAddress: ResolvedOidcAddress,
+    logoutToken: string,
+  ): Promise<BackChannelDeliveryResponse> {
+    const body = new URLSearchParams({ logout_token: logoutToken }).toString();
+
+    return new Promise((resolve, reject) => {
+      const request = https.request(
+        endpoint,
+        {
+          method: 'POST',
+          headers: {
+            accept: 'application/json, text/plain, */*',
+            'content-type': 'application/x-www-form-urlencoded',
+            'content-length': Buffer.byteLength(body),
+          },
+          lookup: (_hostname, _options, callback) => {
+            callback(null, pinnedAddress.address, pinnedAddress.family);
+          },
+          servername: endpoint.hostname,
+          timeout: 5000,
+        },
+        (response) => {
+          const status = response.statusCode ?? 0;
+          response.on('end', () => {
+            resolve({ ok: status >= 200 && status < 300, status });
+          });
+          response.resume();
+        },
+      );
+
+      request.on('timeout', () => {
+        request.destroy(
+          new Error('Back-channel logout delivery timed out.'),
+        );
+      });
+      request.on('error', reject);
+      request.write(body);
+      request.end();
+    });
   }
 
   private async revokeSessionCredentials(sessionId: string): Promise<void> {

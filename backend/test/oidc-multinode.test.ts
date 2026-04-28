@@ -7,6 +7,8 @@
  * work across nodes.
  */
 import crypto from 'crypto';
+import { EventEmitter } from 'events';
+import * as https from 'https';
 import { promises as dns } from 'dns';
 
 // ---------------------------------------------------------------------------
@@ -47,6 +49,10 @@ jest.mock(
   }),
   { virtual: true },
 );
+
+jest.mock('https', () => ({
+  request: jest.fn(),
+}));
 
 // ---------------------------------------------------------------------------
 // Functional Redis mock — backed by a shared Map so both OIDCBridge instances
@@ -552,6 +558,77 @@ describe('OIDC multi-node correctness', () => {
       });
       expect(fetchMock).not.toHaveBeenCalled();
     } finally {
+      dnsSpy.mockRestore();
+      process.env.NODE_ENV = previousNodeEnv;
+    }
+  });
+
+  test('back-channel logout pins vetted DNS address during production delivery', async () => {
+    const client = await registerTestClient(bridgeA);
+    const { sessionId } = await authorizeCode(
+      bridgeA,
+      client.clientId,
+      'user-pinned-resolution',
+    );
+    const previousNodeEnv = process.env.NODE_ENV;
+    const dnsSpy = jest.spyOn(dns, 'lookup').mockResolvedValue([
+      { address: '93.184.216.34', family: 4 },
+    ]);
+    let capturedOptions: https.RequestOptions | undefined;
+    let capturedBody = '';
+    const httpsRequestMock = https.request as jest.Mock;
+    httpsRequestMock.mockImplementation(
+      (url: URL, options: https.RequestOptions, callback: (response: any) => void) => {
+        expect(url.href).toBe(BACKCHANNEL_LOGOUT_URI);
+        capturedOptions = options;
+
+        const request = new EventEmitter() as any;
+        request.write = jest.fn((chunk: string | Buffer) => {
+          capturedBody += chunk.toString();
+          return true;
+        });
+        request.end = jest.fn(() => {
+          const response = new EventEmitter() as any;
+          response.statusCode = 204;
+          response.resume = jest.fn(() => {
+            process.nextTick(() => response.emit('end'));
+          });
+          callback(response);
+        });
+        request.destroy = jest.fn((err?: Error) => {
+          if (err) request.emit('error', err);
+        });
+        return request;
+      },
+    );
+
+    try {
+      process.env.NODE_ENV = 'production';
+
+      const result = await bridgeB.backChannelLogout(sessionId);
+
+      expect(result).toEqual({ notified: true, deliveryStatus: 204 });
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(httpsRequestMock).toHaveBeenCalledTimes(1);
+      expect(capturedBody).toContain('logout_token=');
+      expect(capturedOptions?.servername).toBe('app.example.com');
+      expect(capturedOptions?.lookup).toEqual(expect.any(Function));
+
+      const lookup = capturedOptions!.lookup as any;
+      await new Promise<void>((resolve, reject) => {
+        lookup('app.example.com', {}, (err: Error | null, address: string, family: number) => {
+          try {
+            expect(err).toBeNull();
+            expect(address).toBe('93.184.216.34');
+            expect(family).toBe(4);
+            resolve();
+          } catch (lookupErr) {
+            reject(lookupErr);
+          }
+        });
+      });
+    } finally {
+      httpsRequestMock.mockReset();
       dnsSpy.mockRestore();
       process.env.NODE_ENV = previousNodeEnv;
     }
