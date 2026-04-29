@@ -73,7 +73,7 @@ contract ZKCredentialVerifier is IZKVerifier, AccessControl, Pausable, Reentranc
     /// @dev All registered circuit IDs for enumeration
     bytes32[] private _circuitIds;
 
-    /// @dev Nullifier tracking: keccak256(proof) => used flag
+    /// @dev Domain-separated proof nullifier => used flag
     mapping(bytes32 => bool) private _usedNullifiers;
 
     /// @dev Proof audit log
@@ -109,6 +109,7 @@ contract ZKCredentialVerifier is IZKVerifier, AccessControl, Pausable, Reentranc
     error InvalidICLength(uint256 expected, uint256 actual);
     error InvalidProofPoint();
     error NullifierAlreadyUsed(bytes32 nullifier);
+    error InvalidNullifier(bytes32 supplied, bytes32 expected);
     error InvalidInputCount(uint256 expected, uint256 actual);
     error InputOutOfField(uint256 input);
     error PairingFailed();
@@ -220,11 +221,24 @@ contract ZKCredentialVerifier is IZKVerifier, AccessControl, Pausable, Reentranc
         return _verifyProofInternal(circuitId, proof, publicInputs);
     }
 
+    /// @notice Derive the only accepted replay nullifier for a proof in this verifier domain
+    /// @param circuitId The circuit the proof is verified against
+    /// @param proof The Groth16 proof
+    /// @param publicInputs The public inputs
+    /// @return nullifier Domain-separated replay nullifier
+    function deriveNullifier(
+        bytes32 circuitId,
+        Groth16Proof calldata proof,
+        uint256[] calldata publicInputs
+    ) external view returns (bytes32 nullifier) {
+        return _deriveNullifier(circuitId, _proofHash(proof, publicInputs));
+    }
+
     /// @notice Verify a proof and record the result on-chain with nullifier tracking
     /// @param circuitId The circuit to verify against
     /// @param proof The Groth16 proof
     /// @param publicInputs The public inputs
-    /// @param nullifier Unique nullifier to prevent replay
+    /// @param nullifier Contract-derived nullifier returned by deriveNullifier
     /// @return valid Whether the proof is valid
     function verifyAndRecord(
         bytes32 circuitId,
@@ -232,18 +246,19 @@ contract ZKCredentialVerifier is IZKVerifier, AccessControl, Pausable, Reentranc
         uint256[] calldata publicInputs,
         bytes32 nullifier
     ) external whenNotPaused nonReentrant returns (bool valid) {
-        if (_usedNullifiers[nullifier]) revert NullifierAlreadyUsed(nullifier);
+        bytes32 proofHash = _proofHash(proof, publicInputs);
+        bytes32 expectedNullifier = _deriveNullifier(circuitId, proofHash);
+        if (nullifier != expectedNullifier) revert InvalidNullifier(nullifier, expectedNullifier);
+        if (_usedNullifiers[expectedNullifier]) revert NullifierAlreadyUsed(expectedNullifier);
 
         valid = _verifyProofInternal(circuitId, proof, publicInputs);
 
         // Mark nullifier as used regardless of result to prevent retry attacks
-        _usedNullifiers[nullifier] = true;
-
-        bytes32 proofHash = keccak256(abi.encode(proof.a, proof.b, proof.c, publicInputs));
+        _usedNullifiers[expectedNullifier] = true;
 
         _proofRecords[proofHash] = ProofRecord({
             circuitId: circuitId,
-            nullifier: nullifier,
+            nullifier: expectedNullifier,
             verifier: msg.sender,
             verifiedAt: uint64(block.timestamp),
             valid: valid
@@ -256,7 +271,7 @@ contract ZKCredentialVerifier is IZKVerifier, AccessControl, Pausable, Reentranc
             }
         }
 
-        emit NullifierUsed(nullifier, circuitId);
+        emit NullifierUsed(expectedNullifier, circuitId);
         emit ProofVerified(proofHash, circuitId, valid);
     }
 
@@ -273,6 +288,20 @@ contract ZKCredentialVerifier is IZKVerifier, AccessControl, Pausable, Reentranc
     // ──────────────────────────────────────────────────────────────
     // Internal — Groth16 Verification (BN254)
     // ──────────────────────────────────────────────────────────────
+
+    function _proofHash(
+        Groth16Proof calldata proof,
+        uint256[] calldata publicInputs
+    ) internal pure returns (bytes32) {
+        return keccak256(abi.encode(proof.a, proof.b, proof.c, publicInputs));
+    }
+
+    function _deriveNullifier(
+        bytes32 circuitId,
+        bytes32 proofHash
+    ) internal view returns (bytes32) {
+        return keccak256(abi.encodePacked(address(this), block.chainid, circuitId, proofHash));
+    }
 
     /// @dev Core Groth16 verification using EIP-196/197 precompiles
     function _verifyProofInternal(

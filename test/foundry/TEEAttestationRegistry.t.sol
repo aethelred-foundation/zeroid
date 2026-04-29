@@ -37,14 +37,29 @@ contract TEEAttestationRegistryTest is TestHelper {
         TEEPlatform platform,
         bytes32 reportDataHash,
         address nodeOp,
-        uint64 validityDuration
+        uint64 notBefore,
+        uint64 expiresAt
     ) internal view returns (bytes memory) {
+        uint256 nonce = teeRegistry.attestationNonce(nodeOp);
         bytes32 messageHash = keccak256(abi.encodePacked(
-            enclaveHash, platform, reportDataHash, nodeOp, validityDuration
+            address(teeRegistry),
+            block.chainid,
+            enclaveHash,
+            platform,
+            reportDataHash,
+            nodeOp,
+            nonce,
+            notBefore,
+            expiresAt
         ));
         bytes32 ethSignedHash = MessageHashUtils.toEthSignedMessageHash(messageHash);
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(signerPk, ethSignedHash);
         return abi.encodePacked(r, s, v);
+    }
+
+    function _validityBounds(uint64 duration) internal view returns (uint64 notBefore, uint64 expiresAt) {
+        notBefore = uint64(block.timestamp);
+        expiresAt = notBefore + duration;
     }
 
     function _registerAndSubmit() internal {
@@ -55,10 +70,11 @@ contract TEEAttestationRegistryTest is TestHelper {
 
         // Use MEASUREMENT_HASH as enclaveHash (it's in the allowlist)
         uint64 validity = 1 hours;
-        bytes memory sig = _signAttestation(MEASUREMENT_HASH, TEEPlatform.IntelSGX, REPORT_DATA_HASH, alice, validity);
+        (uint64 notBefore, uint64 expiresAt) = _validityBounds(validity);
+        bytes memory sig = _signAttestation(MEASUREMENT_HASH, TEEPlatform.IntelSGX, REPORT_DATA_HASH, alice, notBefore, expiresAt);
 
         vm.prank(alice);
-        teeRegistry.submitAttestation(MEASUREMENT_HASH, TEEPlatform.IntelSGX, REPORT_DATA_HASH, sig, validity);
+        teeRegistry.submitAttestation(MEASUREMENT_HASH, TEEPlatform.IntelSGX, REPORT_DATA_HASH, sig, notBefore, expiresAt);
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -229,6 +245,65 @@ contract TEEAttestationRegistryTest is TestHelper {
         assertTrue(teeRegistry.isAttestationValid(MEASUREMENT_HASH));
         assertEq(teeRegistry.totalActiveAttestations(), 1);
         assertEq(teeRegistry.getAttestationHistoryLength(MEASUREMENT_HASH), 1);
+        assertEq(teeRegistry.attestationNonce(alice), 1);
+    }
+
+    function test_SubmitAttestation_RevertsReplayWithSameNonce() public {
+        vm.deal(alice, 2 ether);
+        vm.prank(alice);
+        teeRegistry.registerNodeOperator{value: 1 ether}();
+
+        uint64 validity = 1 hours;
+        (uint64 notBefore, uint64 expiresAt) = _validityBounds(validity);
+        bytes memory sig = _signAttestation(MEASUREMENT_HASH, TEEPlatform.IntelSGX, REPORT_DATA_HASH, alice, notBefore, expiresAt);
+
+        vm.prank(alice);
+        teeRegistry.submitAttestation(MEASUREMENT_HASH, TEEPlatform.IntelSGX, REPORT_DATA_HASH, sig, notBefore, expiresAt);
+
+        vm.prank(alice);
+        vm.expectRevert(TEEAttestationRegistry.InvalidAttestationSignature.selector);
+        teeRegistry.submitAttestation(MEASUREMENT_HASH, TEEPlatform.IntelSGX, REPORT_DATA_HASH, sig, notBefore, expiresAt);
+    }
+
+    function test_SubmitAttestation_RevertsCrossRegistryReplay() public {
+        vm.deal(alice, 3 ether);
+        vm.prank(alice);
+        teeRegistry.registerNodeOperator{value: 1 ether}();
+
+        uint64 validity = 1 hours;
+        (uint64 notBefore, uint64 expiresAt) = _validityBounds(validity);
+        bytes memory sig = _signAttestation(MEASUREMENT_HASH, TEEPlatform.IntelSGX, REPORT_DATA_HASH, alice, notBefore, expiresAt);
+
+        TEEAttestationRegistry otherRegistry = new TEEAttestationRegistry(admin);
+        vm.prank(admin);
+        otherRegistry.setPlatformPolicy(
+            TEEPlatform.IntelSGX,
+            1 hours,
+            30 days,
+            signerAddr
+        );
+        vm.prank(admin);
+        otherRegistry.allowMeasurement(MEASUREMENT_HASH, TEEPlatform.IntelSGX);
+        vm.prank(alice);
+        otherRegistry.registerNodeOperator{value: 1 ether}();
+
+        vm.prank(alice);
+        vm.expectRevert(TEEAttestationRegistry.InvalidAttestationSignature.selector);
+        otherRegistry.submitAttestation(MEASUREMENT_HASH, TEEPlatform.IntelSGX, REPORT_DATA_HASH, sig, notBefore, expiresAt);
+    }
+
+    function test_SubmitAttestation_RevertsInvalidSignedValidityBounds() public {
+        vm.deal(alice, 2 ether);
+        vm.prank(alice);
+        teeRegistry.registerNodeOperator{value: 1 ether}();
+
+        uint64 notBefore = uint64(block.timestamp + 1);
+        uint64 expiresAt = uint64(block.timestamp + 1 hours);
+        bytes memory sig = _signAttestation(MEASUREMENT_HASH, TEEPlatform.IntelSGX, REPORT_DATA_HASH, alice, notBefore, expiresAt);
+
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(TEEAttestationRegistry.InvalidAttestationValidity.selector, notBefore, expiresAt));
+        teeRegistry.submitAttestation(MEASUREMENT_HASH, TEEPlatform.IntelSGX, REPORT_DATA_HASH, sig, notBefore, expiresAt);
     }
 
     function test_SubmitAttestation_RevertsPlatformNotEnabled() public {
@@ -241,11 +316,12 @@ contract TEEAttestationRegistryTest is TestHelper {
         teeRegistry.allowMeasurement(sevEnclave, TEEPlatform.AMDSEV);
 
         uint64 validity = 1 hours;
-        bytes memory sig = _signAttestation(sevEnclave, TEEPlatform.AMDSEV, REPORT_DATA_HASH, alice, validity);
+        (uint64 notBefore, uint64 expiresAt) = _validityBounds(validity);
+        bytes memory sig = _signAttestation(sevEnclave, TEEPlatform.AMDSEV, REPORT_DATA_HASH, alice, notBefore, expiresAt);
 
         vm.prank(alice);
         vm.expectRevert(abi.encodeWithSelector(TEEAttestationRegistry.PlatformNotEnabled.selector, TEEPlatform.AMDSEV));
-        teeRegistry.submitAttestation(sevEnclave, TEEPlatform.AMDSEV, REPORT_DATA_HASH, sig, validity);
+        teeRegistry.submitAttestation(sevEnclave, TEEPlatform.AMDSEV, REPORT_DATA_HASH, sig, notBefore, expiresAt);
     }
 
     function test_SubmitAttestation_RevertsMeasurementNotAllowed() public {
@@ -255,11 +331,12 @@ contract TEEAttestationRegistryTest is TestHelper {
 
         bytes32 badEnclave = keccak256("bad_enclave");
         uint64 validity = 1 hours;
-        bytes memory sig = _signAttestation(badEnclave, TEEPlatform.IntelSGX, REPORT_DATA_HASH, alice, validity);
+        (uint64 notBefore, uint64 expiresAt) = _validityBounds(validity);
+        bytes memory sig = _signAttestation(badEnclave, TEEPlatform.IntelSGX, REPORT_DATA_HASH, alice, notBefore, expiresAt);
 
         vm.prank(alice);
         vm.expectRevert(abi.encodeWithSelector(TEEAttestationRegistry.MeasurementNotAllowed.selector, badEnclave));
-        teeRegistry.submitAttestation(badEnclave, TEEPlatform.IntelSGX, REPORT_DATA_HASH, sig, validity);
+        teeRegistry.submitAttestation(badEnclave, TEEPlatform.IntelSGX, REPORT_DATA_HASH, sig, notBefore, expiresAt);
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -312,11 +389,12 @@ contract TEEAttestationRegistryTest is TestHelper {
         teeRegistry.pause();
 
         uint64 validity = 1 hours;
-        bytes memory sig = _signAttestation(MEASUREMENT_HASH, TEEPlatform.IntelSGX, REPORT_DATA_HASH, alice, validity);
+        (uint64 notBefore, uint64 expiresAt) = _validityBounds(validity);
+        bytes memory sig = _signAttestation(MEASUREMENT_HASH, TEEPlatform.IntelSGX, REPORT_DATA_HASH, alice, notBefore, expiresAt);
 
         vm.prank(alice);
         vm.expectRevert();
-        teeRegistry.submitAttestation(MEASUREMENT_HASH, TEEPlatform.IntelSGX, REPORT_DATA_HASH, sig, validity);
+        teeRegistry.submitAttestation(MEASUREMENT_HASH, TEEPlatform.IntelSGX, REPORT_DATA_HASH, sig, notBefore, expiresAt);
     }
 
     function test_ReceiveEth() public {

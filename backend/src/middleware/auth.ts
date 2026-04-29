@@ -13,6 +13,7 @@ export interface AuthenticatedRequest extends Request {
     status: string;
   };
   sessionId?: string;
+  sessionAuthTime?: number;
 }
 
 interface JWTPayload {
@@ -260,6 +261,7 @@ export async function authMiddleware(
 
     req.identity = identity;
     req.sessionId = sessionId;
+    req.sessionAuthTime = jwtPayload.iat;
     next();
   } catch (err) {
     if (err instanceof jose.errors.JWTExpired) {
@@ -377,6 +379,7 @@ export async function optionalAuthMiddleware(
     if (identity?.status === 'ACTIVE') {
       req.identity = identity;
       req.sessionId = sessionId;
+      req.sessionAuthTime = jwtPayload.iat;
     }
   } catch {
     // Swallow — optional auth

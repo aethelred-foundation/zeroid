@@ -140,6 +140,49 @@ contract ZKCredentialVerifierTest is TestHelper {
         assertFalse(verifier.isNullifierUsed(keccak256("nullifier1")));
     }
 
+    function test_DeriveNullifier_IsStableForSameProof() public view {
+        Groth16Proof memory proof = _dummyProof();
+        uint256[] memory publicInputs = new uint256[](1);
+        publicInputs[0] = 123;
+
+        bytes32 nullifierA = verifier.deriveNullifier(CIRCUIT_ID, proof, publicInputs);
+        bytes32 nullifierB = verifier.deriveNullifier(CIRCUIT_ID, proof, publicInputs);
+
+        assertEq(nullifierA, nullifierB);
+        assertNotEq(nullifierA, bytes32(0));
+    }
+
+    function test_DeriveNullifier_DomainSeparatesVerifierAddress() public {
+        Groth16Proof memory proof = _dummyProof();
+        uint256[] memory publicInputs = new uint256[](1);
+        publicInputs[0] = 123;
+
+        ZKCredentialVerifier otherVerifier = new ZKCredentialVerifier(admin);
+
+        bytes32 primaryNullifier = verifier.deriveNullifier(CIRCUIT_ID, proof, publicInputs);
+        bytes32 otherNullifier = otherVerifier.deriveNullifier(CIRCUIT_ID, proof, publicInputs);
+
+        assertNotEq(primaryNullifier, otherNullifier);
+    }
+
+    function test_VerifyAndRecord_RevertsCallerChosenNullifier() public {
+        Groth16Proof memory proof = _dummyProof();
+        uint256[] memory publicInputs = new uint256[](1);
+        publicInputs[0] = 123;
+
+        bytes32 suppliedNullifier = keccak256("caller-controlled-nullifier");
+        bytes32 expectedNullifier = verifier.deriveNullifier(CIRCUIT_ID, proof, publicInputs);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                ZKCredentialVerifier.InvalidNullifier.selector,
+                suppliedNullifier,
+                expectedNullifier
+            )
+        );
+        verifier.verifyAndRecord(CIRCUIT_ID, proof, publicInputs, suppliedNullifier);
+    }
+
     // ════════════════════════════════════════════════════════════════
     // Pause
     // ════════════════════════════════════════════════════════════════

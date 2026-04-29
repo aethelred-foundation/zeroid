@@ -39,6 +39,14 @@ const PROD_BASE_ENV: NodeJS.ProcessEnv = {
   KMS_KEY_ID: 'arn:aws:kms:us-east-1:111122223333:key/zeroid-credential-signer',
   INTEL_PCS_API_KEY: 'pcs_' + 'p'.repeat(40),
   TRUSTED_MRSIGNERS: 'a'.repeat(64),
+  TEE_ALLOWED_ENCLAVES_JSON: JSON.stringify([
+    {
+      mrenclave: 'b'.repeat(64),
+      mrsigner: 'a'.repeat(64),
+      isvProdId: 1,
+      minIsvSvn: 1,
+    },
+  ]),
   MIN_ISV_SVN: '1',
   SCHEMA_APPROVAL_THRESHOLD: '3',
   SCHEMA_REJECTION_THRESHOLD: '3',
@@ -514,6 +522,36 @@ describe('production safety controls', () => {
       MIN_ISV_SVN: '',
     })).toEqual([
       expect.objectContaining({ control: 'MIN_ISV_SVN' }),
+    ]);
+  });
+
+  it('requires exact TEE enclave allowlist policy in production', () => {
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      METRICS_PUBLIC_DISABLED: 'true',
+      TEE_ALLOWED_ENCLAVES_JSON: '',
+    })).toEqual([
+      expect.objectContaining({ control: 'TEE_ALLOWED_ENCLAVES_JSON' }),
+    ]);
+
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      METRICS_PUBLIC_DISABLED: 'true',
+      TEE_ALLOWED_ENCLAVES_JSON: JSON.stringify([
+        { mrenclave: 'not-hex', isvProdId: 1, minIsvSvn: 1 },
+      ]),
+    })).toEqual([
+      expect.objectContaining({ control: 'TEE_ALLOWED_ENCLAVES_JSON' }),
+    ]);
+
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      METRICS_PUBLIC_DISABLED: 'true',
+      TEE_ALLOWED_ENCLAVES_JSON: JSON.stringify([
+        { mrenclave: 'b'.repeat(64), isvProdId: 70000, minIsvSvn: 1 },
+      ]),
+    })).toEqual([
+      expect.objectContaining({ control: 'TEE_ALLOWED_ENCLAVES_JSON' }),
     ]);
   });
 

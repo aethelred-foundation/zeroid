@@ -219,6 +219,14 @@ function pkce() {
   return { verifier, challenge };
 }
 
+function decodeJwtPayload(token: string): Record<string, unknown> {
+  const [, payload] = token.split('.');
+  return JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as Record<
+    string,
+    unknown
+  >;
+}
+
 /** Authorize (code flow) on a bridge instance, returns code + sessionId. */
 async function authorizeCode(
   bridge: OIDCBridge,
@@ -229,6 +237,9 @@ async function authorizeCode(
     codeChallengeMethod?: 'S256';
     scope?: string;
     platformSessionId?: string;
+    platformAuthTime?: number;
+    prompt?: string;
+    maxAge?: number;
   },
 ) {
   const result = await bridge.authorize(
@@ -241,10 +252,15 @@ async function authorizeCode(
       nonce: crypto.randomBytes(8).toString('hex'),
       codeChallenge: opts?.codeChallenge,
       codeChallengeMethod: opts?.codeChallengeMethod,
+      prompt: opts?.prompt,
+      maxAge: opts?.maxAge,
     },
     subjectId,
     { name: 'Alice', email: 'alice@example.com', email_verified: true },
-    { platformSessionId: opts?.platformSessionId },
+    {
+      platformSessionId: opts?.platformSessionId,
+      platformAuthTime: opts?.platformAuthTime,
+    },
   );
   return result;
 }
@@ -705,6 +721,71 @@ describe('OIDC multi-node correctness', () => {
     expect(tokens.refresh_token).toBeDefined();
     expect(tokens.token_type).toBe('Bearer');
     expect(tokens.scope).toBe('openid profile email');
+  });
+
+  test('authorization enforces max_age against the platform authentication time', async () => {
+    const now = 1_776_000_000;
+    const dateSpy = jest.spyOn(Date, 'now').mockReturnValue(now * 1000);
+    try {
+      const client = await registerTestClient(bridgeA);
+
+      await expect(
+        authorizeCode(bridgeA, client.clientId, 'user-max-age-stale', {
+          maxAge: 300,
+          platformAuthTime: now - 301,
+        }),
+      ).rejects.toMatchObject({
+        errorCode: 'login_required',
+      });
+
+      const { code } = await authorizeCode(
+        bridgeA,
+        client.clientId,
+        'user-max-age-fresh',
+        {
+          maxAge: 300,
+          platformAuthTime: now - 120,
+        },
+      );
+
+      const tokens = await bridgeB.exchangeToken({
+        grantType: 'authorization_code',
+        code: code!,
+        redirectUri: REDIRECT_URI,
+        clientId: client.clientId,
+        clientSecret: client.clientSecret,
+      });
+
+      expect(decodeJwtPayload(tokens.id_token).auth_time).toBe(now - 120);
+    } finally {
+      dateSpy.mockRestore();
+    }
+  });
+
+  test('prompt login requires a recently reauthenticated platform session', async () => {
+    const now = 1_776_100_000;
+    const dateSpy = jest.spyOn(Date, 'now').mockReturnValue(now * 1000);
+    try {
+      const client = await registerTestClient(bridgeA);
+
+      await expect(
+        authorizeCode(bridgeA, client.clientId, 'user-prompt-login-stale', {
+          prompt: 'login',
+          platformAuthTime: now - 61,
+        }),
+      ).rejects.toMatchObject({
+        errorCode: 'login_required',
+      });
+
+      await expect(
+        authorizeCode(bridgeA, client.clientId, 'user-prompt-login-fresh', {
+          prompt: 'login',
+          platformAuthTime: now - 10,
+        }),
+      ).resolves.toHaveProperty('code');
+    } finally {
+      dateSpy.mockRestore();
+    }
   });
 
   test('authorization rejects scopes outside the client registration', async () => {

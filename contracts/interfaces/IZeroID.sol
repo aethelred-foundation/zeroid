@@ -197,7 +197,8 @@ interface ITEEAttestation {
         TEEPlatform platform,
         bytes32 reportDataHash,
         bytes calldata attestationSignature,
-        uint64 validityDuration
+        uint64 notBefore,
+        uint64 expiresAt
     ) external;
 
     function revokeAttestation(bytes32 enclaveHash) external;

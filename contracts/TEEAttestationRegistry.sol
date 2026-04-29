@@ -99,6 +99,9 @@ contract TEEAttestationRegistry is ITEEAttestation, AccessControl, Pausable, Ree
     /// @dev Attestation history: enclaveHash => timestamps[]
     mapping(bytes32 => uint64[]) private _attestationHistory;
 
+    /// @dev Per-operator nonce included in signed attestation payloads.
+    mapping(address => uint256) private _attestationNonces;
+
     /// @notice Total number of active attestations
     uint256 public totalActiveAttestations;
 
@@ -133,6 +136,7 @@ contract TEEAttestationRegistry is ITEEAttestation, AccessControl, Pausable, Ree
     error NodeNotActive(address operator);
     error NothingToWithdraw();
     error StaleAttestation(uint64 lastAttestation, uint64 minFreshness);
+    error InvalidAttestationValidity(uint64 notBefore, uint64 expiresAt);
 
     // ──────────────────────────────────────────────────────────────
     // Constructor
@@ -306,13 +310,18 @@ contract TEEAttestationRegistry is ITEEAttestation, AccessControl, Pausable, Ree
         TEEPlatform platform,
         bytes32 reportDataHash,
         bytes calldata attestationSignature,
-        uint64 validityDuration
+        uint64 notBefore,
+        uint64 expiresAt
     ) external override onlyRole(TEE_NODE_ROLE) whenNotPaused nonReentrant {
         // Validate platform is enabled
         PlatformPolicy storage policy = _platformPolicies[platform];
         if (!policy.isEnabled) revert PlatformNotEnabled(platform);
 
-        // Validate validity duration
+        uint64 now64 = uint64(block.timestamp);
+        if (notBefore > now64 || expiresAt <= now64 || expiresAt <= notBefore) {
+            revert InvalidAttestationValidity(notBefore, expiresAt);
+        }
+        uint64 validityDuration = expiresAt - notBefore;
         if (validityDuration < MIN_ATTESTATION_VALIDITY || validityDuration > policy.maxValidityDuration) {
             revert InvalidValidityDuration(validityDuration);
         }
@@ -321,8 +330,17 @@ contract TEEAttestationRegistry is ITEEAttestation, AccessControl, Pausable, Ree
         if (!_allowedMeasurements[enclaveHash]) revert MeasurementNotAllowed(enclaveHash);
 
         // Verify attestation signature against platform signing key
+        uint256 operatorNonce = _attestationNonces[msg.sender];
         bytes32 messageHash = keccak256(abi.encodePacked(
-            enclaveHash, platform, reportDataHash, msg.sender, validityDuration
+            address(this),
+            block.chainid,
+            enclaveHash,
+            platform,
+            reportDataHash,
+            msg.sender,
+            operatorNonce,
+            notBefore,
+            expiresAt
         ));
         bytes32 ethSignedHash = messageHash.toEthSignedMessageHash();
         address recoveredSigner = ethSignedHash.recover(attestationSignature);
@@ -339,13 +357,13 @@ contract TEEAttestationRegistry is ITEEAttestation, AccessControl, Pausable, Ree
             unchecked { totalActiveAttestations++; }
         }
 
-        uint64 now64 = uint64(block.timestamp);
+        unchecked { _attestationNonces[msg.sender] = operatorNonce + 1; }
 
         _attestations[enclaveHash] = AttestationReport({
             enclaveHash: enclaveHash,
             platform: platform,
             attestedAt: now64,
-            expiresAt: now64 + validityDuration,
+            expiresAt: expiresAt,
             reportDataHash: reportDataHash,
             nodeOperator: msg.sender,
             isValid: true
@@ -387,6 +405,11 @@ contract TEEAttestationRegistry is ITEEAttestation, AccessControl, Pausable, Ree
     function isAttestationValid(bytes32 enclaveHash) external view override returns (bool) {
         AttestationReport storage report = _attestations[enclaveHash];
         return report.isValid && block.timestamp < report.expiresAt;
+    }
+
+    /// @notice Return the next attestation signature nonce for a node operator.
+    function attestationNonce(address operator) external view returns (uint256) {
+        return _attestationNonces[operator];
     }
 
     /// @inheritdoc ITEEAttestation

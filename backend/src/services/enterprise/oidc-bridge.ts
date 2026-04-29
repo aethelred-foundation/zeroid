@@ -149,8 +149,15 @@ const SUPPORTED_CLIENT_AUTH_METHODS = [
   'none',
 ] as const;
 const SUPPORTED_SIGNING_ALGORITHMS = ['RS256', 'PS256'] as const;
+const SUPPORTED_PROMPT_VALUES = [
+  'none',
+  'login',
+  'consent',
+  'select_account',
+] as const;
 const PKCE_CODE_CHALLENGE_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 const PKCE_CODE_VERIFIER_PATTERN = /^[A-Za-z0-9._~-]{43,128}$/;
+const PROMPT_LOGIN_FRESHNESS_SECONDS = 60;
 const ALLOW_PUBLIC_OIDC_CLIENTS =
   process.env.ALLOW_PUBLIC_OIDC_CLIENTS === 'true' &&
   process.env.NODE_ENV !== 'production';
@@ -266,8 +273,22 @@ export const AuthorizationRequestSchema = z.object({
   nonce: z.string().optional(),
   codeChallenge: z.string().optional(),
   codeChallengeMethod: z.enum(['S256', 'plain']).optional(),
-  prompt: z.enum(['none', 'login', 'consent', 'select_account']).optional(),
-  maxAge: z.number().int().positive().optional(),
+  prompt: z
+    .string()
+    .trim()
+    .min(1)
+    .optional()
+    .refine((prompt) => {
+      if (!prompt) return true;
+      const values = prompt.split(/\s+/);
+      return (
+        values.every((value) =>
+          (SUPPORTED_PROMPT_VALUES as readonly string[]).includes(value),
+        ) &&
+        !(values.includes('none') && values.length > 1)
+      );
+    }, 'Invalid OIDC prompt value'),
+  maxAge: z.number().int().nonnegative().optional(),
   acrValues: z.string().optional(),
   claims: z.record(z.unknown()).optional(),
   zeroidCredentialTypes: z.array(z.string()).optional(),
@@ -336,6 +357,7 @@ const STANDARD_SCOPES: Record<string, string[]> = {
     'kyc_provider',
     'kyc_verified_at',
     'kyc_jurisdiction',
+    'verified_claims',
   ],
   'zeroid:age_verified': [
     'age_over_18',
@@ -768,6 +790,7 @@ export class OIDCBridge {
     subjectClaims: Record<string, unknown>,
     sessionContext: {
       platformSessionId?: string;
+      platformAuthTime?: number;
     } = {},
   ): Promise<{
     redirectUrl: string;
@@ -829,9 +852,11 @@ export class OIDCBridge {
       );
     }
 
+    const now = Math.floor(Date.now() / 1000);
+    const authTime = this.assertAuthenticationFreshness(parsed, sessionContext, now);
+
     // Create session
     const sessionId = crypto.randomUUID();
-    const now = Math.floor(Date.now() / 1000);
     await this.sessions.set(sessionId, {
       sessionId,
       subjectId,
@@ -839,7 +864,7 @@ export class OIDCBridge {
       ...(sessionContext.platformSessionId
         ? { platformSessionId: sessionContext.platformSessionId }
         : {}),
-      authTime: now,
+      authTime,
       lastActivity: now,
       active: true,
     });
@@ -848,6 +873,9 @@ export class OIDCBridge {
     // Build claims based only on scopes registered for this client.
     const requestedScopes = this.assertScopesAllowed(client, parsed.scope);
     const claims = this.buildClaims(requestedScopes, subjectId, subjectClaims);
+    if (requestedScopes.includes('openid')) {
+      claims.auth_time = authTime;
+    }
 
     if (parsed.responseType === 'code') {
       const code = crypto.randomBytes(32).toString('base64url');
@@ -1626,6 +1654,56 @@ export class OIDCBridge {
     }
 
     return claims;
+  }
+
+  private assertAuthenticationFreshness(
+    request: AuthorizationRequest,
+    sessionContext: { platformAuthTime?: number },
+    now: number,
+  ): number {
+    const promptValues = new Set(request.prompt?.split(/\s+/).filter(Boolean) ?? []);
+    const authTime = sessionContext.platformAuthTime;
+    const requiresFreshAuthentication =
+      promptValues.has('login') || request.maxAge !== undefined;
+
+    if (!requiresFreshAuthentication) {
+      return authTime ?? now;
+    }
+
+    if (
+      typeof authTime !== 'number' ||
+      !Number.isInteger(authTime) ||
+      authTime <= 0 ||
+      authTime > now
+    ) {
+      throw new OIDCError(
+        'login_required',
+        'Fresh platform authentication is required for this authorization request',
+        401,
+      );
+    }
+
+    const sessionAge = now - authTime;
+    if (
+      promptValues.has('login') &&
+      sessionAge > PROMPT_LOGIN_FRESHNESS_SECONDS
+    ) {
+      throw new OIDCError(
+        'login_required',
+        'prompt=login requires a recently reauthenticated platform session',
+        401,
+      );
+    }
+
+    if (request.maxAge !== undefined && sessionAge > request.maxAge) {
+      throw new OIDCError(
+        'login_required',
+        'Platform authentication is older than max_age',
+        401,
+      );
+    }
+
+    return authTime;
   }
 
   private resolveRefreshScopes(

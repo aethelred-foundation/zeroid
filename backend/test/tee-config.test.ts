@@ -112,6 +112,74 @@ describe('TEE production configuration', () => {
     });
   });
 
+  it('requires exact enclave allowlist policy in production', () => {
+    process.env.TEE_DCAP_API_URL = 'https://collateral.example.com';
+    process.env.TRUSTED_MRSIGNERS = 'a'.repeat(64);
+    process.env.TEE_ALLOWED_ENCLAVES_JSON = '';
+
+    const { TEEAttestationService } = require('../src/services/tee');
+    const service = new TEEAttestationService() as any;
+
+    expect(() => service.verifyEnclavePolicy({
+      mrenclave: 'b'.repeat(64),
+      mrsigner: 'a'.repeat(64),
+      isvProdId: 1,
+      isvSvn: 1,
+    })).toThrow(expect.objectContaining({
+      code: 'TEE_NO_TRUSTED_ENCLAVES',
+    }));
+  });
+
+  it('enforces mrenclave, product id, signer, and per-enclave SVN policy', () => {
+    process.env.TEE_DCAP_API_URL = 'https://collateral.example.com';
+    process.env.TRUSTED_MRSIGNERS = 'a'.repeat(64);
+    process.env.TEE_ALLOWED_ENCLAVES_JSON = JSON.stringify([
+      {
+        mrenclave: 'b'.repeat(64),
+        mrsigner: 'a'.repeat(64),
+        isvProdId: 7,
+        minIsvSvn: 3,
+      },
+    ]);
+
+    const { TEEAttestationService } = require('../src/services/tee');
+    const service = new TEEAttestationService() as any;
+
+    expect(() => service.verifyEnclavePolicy({
+      mrenclave: 'c'.repeat(64),
+      mrsigner: 'a'.repeat(64),
+      isvProdId: 7,
+      isvSvn: 3,
+    })).toThrow(expect.objectContaining({
+      code: 'TEE_UNTRUSTED_ENCLAVE',
+    }));
+
+    expect(() => service.verifyEnclavePolicy({
+      mrenclave: 'b'.repeat(64),
+      mrsigner: 'a'.repeat(64),
+      isvProdId: 8,
+      isvSvn: 3,
+    })).toThrow(expect.objectContaining({
+      code: 'TEE_ENCLAVE_POLICY_MISMATCH',
+    }));
+
+    expect(() => service.verifyEnclavePolicy({
+      mrenclave: 'b'.repeat(64),
+      mrsigner: 'a'.repeat(64),
+      isvProdId: 7,
+      isvSvn: 2,
+    })).toThrow(expect.objectContaining({
+      code: 'TEE_ENCLAVE_SVN_TOO_LOW',
+    }));
+
+    expect(() => service.verifyEnclavePolicy({
+      mrenclave: 'b'.repeat(64),
+      mrsigner: 'a'.repeat(64),
+      isvProdId: 7,
+      isvSvn: 3,
+    })).not.toThrow();
+  });
+
   it('rejects oversized collateral responses before parsing them', async () => {
     process.env.TEE_DCAP_API_URL = 'https://collateral.example.com';
 

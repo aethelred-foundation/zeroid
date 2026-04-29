@@ -14,6 +14,7 @@ import {
   oidcBridge,
   OIDCClientRegistrationSchema,
   RegisteredClient,
+  type AuthorizationRequest,
   type TokenRequest,
 } from '../../services/enterprise/oidc-bridge';
 import { buildTrustedOIDCClaims } from '../../services/enterprise/oidc-claims';
@@ -2494,11 +2495,40 @@ router.post(
       }
 
       const subjectClaims = await buildTrustedOIDCClaims(subjectId, subject);
+      const requestBody =
+        req.body && typeof req.body === 'object'
+          ? (req.body as Record<string, unknown>)
+          : {};
+      const maxAgeRaw = requestBody.max_age ?? requestBody.maxAge;
+      const maxAge =
+        typeof maxAgeRaw === 'string' && maxAgeRaw.trim().length > 0
+          ? Number(maxAgeRaw)
+          : maxAgeRaw;
+      const authorizationRequest = {
+        clientId: requestBody.client_id ?? requestBody.clientId,
+        redirectUri: requestBody.redirect_uri ?? requestBody.redirectUri,
+        responseType: requestBody.response_type ?? requestBody.responseType,
+        scope: requestBody.scope,
+        state: requestBody.state,
+        nonce: requestBody.nonce,
+        codeChallenge: requestBody.code_challenge ?? requestBody.codeChallenge,
+        codeChallengeMethod:
+          requestBody.code_challenge_method ?? requestBody.codeChallengeMethod,
+        prompt: requestBody.prompt,
+        maxAge,
+        acrValues: requestBody.acr_values ?? requestBody.acrValues,
+        claims: requestBody.claims,
+        zeroidCredentialTypes:
+          requestBody.zeroid_credential_types ?? requestBody.zeroidCredentialTypes,
+      } as AuthorizationRequest;
       const result = await oidcBridge.authorize(
-        req.body,
+        authorizationRequest,
         subjectId,
         subjectClaims,
-        { platformSessionId: authReq.sessionId },
+        {
+          platformSessionId: authReq.sessionId,
+          platformAuthTime: authReq.sessionAuthTime,
+        },
       );
       res.status(200).json({ data: result });
     } catch (err) {

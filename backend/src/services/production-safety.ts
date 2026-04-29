@@ -26,6 +26,7 @@ const PRIVATE_HOSTNAME_SUFFIXES = [
   '.test',
 ];
 const SGX_MRSIGNER_PATTERN = /^[0-9a-f]{64}$/i;
+const SGX_MRENCLAVE_PATTERN = /^[0-9a-f]{64}$/i;
 const KNOWN_TEE_TCB_STATUSES = new Set([
   'UpToDate',
   'SWHardeningNeeded',
@@ -147,6 +148,7 @@ export function checkedProductionSafetyControls(): string[] {
     'CREDENTIAL_SIGNING_KMS',
     'INTEL_PCS_API_KEY',
     'TRUSTED_MRSIGNERS',
+    'TEE_ALLOWED_ENCLAVES_JSON',
     'MIN_ISV_SVN',
     'TEE_TCB_STATUS_POLICY',
     'SCHEMA_GOVERNANCE_THRESHOLDS',
@@ -487,6 +489,8 @@ function validateTeeAttestationConfig(
     });
   }
 
+  validateTrustedEnclavePolicy(env, violations);
+
   const minIsvSvn = env.MIN_ISV_SVN?.trim();
   if (!minIsvSvn) {
     violations.push({
@@ -514,6 +518,66 @@ function validateTeeAttestationConfig(
     ),
     violations,
   );
+}
+
+function validateTrustedEnclavePolicy(
+  env: NodeJS.ProcessEnv,
+  violations: ProductionSafetyViolation[],
+): void {
+  const rawPolicy = env.TEE_ALLOWED_ENCLAVES_JSON?.trim();
+  if (!rawPolicy) {
+    violations.push({
+      control: 'TEE_ALLOWED_ENCLAVES_JSON',
+      risk: 'Production TEE attestation requires exact MRENCLAVE, isvProdId, and minIsvSvn allowlist policy',
+    });
+    return;
+  }
+
+  try {
+    const parsed = JSON.parse(rawPolicy) as unknown;
+    if (!Array.isArray(parsed) || parsed.length === 0) {
+      violations.push({
+        control: 'TEE_ALLOWED_ENCLAVES_JSON',
+        risk: 'TEE_ALLOWED_ENCLAVES_JSON must be a non-empty JSON array',
+      });
+      return;
+    }
+
+    const invalidEntry = parsed.find((entry) => {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+        return true;
+      }
+      const policy = entry as Record<string, unknown>;
+      return (
+        typeof policy.mrenclave !== 'string' ||
+        !SGX_MRENCLAVE_PATTERN.test(policy.mrenclave) ||
+        !Number.isInteger(policy.isvProdId) ||
+        (policy.isvProdId as number) < 0 ||
+        (policy.isvProdId as number) > 0xffff ||
+        !Number.isInteger(policy.minIsvSvn) ||
+        (policy.minIsvSvn as number) < 1 ||
+        (
+          policy.mrsigner !== undefined &&
+          (
+            typeof policy.mrsigner !== 'string' ||
+            !SGX_MRSIGNER_PATTERN.test(policy.mrsigner)
+          )
+        )
+      );
+    });
+
+    if (invalidEntry) {
+      violations.push({
+        control: 'TEE_ALLOWED_ENCLAVES_JSON',
+        risk: 'TEE enclave policy entries must include 64-hex mrenclave, uint16 isvProdId, positive minIsvSvn, and optional 64-hex mrsigner',
+      });
+    }
+  } catch {
+    violations.push({
+      control: 'TEE_ALLOWED_ENCLAVES_JSON',
+      risk: 'TEE_ALLOWED_ENCLAVES_JSON must be valid JSON',
+    });
+  }
 }
 
 function validateTeeTcbStatusPolicy(

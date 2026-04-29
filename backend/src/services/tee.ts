@@ -104,6 +104,13 @@ interface SGXReportBody {
   reportData: string;
 }
 
+interface TrustedEnclavePolicy {
+  mrenclave: string;
+  isvProdId: number;
+  minIsvSvn: number;
+  mrsigner?: string;
+}
+
 interface QuoteCertificationResult {
   fmspc: string;
   pckLeafSerial: string;
@@ -208,6 +215,9 @@ const COLLATERAL_REFRESH_THRESHOLD = 0.8 * MAX_COLLATERAL_AGE_MS;
 const TRUSTED_MRSIGNERS = new Set(
   (process.env.TRUSTED_MRSIGNERS ?? '').split(',').filter(Boolean),
 );
+const TRUSTED_ENCLAVE_POLICIES = parseTrustedEnclavePolicies(
+  process.env.TEE_ALLOWED_ENCLAVES_JSON,
+);
 
 // Minimum ISV SVN required
 const MIN_ISV_SVN = parseInt(process.env.MIN_ISV_SVN ?? '1', 10);
@@ -227,6 +237,44 @@ const ALLOWED_QE_TCB_STATUSES = new Set(
     .map((status) => status.trim())
     .filter(Boolean),
 );
+
+function parseTrustedEnclavePolicies(
+  rawPolicies: string | undefined,
+): TrustedEnclavePolicy[] {
+  const trimmed = rawPolicies?.trim();
+  if (!trimmed) return [];
+
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (!Array.isArray(parsed)) return [];
+
+    return parsed
+      .map((entry): TrustedEnclavePolicy | null => {
+        if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+          return null;
+        }
+        const candidate = entry as Record<string, unknown>;
+        if (
+          typeof candidate.mrenclave !== 'string' ||
+          typeof candidate.isvProdId !== 'number' ||
+          typeof candidate.minIsvSvn !== 'number'
+        ) {
+          return null;
+        }
+        return {
+          mrenclave: candidate.mrenclave.toLowerCase(),
+          isvProdId: candidate.isvProdId,
+          minIsvSvn: candidate.minIsvSvn,
+          ...(typeof candidate.mrsigner === 'string'
+            ? { mrsigner: candidate.mrsigner.toLowerCase() }
+            : {}),
+        };
+      })
+      .filter((entry): entry is TrustedEnclavePolicy => Boolean(entry));
+  } catch {
+    return [];
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Intel SGX Root CA certificate (well-known trust anchor)
@@ -375,8 +423,9 @@ export class TEEAttestationService {
       );
       this.enforceTCBPolicy(tcbStatus);
 
-      // 7. Verify MRSIGNER trust
+      // 7. Verify signer and exact enclave/product trust policy
       this.verifyMRSIGNERTrust(reportBody.mrsigner);
+      this.verifyEnclavePolicy(reportBody);
 
       // 8. Check ISV SVN
       if (reportBody.isvSvn < MIN_ISV_SVN) {
@@ -2738,6 +2787,50 @@ export class TEEAttestationService {
       throw new AttestationError(
         `MRSIGNER ${mrsigner} is not in the trusted set`,
         'TEE_UNTRUSTED_SIGNER',
+      );
+    }
+  }
+
+  private verifyEnclavePolicy(reportBody: SGXReportBody): void {
+    if (TRUSTED_ENCLAVE_POLICIES.length === 0) {
+      if (IS_PRODUCTION) {
+        throw new AttestationError(
+          'No trusted enclave measurements configured. Set TEE_ALLOWED_ENCLAVES_JSON with exact MRENCLAVE, isvProdId, and minIsvSvn policy.',
+          'TEE_NO_TRUSTED_ENCLAVES',
+          503,
+        );
+      }
+      return;
+    }
+
+    const mrenclave = reportBody.mrenclave.toLowerCase();
+    const mrsigner = reportBody.mrsigner.toLowerCase();
+    const enclaveMatches = TRUSTED_ENCLAVE_POLICIES.filter(
+      (policy) => policy.mrenclave === mrenclave,
+    );
+    if (enclaveMatches.length === 0) {
+      throw new AttestationError(
+        `MRENCLAVE ${reportBody.mrenclave} is not approved by enclave policy`,
+        'TEE_UNTRUSTED_ENCLAVE',
+      );
+    }
+
+    const policy = enclaveMatches.find(
+      (entry) =>
+        entry.isvProdId === reportBody.isvProdId &&
+        (!entry.mrsigner || entry.mrsigner === mrsigner),
+    );
+    if (!policy) {
+      throw new AttestationError(
+        'TEE enclave measurement matched, but product ID or signer did not match policy',
+        'TEE_ENCLAVE_POLICY_MISMATCH',
+      );
+    }
+
+    if (reportBody.isvSvn < policy.minIsvSvn) {
+      throw new AttestationError(
+        `ISV SVN ${reportBody.isvSvn} below enclave policy minimum ${policy.minIsvSvn}`,
+        'TEE_ENCLAVE_SVN_TOO_LOW',
       );
     }
   }
