@@ -124,6 +124,42 @@ const mockVerifyProof = jest.fn(async () => ({
   verifiedAt: new Date().toISOString(),
 }));
 const mockIsCircuitContextBound = jest.fn(() => true);
+const mockValidateContextBoundPublicSignals = jest.fn(
+  (
+    _circuitName: string,
+    publicSignals: string[],
+    expected: { claimsHash: string; contextCommitment: string },
+  ) => {
+    if (publicSignals.length !== 3) {
+      return {
+        valid: false,
+        code: 'PROOF_SIGNALS_SCHEMA_INVALID',
+        error:
+          'Public signals do not match the circuit schema for this context-bound proof',
+        statusCode: 400,
+      };
+    }
+    if (publicSignals[0] !== expected.claimsHash) {
+      return {
+        valid: false,
+        code: 'PROOF_CLAIMS_HASH_NOT_COMMITTED',
+        error:
+          'Claims commitment is not the first public signal - proof is not bound to the credential',
+        statusCode: 400,
+      };
+    }
+    if (publicSignals[2] !== expected.contextCommitment) {
+      return {
+        valid: false,
+        code: 'PROOF_CONTEXT_NOT_COMMITTED',
+        error:
+          'Context commitment is not the last public signal - proof is not bound to this context',
+        statusCode: 400,
+      };
+    }
+    return { valid: true };
+  },
+);
 
 jest.mock('../src/services/zkproof', () => ({
   zkProofService: {
@@ -143,6 +179,7 @@ jest.mock('../src/services/zkproof', () => ({
     })),
     verifyProof: mockVerifyProof,
     isCircuitContextBound: mockIsCircuitContextBound,
+    validateContextBoundPublicSignals: mockValidateContextBoundPublicSignals,
     buildSelectiveDisclosureInputs: jest.fn(() => ({})),
     listCircuits: jest.fn(() => []),
   },
@@ -444,6 +481,42 @@ function buildValidPayload(
 beforeEach(() => {
   jest.clearAllMocks();
   mockIsCircuitContextBound.mockReturnValue(true);
+  mockValidateContextBoundPublicSignals.mockImplementation(
+    (
+      _circuitName: string,
+      publicSignals: string[],
+      expected: { claimsHash: string; contextCommitment: string },
+    ) => {
+      if (publicSignals.length !== 3) {
+        return {
+          valid: false,
+          code: 'PROOF_SIGNALS_SCHEMA_INVALID',
+          error:
+            'Public signals do not match the circuit schema for this context-bound proof',
+          statusCode: 400,
+        };
+      }
+      if (publicSignals[0] !== expected.claimsHash) {
+        return {
+          valid: false,
+          code: 'PROOF_CLAIMS_HASH_NOT_COMMITTED',
+          error:
+            'Claims commitment is not the first public signal - proof is not bound to the credential',
+          statusCode: 400,
+        };
+      }
+      if (publicSignals[2] !== expected.contextCommitment) {
+        return {
+          valid: false,
+          code: 'PROOF_CONTEXT_NOT_COMMITTED',
+          error:
+            'Context commitment is not the last public signal - proof is not bound to this context',
+          statusCode: 400,
+        };
+      }
+      return { valid: true };
+    },
+  );
   for (const k of Object.keys(redisStore)) delete redisStore[k];
   for (const k of Object.keys(redisSortedSets)) delete redisSortedSets[k];
   for (const k of Object.keys(issuedTokenHashes)) delete issuedTokenHashes[k];
@@ -747,6 +820,84 @@ describe('ZK-01: Context-tamper verification', () => {
 
     expect(res.status).toBe(400);
     expect(res.body.code).toBe('PROOF_CONTEXT_NOT_COMMITTED');
+  });
+
+  it('rejects when contextCommitment is present but not in the schema-defined slot', async () => {
+    const token = await makeToken({ sub: VERIFIER_ID, did: VERIFIER_DID });
+    stubAuthFor(VERIFIER_ID, VERIFIER_DID);
+
+    const nonce = 'nonce-reordered-signals';
+    const issuedAt = Date.now() - 1000;
+    const ctxField = computeContextCommitmentField(
+      nonce,
+      VERIFIER_ID,
+      SUBJECT_ID,
+      CREDENTIAL_ID,
+      issuedAt,
+    );
+    seedNonce(
+      nonce,
+      VERIFIER_ID,
+      SUBJECT_ID,
+      CREDENTIAL_ID,
+      issuedAt,
+      ctxField,
+    );
+
+    const payload = buildValidPayload({
+      nonce,
+      audience: VERIFIER_ID,
+      contextCommitment: ctxField,
+      issuedAt,
+      publicSignals: [CREDENTIAL_CLAIMS_FIELD, ctxField, '2'],
+    });
+
+    const res = await request(app as Express)
+      .post('/api/v1/verification/zk-verify')
+      .set('Authorization', `Bearer ${token}`)
+      .send(payload);
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('PROOF_CONTEXT_NOT_COMMITTED');
+  });
+
+  it('rejects extra public signals beyond the circuit schema', async () => {
+    const token = await makeToken({ sub: VERIFIER_ID, did: VERIFIER_DID });
+    stubAuthFor(VERIFIER_ID, VERIFIER_DID);
+
+    const nonce = 'nonce-extra-signal';
+    const issuedAt = Date.now() - 1000;
+    const ctxField = computeContextCommitmentField(
+      nonce,
+      VERIFIER_ID,
+      SUBJECT_ID,
+      CREDENTIAL_ID,
+      issuedAt,
+    );
+    seedNonce(
+      nonce,
+      VERIFIER_ID,
+      SUBJECT_ID,
+      CREDENTIAL_ID,
+      issuedAt,
+      ctxField,
+    );
+
+    const payload = buildValidPayload({
+      nonce,
+      audience: VERIFIER_ID,
+      contextCommitment: ctxField,
+      issuedAt,
+      publicSignals: [CREDENTIAL_CLAIMS_FIELD, '2', ctxField, '999'],
+    });
+
+    const res = await request(app as Express)
+      .post('/api/v1/verification/zk-verify')
+      .set('Authorization', `Bearer ${token}`)
+      .send(payload);
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('PROOF_SIGNALS_SCHEMA_INVALID');
   });
 
   // -----------------------------------------------------------------------

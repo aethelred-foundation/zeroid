@@ -158,6 +158,7 @@ jest.mock('../src/services/zkproof', () => ({
     })),
     buildSelectiveDisclosureInputs: jest.fn(() => ({})),
     isCircuitContextBound: jest.fn(() => true),
+    validateContextBoundPublicSignals: jest.fn(() => ({ valid: true })),
     listCircuits: jest.fn(() => []),
   },
 }));

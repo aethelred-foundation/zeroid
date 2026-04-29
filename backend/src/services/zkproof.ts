@@ -48,12 +48,26 @@ interface CircuitConfig {
   contextBound: boolean;
 }
 
+export interface PublicSignalCommitments {
+  claimsHash: string;
+  contextCommitment: string;
+}
+
+export interface PublicSignalSchemaValidation {
+  valid: boolean;
+  code?: string;
+  error?: string;
+  statusCode?: number;
+}
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 const CIRCUITS_DIR = process.env.CIRCUITS_DIR ?? path.join(process.cwd(), 'circuits');
 const PROOF_CACHE_TTL = parseInt(process.env.PROOF_CACHE_TTL ?? '3600', 10);
 const MAX_PROOF_GENERATION_TIME_MS = 30_000;
+const CLAIMS_HASH_PUBLIC_SIGNAL = 'claimsHash';
+const CONTEXT_COMMITMENT_PUBLIC_SIGNAL = 'contextCommitment';
 
 // Supported circuits
 const CIRCUIT_REGISTRY: Record<string, CircuitConfig> = {
@@ -314,10 +328,99 @@ export class ZKProofService {
       return false;
     }
 
+    return this.isContextBoundPublicSignalSchema(circuit.publicSignals);
+  }
+
+  getCircuitPublicSignalSchema(circuitName: string): string[] | null {
+    const circuit = CIRCUIT_REGISTRY[circuitName];
+    return circuit ? [...circuit.publicSignals] : null;
+  }
+
+  validateContextBoundPublicSignals(
+    circuitName: string,
+    publicSignals: string[],
+    expected: PublicSignalCommitments,
+  ): PublicSignalSchemaValidation {
+    const circuit = CIRCUIT_REGISTRY[circuitName];
+    if (!circuit) {
+      return {
+        valid: false,
+        code: 'ZK_UNKNOWN_CIRCUIT',
+        error: `Unknown circuit: ${circuitName}`,
+        statusCode: 400,
+      };
+    }
+
+    if (!circuit.contextBound) {
+      return {
+        valid: false,
+        code: 'ZK_CIRCUIT_CONTEXT_BINDING_UNSUPPORTED',
+        error: 'ZK circuit is not approved for context-bound production verification',
+        statusCode: 503,
+      };
+    }
+
+    return this.validatePublicSignalsAgainstSchema(
+      publicSignals,
+      circuit.publicSignals,
+      expected,
+    );
+  }
+
+  validatePublicSignalsAgainstSchema(
+    publicSignals: string[],
+    publicSignalSchema: string[],
+    expected: PublicSignalCommitments,
+  ): PublicSignalSchemaValidation {
+    if (!this.isContextBoundPublicSignalSchema(publicSignalSchema)) {
+      return {
+        valid: false,
+        code: 'ZK_CIRCUIT_CONTEXT_BINDING_UNSUPPORTED',
+        error:
+          'Circuit public-signal schema must expose claimsHash first and contextCommitment last',
+        statusCode: 503,
+      };
+    }
+
+    if (publicSignals.length !== publicSignalSchema.length) {
+      return {
+        valid: false,
+        code: 'PROOF_SIGNALS_SCHEMA_INVALID',
+        error:
+          'Public signals do not match the circuit schema for this context-bound proof',
+        statusCode: 400,
+      };
+    }
+
+    if (publicSignals[0] !== expected.claimsHash) {
+      return {
+        valid: false,
+        code: 'PROOF_CLAIMS_HASH_NOT_COMMITTED',
+        error:
+          'Claims commitment is not the first public signal - proof is not bound to the credential',
+        statusCode: 400,
+      };
+    }
+
+    if (publicSignals[publicSignals.length - 1] !== expected.contextCommitment) {
+      return {
+        valid: false,
+        code: 'PROOF_CONTEXT_NOT_COMMITTED',
+        error:
+          'Context commitment is not the last public signal - proof is not bound to this context',
+        statusCode: 400,
+      };
+    }
+
+    return { valid: true };
+  }
+
+  private isContextBoundPublicSignalSchema(publicSignals: string[]): boolean {
     return (
-      circuit.publicSignals[0] === 'claimsHash' &&
-      circuit.publicSignals[circuit.publicSignals.length - 1] ===
-        'contextCommitment'
+      publicSignals.length >= 2 &&
+      publicSignals[0] === CLAIMS_HASH_PUBLIC_SIGNAL &&
+      publicSignals[publicSignals.length - 1] ===
+        CONTEXT_COMMITMENT_PUBLIC_SIGNAL
     );
   }
 

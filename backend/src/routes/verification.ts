@@ -2,7 +2,10 @@ import { Router, Response } from 'express';
 import { AuthenticatedRequest } from '../middleware/auth';
 import { validate, uuidSchema } from '../middleware/validation';
 import { verificationLimiter } from '../middleware/rateLimit';
-import { zkProofService } from '../services/zkproof';
+import {
+  zkProofService,
+  type PublicSignalSchemaValidation,
+} from '../services/zkproof';
 import { teeService } from '../services/tee';
 import { credentialService } from '../services/credential';
 import { prisma, logger, redis, verificationCounter } from '../index';
@@ -81,6 +84,29 @@ function rejectUnboundCircuitIfNeeded(
     code: 'ZK_CIRCUIT_CONTEXT_BINDING_UNSUPPORTED',
   });
   return true;
+}
+
+function proofSignalValidationError(
+  validation: PublicSignalSchemaValidation,
+  statusCode = validation.statusCode ?? 400,
+): Error & { code?: string; statusCode?: number } {
+  const error = new Error(
+    validation.error ?? 'Proof public signals failed schema validation',
+  ) as Error & { code?: string; statusCode?: number };
+  error.code = validation.code ?? 'PROOF_SIGNALS_SCHEMA_INVALID';
+  error.statusCode = statusCode;
+  return error;
+}
+
+function sendProofSignalValidationFailure(
+  res: Response,
+  validation: PublicSignalSchemaValidation,
+): void {
+  const error = proofSignalValidationError(validation);
+  res.status(error.statusCode ?? 400).json({
+    error: error.message,
+    code: error.code,
+  });
 }
 
 function isCredentialExpired(expiresAt: Date | string | null | undefined): boolean {
@@ -260,6 +286,19 @@ router.post(
         credentialId,
         selectiveDisclosure,
       });
+
+      const generatedSignalValidation =
+        zkProofService.validateContextBoundPublicSignals(
+          circuitName,
+          result.publicSignals,
+          {
+            claimsHash: claimsHashField,
+            contextCommitment: contextCommitmentField,
+          },
+        );
+      if (!generatedSignalValidation.valid) {
+        throw proofSignalValidationError(generatedSignalValidation, 500);
+      }
 
       // Create verification record
       await prisma.verification.create({
@@ -613,55 +652,26 @@ router.post(
         return;
       }
 
-      // 8. CRITICAL: Enforce context commitment against the proof's actual
-      //    public signals. This closes the replay/rebinding gap — the proof
-      //    is only accepted if the contextCommitment was committed as a
-      //    public input during proof generation and is verified by the
-      //    circuit's verification key. Without this check, a valid proof
-      //    could be replayed with forged metadata.
-      //
-      //    ZK-02: We enforce both presence AND position — all ZeroID circuits
-      //    emit contextCommitment as the last public signal. Checking position
-      //    prevents a malicious circuit from smuggling the commitment into an
-      //    unrelated signal slot.
-      if (!Array.isArray(publicSignals) || publicSignals.length < 2) {
-        res.status(400).json({
-          error:
-            'Public signals array is missing or too short — expected at least claimsHash and contextCommitment',
-          code: 'PROOF_SIGNALS_SCHEMA_INVALID',
-        });
-        return;
-      }
-
-      const firstSignal = publicSignals[0];
-      if (firstSignal !== expectedClaimsHashField) {
-        logger.warn('proof_claims_hash_not_in_public_signals', {
+      // 8. Enforce exact public-signal schema and context commitments. This
+      // keeps the route aligned with the compiled circuit manifest before a
+      // context-bound circuit is allowed into production.
+      const signalValidation =
+        zkProofService.validateContextBoundPublicSignals(
+          circuitName,
+          publicSignals,
+          {
+            claimsHash: expectedClaimsHashField,
+            contextCommitment: expectedCommitmentField,
+          },
+        );
+      if (!signalValidation.valid) {
+        logger.warn('proof_public_signal_schema_invalid', {
           nonce,
-          expectedClaimsHash: expectedClaimsHashField,
-          actualFirstSignal: firstSignal,
+          circuitName,
+          code: signalValidation.code,
           publicSignalsLength: publicSignals.length,
         });
-        res.status(400).json({
-          error:
-            'Claims commitment is not the first public signal — proof is not bound to the credential',
-          code: 'PROOF_CLAIMS_HASH_NOT_COMMITTED',
-        });
-        return;
-      }
-
-      const lastSignal = publicSignals[publicSignals.length - 1];
-      if (lastSignal !== expectedCommitmentField) {
-        logger.warn('proof_context_not_in_public_signals', {
-          nonce,
-          expectedCommitment: expectedCommitmentField,
-          actualLastSignal: lastSignal,
-          publicSignalsLength: publicSignals.length,
-        });
-        res.status(400).json({
-          error:
-            'Context commitment is not the last public signal — proof is not bound to this context',
-          code: 'PROOF_CONTEXT_NOT_COMMITTED',
-        });
+        sendProofSignalValidationFailure(res, signalValidation);
         return;
       }
 
