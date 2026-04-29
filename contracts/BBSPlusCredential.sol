@@ -57,6 +57,8 @@ contract BBSPlusCredential is AccessControl, Pausable, ReentrancyGuard {
     error EmptyBatch();
     error ProofExpired();
     error DomainMismatch();
+    error UnsupportedProofSystem();
+    error InvalidPublicKey();
     error InvalidBlindingFactor();
     error AccumulatorNotInitialized();
     error WitnessUpdateFailed();
@@ -232,6 +234,7 @@ contract BBSPlusCredential is AccessControl, Pausable, ReentrancyGuard {
         if (h.length == 0) revert InvalidPublicKeyLength();
         if (_issuerKeys[issuerId].active) revert PublicKeyAlreadyRegistered();
         if (domainTag == bytes32(0)) revert InvalidDomainTag();
+        _requireValidNonZeroG1(h0);
 
         IssuerPublicKey storage key = _issuerKeys[issuerId];
         key.w = w;
@@ -243,6 +246,7 @@ contract BBSPlusCredential is AccessControl, Pausable, ReentrancyGuard {
 
         // Store per-message generators
         for (uint256 i = 0; i < h.length; i++) {
+            _requireValidNonZeroG1(h[i]);
             key.h.push(h[i]);
         }
 
@@ -304,39 +308,17 @@ contract BBSPlusCredential is AccessControl, Pausable, ReentrancyGuard {
     }
 
     /**
-     * @notice Issue a credential from a blinded request (blind issuance).
-     * @dev The holder commits to hidden attributes; the issuer signs over the
-     *      commitment without seeing the hidden values.
-     * @param issuerId  Issuer identifier
-     * @param request   Blinded credential request with commitment proof
-     * @param signature The BBS+ signature over the combined commitment
-     * @return credentialHash The unique hash for this blinded credential
+     * @notice Blind issuance is disabled until a production proof verifier is wired.
+     * @dev Fails closed because the previous in-contract commitment check was not
+     *      a complete proof of knowledge.
+     * @return Never returns; always reverts.
      */
     function issueBlindedCredential(
-        bytes32 issuerId,
-        BlindedCredentialRequest calldata request,
-        BBSSignature calldata signature
-    ) external onlyRole(ISSUER_ROLE) whenNotPaused nonReentrant returns (bytes32 credentialHash) {
-        IssuerPublicKey storage pk = _issuerKeys[issuerId];
-        if (!pk.active) revert PublicKeyNotRegistered();
-
-        // Verify the commitment proof of knowledge
-        if (!_verifyCommitmentProof(pk, request)) {
-            revert InvalidBlindingFactor();
-        }
-
-        credentialHash = keccak256(
-            abi.encodePacked(
-                issuerId,
-                BN254.encodeG1(request.commitment),
-                signature.e,
-                signature.s
-            )
-        );
-        _issuedCredentials[credentialHash] = true;
-        unchecked { ++totalCredentialsIssued; }
-
-        emit CredentialBlinded(credentialHash, credentialHash, block.timestamp);
+        bytes32,
+        BlindedCredentialRequest calldata,
+        BBSSignature calldata
+    ) external view onlyRole(ISSUER_ROLE) whenNotPaused returns (bytes32) {
+        revert UnsupportedProofSystem();
     }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -344,120 +326,29 @@ contract BBSPlusCredential is AccessControl, Pausable, ReentrancyGuard {
     // ──────────────────────────────────────────────────────────────────────
 
     /**
-     * @notice Verify a BBS+ proof of knowledge with selective disclosure.
-     * @dev This verifies that the prover knows a valid BBS+ signature on a set of
-     *      messages, revealing only the messages at revealedIndices. The proof is
-     *      unlinkable: two proofs from the same credential cannot be correlated.
-     *
-     *      Verification equation (simplified):
-     *        e(Ā, g2) == e(A', w)                            ... (1)
-     *        Ā == A' * (e + challenge)                        ... (2)
-     *        D == h0^s2 + Σ_{hidden} h_i^m_i                 ... (3)
-     *        Schnorr verification of responses against challenge
-     *
-     * @param issuerId The issuer whose key should be used for verification
-     * @param proof    The BBS+ proof of knowledge
-     * @return valid   True if the proof verifies
+     * @notice Selective disclosure proof verification is disabled fail-closed.
+     * @dev Retained for ABI compatibility until a complete audited verifier is
+     *      available.
+     * @return Never returns; always reverts.
      */
     function verifySelectiveDisclosure(
-        bytes32 issuerId,
-        BBSProof calldata proof
-    ) external whenNotPaused nonReentrant returns (bool valid) {
-        IssuerPublicKey storage pk = _issuerKeys[issuerId];
-        if (!pk.active) revert PublicKeyNotRegistered();
-
-        // Check proof is not expired
-        if (proof.expiresAt != 0 && block.timestamp > proof.expiresAt) {
-            revert ProofExpired();
-        }
-
-        // Check domain tag matches
-        if (proof.domainTag != pk.domainTag) revert DomainMismatch();
-
-        // Check nonce not reused
-        bytes32 nonceHash = keccak256(abi.encodePacked(proof.nonce, proof.domainTag));
-        if (_usedNonces[nonceHash]) revert InvalidProof();
-        _usedNonces[nonceHash] = true;
-
-        // Core BBS+ proof verification
-        valid = _verifyBBSProof(pk, proof);
-        if (!valid) revert InvalidProof();
-
-        unchecked { ++totalProofsVerified; }
-
-        bytes32 proofHash = keccak256(
-            abi.encodePacked(
-                BN254.encodeG1(proof.aBar),
-                BN254.encodeG1(proof.aPrime),
-                proof.challenge
-            )
-        );
-
-        emit ProofVerified(
-            proof.domainTag,
-            proofHash,
-            proof.revealedIndices.length,
-            block.timestamp
-        );
+        bytes32,
+        BBSProof calldata
+    ) external view whenNotPaused returns (bool) {
+        revert UnsupportedProofSystem();
     }
 
     /**
-     * @notice Batch-verify multiple BBS+ proofs in a single transaction.
-     * @dev Uses random linear combination to amortize pairing costs.
-     *      If any individual proof is invalid, the entire batch fails.
-     * @param issuerId The common issuer for all proofs
-     * @param proofs   Array of BBS+ proofs to verify
-     * @return validCount Number of individually valid proofs
+     * @notice Batch BBS+ proof verification is disabled fail-closed.
+     * @dev Retained for ABI compatibility until single-proof verification is
+     *      complete and audited.
+     * @return Never returns; always reverts.
      */
     function batchVerifyProofs(
-        bytes32 issuerId,
-        BBSProof[] calldata proofs
-    ) external whenNotPaused nonReentrant returns (uint256 validCount) {
-        if (proofs.length == 0) revert EmptyBatch();
-        IssuerPublicKey storage pk = _issuerKeys[issuerId];
-        if (!pk.active) revert PublicKeyNotRegistered();
-
-        // Random linear combination for batch verification
-        // Generate random coefficients from a seed to ensure non-trivial combination
-        bytes32 batchSeed = keccak256(
-            abi.encodePacked(block.timestamp, block.prevrandao, msg.sender)
-        );
-
-        BN254.G1Point[] memory g1Accum = new BN254.G1Point[](proofs.length * 2);
-        BN254.G2Point[] memory g2Accum = new BN254.G2Point[](proofs.length * 2);
-
-        for (uint256 i = 0; i < proofs.length; i++) {
-            BBSProof calldata proof = proofs[i];
-
-            // Check nonce uniqueness
-            bytes32 nonceHash = keccak256(abi.encodePacked(proof.nonce, proof.domainTag));
-            if (_usedNonces[nonceHash]) continue;
-            _usedNonces[nonceHash] = true;
-
-            // Generate random coefficient for this proof
-            uint256 rho = uint256(
-                keccak256(abi.encodePacked(batchSeed, i))
-            ) % BN254.R_MOD;
-            if (rho == 0) rho = 1;
-
-            // Accumulate: rho_i * e(Ā_i, g2) =? rho_i * e(A'_i, w)
-            g1Accum[i * 2] = BN254.ecMul(proof.aBar, rho);
-            g2Accum[i * 2] = BN254.g2Generator();
-            g1Accum[i * 2 + 1] = BN254.negate(BN254.ecMul(proof.aPrime, rho));
-            g2Accum[i * 2 + 1] = pk.w;
-
-            unchecked { ++validCount; }
-        }
-
-        // Perform the batched pairing check
-        if (validCount > 0) {
-            bool batchValid = BN254.pairingBatch(g1Accum, g2Accum);
-            if (!batchValid) revert BatchVerificationFailed();
-        }
-
-        totalProofsVerified += validCount;
-
-        emit BatchVerificationCompleted(proofs.length, validCount, block.timestamp);
+        bytes32,
+        BBSProof[] calldata
+    ) external view whenNotPaused returns (uint256) {
+        revert UnsupportedProofSystem();
     }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -553,10 +444,9 @@ contract BBSPlusCredential is AccessControl, Pausable, ReentrancyGuard {
             )
         );
 
-        // Verify proof data matches expected target
-        // In production, this calls a Groth16/PLONK verifier contract
-        valid = (keccak256(proofData) == proofTarget) ||
-                _verifyAccumulatorProof(proofData, proofTarget);
+        // No production verifier is wired for this legacy BBS accumulator path.
+        // Fail closed instead of accepting shape-only or placeholder proofs.
+        valid = keccak256(proofData) == proofTarget;
     }
 
     /**
@@ -630,6 +520,8 @@ contract BBSPlusCredential is AccessControl, Pausable, ReentrancyGuard {
         uint256[] calldata messages,
         BBSSignature calldata sig
     ) internal view returns (bool) {
+        if (!_isValidNonZeroG1(sig.a)) return false;
+
         // Compute B = g1 + h0^s + Σ h_i^m_i
         BN254.G1Point memory b = BN254.g1Generator();
         b = BN254.ecAdd(b, BN254.ecMul(pk.h0, sig.s));
@@ -655,108 +547,11 @@ contract BBSPlusCredential is AccessControl, Pausable, ReentrancyGuard {
         );
     }
 
-    /**
-     * @dev Verify a BBS+ proof of knowledge (selective disclosure proof).
-     *      Core verification steps:
-     *        1. e(Ā, g2) == e(A', w)  — signature validity
-     *        2. Ā == D^challenge · A'^(-e_resp)  — proof of exponent knowledge
-     *        3. Schnorr verification of hidden message responses
-     */
-    function _verifyBBSProof(
-        IssuerPublicKey storage pk,
-        BBSProof calldata proof
-    ) internal view returns (bool) {
-        // Step 1: Pairing check e(Ā, g2) == e(A', w)
-        bool pairingValid = BN254.pairingCheck(
-            proof.aBar,
-            BN254.g2Generator(),
-            proof.aPrime,
-            pk.w
-        );
-        if (!pairingValid) return false;
-
-        // Step 2: Reconstruct the commitment from Schnorr responses
-        // C = h0^s_resp · Π_{hidden} h_i^m_resp_i
-        BN254.G1Point memory commitment = BN254.ecMul(pk.h0, proof.responses[0]);
-
-        uint256 hiddenIdx = 1;
-        uint256 revealedPtr = 0;
-
-        for (uint256 i = 0; i < pk.maxMessages && hiddenIdx < proof.responses.length; i++) {
-            // Skip revealed indices
-            if (revealedPtr < proof.revealedIndices.length &&
-                proof.revealedIndices[revealedPtr] == i) {
-                revealedPtr++;
-                continue;
-            }
-            commitment = BN254.ecAdd(
-                commitment,
-                BN254.ecMul(pk.h[i], proof.responses[hiddenIdx])
-            );
-            hiddenIdx++;
-        }
-
-        // Step 3: Verify Fiat-Shamir challenge
-        bytes32 computedChallenge = keccak256(
-            abi.encodePacked(
-                BN254.encodeG1(proof.aBar),
-                BN254.encodeG1(proof.aPrime),
-                BN254.encodeG1(proof.d),
-                BN254.encodeG1(commitment),
-                proof.domainTag,
-                proof.nonce,
-                proof.revealedMessages
-            )
-        );
-
-        return uint256(computedChallenge) % BN254.R_MOD == proof.challenge;
+    function _requireValidNonZeroG1(BN254.G1Point memory point) internal pure {
+        if (!_isValidNonZeroG1(point)) revert InvalidPublicKey();
     }
 
-    /**
-     * @dev Verify commitment proof of knowledge for blinded issuance.
-     */
-    function _verifyCommitmentProof(
-        IssuerPublicKey storage pk,
-        BlindedCredentialRequest calldata request
-    ) internal view returns (bool) {
-        // Reconstruct commitment from proof responses
-        BN254.G1Point memory reconstructed = BN254.g1Zero();
-
-        for (uint256 i = 0; i < request.proofResponses.length; i++) {
-            if (i < pk.h.length) {
-                reconstructed = BN254.ecAdd(
-                    reconstructed,
-                    BN254.ecMul(pk.h[i], request.proofResponses[i])
-                );
-            }
-        }
-
-        // Check that the commitment matches via challenge verification
-        BN254.G1Point memory target = BN254.ecAdd(
-            request.commitment,
-            BN254.ecMul(request.proofCommitment, request.proofChallenge)
-        );
-
-        bytes32 expectedChallenge = keccak256(
-            abi.encodePacked(
-                BN254.encodeG1(request.commitment),
-                BN254.encodeG1(request.proofCommitment),
-                BN254.encodeG1(reconstructed)
-            )
-        );
-
-        return uint256(expectedChallenge) % BN254.R_MOD == request.proofChallenge;
-    }
-
-    /**
-     * @dev Verify an accumulator update proof (placeholder for SNARK verifier call).
-     */
-    function _verifyAccumulatorProof(
-        bytes calldata proofData,
-        bytes32 /* target */
-    ) internal pure returns (bool) {
-        // In production, this dispatches to a Groth16 verifier contract.
-        // The proof must demonstrate valid accumulator state transition.
-        return proofData.length >= 256; // Minimum proof size for Groth16
+    function _isValidNonZeroG1(BN254.G1Point memory point) internal pure returns (bool) {
+        return !BN254.isZero(point) && BN254.isOnCurve(point);
     }
 }

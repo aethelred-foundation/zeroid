@@ -102,6 +102,21 @@ contract BBSPlusCredentialTest is TestHelper {
         bbs.registerIssuerKey(ISSUER_ID, _g2(), _g1(), h, bytes32(0));
     }
 
+    function test_RegisterIssuerKey_RevertsInvalidG1Generators() public {
+        BN254.G1Point[] memory h = new BN254.G1Point[](1);
+        h[0] = _g1();
+
+        vm.prank(admin);
+        vm.expectRevert(BBSPlusCredential.InvalidPublicKey.selector);
+        bbs.registerIssuerKey(ISSUER_ID, _g2(), BN254.G1Point(0, 0), h, DOMAIN_TAG);
+
+        h[0] = BN254.G1Point(0, 0);
+
+        vm.prank(admin);
+        vm.expectRevert(BBSPlusCredential.InvalidPublicKey.selector);
+        bbs.registerIssuerKey(keccak256("issuer:bbs:invalid-h"), _g2(), _g1(), h, DOMAIN_TAG);
+    }
+
     function test_RevokeIssuerKey() public {
         _registerKey();
 
@@ -184,6 +199,21 @@ contract BBSPlusCredentialTest is TestHelper {
         bbs.updateAccumulator(ACC_ID, keccak256("r"), 1, "");
     }
 
+    function test_VerifyNonRevocation_RejectsPlaceholderSizedProof() public {
+        vm.prank(admin);
+        bbs.initializeAccumulator(ACC_ID, keccak256("root"));
+
+        BBSPlusCredential.NonRevocationWitness memory witness =
+            BBSPlusCredential.NonRevocationWitness({
+                witnessPoint: _g1(),
+                epoch: 1,
+                credentialHash: keccak256("credential")
+            });
+        bytes memory fakeProof = new bytes(256);
+
+        assertFalse(bbs.verifyNonRevocation(ACC_ID, witness, fakeProof));
+    }
+
     function test_GetHistoricalRoot() public {
         bytes32 root1 = keccak256("root1");
         vm.prank(admin);
@@ -199,6 +229,26 @@ contract BBSPlusCredentialTest is TestHelper {
 
     function test_IsCredentialIssued_FalseInitially() public view {
         assertFalse(bbs.isCredentialIssued(keccak256("c1")));
+    }
+
+    function test_BlindIssuanceAndSelectiveDisclosureFailClosed() public {
+        BBSPlusCredential.BlindedCredentialRequest memory request;
+        BBSPlusCredential.BBSSignature memory signature;
+
+        vm.prank(admin);
+        vm.expectRevert(BBSPlusCredential.UnsupportedProofSystem.selector);
+        bbs.issueBlindedCredential(ISSUER_ID, request, signature);
+
+        BBSPlusCredential.BBSProof memory proof;
+
+        vm.expectRevert(BBSPlusCredential.UnsupportedProofSystem.selector);
+        bbs.verifySelectiveDisclosure(ISSUER_ID, proof);
+
+        BBSPlusCredential.BBSProof[] memory proofs = new BBSPlusCredential.BBSProof[](1);
+        proofs[0] = proof;
+
+        vm.expectRevert(BBSPlusCredential.UnsupportedProofSystem.selector);
+        bbs.batchVerifyProofs(ISSUER_ID, proofs);
     }
 
     // ════════════════════════════════════════════════════════════════
