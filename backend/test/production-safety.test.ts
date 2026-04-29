@@ -5,6 +5,7 @@ import {
   isMetricsRequestAuthorized,
   validateProductionConfig,
 } from '../src/services/production-safety';
+import { circuitArtifactDigestKeys } from '../src/services/circuit-artifacts';
 import crypto from 'crypto';
 
 const oidcKeyPair = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
@@ -18,6 +19,12 @@ const oidcPublicKey = oidcKeyPair.publicKey.export({
 }) as string;
 
 const BASE_ENV: NodeJS.ProcessEnv = { NODE_ENV: 'test' };
+const circuitDigestManifest = Object.fromEntries(
+  circuitArtifactDigestKeys().map((key, index) => [
+    key,
+    (index + 1).toString(16).repeat(64).slice(0, 64),
+  ]),
+);
 const PROD_BASE_ENV: NodeJS.ProcessEnv = {
   NODE_ENV: 'production',
   REDIS_URL: 'rediss://redis.zeroid.example:6380',
@@ -51,6 +58,7 @@ const PROD_BASE_ENV: NodeJS.ProcessEnv = {
   SCHEMA_APPROVAL_THRESHOLD: '3',
   SCHEMA_REJECTION_THRESHOLD: '3',
   ZK_CONTEXT_BOUND_CIRCUITS_READY: 'true',
+  ZK_CIRCUIT_ARTIFACT_DIGESTS_JSON: JSON.stringify(circuitDigestManifest),
 };
 
 describe('production safety controls', () => {
@@ -552,6 +560,37 @@ describe('production safety controls', () => {
       ]),
     })).toEqual([
       expect.objectContaining({ control: 'TEE_ALLOWED_ENCLAVES_JSON' }),
+    ]);
+  });
+
+  it('requires pinned ZK circuit artifact digests in production', () => {
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      METRICS_PUBLIC_DISABLED: 'true',
+      ZK_CIRCUIT_ARTIFACT_DIGESTS_JSON: '',
+    })).toEqual([
+      expect.objectContaining({ control: 'ZK_CIRCUIT_ARTIFACT_DIGESTS_JSON' }),
+    ]);
+
+    const missingDigestManifest = { ...circuitDigestManifest };
+    delete missingDigestManifest[circuitArtifactDigestKeys()[0]];
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      METRICS_PUBLIC_DISABLED: 'true',
+      ZK_CIRCUIT_ARTIFACT_DIGESTS_JSON: JSON.stringify(missingDigestManifest),
+    })).toEqual([
+      expect.objectContaining({ control: 'ZK_CIRCUIT_ARTIFACT_DIGESTS_JSON' }),
+    ]);
+
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      METRICS_PUBLIC_DISABLED: 'true',
+      ZK_CIRCUIT_ARTIFACT_DIGESTS_JSON: JSON.stringify({
+        ...circuitDigestManifest,
+        [circuitArtifactDigestKeys()[0]]: 'not-a-digest',
+      }),
+    })).toEqual([
+      expect.objectContaining({ control: 'ZK_CIRCUIT_ARTIFACT_DIGESTS_JSON' }),
     ]);
   });
 

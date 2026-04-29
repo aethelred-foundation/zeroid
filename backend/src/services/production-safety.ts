@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import * as net from 'net';
+import { circuitArtifactDigestKeys } from './circuit-artifacts';
 
 export interface ProductionSafetyViolation {
   control: string;
@@ -153,6 +154,7 @@ export function checkedProductionSafetyControls(): string[] {
     'TEE_TCB_STATUS_POLICY',
     'SCHEMA_GOVERNANCE_THRESHOLDS',
     'ZK_CONTEXT_BOUND_CIRCUITS_READY',
+    'ZK_CIRCUIT_ARTIFACT_DIGESTS_JSON',
   ];
 }
 
@@ -373,6 +375,7 @@ export function collectProductionSafetyViolations(
       risk: 'Production ZK verification requires audited circuits that expose claimsHash and contextCommitment as fixed public signals',
     });
   }
+  validateCircuitArtifactDigestPolicy(env, violations);
 
   return violations;
 }
@@ -576,6 +579,51 @@ function validateTrustedEnclavePolicy(
     violations.push({
       control: 'TEE_ALLOWED_ENCLAVES_JSON',
       risk: 'TEE_ALLOWED_ENCLAVES_JSON must be valid JSON',
+    });
+  }
+}
+
+function validateCircuitArtifactDigestPolicy(
+  env: NodeJS.ProcessEnv,
+  violations: ProductionSafetyViolation[],
+): void {
+  const rawDigests = env.ZK_CIRCUIT_ARTIFACT_DIGESTS_JSON?.trim();
+  if (!rawDigests) {
+    violations.push({
+      control: 'ZK_CIRCUIT_ARTIFACT_DIGESTS_JSON',
+      risk: 'Production ZK verification requires a pinned SHA-256 digest manifest for circuit source and artifacts',
+    });
+    return;
+  }
+
+  try {
+    const parsed = JSON.parse(rawDigests) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      violations.push({
+        control: 'ZK_CIRCUIT_ARTIFACT_DIGESTS_JSON',
+        risk: 'ZK_CIRCUIT_ARTIFACT_DIGESTS_JSON must be a JSON object',
+      });
+      return;
+    }
+
+    const digestManifest = parsed as Record<string, unknown>;
+    const missingKey = circuitArtifactDigestKeys().find(
+      (key) => typeof digestManifest[key] !== 'string',
+    );
+    const invalidDigest = Object.entries(digestManifest).find(
+      ([, value]) => typeof value !== 'string' || !/^[0-9a-f]{64}$/i.test(value),
+    );
+
+    if (missingKey || invalidDigest) {
+      violations.push({
+        control: 'ZK_CIRCUIT_ARTIFACT_DIGESTS_JSON',
+        risk: 'ZK circuit digest manifest must include every required source/artifact key with 64-hex SHA-256 digests',
+      });
+    }
+  } catch {
+    violations.push({
+      control: 'ZK_CIRCUIT_ARTIFACT_DIGESTS_JSON',
+      risk: 'ZK_CIRCUIT_ARTIFACT_DIGESTS_JSON must be valid JSON',
     });
   }
 }

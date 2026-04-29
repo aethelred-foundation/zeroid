@@ -24,6 +24,10 @@ import {
   isMetricsEndpointDisabled,
   isMetricsRequestAuthorized,
 } from './services/production-safety';
+import {
+  parseExpectedCircuitArtifactDigests,
+  validateCircuitArtifacts,
+} from './services/circuit-artifacts';
 
 // ---------------------------------------------------------------------------
 // Logger
@@ -357,8 +361,22 @@ function validateProductionConfig(): void {
     );
   }
 
+  const circuitReport = validateCircuitArtifacts({
+    requireArtifacts: true,
+    requireExpectedDigests: true,
+    expectedDigests: parseExpectedCircuitArtifactDigests(
+      process.env.ZK_CIRCUIT_ARTIFACT_DIGESTS_JSON,
+    ),
+  });
+
   logger.info('production_safety_gates_passed', {
     checkedControls: checkedProductionSafetyControls(),
+    circuitArtifacts: circuitReport.map((circuit) => ({
+      name: circuit.name,
+      artifactsReady: circuit.artifactsReady,
+      sourceSha256: circuit.source.sha256,
+      artifactLabels: Object.keys(circuit.artifacts),
+    })),
   });
 }
 
