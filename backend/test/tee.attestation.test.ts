@@ -627,6 +627,14 @@ describe('checkCertificateRevocation', () => {
     expect(revokedSerials.has(serial1)).toBe(true);
     expect(revokedSerials.has(serial2)).toBe(true);
   });
+
+  it('fails closed instead of returning partial serials from malformed CRLs', () => {
+    const malformedCrl = Buffer.from('3006300430020500', 'hex');
+
+    expect(() =>
+      priv().extractRevokedSerialsFromDer(malformedCrl),
+    ).toThrow(expect.objectContaining({ code: 'TEE_CRL_PARSE_FAILED' }));
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -670,6 +678,14 @@ describe('validateCrlFreshness', () => {
     expect(() => {
       priv().validateCrlFreshness(pckCrlDer, 'PCK CRL');
     }).not.toThrow();
+  });
+
+  it('fails closed when CRL freshness fields cannot be parsed', () => {
+    const malformedCrl = Buffer.from('3006300430020500', 'hex');
+
+    expect(() => {
+      priv().validateCrlFreshness(malformedCrl, 'PCK CRL');
+    }).toThrow(expect.objectContaining({ code: 'TEE_CRL_PARSE_FAILED' }));
   });
 });
 

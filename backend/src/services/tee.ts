@@ -156,6 +156,20 @@ interface ResolvedCollateralEndpoint {
   pinnedAddress?: ResolvedCollateralAddress;
 }
 
+interface DerElement {
+  tag: number;
+  start: number;
+  contentStart: number;
+  length: number;
+  end: number;
+}
+
+interface ParsedCrlTbsMetadata {
+  thisUpdate: number;
+  nextUpdate?: number;
+  revokedSerials: Set<string>;
+}
+
 // ---------------------------------------------------------------------------
 // Intel SGX PCCS / DCAP configuration
 // ---------------------------------------------------------------------------
@@ -1869,11 +1883,7 @@ export class TEEAttestationService {
   // We parse just enough to extract the two time fields.
   // -------------------------------------------------------------------------
   private validateCrlFreshness(crlDer: Buffer, label: string): void {
-    const times = this.extractCrlTimes(crlDer);
-    if (!times) {
-      logger.warn('crl_freshness_times_not_parsed', { label });
-      return; // Best-effort; signature verification is the primary gate
-    }
+    const times = this.parseCrlTbsMetadata(crlDer, label);
 
     const now = Date.now();
     const { thisUpdate, nextUpdate } = times;
@@ -1909,59 +1919,6 @@ export class TEEAttestationService {
   // -------------------------------------------------------------------------
   // Internal: Extract thisUpdate and nextUpdate times from CRL DER
   // -------------------------------------------------------------------------
-  private extractCrlTimes(
-    crlDer: Buffer,
-  ): { thisUpdate: number; nextUpdate?: number } | null {
-    // Navigate: outer SEQUENCE → tbsCertList SEQUENCE → skip version, sigAlg, issuer → times
-    let offset = 0;
-    if (crlDer[offset] !== 0x30) return null;
-    const outerLen = this.parseDerLength(crlDer, offset + 1);
-    if (!outerLen) return null;
-    offset = outerLen.contentStart;
-
-    // tbsCertList SEQUENCE
-    if (crlDer[offset] !== 0x30) return null;
-    const tbsLen = this.parseDerLength(crlDer, offset + 1);
-    if (!tbsLen) return null;
-    let tbsOffset = tbsLen.contentStart;
-    const tbsEnd = tbsLen.contentStart + tbsLen.length;
-
-    // Optional version (context tag [0])
-    if (crlDer[tbsOffset] === 0xa0) {
-      const vLen = this.parseDerLength(crlDer, tbsOffset + 1);
-      if (!vLen) return null;
-      tbsOffset = vLen.contentStart + vLen.length;
-    }
-
-    // Skip signature algorithm SEQUENCE
-    if (crlDer[tbsOffset] !== 0x30) return null;
-    const sigAlgLen = this.parseDerLength(crlDer, tbsOffset + 1);
-    if (!sigAlgLen) return null;
-    tbsOffset = sigAlgLen.contentStart + sigAlgLen.length;
-
-    // Skip issuer SEQUENCE
-    if (crlDer[tbsOffset] !== 0x30) return null;
-    const issuerLen = this.parseDerLength(crlDer, tbsOffset + 1);
-    if (!issuerLen) return null;
-    tbsOffset = issuerLen.contentStart + issuerLen.length;
-
-    // thisUpdate (UTCTime 0x17 or GeneralizedTime 0x18)
-    const thisUpdateTime = this.parseAsn1Time(crlDer, tbsOffset);
-    if (!thisUpdateTime) return null;
-    tbsOffset = thisUpdateTime.nextOffset;
-
-    // nextUpdate (optional, same time types)
-    let nextUpdate: number | undefined;
-    if (tbsOffset < tbsEnd) {
-      const nextUpdateTime = this.parseAsn1Time(crlDer, tbsOffset);
-      if (nextUpdateTime) {
-        nextUpdate = nextUpdateTime.time;
-      }
-    }
-
-    return { thisUpdate: thisUpdateTime.time, nextUpdate };
-  }
-
   // -------------------------------------------------------------------------
   // Internal: Parse ASN.1 UTCTime (0x17) or GeneralizedTime (0x18)
   // -------------------------------------------------------------------------
@@ -1996,73 +1953,165 @@ export class TEEAttestationService {
   // Internal: Extract revoked serial numbers from pre-parsed DER buffer
   // -------------------------------------------------------------------------
   private extractRevokedSerialsFromDer(crlDer: Buffer): Set<string> {
-    const serials = new Set<string>();
-    try {
-      this.parseDerCrlSerials(crlDer, 0, crlDer.length, serials);
-    } catch (err) {
-      logger.warn('crl_serial_extraction_partial', {
-        error: (err as Error).message,
-      });
-    }
-    return serials;
+    return this.parseCrlTbsMetadata(crlDer, 'CRL').revokedSerials;
   }
 
-  // -------------------------------------------------------------------------
-  // Internal: Walk DER-encoded CRL to extract revoked serial numbers
-  //
-  // This does a recursive walk of ASN.1 SEQUENCE structures to find
-  // INTEGER values that represent revoked certificate serials within the
-  // revokedCertificates list.
-  // -------------------------------------------------------------------------
-  private parseDerCrlSerials(
+  private parseCrlTbsMetadata(
+    crlDer: Buffer,
+    label: string,
+  ): ParsedCrlTbsMetadata {
+    const outer = this.requireDerElement(crlDer, 0, crlDer.length, 0x30, label);
+    const tbsCertList = this.requireDerElement(
+      crlDer,
+      outer.contentStart,
+      outer.end,
+      0x30,
+      label,
+    );
+    let offset = tbsCertList.contentStart;
+
+    // RFC 5280 TBSCertList.version is an optional INTEGER, not an explicit tag.
+    const maybeVersion = this.parseDerElement(crlDer, offset, tbsCertList.end);
+    if (maybeVersion?.tag === 0x02) {
+      offset = maybeVersion.end;
+    }
+
+    const signatureAlgorithm = this.requireDerElement(
+      crlDer,
+      offset,
+      tbsCertList.end,
+      0x30,
+      label,
+    );
+    offset = signatureAlgorithm.end;
+
+    const issuer = this.requireDerElement(
+      crlDer,
+      offset,
+      tbsCertList.end,
+      0x30,
+      label,
+    );
+    offset = issuer.end;
+
+    const thisUpdateTime = this.parseAsn1Time(crlDer, offset);
+    if (!thisUpdateTime) {
+      throw new AttestationError(
+        `${label}: failed to parse CRL thisUpdate`,
+        'TEE_CRL_PARSE_FAILED',
+      );
+    }
+    offset = thisUpdateTime.nextOffset;
+
+    let nextUpdate: number | undefined;
+    const nextUpdateTime = this.parseAsn1Time(crlDer, offset);
+    if (nextUpdateTime) {
+      nextUpdate = nextUpdateTime.time;
+      offset = nextUpdateTime.nextOffset;
+    }
+
+    const revokedSerials = new Set<string>();
+    const nextElement = this.parseDerElement(crlDer, offset, tbsCertList.end);
+    if (nextElement?.tag === 0x30) {
+      this.extractRevokedSerialsFromList(crlDer, nextElement, revokedSerials, label);
+      offset = nextElement.end;
+    }
+
+    const extensionElement = this.parseDerElement(
+      crlDer,
+      offset,
+      tbsCertList.end,
+    );
+    if (extensionElement && extensionElement.tag !== 0xa0) {
+      throw new AttestationError(
+        `${label}: unexpected field in TBSCertList`,
+        'TEE_CRL_PARSE_FAILED',
+      );
+    }
+
+    return {
+      thisUpdate: thisUpdateTime.time,
+      nextUpdate,
+      revokedSerials,
+    };
+  }
+
+  private extractRevokedSerialsFromList(
+    crlDer: Buffer,
+    revokedList: DerElement,
+    serials: Set<string>,
+    label: string,
+  ): void {
+    let entryOffset = revokedList.contentStart;
+    while (entryOffset < revokedList.end) {
+      const entry = this.requireDerElement(
+        crlDer,
+        entryOffset,
+        revokedList.end,
+        0x30,
+        label,
+      );
+      const serial = this.requireDerElement(
+        crlDer,
+        entry.contentStart,
+        entry.end,
+        0x02,
+        label,
+      );
+      if (serial.length === 0) {
+        throw new AttestationError(
+          `${label}: revoked certificate serial is empty`,
+          'TEE_CRL_PARSE_FAILED',
+        );
+      }
+      serials.add(
+        this.normalizeCertificateSerial(
+          crlDer.subarray(serial.contentStart, serial.end).toString('hex'),
+        ),
+      );
+      entryOffset = entry.end;
+    }
+  }
+
+  private requireDerElement(
     buf: Buffer,
     offset: number,
     end: number,
-    serials: Set<string>,
-    depth: number = 0,
-  ): void {
-    while (offset < end) {
-      if (offset + 2 > end) break;
-
-      const tag = buf[offset];
-      offset += 1;
-
-      // Parse length
-      let length: number;
-      if (buf[offset] & 0x80) {
-        const numLenBytes = buf[offset] & 0x7f;
-        offset += 1;
-        if (numLenBytes > 4 || offset + numLenBytes > end) break;
-        length = 0;
-        for (let i = 0; i < numLenBytes; i++) {
-          length = (length << 8) | buf[offset + i];
-        }
-        offset += numLenBytes;
-      } else {
-        length = buf[offset];
-        offset += 1;
-      }
-
-      if (offset + length > end) break;
-
-      const contentEnd = offset + length;
-
-      // SEQUENCE (0x30) - recurse into it
-      if (tag === 0x30) {
-        this.parseDerCrlSerials(buf, offset, contentEnd, serials, depth + 1);
-      }
-      // INTEGER (0x02) at depth >= 3 is likely a revoked serial number
-      // (depth 0=outer, 1=tbsCertList, 2=revokedCertificates SEQUENCE, 3=per-entry SEQUENCE)
-      else if (tag === 0x02 && depth >= 3) {
-        const serial = buf
-          .subarray(offset, contentEnd)
-          .toString('hex')
-          .toLowerCase();
-        serials.add(this.normalizeCertificateSerial(serial));
-      }
-
-      offset = contentEnd;
+    expectedTag: number,
+    label: string,
+  ): DerElement {
+    const element = this.parseDerElement(buf, offset, end);
+    if (!element || element.tag !== expectedTag) {
+      throw new AttestationError(
+        `${label}: failed to parse expected DER tag 0x${expectedTag.toString(16)}`,
+        'TEE_CRL_PARSE_FAILED',
+      );
     }
+    return element;
+  }
+
+  private parseDerElement(
+    buf: Buffer,
+    offset: number,
+    end: number = buf.length,
+  ): DerElement | null {
+    if (offset >= end) return null;
+    if (offset + 2 > end) return null;
+
+    const tag = buf[offset];
+    const lengthInfo = this.parseDerLength(buf, offset + 1);
+    if (!lengthInfo) return null;
+
+    const elementEnd = lengthInfo.contentStart + lengthInfo.length;
+    if (elementEnd > end) return null;
+
+    return {
+      tag,
+      start: offset,
+      contentStart: lengthInfo.contentStart,
+      length: lengthInfo.length,
+      end: elementEnd,
+    };
   }
 
   private normalizeCertificateSerial(serialNumber: string): string {

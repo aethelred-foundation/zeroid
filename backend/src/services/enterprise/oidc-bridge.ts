@@ -398,6 +398,7 @@ interface IssuedToken {
   subjectId: string;
   scope: string;
   tokenType: 'access_token' | 'id_token' | 'refresh_token';
+  sessionId?: string;
   issuedAt: number;
   expiresAt: number;
   revoked: boolean;
@@ -1570,6 +1571,7 @@ export class OIDCBridge {
       subjectId,
       scope,
       tokenType,
+      ...(sessionId ? { sessionId } : {}),
       issuedAt: now,
       expiresAt: now + ttl,
       revoked: false,
@@ -1976,7 +1978,49 @@ export class OIDCBridge {
       throw new OIDCError('invalid_token', 'JWT claims validation failed', 401);
     }
 
+    await this.assertIssuedTokenSessionActive(tokenRecord, payload);
+
     return { payload, tokenRecord };
+  }
+
+  private async assertIssuedTokenSessionActive(
+    tokenRecord: IssuedToken,
+    payload: Record<string, unknown>,
+  ): Promise<void> {
+    const payloadSessionId = payload.sid;
+    if (payloadSessionId !== undefined && typeof payloadSessionId !== 'string') {
+      throw new OIDCError('invalid_token', 'JWT session claim is invalid', 401);
+    }
+
+    const sessionId = tokenRecord.sessionId ?? payloadSessionId;
+    if (!sessionId) {
+      return;
+    }
+
+    if (tokenRecord.sessionId !== sessionId || payloadSessionId !== sessionId) {
+      throw new OIDCError(
+        'invalid_token',
+        'JWT session binding does not match token record',
+        401,
+      );
+    }
+
+    const session = await this.sessions.get(sessionId);
+    if (
+      !session ||
+      !session.active ||
+      session.clientId !== tokenRecord.clientId ||
+      session.subjectId !== tokenRecord.subjectId
+    ) {
+      tokenRecord.revoked = true;
+      await this.issuedTokens.set(tokenRecord.tokenId, tokenRecord);
+      await redis.srem(sessionTokenSetKey(sessionId), tokenRecord.tokenId);
+      throw new OIDCError(
+        'invalid_token',
+        'Token session is no longer active',
+        401,
+      );
+    }
   }
 
   private resolveSigningAlgorithm(): SupportedSigningAlgorithm {

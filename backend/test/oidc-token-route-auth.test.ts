@@ -276,4 +276,20 @@ describe('OIDC token route client authentication', () => {
       scope: undefined,
     });
   });
+
+  it('keeps the SAML bridge disabled without returning assertion material', async () => {
+    const response = await invokeRoute('POST', '/oidc/saml', {
+      body: {
+        client_id: 'client-1',
+        subject: 'user-1',
+      },
+    });
+
+    expect(response.statusCode).toBe(501);
+    expect(response.body).toMatchObject({
+      code: 'SAML_NOT_IMPLEMENTED',
+    });
+    expect(response.body).not.toHaveProperty('samlResponse');
+    expect(response.body).not.toHaveProperty('assertion');
+  });
 });

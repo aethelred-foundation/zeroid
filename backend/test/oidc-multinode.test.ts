@@ -1751,6 +1751,34 @@ describe('OIDC multi-node correctness', () => {
     expect(refreshedB.access_token).toBeDefined();
   });
 
+  test('session-bound access token is rejected after logout even if token index was missed', async () => {
+    const client = await registerTestClient(bridgeA);
+    const { code, sessionId } = await authorizeCode(
+      bridgeA,
+      client.clientId,
+      'user-index-race',
+    );
+
+    const tokens = await bridgeA.exchangeToken({
+      grantType: 'authorization_code',
+      code: code!,
+      redirectUri: REDIRECT_URI,
+      clientId: client.clientId,
+      clientSecret: client.clientSecret,
+    });
+
+    await expect(bridgeB.getUserInfo(tokens.access_token)).resolves.toMatchObject({
+      sub: 'user-index-race',
+    });
+
+    await redisMock.del(`oidc:session-tokens:${sessionId}`);
+    await bridgeA.frontChannelLogout(sessionId);
+
+    await expect(bridgeB.getUserInfo(tokens.access_token)).rejects.toMatchObject({
+      errorCode: 'invalid_token',
+    });
+  });
+
   // 13. Back-channel logout must also invalidate refresh tokens for the session.
   test('back-channel logout revokes session refresh tokens', async () => {
     const client = await registerTestClient(bridgeA);
