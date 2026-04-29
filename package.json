@@ -21,7 +21,7 @@
     "test:ci": "jest --ci --coverage --reporters=default",
     "test:changed": "jest --changedSince=main",
     "test:e2e": "playwright test",
-    "circuits:compile": "circom circuits/age/age_proof.circom --r1cs --wasm --sym -o build/circuits/age && circom circuits/residency/residency_proof.circom --r1cs --wasm --sym -o build/circuits/residency && circom circuits/credit/credit_tier_proof.circom --r1cs --wasm --sym -o build/circuits/credit",
+    "circuits:compile": "circom circuits/age/age_proof.circom --r1cs --wasm --sym -o build/circuits/age && circom circuits/age/age_context_proof.circom --r1cs --wasm --sym -o build/circuits/age_context_v2 && circom circuits/residency/residency_proof.circom --r1cs --wasm --sym -o build/circuits/residency && circom circuits/credit/credit_tier_proof.circom --r1cs --wasm --sym -o build/circuits/credit",
     "circuits:setup": "snarkjs groth16 setup build/circuits/age/age_proof.r1cs pot12_final.ptau build/circuits/age/age_proof_0000.zkey",
     "circuits:verify": "snarkjs zkey verify build/circuits/age/age_proof.r1cs pot12_final.ptau build/circuits/age/age_proof_final.zkey",
     "contracts:compile": "forge build",

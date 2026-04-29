@@ -80,6 +80,20 @@ const CIRCUIT_REGISTRY: Record<string, CircuitConfig> = {
     publicSignals: ['ageThresholdYears', 'currentTimestamp', 'credentialHashPublic'],
     contextBound: false,
   },
+  age_verification_context_v2: {
+    wasmPath: path.join(
+      CIRCUITS_DIR,
+      'age_context_v2',
+      'age_context_proof_js',
+      'age_context_proof.wasm',
+    ),
+    zkeyPath: path.join(CIRCUITS_DIR, 'age_context_v2', 'age_context_proof_final.zkey'),
+    vkeyPath: path.join(CIRCUITS_DIR, 'age_context_v2', 'verification_key.json'),
+    maxInputs: 14,
+    description: 'Context-bound age proof with claimsHash and verifier context as fixed public signals',
+    publicSignals: ['claimsHash', 'ageThresholdYears', 'contextCommitment'],
+    contextBound: true,
+  },
   nationality_check: {
     wasmPath: path.join(CIRCUITS_DIR, 'nationality_check', 'nationality_check.wasm'),
     zkeyPath: path.join(CIRCUITS_DIR, 'nationality_check', 'nationality_check_final.zkey'),
@@ -318,7 +332,7 @@ export class ZKProofService {
       description: config.description,
       maxInputs: config.maxInputs,
       publicSignals: config.publicSignals,
-      contextBound: config.contextBound,
+      contextBound: this.isCircuitContextBound(name),
     }));
   }
 
@@ -328,7 +342,10 @@ export class ZKProofService {
       return false;
     }
 
-    return this.isContextBoundPublicSignalSchema(circuit.publicSignals);
+    return (
+      this.isContextBoundPublicSignalSchema(circuit.publicSignals) &&
+      this.areCircuitArtifactsAvailable(circuit)
+    );
   }
 
   getCircuitPublicSignalSchema(circuitName: string): string[] | null {
@@ -351,7 +368,7 @@ export class ZKProofService {
       };
     }
 
-    if (!circuit.contextBound) {
+    if (!this.isCircuitContextBound(circuitName)) {
       return {
         valid: false,
         code: 'ZK_CIRCUIT_CONTEXT_BINDING_UNSUPPORTED',
@@ -421,6 +438,12 @@ export class ZKProofService {
       publicSignals[0] === CLAIMS_HASH_PUBLIC_SIGNAL &&
       publicSignals[publicSignals.length - 1] ===
         CONTEXT_COMMITMENT_PUBLIC_SIGNAL
+    );
+  }
+
+  private areCircuitArtifactsAvailable(circuit: CircuitConfig): boolean {
+    return [circuit.wasmPath, circuit.zkeyPath, circuit.vkeyPath].every((filePath) =>
+      fs.existsSync(filePath),
     );
   }
 
