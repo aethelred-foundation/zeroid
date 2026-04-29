@@ -149,6 +149,8 @@ const SUPPORTED_CLIENT_AUTH_METHODS = [
   'none',
 ] as const;
 const SUPPORTED_SIGNING_ALGORITHMS = ['RS256', 'PS256'] as const;
+const PKCE_CODE_CHALLENGE_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+const PKCE_CODE_VERIFIER_PATTERN = /^[A-Za-z0-9._~-]{43,128}$/;
 const ALLOW_PUBLIC_OIDC_CLIENTS =
   process.env.ALLOW_PUBLIC_OIDC_CLIENTS === 'true' &&
   process.env.NODE_ENV !== 'production';
@@ -387,6 +389,7 @@ interface OIDCSession {
   sessionId: string;
   subjectId: string;
   clientId: string;
+  platformSessionId?: string;
   authTime: number;
   lastActivity: number;
   active: boolean;
@@ -525,6 +528,10 @@ const sessionTokenSetKey = (sessionId: string) =>
   `oidc:session-tokens:${sessionId}`;
 const sessionRefreshTokenSetKey = (sessionId: string) =>
   `oidc:session-refresh-tokens:${sessionId}`;
+const platformSessionSetKey = (platformSessionId: string) =>
+  `oidc:platform-session:${platformSessionId}`;
+const subjectSessionSetKey = (subjectId: string) =>
+  `oidc:subject-sessions:${subjectId}`;
 const organizationClientSetKey = (organizationId: string) =>
   `oidc:org-clients:${organizationId}`;
 
@@ -759,6 +766,9 @@ export class OIDCBridge {
     request: AuthorizationRequest,
     subjectId: string,
     subjectClaims: Record<string, unknown>,
+    sessionContext: {
+      platformSessionId?: string;
+    } = {},
   ): Promise<{
     redirectUrl: string;
     code?: string;
@@ -809,6 +819,16 @@ export class OIDCBridge {
       throw new OIDCError('invalid_request', 'Only S256 PKCE is supported');
     }
 
+    if (
+      parsed.codeChallenge &&
+      !PKCE_CODE_CHALLENGE_PATTERN.test(parsed.codeChallenge)
+    ) {
+      throw new OIDCError(
+        'invalid_request',
+        'PKCE S256 code_challenge must be a 43-character base64url SHA-256 digest',
+      );
+    }
+
     // Create session
     const sessionId = crypto.randomUUID();
     const now = Math.floor(Date.now() / 1000);
@@ -816,10 +836,14 @@ export class OIDCBridge {
       sessionId,
       subjectId,
       clientId: parsed.clientId,
+      ...(sessionContext.platformSessionId
+        ? { platformSessionId: sessionContext.platformSessionId }
+        : {}),
       authTime: now,
       lastActivity: now,
       active: true,
     });
+    await this.indexOidcSession(sessionId, subjectId, sessionContext.platformSessionId);
 
     // Build claims based only on scopes registered for this client.
     const requestedScopes = this.assertScopesAllowed(client, parsed.scope);
@@ -961,6 +985,12 @@ export class OIDCBridge {
       }
       if (!request.codeVerifier) {
         throw new OIDCError('invalid_grant', 'Code verifier required');
+      }
+      if (!PKCE_CODE_VERIFIER_PATTERN.test(request.codeVerifier)) {
+        throw new OIDCError(
+          'invalid_grant',
+          'PKCE code_verifier must be 43-128 RFC 7636 unreserved characters',
+        );
       }
       const verified = this.verifyPKCE(
         request.codeVerifier,
@@ -1235,10 +1265,7 @@ export class OIDCBridge {
       throw new OIDCError('invalid_session', 'Session not found');
     }
 
-    session.active = false;
-    await this.sessions.set(sessionId, session);
-
-    await this.revokeSessionCredentials(sessionId);
+    await this.deactivateOidcSession(session, 'front_channel_logout');
 
     const client = await this.clients.get(session.clientId);
     const logoutUrls = client?.registration.postLogoutRedirectUris ?? [];
@@ -1263,9 +1290,7 @@ export class OIDCBridge {
     const session = await this.sessions.get(sessionId);
     if (!session) return { notified: false };
 
-    session.active = false;
-    await this.sessions.set(sessionId, session);
-    await this.revokeSessionCredentials(sessionId);
+    await this.deactivateOidcSession(session, 'back_channel_logout');
 
     const client = await this.getNormalizedClient(session.clientId);
     const logoutUri = client?.registration.backchannelLogoutUri;
@@ -1308,9 +1333,96 @@ export class OIDCBridge {
     };
   }
 
+  async revokePlatformSession(
+    platformSessionId: string,
+  ): Promise<{ revokedSessions: number }> {
+    const sessionIds = await redis.smembers(
+      platformSessionSetKey(platformSessionId),
+    );
+    let revokedSessions = 0;
+    for (const sessionId of sessionIds) {
+      const session = await this.sessions.get(sessionId);
+      if (session) {
+        const revoked = await this.deactivateOidcSession(
+          session,
+          'platform_session_revoked',
+        );
+        if (revoked) revokedSessions += 1;
+      }
+    }
+    await redis.del(platformSessionSetKey(platformSessionId));
+    return { revokedSessions };
+  }
+
+  async revokeSubjectSessions(
+    subjectId: string,
+  ): Promise<{ revokedSessions: number }> {
+    const sessionIds = await redis.smembers(subjectSessionSetKey(subjectId));
+    let revokedSessions = 0;
+    for (const sessionId of sessionIds) {
+      const session = await this.sessions.get(sessionId);
+      if (session) {
+        const revoked = await this.deactivateOidcSession(
+          session,
+          'subject_sessions_revoked',
+        );
+        if (revoked) revokedSessions += 1;
+      }
+    }
+    await redis.del(subjectSessionSetKey(subjectId));
+    return { revokedSessions };
+  }
+
   // -------------------------------------------------------------------------
   // Internal helpers
   // -------------------------------------------------------------------------
+  private async indexOidcSession(
+    sessionId: string,
+    subjectId: string,
+    platformSessionId?: string,
+  ): Promise<void> {
+    const subjectKey = subjectSessionSetKey(subjectId);
+    await redis.sadd(subjectKey, sessionId);
+    await redis.expire(subjectKey, OIDC_REFRESH_TOKEN_TTL);
+
+    if (platformSessionId) {
+      const platformKey = platformSessionSetKey(platformSessionId);
+      await redis.sadd(platformKey, sessionId);
+      await redis.expire(platformKey, OIDC_REFRESH_TOKEN_TTL);
+    }
+  }
+
+  private async deactivateOidcSession(
+    session: OIDCSession,
+    reason: string,
+  ): Promise<boolean> {
+    const wasActive = session.active;
+    session.active = false;
+    session.lastActivity = Math.floor(Date.now() / 1000);
+    await this.sessions.set(session.sessionId, session);
+    await this.revokeSessionCredentials(session.sessionId);
+    await this.removeOidcSessionIndexes(session);
+
+    logger.info('oidc_session_revoked', {
+      sessionId: session.sessionId,
+      clientId: session.clientId,
+      subjectId: session.subjectId,
+      platformSessionId: session.platformSessionId,
+      reason,
+    });
+    return wasActive;
+  }
+
+  private async removeOidcSessionIndexes(session: OIDCSession): Promise<void> {
+    await redis.srem(subjectSessionSetKey(session.subjectId), session.sessionId);
+    if (session.platformSessionId) {
+      await redis.srem(
+        platformSessionSetKey(session.platformSessionId),
+        session.sessionId,
+      );
+    }
+  }
+
   private async deliverBackChannelLogout(
     logoutUri: string,
     logoutToken: string,

@@ -9,6 +9,8 @@ const mockRedisSet = jest.fn();
 const mockRedisDel = jest.fn();
 const mockGenerateToken = jest.fn();
 const mockRevokeToken = jest.fn();
+const mockRevokePlatformSession = jest.fn();
+const mockRevokeSubjectSessions = jest.fn();
 
 jest.mock('../src/index', () => ({
   logger: {
@@ -38,6 +40,13 @@ jest.mock('../src/index', () => ({
 jest.mock('../src/middleware/auth', () => ({
   generateToken: mockGenerateToken,
   revokeToken: mockRevokeToken,
+}));
+
+jest.mock('../src/services/enterprise/oidc-bridge', () => ({
+  oidcBridge: {
+    revokePlatformSession: mockRevokePlatformSession,
+    revokeSubjectSessions: mockRevokeSubjectSessions,
+  },
 }));
 
 import { IdentityService } from '../src/services/identity';
@@ -94,6 +103,8 @@ describe('IdentityService recovery hardening', () => {
       token: 'session-token',
       sessionId: 'session-1',
     });
+    mockRevokePlatformSession.mockResolvedValue({ revokedSessions: 0 });
+    mockRevokeSubjectSessions.mockResolvedValue({ revokedSessions: 0 });
   });
 
   it('does not self-reactivate suspended identities during recovery', async () => {

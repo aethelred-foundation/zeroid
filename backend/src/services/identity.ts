@@ -1,5 +1,6 @@
 import { prisma, logger, redis } from '../index';
 import { generateToken, revokeToken } from '../middleware/auth';
+import { oidcBridge } from './enterprise/oidc-bridge';
 // tee import removed — not used in this module
 import { IdentityStatus } from '@prisma/client';
 import nodeCrypto from 'crypto';
@@ -266,7 +267,8 @@ export class IdentityService {
       throw new IdentityError('Invalid recovery proof', 'IDENTITY_RECOVERY_INVALID', 403);
     }
 
-    // Revoke all existing sessions
+    // Revoke all existing platform and enterprise federation sessions
+    await oidcBridge.revokeSubjectSessions(identity.id);
     const sessions = await prisma.session.findMany({ where: { identityId: identity.id } });
     for (const session of sessions) {
       await revokeToken(session.id);
@@ -419,6 +421,7 @@ export class IdentityService {
   // Logout (revoke session)
   // -------------------------------------------------------------------------
   async logout(identityId: string, sessionId: string): Promise<void> {
+    await oidcBridge.revokePlatformSession(sessionId);
     await revokeToken(sessionId);
 
     await prisma.auditLog.create({

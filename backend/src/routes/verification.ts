@@ -32,6 +32,7 @@ type ProofNonceRecord = {
   issuedAt?: unknown;
   claimsHashField?: unknown;
   contextCommitmentField?: unknown;
+  publicSignalValues?: unknown;
 };
 
 function canonicalizeClaims(value: unknown): string {
@@ -107,6 +108,115 @@ function sendProofSignalValidationFailure(
     error: error.message,
     code: error.code,
   });
+}
+
+function buildRouteError(
+  message: string,
+  code: string,
+  statusCode = 400,
+): Error & { code?: string; statusCode?: number } {
+  const error = new Error(message) as Error & {
+    code?: string;
+    statusCode?: number;
+  };
+  error.code = code;
+  error.statusCode = statusCode;
+  return error;
+}
+
+function normalizePublicSignalValue(value: string | number, signalName: string): string {
+  if (typeof value === 'number') {
+    if (!Number.isSafeInteger(value) || value < 0) {
+      throw buildRouteError(
+        `Public signal ${signalName} must be a non-negative safe integer`,
+        'PROOF_PUBLIC_SIGNAL_PARAMETER_INVALID',
+      );
+    }
+    return value.toString();
+  }
+
+  const trimmed = value.trim();
+  if (/^\d+$/.test(trimmed) || /^0x[0-9a-f]+$/i.test(trimmed)) {
+    return BigInt(trimmed).toString();
+  }
+
+  throw buildRouteError(
+    `Public signal ${signalName} must be a decimal or hexadecimal field value`,
+    'PROOF_PUBLIC_SIGNAL_PARAMETER_INVALID',
+  );
+}
+
+function resolvePublicSignalInputValue(
+  signalName: string,
+  inputs: Record<string, string | number>,
+): string {
+  const aliases =
+    signalName === 'ageThresholdYears'
+      ? ['ageThresholdYears', 'ageThreshold', 'threshold']
+      : [signalName];
+  const values = aliases
+    .filter((alias) => Object.prototype.hasOwnProperty.call(inputs, alias))
+    .map((alias) => normalizePublicSignalValue(inputs[alias], signalName));
+  const uniqueValues = [...new Set(values)];
+
+  if (uniqueValues.length === 0) {
+    throw buildRouteError(
+      `Missing proof parameter for public signal: ${signalName}`,
+      'PROOF_PUBLIC_SIGNAL_PARAMETER_MISSING',
+    );
+  }
+
+  if (uniqueValues.length > 1) {
+    throw buildRouteError(
+      `Conflicting proof parameters for public signal: ${signalName}`,
+      'PROOF_PUBLIC_SIGNAL_PARAMETER_CONFLICT',
+    );
+  }
+
+  return uniqueValues[0];
+}
+
+function buildExpectedPublicSignalValues(
+  circuitName: string,
+  inputs: Record<string, string | number>,
+  commitments: { claimsHash: string; contextCommitment: string },
+): Record<string, string> {
+  const schema = zkProofService.getCircuitPublicSignalSchema(circuitName);
+  if (!schema) {
+    throw buildRouteError(
+      `Unknown circuit: ${circuitName}`,
+      'ZK_UNKNOWN_CIRCUIT',
+    );
+  }
+
+  const values: Record<string, string> = {};
+  for (const signalName of schema) {
+    if (signalName === 'claimsHash') {
+      values[signalName] = commitments.claimsHash;
+    } else if (signalName === 'contextCommitment') {
+      values[signalName] = commitments.contextCommitment;
+    } else {
+      values[signalName] = resolvePublicSignalInputValue(signalName, inputs);
+    }
+  }
+
+  return values;
+}
+
+function parseNoncePublicSignalValues(
+  value: unknown,
+): Record<string, string> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+
+  const entries = Object.entries(value as Record<string, unknown>);
+  if (entries.length === 0) return null;
+  if (entries.some(([, entryValue]) => typeof entryValue !== 'string')) {
+    return null;
+  }
+
+  return Object.fromEntries(entries) as Record<string, string>;
 }
 
 function isCredentialExpired(expiresAt: Date | string | null | undefined): boolean {
@@ -212,6 +322,14 @@ router.post(
         '0x' + contextCommitment.substring(0, 62),
       ).toString();
       const claimsHashField = digestToFieldElement(credential.claimsHash);
+      const publicSignalValues = buildExpectedPublicSignalValues(
+        circuitName,
+        inputs,
+        {
+          claimsHash: claimsHashField,
+          contextCommitment: contextCommitmentField,
+        },
+      );
 
       // Reserve the nonce before expensive proof generation. SET NX prevents
       // callers from overwriting another in-flight proof context with the same
@@ -227,6 +345,7 @@ router.post(
           issuedAt,
           claimsHashField,
           contextCommitmentField,
+          publicSignalValues,
         }),
         'EX',
         PROOF_NONCE_TTL_SECONDS,
@@ -241,12 +360,7 @@ router.post(
       }
 
       const witnessInputs: Record<string, string | number> = {
-        // Claims hash as a public commitment for integrity binding
-        claimsHash: claimsHashField,
-        // Single context commitment — encodes nonce, audience, subject,
-        // credential, and issuedAt. Verified against public signals on
-        // the verifier side to ensure proof is bound to this context.
-        contextCommitment: contextCommitmentField,
+        ...publicSignalValues,
       };
 
       // For selective disclosure, include only the selected claim values
@@ -270,13 +384,20 @@ router.post(
       const allowedParams = [
         'threshold',
         'ageThreshold',
+        'ageThresholdYears',
         'incomeMin',
         'incomeMax',
         'nationalitySet',
       ];
       for (const [key, value] of Object.entries(inputs)) {
         if (allowedParams.includes(key)) {
-          witnessInputs[key] = value as string | number;
+          const witnessKey =
+            key === 'threshold' || key === 'ageThreshold'
+              ? 'ageThresholdYears'
+              : key;
+          if (!Object.prototype.hasOwnProperty.call(witnessInputs, witnessKey)) {
+            witnessInputs[witnessKey] = value as string | number;
+          }
         }
       }
 
@@ -294,6 +415,7 @@ router.post(
           {
             claimsHash: claimsHashField,
             contextCommitment: contextCommitmentField,
+            publicSignals: publicSignalValues,
           },
         );
       if (!generatedSignalValidation.valid) {
@@ -315,6 +437,7 @@ router.post(
             audience,
             claimsHash: claimsHashField,
             contextCommitment: contextCommitmentField,
+            publicSignalValues,
             issuedAt,
           },
           result: 'VERIFIED',
@@ -339,6 +462,7 @@ router.post(
           expiresAt: issuedAt + MAX_PROOF_AGE_MS,
           claimsHash: claimsHashField,
           contextCommitment: contextCommitmentField,
+          publicSignalValues,
         },
         message: 'ZK proof generated successfully',
       });
@@ -544,6 +668,16 @@ router.post(
         });
         return;
       }
+      const noncePublicSignalValues = parseNoncePublicSignalValues(
+        nonceRecord.publicSignalValues,
+      );
+      if (!noncePublicSignalValues) {
+        res.status(400).json({
+          error: 'Nonce record is missing public signal expectations',
+          code: 'PROOF_NONCE_RECORD_INVALID',
+        });
+        return;
+      }
 
       if (
         nonceRecord.nonce !== nonce ||
@@ -637,6 +771,18 @@ router.post(
         return;
       }
 
+      if (
+        noncePublicSignalValues.claimsHash !== expectedClaimsHashField ||
+        noncePublicSignalValues.contextCommitment !== expectedCommitmentField
+      ) {
+        res.status(400).json({
+          error:
+            'Nonce public-signal expectations do not match the proof context',
+          code: 'PROOF_PUBLIC_SIGNAL_CONTEXT_INVALID',
+        });
+        return;
+      }
+
       // 7. Verify the ZK proof cryptographically
       const result = await zkProofService.verifyProof(
         proof,
@@ -662,6 +808,7 @@ router.post(
           {
             claimsHash: expectedClaimsHashField,
             contextCommitment: expectedCommitmentField,
+            publicSignals: noncePublicSignalValues,
           },
         );
       if (!signalValidation.valid) {

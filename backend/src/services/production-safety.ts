@@ -131,6 +131,7 @@ export function checkedProductionSafetyControls(): string[] {
   return [
     ...UNSAFE_PRODUCTION_FLAGS.map((flag) => flag.control),
     'REDIS_URL',
+    'REDIS_TLS_OR_ALLOW_PLAINTEXT_REDIS_IN_PRODUCTION',
     'JWT_SECRET',
     'TRUSTED_PROXY',
     'CORS_ORIGINS',
@@ -183,10 +184,10 @@ export function collectProductionSafetyViolations(
       control: 'REDIS_URL',
       risk: 'Production Redis connection is missing; rate limiting and session state cannot be enforced reliably',
     });
-  } else if (!isTrustedRedisUrl(redisUrl)) {
+  } else if (!isTrustedRedisUrl(redisUrl, env)) {
     violations.push({
       control: 'REDIS_URL',
-      risk: 'Production Redis connection must use a non-local redis:// or rediss:// endpoint',
+      risk: 'Production Redis connection must use rediss:// TLS to protect session, OIDC, and rate-limit state',
     });
   }
 
@@ -687,10 +688,19 @@ function decodeSecretEncryptionKey(value: string): Buffer | null {
   }
 }
 
-function isTrustedRedisUrl(value: string): boolean {
+function isTrustedRedisUrl(
+  value: string,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
   try {
     const url = new URL(value);
     if (url.protocol !== 'redis:' && url.protocol !== 'rediss:') return false;
+    if (
+      url.protocol === 'redis:' &&
+      env.ALLOW_PLAINTEXT_REDIS_IN_PRODUCTION !== 'true'
+    ) {
+      return false;
+    }
     const hostname = url.hostname.toLowerCase();
     return !isLocalHostname(hostname);
   } catch {

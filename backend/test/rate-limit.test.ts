@@ -1,10 +1,10 @@
-const mockPipeline = jest.fn();
+const mockEval = jest.fn();
 const mockWarn = jest.fn();
 const mockError = jest.fn();
 
 jest.mock('../src/index', () => ({
   redis: {
-    pipeline: mockPipeline,
+    eval: mockEval,
   },
   logger: {
     warn: mockWarn,
@@ -15,16 +15,6 @@ jest.mock('../src/index', () => ({
 import { createRateLimiter } from '../src/middleware/rateLimit';
 
 const ORIGINAL_ENV = { ...process.env };
-
-function createPipeline(execResult: unknown) {
-  return {
-    zremrangebyscore: jest.fn().mockReturnThis(),
-    zadd: jest.fn().mockReturnThis(),
-    zcard: jest.fn().mockReturnThis(),
-    expire: jest.fn().mockReturnThis(),
-    exec: jest.fn(async () => execResult),
-  };
-}
 
 function createMockHttp() {
   const req: any = {
@@ -65,7 +55,7 @@ describe('createRateLimiter', () => {
   });
 
   it('allows requests within the configured limit', async () => {
-    mockPipeline.mockReturnValue(createPipeline([[null, 1], [null, 1], [null, 1], [null, 1]]));
+    mockEval.mockResolvedValue(1);
     const limiter = createRateLimiter({ windowMs: 60_000, maxRequests: 2, keyPrefix: 'rl:test' });
     const { req, res, next } = createMockHttp();
 
@@ -78,7 +68,7 @@ describe('createRateLimiter', () => {
   });
 
   it('rejects requests over the configured limit', async () => {
-    mockPipeline.mockReturnValue(createPipeline([[null, 1], [null, 1], [null, 3], [null, 1]]));
+    mockEval.mockResolvedValue(3);
     const limiter = createRateLimiter({ windowMs: 60_000, maxRequests: 2, keyPrefix: 'rl:test' });
     const { req, res, next } = createMockHttp();
 
@@ -91,7 +81,7 @@ describe('createRateLimiter', () => {
 
   it('trusts forwarded client IP only from configured proxy peers', async () => {
     process.env.TRUSTED_PROXY = '10.0.0.5';
-    mockPipeline.mockReturnValue(createPipeline([[null, 1], [null, 1], [null, 1], [null, 1]]));
+    mockEval.mockResolvedValue(1);
     const limiter = createRateLimiter({ windowMs: 60_000, maxRequests: 2, keyPrefix: 'rl:test' });
     const { req, next } = createMockHttp();
     req.ip = '10.0.0.5';
@@ -100,17 +90,21 @@ describe('createRateLimiter', () => {
 
     await limiter(req, createMockHttp().res, next);
 
-    const pipeline = mockPipeline.mock.results[0]?.value;
-    expect(pipeline.zremrangebyscore).toHaveBeenCalledWith(
+    expect(mockEval).toHaveBeenCalledWith(
+      expect.stringContaining('ZREMRANGEBYSCORE'),
+      1,
       'rl:test:203.0.113.44',
-      0,
-      expect.any(Number),
+      expect.any(String),
+      expect.any(String),
+      expect.any(String),
+      expect.any(String),
+      expect.any(String),
     );
   });
 
   it('ignores spoofed forwarded client IP from untrusted peers', async () => {
     process.env.TRUSTED_PROXY = '10.0.0.5';
-    mockPipeline.mockReturnValue(createPipeline([[null, 1], [null, 1], [null, 1], [null, 1]]));
+    mockEval.mockResolvedValue(1);
     const limiter = createRateLimiter({ windowMs: 60_000, maxRequests: 2, keyPrefix: 'rl:test' });
     const { req, next } = createMockHttp();
     req.ip = '198.51.100.9';
@@ -119,16 +113,20 @@ describe('createRateLimiter', () => {
 
     await limiter(req, createMockHttp().res, next);
 
-    const pipeline = mockPipeline.mock.results[0]?.value;
-    expect(pipeline.zremrangebyscore).toHaveBeenCalledWith(
+    expect(mockEval).toHaveBeenCalledWith(
+      expect.stringContaining('ZREMRANGEBYSCORE'),
+      1,
       'rl:test:198.51.100.9',
-      0,
-      expect.any(Number),
+      expect.any(String),
+      expect.any(String),
+      expect.any(String),
+      expect.any(String),
+      expect.any(String),
     );
   });
 
-  it('fails open outside production when Redis returns no pipeline results', async () => {
-    mockPipeline.mockReturnValue(createPipeline(null));
+  it('fails open outside production when Redis returns an invalid count', async () => {
+    mockEval.mockResolvedValue(null);
     const limiter = createRateLimiter({ windowMs: 60_000, maxRequests: 2, keyPrefix: 'rl:test' });
     const { req, res, next } = createMockHttp();
 
@@ -138,9 +136,9 @@ describe('createRateLimiter', () => {
     expect(res.status).not.toHaveBeenCalled();
   });
 
-  it('fails closed in production when Redis returns no pipeline results', async () => {
+  it('fails closed in production when Redis returns an invalid count', async () => {
     process.env.NODE_ENV = 'production';
-    mockPipeline.mockReturnValue(createPipeline(null));
+    mockEval.mockResolvedValue(null);
     const limiter = createRateLimiter({ windowMs: 60_000, maxRequests: 2, keyPrefix: 'rl:test' });
     const { req, res, next } = createMockHttp();
 
@@ -154,7 +152,7 @@ describe('createRateLimiter', () => {
 
   it('fails closed in production when Redis throws', async () => {
     process.env.NODE_ENV = 'production';
-    mockPipeline.mockImplementation(() => {
+    mockEval.mockImplementation(() => {
       throw new Error('redis unavailable');
     });
     const limiter = createRateLimiter({ windowMs: 60_000, maxRequests: 2, keyPrefix: 'rl:test' });

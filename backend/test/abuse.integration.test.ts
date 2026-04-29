@@ -23,6 +23,28 @@ const redisStore: Record<string, string> = {};
 const redisSortedSets: Record<string, Array<{ score: number; member: string }>> = {};
 const issuedTokenHashes: Record<string, string> = {};
 
+async function rateLimitEval(
+  _script: string,
+  _numKeys: number,
+  key: string,
+  windowStart: string,
+  now: string,
+  member: string,
+  maxRequests: string,
+) {
+  if (!redisSortedSets[key]) redisSortedSets[key] = [];
+  const windowStartNumber = Number(windowStart);
+  redisSortedSets[key] = redisSortedSets[key].filter(
+    (entry) => entry.score > windowStartNumber,
+  );
+  const currentCount = redisSortedSets[key].length;
+  if (currentCount >= Number(maxRequests)) {
+    return currentCount + 1;
+  }
+  redisSortedSets[key].push({ score: Number(now), member });
+  return currentCount + 1;
+}
+
 const mockRedis = {
   get: jest.fn(async (key: string) => redisStore[key] ?? null),
   set: jest.fn(async (key: string, value: string, ...args: unknown[]) => {
@@ -40,6 +62,7 @@ const mockRedis = {
   connect: jest.fn(async () => {}),
   disconnect: jest.fn(),
   on: jest.fn(),
+  eval: jest.fn(rateLimitEval),
   pipeline: jest.fn(() => {
     const ops: Array<() => void> = [];
     const pipe = {
@@ -337,6 +360,7 @@ function stubAuthFor(identityId = 'identity-1', did = 'did:aethelred:alice', ses
 // ---------------------------------------------------------------------------
 beforeEach(() => {
   jest.clearAllMocks();
+  mockRedis.eval.mockImplementation(rateLimitEval);
   // Clear in-memory stores
   for (const k of Object.keys(redisStore)) delete redisStore[k];
   for (const k of Object.keys(redisSortedSets)) delete redisSortedSets[k];
@@ -349,24 +373,8 @@ beforeEach(() => {
 describe('1 - Rate-limit enforcement', () => {
   it('should return 429 when global rate limit is exceeded', async () => {
     // The global limiter allows 120 requests per 60s window.
-    // We simulate the sorted-set already containing 121 entries so the
-    // very next request breaches the limit.
-    const pipeExecOverride = async () => [
-      [null, 'OK'],
-      [null, 1],
-      [null, 122], // zcard returns count > maxRequests (120)
-      [null, 1],
-    ];
-    mockRedis.pipeline.mockImplementation(() => {
-      const pipe: any = {
-        zremrangebyscore: jest.fn().mockReturnThis(),
-        zadd: jest.fn().mockReturnThis(),
-        zcard: jest.fn().mockReturnThis(),
-        expire: jest.fn().mockReturnThis(),
-        exec: jest.fn(pipeExecOverride),
-      };
-      return pipe;
-    });
+    // Return a count over the cap from the atomic Redis script.
+    mockRedis.eval.mockResolvedValueOnce(122);
 
     const res = await request(app as Express)
       .post('/api/v1/identity/register')

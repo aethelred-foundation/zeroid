@@ -29,6 +29,11 @@ describe('ZK public signal schema validation', () => {
       {
         claimsHash: 'claims-field',
         contextCommitment: 'context-field',
+        publicSignals: {
+          claimsHash: 'claims-field',
+          ageThresholdYears: '21',
+          contextCommitment: 'context-field',
+        },
       },
     );
 
@@ -40,6 +45,11 @@ describe('ZK public signal schema validation', () => {
     const expected = {
       claimsHash: 'claims-field',
       contextCommitment: 'context-field',
+      publicSignals: {
+        claimsHash: 'claims-field',
+        ageThresholdYears: '21',
+        contextCommitment: 'context-field',
+      },
     };
 
     expect(
@@ -72,12 +82,54 @@ describe('ZK public signal schema validation', () => {
       {
         claimsHash: 'claims-field',
         contextCommitment: 'context-field',
+        publicSignals: {
+          claimsHash: 'claims-field',
+          ageThresholdYears: '21',
+          contextCommitment: 'context-field',
+        },
       },
     );
 
     expect(result).toMatchObject({
       valid: false,
       code: 'PROOF_CONTEXT_NOT_COMMITTED',
+    });
+  });
+
+  it('rejects policy parameter public signals that do not match the issued context', () => {
+    const result = service.validatePublicSignalsAgainstSchema(
+      ['claims-field', '18', 'context-field'],
+      ['claimsHash', 'ageThresholdYears', 'contextCommitment'],
+      {
+        claimsHash: 'claims-field',
+        contextCommitment: 'context-field',
+        publicSignals: {
+          claimsHash: 'claims-field',
+          ageThresholdYears: '21',
+          contextCommitment: 'context-field',
+        },
+      },
+    );
+
+    expect(result).toMatchObject({
+      valid: false,
+      code: 'PROOF_PUBLIC_SIGNAL_VALUE_MISMATCH',
+    });
+  });
+
+  it('rejects context-bound schemas when a middle public-signal expectation is missing', () => {
+    const result = service.validatePublicSignalsAgainstSchema(
+      ['claims-field', '21', 'context-field'],
+      ['claimsHash', 'ageThresholdYears', 'contextCommitment'],
+      {
+        claimsHash: 'claims-field',
+        contextCommitment: 'context-field',
+      },
+    );
+
+    expect(result).toMatchObject({
+      valid: false,
+      code: 'PROOF_PUBLIC_SIGNAL_EXPECTATION_MISSING',
     });
   });
 
@@ -88,6 +140,10 @@ describe('ZK public signal schema validation', () => {
       {
         claimsHash: 'claims-field',
         contextCommitment: 'context-field',
+        publicSignals: {
+          claimsHash: 'claims-field',
+          contextCommitment: 'context-field',
+        },
       },
     );
 
@@ -119,6 +175,11 @@ describe('ZK public signal schema validation', () => {
         {
           claimsHash: 'claims-field',
           contextCommitment: 'context-field',
+          publicSignals: {
+            claimsHash: 'claims-field',
+            ageThresholdYears: '21',
+            contextCommitment: 'context-field',
+          },
         },
       ),
     ).toMatchObject({

@@ -1,6 +1,18 @@
 import { Request, Response, NextFunction } from 'express';
 import { redis, logger } from '../index';
 
+const RATE_LIMIT_WINDOW_SCRIPT = `
+  redis.call('ZREMRANGEBYSCORE', KEYS[1], 0, ARGV[1])
+  local current_count = redis.call('ZCARD', KEYS[1])
+  if current_count >= tonumber(ARGV[4]) then
+    redis.call('EXPIRE', KEYS[1], ARGV[5])
+    return current_count + 1
+  end
+  redis.call('ZADD', KEYS[1], ARGV[2], ARGV[3])
+  redis.call('EXPIRE', KEYS[1], ARGV[5])
+  return current_count + 1
+`;
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -44,19 +56,18 @@ export function createRateLimiter(config: RateLimitConfig) {
     const windowStart = now - windowMs;
 
     try {
-      // Sliding window counter via Redis sorted set
-      const pipeline = redis.pipeline();
-      // Remove entries outside the current window
-      pipeline.zremrangebyscore(key, 0, windowStart);
-      // Add current request
-      pipeline.zadd(key, now, `${now}:${crypto.randomUUID()}`);
-      // Count entries in window
-      pipeline.zcard(key);
-      // Set TTL on the key
-      pipeline.expire(key, windowSec + 1);
-
-      const results = await pipeline.exec();
-      if (!results) {
+      const requestCountResult = await redis.eval(
+        RATE_LIMIT_WINDOW_SCRIPT,
+        1,
+        key,
+        String(windowStart),
+        String(now),
+        `${now}:${crypto.randomUUID()}`,
+        String(maxRequests),
+        String(windowSec + 1),
+      );
+      const requestCount = Number(requestCountResult);
+      if (!Number.isSafeInteger(requestCount) || requestCount < 1) {
         logger.warn('rate_limit_redis_unavailable', { key });
         handleRateLimitStoreFailure(req, res, next, {
           key,
@@ -68,7 +79,6 @@ export function createRateLimiter(config: RateLimitConfig) {
         return;
       }
 
-      const requestCount = (results[2]?.[1] as number) ?? 0;
       const remaining = Math.max(0, maxRequests - requestCount);
       const resetTime = Math.ceil((now + windowMs) / 1000);
 

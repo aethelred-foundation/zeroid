@@ -78,6 +78,23 @@ describe('production safety controls', () => {
     ]);
   });
 
+  it('requires TLS Redis for production state unless explicitly overridden', () => {
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      REDIS_URL: 'redis://redis.zeroid.example:6379',
+      METRICS_PUBLIC_DISABLED: 'true',
+    })).toEqual([
+      expect.objectContaining({ control: 'REDIS_URL' }),
+    ]);
+
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      REDIS_URL: 'redis://redis.zeroid.example:6379',
+      ALLOW_PLAINTEXT_REDIS_IN_PRODUCTION: 'true',
+      METRICS_PUBLIC_DISABLED: 'true',
+    })).toEqual([]);
+  });
+
   it('requires a strong JWT signing secret in production', () => {
     expect(collectProductionSafetyViolations({
       ...PROD_BASE_ENV,

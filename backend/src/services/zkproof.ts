@@ -51,6 +51,7 @@ interface CircuitConfig {
 export interface PublicSignalCommitments {
   claimsHash: string;
   contextCommitment: string;
+  publicSignals?: Record<string, string>;
 }
 
 export interface PublicSignalSchemaValidation {
@@ -409,7 +410,13 @@ export class ZKProofService {
       };
     }
 
-    if (publicSignals[0] !== expected.claimsHash) {
+    const expectedBySignalName: Record<string, string> = {
+      ...expected.publicSignals,
+      claimsHash: expected.claimsHash,
+      contextCommitment: expected.contextCommitment,
+    };
+
+    if (publicSignals[0] !== expectedBySignalName.claimsHash) {
       return {
         valid: false,
         code: 'PROOF_CLAIMS_HASH_NOT_COMMITTED',
@@ -419,7 +426,7 @@ export class ZKProofService {
       };
     }
 
-    if (publicSignals[publicSignals.length - 1] !== expected.contextCommitment) {
+    if (publicSignals[publicSignals.length - 1] !== expectedBySignalName.contextCommitment) {
       return {
         valid: false,
         code: 'PROOF_CONTEXT_NOT_COMMITTED',
@@ -427,6 +434,29 @@ export class ZKProofService {
           'Context commitment is not the last public signal - proof is not bound to this context',
         statusCode: 400,
       };
+    }
+
+    for (let index = 1; index < publicSignalSchema.length - 1; index += 1) {
+      const signalName = publicSignalSchema[index];
+      const expectedValue = expectedBySignalName[signalName];
+
+      if (typeof expectedValue !== 'string') {
+        return {
+          valid: false,
+          code: 'PROOF_PUBLIC_SIGNAL_EXPECTATION_MISSING',
+          error: `Expected value is missing for public signal: ${signalName}`,
+          statusCode: 400,
+        };
+      }
+
+      if (publicSignals[index] !== expectedValue) {
+        return {
+          valid: false,
+          code: 'PROOF_PUBLIC_SIGNAL_VALUE_MISMATCH',
+          error: `Public signal ${signalName} does not match the issued proof context`,
+          statusCode: 400,
+        };
+      }
     }
 
     return { valid: true };

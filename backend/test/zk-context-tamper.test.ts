@@ -51,6 +51,7 @@ const mockRedis = {
   connect: jest.fn(async () => {}),
   disconnect: jest.fn(),
   on: jest.fn(),
+  eval: jest.fn(async () => 1),
   pipeline: jest.fn(() => {
     const pipe: any = {
       zremrangebyscore: jest.fn().mockReturnThis(),
@@ -128,8 +129,17 @@ const mockValidateContextBoundPublicSignals = jest.fn(
   (
     _circuitName: string,
     publicSignals: string[],
-    expected: { claimsHash: string; contextCommitment: string },
+    expected: {
+      claimsHash: string;
+      contextCommitment: string;
+      publicSignals?: Record<string, string>;
+    },
   ) => {
+    const expectedSignals = {
+      ...expected.publicSignals,
+      claimsHash: expected.claimsHash,
+      contextCommitment: expected.contextCommitment,
+    };
     if (publicSignals.length !== 3) {
       return {
         valid: false,
@@ -139,7 +149,7 @@ const mockValidateContextBoundPublicSignals = jest.fn(
         statusCode: 400,
       };
     }
-    if (publicSignals[0] !== expected.claimsHash) {
+    if (publicSignals[0] !== expectedSignals.claimsHash) {
       return {
         valid: false,
         code: 'PROOF_CLAIMS_HASH_NOT_COMMITTED',
@@ -148,12 +158,21 @@ const mockValidateContextBoundPublicSignals = jest.fn(
         statusCode: 400,
       };
     }
-    if (publicSignals[2] !== expected.contextCommitment) {
+    if (publicSignals[2] !== expectedSignals.contextCommitment) {
       return {
         valid: false,
         code: 'PROOF_CONTEXT_NOT_COMMITTED',
         error:
           'Context commitment is not the last public signal - proof is not bound to this context',
+        statusCode: 400,
+      };
+    }
+    if (publicSignals[1] !== expectedSignals.ageThresholdYears) {
+      return {
+        valid: false,
+        code: 'PROOF_PUBLIC_SIGNAL_VALUE_MISMATCH',
+        error:
+          'Public signal ageThresholdYears does not match the issued proof context',
         statusCode: 400,
       };
     }
@@ -414,6 +433,11 @@ function seedNonce(
   issuedAt: number,
   contextCommitmentField: string,
   claimsHashField = CREDENTIAL_CLAIMS_FIELD,
+  publicSignalValues: Record<string, string> = {
+    claimsHash: claimsHashField,
+    ageThresholdYears: '2',
+    contextCommitment: contextCommitmentField,
+  },
 ) {
   redisStore[proofNonceScopedKey('proof:nonce', nonce)] = JSON.stringify({
     nonce,
@@ -423,6 +447,7 @@ function seedNonce(
     issuedAt,
     claimsHashField,
     contextCommitmentField,
+    publicSignalValues,
   });
 }
 
@@ -485,8 +510,17 @@ beforeEach(() => {
     (
       _circuitName: string,
       publicSignals: string[],
-      expected: { claimsHash: string; contextCommitment: string },
+      expected: {
+        claimsHash: string;
+        contextCommitment: string;
+        publicSignals?: Record<string, string>;
+      },
     ) => {
+      const expectedSignals = {
+        ...expected.publicSignals,
+        claimsHash: expected.claimsHash,
+        contextCommitment: expected.contextCommitment,
+      };
       if (publicSignals.length !== 3) {
         return {
           valid: false,
@@ -496,7 +530,7 @@ beforeEach(() => {
           statusCode: 400,
         };
       }
-      if (publicSignals[0] !== expected.claimsHash) {
+      if (publicSignals[0] !== expectedSignals.claimsHash) {
         return {
           valid: false,
           code: 'PROOF_CLAIMS_HASH_NOT_COMMITTED',
@@ -505,12 +539,21 @@ beforeEach(() => {
           statusCode: 400,
         };
       }
-      if (publicSignals[2] !== expected.contextCommitment) {
+      if (publicSignals[2] !== expectedSignals.contextCommitment) {
         return {
           valid: false,
           code: 'PROOF_CONTEXT_NOT_COMMITTED',
           error:
             'Context commitment is not the last public signal - proof is not bound to this context',
+          statusCode: 400,
+        };
+      }
+      if (publicSignals[1] !== expectedSignals.ageThresholdYears) {
+        return {
+          valid: false,
+          code: 'PROOF_PUBLIC_SIGNAL_VALUE_MISMATCH',
+          error:
+            'Public signal ageThresholdYears does not match the issued proof context',
           statusCode: 400,
         };
       }
@@ -898,6 +941,92 @@ describe('ZK-01: Context-tamper verification', () => {
 
     expect(res.status).toBe(400);
     expect(res.body.code).toBe('PROOF_SIGNALS_SCHEMA_INVALID');
+  });
+
+  it('rejects when a policy public signal differs from the nonce-bound value', async () => {
+    const token = await makeToken({ sub: VERIFIER_ID, did: VERIFIER_DID });
+    stubAuthFor(VERIFIER_ID, VERIFIER_DID);
+
+    const nonce = 'nonce-policy-signal-swap';
+    const issuedAt = Date.now() - 1000;
+    const ctxField = computeContextCommitmentField(
+      nonce,
+      VERIFIER_ID,
+      SUBJECT_ID,
+      CREDENTIAL_ID,
+      issuedAt,
+    );
+    seedNonce(
+      nonce,
+      VERIFIER_ID,
+      SUBJECT_ID,
+      CREDENTIAL_ID,
+      issuedAt,
+      ctxField,
+      CREDENTIAL_CLAIMS_FIELD,
+      {
+        claimsHash: CREDENTIAL_CLAIMS_FIELD,
+        ageThresholdYears: '21',
+        contextCommitment: ctxField,
+      },
+    );
+
+    const payload = buildValidPayload({
+      nonce,
+      audience: VERIFIER_ID,
+      contextCommitment: ctxField,
+      issuedAt,
+      publicSignals: [CREDENTIAL_CLAIMS_FIELD, '18', ctxField],
+    });
+
+    const res = await request(app as Express)
+      .post('/api/v1/verification/zk-verify')
+      .set('Authorization', `Bearer ${token}`)
+      .send(payload);
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('PROOF_PUBLIC_SIGNAL_VALUE_MISMATCH');
+  });
+
+  it('rejects nonce records that do not carry full public-signal expectations', async () => {
+    const token = await makeToken({ sub: VERIFIER_ID, did: VERIFIER_DID });
+    stubAuthFor(VERIFIER_ID, VERIFIER_DID);
+
+    const nonce = 'nonce-missing-policy-signal-context';
+    const issuedAt = Date.now() - 1000;
+    const ctxField = computeContextCommitmentField(
+      nonce,
+      VERIFIER_ID,
+      SUBJECT_ID,
+      CREDENTIAL_ID,
+      issuedAt,
+    );
+    redisStore[proofNonceScopedKey('proof:nonce', nonce)] = JSON.stringify({
+      nonce,
+      audience: VERIFIER_ID,
+      subjectId: SUBJECT_ID,
+      credentialId: CREDENTIAL_ID,
+      issuedAt,
+      claimsHashField: CREDENTIAL_CLAIMS_FIELD,
+      contextCommitmentField: ctxField,
+    });
+
+    const payload = buildValidPayload({
+      nonce,
+      audience: VERIFIER_ID,
+      contextCommitment: ctxField,
+      issuedAt,
+      publicSignals: [CREDENTIAL_CLAIMS_FIELD, '2', ctxField],
+    });
+
+    const res = await request(app as Express)
+      .post('/api/v1/verification/zk-verify')
+      .set('Authorization', `Bearer ${token}`)
+      .send(payload);
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('PROOF_NONCE_RECORD_INVALID');
+    expect(mockVerifyProof).not.toHaveBeenCalled();
   });
 
   // -----------------------------------------------------------------------

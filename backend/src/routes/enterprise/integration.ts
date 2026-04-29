@@ -2498,6 +2498,7 @@ router.post(
         req.body,
         subjectId,
         subjectClaims,
+        { platformSessionId: authReq.sessionId },
       );
       res.status(200).json({ data: result });
     } catch (err) {

@@ -228,6 +228,7 @@ async function authorizeCode(
     codeChallenge?: string;
     codeChallengeMethod?: 'S256';
     scope?: string;
+    platformSessionId?: string;
   },
 ) {
   const result = await bridge.authorize(
@@ -243,6 +244,7 @@ async function authorizeCode(
     },
     subjectId,
     { name: 'Alice', email: 'alice@example.com', email_verified: true },
+    { platformSessionId: opts?.platformSessionId },
   );
   return result;
 }
@@ -1069,6 +1071,24 @@ describe('OIDC multi-node correctness', () => {
     expect(tokens.access_token).toBeDefined();
   });
 
+  test('authorization rejects weak PKCE code challenges', async () => {
+    const client = await registerTestClient(bridgeA);
+
+    await expect(
+      authorizeCode(
+        bridgeA,
+        client.clientId,
+        'user-weak-pkce',
+        {
+          codeChallenge: 'short',
+          codeChallengeMethod: 'S256',
+        },
+      ),
+    ).rejects.toMatchObject({
+      errorCode: 'invalid_request',
+    });
+  });
+
   test('legacy plain PKCE authorization codes cannot be redeemed', async () => {
     const client = await registerTestClient(bridgeA);
     const pair = pkce();
@@ -1775,6 +1795,92 @@ describe('OIDC multi-node correctness', () => {
     await bridgeA.frontChannelLogout(sessionId);
 
     await expect(bridgeB.getUserInfo(tokens.access_token)).rejects.toMatchObject({
+      errorCode: 'invalid_token',
+    });
+  });
+
+  test('platform session revocation invalidates linked OIDC access and refresh tokens', async () => {
+    const client = await registerTestClient(bridgeA);
+    const platformSessionId = 'platform-session-oidc-1';
+    const { code, sessionId } = await authorizeCode(
+      bridgeA,
+      client.clientId,
+      'user-platform-logout',
+      { platformSessionId },
+    );
+
+    const tokens = await bridgeA.exchangeToken({
+      grantType: 'authorization_code',
+      code: code!,
+      redirectUri: REDIRECT_URI,
+      clientId: client.clientId,
+      clientSecret: client.clientSecret,
+    });
+
+    await expect(bridgeB.getUserInfo(tokens.access_token)).resolves.toMatchObject({
+      sub: 'user-platform-logout',
+    });
+
+    const revoked = await bridgeB.revokePlatformSession(platformSessionId);
+    expect(revoked.revokedSessions).toBe(1);
+    expect(await redisMock.smembers(`oidc:platform-session:${platformSessionId}`)).toEqual([]);
+
+    await expect(bridgeA.getUserInfo(tokens.access_token)).rejects.toMatchObject({
+      errorCode: 'invalid_token',
+    });
+    await expect(
+      bridgeA.exchangeToken({
+        grantType: 'refresh_token',
+        refreshToken: tokens.refresh_token,
+        clientId: client.clientId,
+        clientSecret: client.clientSecret,
+      }),
+    ).rejects.toMatchObject({
+      errorCode: 'invalid_grant',
+    });
+
+    const storedSession = JSON.parse((await redisMock.get(`oidc:sessions:${sessionId}`))!);
+    expect(storedSession.active).toBe(false);
+  });
+
+  test('subject session revocation invalidates all linked OIDC sessions for recovery', async () => {
+    const client = await registerTestClient(bridgeA);
+    const sessionA = await authorizeCode(
+      bridgeA,
+      client.clientId,
+      'user-recovery',
+      { platformSessionId: 'platform-session-recovery-a' },
+    );
+    const sessionB = await authorizeCode(
+      bridgeB,
+      client.clientId,
+      'user-recovery',
+      { platformSessionId: 'platform-session-recovery-b' },
+    );
+
+    const tokensA = await bridgeA.exchangeToken({
+      grantType: 'authorization_code',
+      code: sessionA.code!,
+      redirectUri: REDIRECT_URI,
+      clientId: client.clientId,
+      clientSecret: client.clientSecret,
+    });
+    const tokensB = await bridgeB.exchangeToken({
+      grantType: 'authorization_code',
+      code: sessionB.code!,
+      redirectUri: REDIRECT_URI,
+      clientId: client.clientId,
+      clientSecret: client.clientSecret,
+    });
+
+    const revoked = await bridgeA.revokeSubjectSessions('user-recovery');
+    expect(revoked.revokedSessions).toBe(2);
+    expect(await redisMock.smembers('oidc:subject-sessions:user-recovery')).toEqual([]);
+
+    await expect(bridgeB.getUserInfo(tokensA.access_token)).rejects.toMatchObject({
+      errorCode: 'invalid_token',
+    });
+    await expect(bridgeA.getUserInfo(tokensB.access_token)).rejects.toMatchObject({
       errorCode: 'invalid_token',
     });
   });
