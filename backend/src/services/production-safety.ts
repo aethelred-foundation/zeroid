@@ -10,6 +10,7 @@ const MIN_METRICS_TOKEN_LENGTH = 32;
 const MIN_JWT_SECRET_LENGTH = 48;
 const MIN_POLICY_RECEIPT_SECRET_LENGTH = 48;
 const MIN_ENTERPRISE_SECRET_HASH_PEPPER_LENGTH = 48;
+const MIN_IDENTITY_RECOVERY_HASH_PEPPER_LENGTH = 48;
 const DEFAULT_DEVELOPMENT_CORS_ORIGINS = ['http://localhost:3000'];
 const REQUIRED_SECRET_KEY_BYTES = 32;
 const MAX_PRODUCTION_SANCTIONS_LIST_AGE_HOURS = 24;
@@ -139,6 +140,7 @@ export function checkedProductionSafetyControls(): string[] {
     'WEBHOOK_SECRET_ENCRYPTION_KEY',
     'POLICY_RECEIPT_SIGNING_SECRET',
     'ENTERPRISE_SECRET_HASH_PEPPER',
+    'IDENTITY_RECOVERY_HASH_PEPPER',
     'OIDC_ISSUER_URL',
     'OIDC_SIGNING_KEYPAIR',
     'CREDENTIAL_SIGNING_KMS',
@@ -321,6 +323,26 @@ export function collectProductionSafetyViolations(
     violations.push({
       control: 'ENTERPRISE_SECRET_HASH_PEPPER',
       risk: 'Enterprise secret hash pepper must not use a known development or test placeholder',
+    });
+  }
+
+  const recoveryHashPepper = env.IDENTITY_RECOVERY_HASH_PEPPER?.trim();
+  if (!recoveryHashPepper) {
+    violations.push({
+      control: 'IDENTITY_RECOVERY_HASH_PEPPER',
+      risk: 'Production identity recovery hashes require a deployment pepper to resist offline recovery-proof guessing after datastore disclosure',
+    });
+  } else if (
+    recoveryHashPepper.length < MIN_IDENTITY_RECOVERY_HASH_PEPPER_LENGTH
+  ) {
+    violations.push({
+      control: 'IDENTITY_RECOVERY_HASH_PEPPER',
+      risk: `Identity recovery hash pepper must be at least ${MIN_IDENTITY_RECOVERY_HASH_PEPPER_LENGTH} characters`,
+    });
+  } else if (isKnownUnsafeJwtSecret(recoveryHashPepper)) {
+    violations.push({
+      control: 'IDENTITY_RECOVERY_HASH_PEPPER',
+      risk: 'Identity recovery hash pepper must not use a known development or test placeholder',
     });
   }
 

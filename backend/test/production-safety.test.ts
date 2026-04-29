@@ -31,6 +31,7 @@ const PROD_BASE_ENV: NodeJS.ProcessEnv = {
   WEBHOOK_SECRET_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64'),
   POLICY_RECEIPT_SIGNING_SECRET: 'r'.repeat(64),
   ENTERPRISE_SECRET_HASH_PEPPER: 'e'.repeat(64),
+  IDENTITY_RECOVERY_HASH_PEPPER: 'i'.repeat(64),
   OIDC_ISSUER_URL: 'https://id.zeroid.example/enterprise/oidc',
   OIDC_SIGNING_PRIVATE_KEY: oidcPrivateKey,
   OIDC_SIGNING_PUBLIC_KEY: oidcPublicKey,
@@ -304,6 +305,32 @@ describe('production safety controls', () => {
       ENTERPRISE_SECRET_HASH_PEPPER: 'change-me',
     })).toEqual([
       expect.objectContaining({ control: 'ENTERPRISE_SECRET_HASH_PEPPER' }),
+    ]);
+  });
+
+  it('requires a strong identity recovery hash pepper in production', () => {
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      METRICS_PUBLIC_DISABLED: 'true',
+      IDENTITY_RECOVERY_HASH_PEPPER: '',
+    })).toEqual([
+      expect.objectContaining({ control: 'IDENTITY_RECOVERY_HASH_PEPPER' }),
+    ]);
+
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      METRICS_PUBLIC_DISABLED: 'true',
+      IDENTITY_RECOVERY_HASH_PEPPER: 'short-pepper',
+    })).toEqual([
+      expect.objectContaining({ control: 'IDENTITY_RECOVERY_HASH_PEPPER' }),
+    ]);
+
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      METRICS_PUBLIC_DISABLED: 'true',
+      IDENTITY_RECOVERY_HASH_PEPPER: 'change-me',
+    })).toEqual([
+      expect.objectContaining({ control: 'IDENTITY_RECOVERY_HASH_PEPPER' }),
     ]);
   });
 

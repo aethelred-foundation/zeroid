@@ -2,6 +2,10 @@ import { prisma, logger, redis } from '../index';
 import { generateToken, revokeToken } from '../middleware/auth';
 // tee import removed — not used in this module
 import { IdentityStatus } from '@prisma/client';
+import nodeCrypto from 'crypto';
+
+const IDENTITY_RECOVERY_HASH_PEPPER_ENV = 'IDENTITY_RECOVERY_HASH_PEPPER';
+const MIN_IDENTITY_RECOVERY_HASH_PEPPER_LENGTH = 48;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -77,7 +81,7 @@ export class IdentityService {
       data: {
         did: request.did,
         publicKey: request.publicKey,
-        recoveryHash: request.recoveryHash,
+        recoveryHash: this.protectRecoveryHash(request.recoveryHash),
         displayName: request.displayName,
         metadata: (request.metadata ?? {}) as any,
         status: 'ACTIVE',
@@ -246,7 +250,7 @@ export class IdentityService {
 
     // Verify recovery proof against stored hash
     const proofHash = await this.hashRecoveryProof(request.recoveryProof);
-    if (proofHash !== identity.recoveryHash) {
+    if (!this.recoveryHashMatches(proofHash, identity.recoveryHash)) {
       logger.warn('identity_recovery_failed', { did: request.did, reason: 'invalid_proof' });
 
       await prisma.auditLog.create({
@@ -269,11 +273,14 @@ export class IdentityService {
     }
 
     // Update identity with new key material
+    const protectedNewRecoveryHash = this.protectRecoveryHash(
+      request.newRecoveryHash,
+    );
     await prisma.identity.update({
       where: { id: identity.id },
       data: {
         publicKey: request.newPublicKey,
-        recoveryHash: request.newRecoveryHash,
+        recoveryHash: protectedNewRecoveryHash,
         status: 'RECOVERED',
         teeAttested: false, // Require re-attestation
         teeAttestationId: null,
@@ -452,10 +459,71 @@ export class IdentityService {
 
   private async hashRecoveryProof(proof: string): Promise<string> {
     const encoder = new TextEncoder();
-    const hashBuffer = await crypto.subtle.digest('SHA-256', encoder.encode(proof));
+    const hashBuffer = await globalThis.crypto.subtle.digest('SHA-256', encoder.encode(proof));
     return Array.from(new Uint8Array(hashBuffer))
       .map((b) => b.toString(16).padStart(2, '0'))
       .join('');
+  }
+
+  private protectRecoveryHash(recoveryHash: string): string {
+    const pepper = this.getRecoveryHashPepper();
+    if (!pepper) return recoveryHash;
+
+    return nodeCrypto
+      .createHmac('sha256', pepper)
+      .update('zeroid:identity-recovery:v2:')
+      .update(recoveryHash)
+      .digest('hex');
+  }
+
+  private recoveryHashMatches(
+    presentedRecoveryHash: string,
+    storedRecoveryHash: string,
+  ): boolean {
+    const protectedPresentedHash = this.protectRecoveryHash(
+      presentedRecoveryHash,
+    );
+    if (this.timingSafeHexEqual(protectedPresentedHash, storedRecoveryHash)) {
+      return true;
+    }
+
+    return (
+      this.allowLegacyRecoveryHashFallback() &&
+      this.timingSafeHexEqual(presentedRecoveryHash, storedRecoveryHash)
+    );
+  }
+
+  private getRecoveryHashPepper(): string | null {
+    const pepper = process.env[IDENTITY_RECOVERY_HASH_PEPPER_ENV]?.trim();
+    if (pepper && pepper.length >= MIN_IDENTITY_RECOVERY_HASH_PEPPER_LENGTH) {
+      return pepper;
+    }
+
+    if (process.env.NODE_ENV === 'production') {
+      throw new IdentityError(
+        `${IDENTITY_RECOVERY_HASH_PEPPER_ENV} must be configured in production and contain at least ${MIN_IDENTITY_RECOVERY_HASH_PEPPER_LENGTH} characters`,
+        'IDENTITY_RECOVERY_HASH_PEPPER_MISSING',
+        500,
+      );
+    }
+
+    return null;
+  }
+
+  private allowLegacyRecoveryHashFallback(): boolean {
+    return process.env.NODE_ENV !== 'production';
+  }
+
+  private timingSafeHexEqual(left: string, right: string): boolean {
+    if (!/^[0-9a-f]{64}$/i.test(left) || !/^[0-9a-f]{64}$/i.test(right)) {
+      return false;
+    }
+    const leftBuffer = Buffer.from(left, 'hex');
+    const rightBuffer = Buffer.from(right, 'hex');
+    return (
+      leftBuffer.length === rightBuffer.length &&
+      nodeCrypto.timingSafeEqual(leftBuffer, rightBuffer)
+    );
   }
 
   private formatIdentity(identity: {
