@@ -38,7 +38,12 @@ const CIRCUIT_MANIFESTS: CircuitManifest[] = [
   {
     name: 'age_verification_context_v2',
     source: 'circuits/age/age_context_proof.circom',
-    publicSignals: ['claimsHash', 'ageThresholdYears', 'contextCommitment'],
+    publicSignals: [
+      'claimsHash',
+      'ageThresholdYears',
+      'currentTimestamp',
+      'contextCommitment',
+    ],
     noPublicOutputs: true,
     artifacts: {
       r1cs: 'build/circuits/age_context_v2/age_context_proof.r1cs',

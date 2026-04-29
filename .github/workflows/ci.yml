@@ -35,6 +35,8 @@ jobs:
       - name: Install backend dependencies
         working-directory: ./backend
         run: npm ci
+      - name: Validate ZK circuit schema manifest
+        run: npm run circuits:validate
       - name: NPM Security Audit
         run: npm run security:audit:all
 

@@ -92,7 +92,12 @@ const CIRCUIT_REGISTRY: Record<string, CircuitConfig> = {
     vkeyPath: path.join(CIRCUITS_DIR, 'age_context_v2', 'verification_key.json'),
     maxInputs: 14,
     description: 'Context-bound age proof with claimsHash and verifier context as fixed public signals',
-    publicSignals: ['claimsHash', 'ageThresholdYears', 'contextCommitment'],
+    publicSignals: [
+      'claimsHash',
+      'ageThresholdYears',
+      'currentTimestamp',
+      'contextCommitment',
+    ],
     contextBound: true,
   },
   nationality_check: {

@@ -24,14 +24,15 @@ describe('ZK public signal schema validation', () => {
 
   it('accepts public signals that exactly match a context-bound schema', () => {
     const result = service.validatePublicSignalsAgainstSchema(
-      ['claims-field', '21', 'context-field'],
-      ['claimsHash', 'ageThresholdYears', 'contextCommitment'],
+      ['claims-field', '21', '1777440000', 'context-field'],
+      ['claimsHash', 'ageThresholdYears', 'currentTimestamp', 'contextCommitment'],
       {
         claimsHash: 'claims-field',
         contextCommitment: 'context-field',
         publicSignals: {
           claimsHash: 'claims-field',
           ageThresholdYears: '21',
+          currentTimestamp: '1777440000',
           contextCommitment: 'context-field',
         },
       },
@@ -41,13 +42,14 @@ describe('ZK public signal schema validation', () => {
   });
 
   it('rejects missing or extra public signals', () => {
-    const schema = ['claimsHash', 'ageThresholdYears', 'contextCommitment'];
+    const schema = ['claimsHash', 'ageThresholdYears', 'currentTimestamp', 'contextCommitment'];
     const expected = {
       claimsHash: 'claims-field',
       contextCommitment: 'context-field',
       publicSignals: {
         claimsHash: 'claims-field',
         ageThresholdYears: '21',
+        currentTimestamp: '1777440000',
         contextCommitment: 'context-field',
       },
     };
@@ -65,7 +67,7 @@ describe('ZK public signal schema validation', () => {
 
     expect(
       service.validatePublicSignalsAgainstSchema(
-        ['claims-field', '21', 'context-field', 'extra'],
+        ['claims-field', '21', '1777440000', 'context-field', 'extra'],
         schema,
         expected,
       ),
@@ -77,14 +79,15 @@ describe('ZK public signal schema validation', () => {
 
   it('rejects reordered commitment values even when both are present', () => {
     const result = service.validatePublicSignalsAgainstSchema(
-      ['claims-field', 'context-field', '21'],
-      ['claimsHash', 'ageThresholdYears', 'contextCommitment'],
+      ['claims-field', '21', 'context-field', '1777440000'],
+      ['claimsHash', 'ageThresholdYears', 'currentTimestamp', 'contextCommitment'],
       {
         claimsHash: 'claims-field',
         contextCommitment: 'context-field',
         publicSignals: {
           claimsHash: 'claims-field',
           ageThresholdYears: '21',
+          currentTimestamp: '1777440000',
           contextCommitment: 'context-field',
         },
       },
@@ -98,14 +101,37 @@ describe('ZK public signal schema validation', () => {
 
   it('rejects policy parameter public signals that do not match the issued context', () => {
     const result = service.validatePublicSignalsAgainstSchema(
-      ['claims-field', '18', 'context-field'],
-      ['claimsHash', 'ageThresholdYears', 'contextCommitment'],
+      ['claims-field', '18', '1777440000', 'context-field'],
+      ['claimsHash', 'ageThresholdYears', 'currentTimestamp', 'contextCommitment'],
       {
         claimsHash: 'claims-field',
         contextCommitment: 'context-field',
         publicSignals: {
           claimsHash: 'claims-field',
           ageThresholdYears: '21',
+          currentTimestamp: '1777440000',
+          contextCommitment: 'context-field',
+        },
+      },
+    );
+
+    expect(result).toMatchObject({
+      valid: false,
+      code: 'PROOF_PUBLIC_SIGNAL_VALUE_MISMATCH',
+    });
+  });
+
+  it('rejects freshness timestamps that do not match the issued proof context', () => {
+    const result = service.validatePublicSignalsAgainstSchema(
+      ['claims-field', '21', '1777449999', 'context-field'],
+      ['claimsHash', 'ageThresholdYears', 'currentTimestamp', 'contextCommitment'],
+      {
+        claimsHash: 'claims-field',
+        contextCommitment: 'context-field',
+        publicSignals: {
+          claimsHash: 'claims-field',
+          ageThresholdYears: '21',
+          currentTimestamp: '1777440000',
           contextCommitment: 'context-field',
         },
       },
@@ -119,8 +145,8 @@ describe('ZK public signal schema validation', () => {
 
   it('rejects context-bound schemas when a middle public-signal expectation is missing', () => {
     const result = service.validatePublicSignalsAgainstSchema(
-      ['claims-field', '21', 'context-field'],
-      ['claimsHash', 'ageThresholdYears', 'contextCommitment'],
+      ['claims-field', '21', '1777440000', 'context-field'],
+      ['claimsHash', 'ageThresholdYears', 'currentTimestamp', 'contextCommitment'],
       {
         claimsHash: 'claims-field',
         contextCommitment: 'context-field',
@@ -165,19 +191,21 @@ describe('ZK public signal schema validation', () => {
     expect(service.getCircuitPublicSignalSchema('age_verification_context_v2')).toEqual([
       'claimsHash',
       'ageThresholdYears',
+      'currentTimestamp',
       'contextCommitment',
     ]);
 
     expect(
       service.validateContextBoundPublicSignals(
         'age_verification_context_v2',
-        ['claims-field', '21', 'context-field'],
+        ['claims-field', '21', '1777440000', 'context-field'],
         {
           claimsHash: 'claims-field',
           contextCommitment: 'context-field',
           publicSignals: {
             claimsHash: 'claims-field',
             ageThresholdYears: '21',
+            currentTimestamp: '1777440000',
             contextCommitment: 'context-field',
           },
         },
@@ -197,7 +225,7 @@ describe('ZK public signal schema validation', () => {
     const source = fs.readFileSync(sourcePath, 'utf8');
 
     expect(source).toContain(
-      'component main {public [claimsHash, ageThresholdYears, contextCommitment]}',
+      'component main {public [claimsHash, ageThresholdYears, currentTimestamp, contextCommitment]}',
     );
     expect(source).not.toContain('signal output');
   });

@@ -24,7 +24,7 @@ function createCircuitFixture(): string {
   writeFile(
     root,
     'circuits/age/age_context_proof.circom',
-    'pragma circom 2.1.6;\ncomponent main {public [claimsHash, ageThresholdYears, contextCommitment]} = AgeContextProof();\n',
+    'pragma circom 2.1.6;\ncomponent main {public [claimsHash, ageThresholdYears, currentTimestamp, contextCommitment]} = AgeContextProof();\n',
   );
   return root;
 }
@@ -35,7 +35,7 @@ function writeArtifacts(root: string): Record<string, string> {
     'age_verification_context_v2.sym': 'sym-bytes',
     'age_verification_context_v2.wasm': 'wasm-bytes',
     'age_verification_context_v2.zkey': 'zkey-bytes',
-    'age_verification_context_v2.vkey': JSON.stringify({ nPublic: 3 }),
+    'age_verification_context_v2.vkey': JSON.stringify({ nPublic: 4 }),
   };
 
   writeFile(root, 'build/circuits/age_context_v2/age_context_proof.r1cs', files['age_verification_context_v2.r1cs']);
@@ -50,7 +50,7 @@ function writeArtifacts(root: string): Record<string, string> {
 
   return {
     'age_verification_context_v2.source': sha256(
-      'pragma circom 2.1.6;\ncomponent main {public [claimsHash, ageThresholdYears, contextCommitment]} = AgeContextProof();\n',
+      'pragma circom 2.1.6;\ncomponent main {public [claimsHash, ageThresholdYears, currentTimestamp, contextCommitment]} = AgeContextProof();\n',
     ),
     ...Object.fromEntries(
       Object.entries(files).map(([key, value]) => [key, sha256(value)]),

@@ -5,7 +5,7 @@ pragma circom 2.1.6;
 // =============================================================================
 // Proves an age threshold against a signed credential commitment while exposing
 // the exact public-signal schema required by the backend verifier:
-//   [claimsHash, ageThresholdYears, contextCommitment]
+//   [claimsHash, ageThresholdYears, currentTimestamp, contextCommitment]
 //
 // This circuit has no public outputs so contextCommitment remains the final
 // public signal. A valid Groth16 proof itself is the boolean assertion that:
@@ -24,13 +24,13 @@ template AgeContextProof(N_BITS) {
     // Public signals. The order is part of the verifier contract.
     signal input claimsHash;
     signal input ageThresholdYears;
+    signal input currentTimestamp;
     signal input contextCommitment;
 
     // Private credential witness.
     signal input subjectId;
     signal input dateOfBirth;
     signal input expiryTimestamp;
-    signal input currentTimestamp;
     signal input issuerPubKeyX;
     signal input issuerPubKeyY;
     signal input nonce;
@@ -81,4 +81,4 @@ template AgeContextProof(N_BITS) {
     contextCommitmentWitness === contextCommitment;
 }
 
-component main {public [claimsHash, ageThresholdYears, contextCommitment]} = AgeContextProof(64);
+component main {public [claimsHash, ageThresholdYears, currentTimestamp, contextCommitment]} = AgeContextProof(64);

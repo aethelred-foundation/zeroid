@@ -322,9 +322,13 @@ router.post(
         '0x' + contextCommitment.substring(0, 62),
       ).toString();
       const claimsHashField = digestToFieldElement(credential.claimsHash);
+      const proofCurrentTimestamp = Math.floor(issuedAt / 1000);
       const publicSignalValues = buildExpectedPublicSignalValues(
         circuitName,
-        inputs,
+        {
+          ...inputs,
+          currentTimestamp: proofCurrentTimestamp,
+        },
         {
           claimsHash: claimsHashField,
           contextCommitment: contextCommitmentField,

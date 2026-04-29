@@ -140,7 +140,7 @@ const mockValidateContextBoundPublicSignals = jest.fn(
       claimsHash: expected.claimsHash,
       contextCommitment: expected.contextCommitment,
     };
-    if (publicSignals.length !== 3) {
+    if (publicSignals.length !== 4) {
       return {
         valid: false,
         code: 'PROOF_SIGNALS_SCHEMA_INVALID',
@@ -158,7 +158,7 @@ const mockValidateContextBoundPublicSignals = jest.fn(
         statusCode: 400,
       };
     }
-    if (publicSignals[2] !== expectedSignals.contextCommitment) {
+    if (publicSignals[3] !== expectedSignals.contextCommitment) {
       return {
         valid: false,
         code: 'PROOF_CONTEXT_NOT_COMMITTED',
@@ -173,6 +173,15 @@ const mockValidateContextBoundPublicSignals = jest.fn(
         code: 'PROOF_PUBLIC_SIGNAL_VALUE_MISMATCH',
         error:
           'Public signal ageThresholdYears does not match the issued proof context',
+        statusCode: 400,
+      };
+    }
+    if (publicSignals[2] !== expectedSignals.currentTimestamp) {
+      return {
+        valid: false,
+        code: 'PROOF_PUBLIC_SIGNAL_VALUE_MISMATCH',
+        error:
+          'Public signal currentTimestamp does not match the issued proof context',
         statusCode: 400,
       };
     }
@@ -424,6 +433,10 @@ function proofNonceScopedKey(prefix: string, nonce: string): string {
   return `${prefix}:${createHash('sha256').update(nonce).digest('hex')}`;
 }
 
+function currentTimestampField(issuedAt: number): string {
+  return Math.floor(issuedAt / 1000).toString();
+}
+
 /** Seed a nonce record into the mock Redis store (simulating proof generation). */
 function seedNonce(
   nonce: string,
@@ -436,6 +449,7 @@ function seedNonce(
   publicSignalValues: Record<string, string> = {
     claimsHash: claimsHashField,
     ageThresholdYears: '2',
+    currentTimestamp: currentTimestampField(issuedAt),
     contextCommitment: contextCommitmentField,
   },
 ) {
@@ -476,6 +490,7 @@ function buildValidPayload(
   const publicSignals = overrides.publicSignals ?? [
     CREDENTIAL_CLAIMS_FIELD,
     '2',
+    currentTimestampField(issuedAt),
     ctxField,
   ];
 
@@ -521,7 +536,7 @@ beforeEach(() => {
         claimsHash: expected.claimsHash,
         contextCommitment: expected.contextCommitment,
       };
-      if (publicSignals.length !== 3) {
+      if (publicSignals.length !== 4) {
         return {
           valid: false,
           code: 'PROOF_SIGNALS_SCHEMA_INVALID',
@@ -539,7 +554,7 @@ beforeEach(() => {
           statusCode: 400,
         };
       }
-      if (publicSignals[2] !== expectedSignals.contextCommitment) {
+      if (publicSignals[3] !== expectedSignals.contextCommitment) {
         return {
           valid: false,
           code: 'PROOF_CONTEXT_NOT_COMMITTED',
@@ -554,6 +569,15 @@ beforeEach(() => {
           code: 'PROOF_PUBLIC_SIGNAL_VALUE_MISMATCH',
           error:
             'Public signal ageThresholdYears does not match the issued proof context',
+          statusCode: 400,
+        };
+      }
+      if (publicSignals[2] !== expectedSignals.currentTimestamp) {
+        return {
+          valid: false,
+          code: 'PROOF_PUBLIC_SIGNAL_VALUE_MISMATCH',
+          error:
+            'Public signal currentTimestamp does not match the issued proof context',
           statusCode: 400,
         };
       }
@@ -634,7 +658,12 @@ describe('ZK-01: Context-tamper verification', () => {
       audience: VERIFIER_ID,
       contextCommitment: wrongField,
       issuedAt,
-      publicSignals: [CREDENTIAL_CLAIMS_FIELD, '2', wrongField],
+      publicSignals: [
+        CREDENTIAL_CLAIMS_FIELD,
+        '2',
+        currentTimestampField(issuedAt),
+        wrongField,
+      ],
     });
 
     const res = await request(app as Express)
@@ -697,7 +726,12 @@ describe('ZK-01: Context-tamper verification', () => {
       audience: VERIFIER_ID,
       contextCommitment: ctxField,
       issuedAt,
-      publicSignals: [CREDENTIAL_CLAIMS_FIELD, '2', ctxField],
+      publicSignals: [
+        CREDENTIAL_CLAIMS_FIELD,
+        '2',
+        currentTimestampField(issuedAt),
+        ctxField,
+      ],
     });
 
     const res = await request(app as Express)
@@ -732,7 +766,12 @@ describe('ZK-01: Context-tamper verification', () => {
         audience: VERIFIER_ID,
         contextCommitment: ctxField,
         issuedAt,
-        publicSignals: [CREDENTIAL_CLAIMS_FIELD, '2', ctxField],
+        publicSignals: [
+          CREDENTIAL_CLAIMS_FIELD,
+          '2',
+          currentTimestampField(issuedAt),
+          ctxField,
+        ],
       }));
 
     expect(res.status).toBe(400);
@@ -768,7 +807,12 @@ describe('ZK-01: Context-tamper verification', () => {
       audience: VERIFIER_ID,
       contextCommitment: ctxField,
       issuedAt: bodyIssuedAt,
-      publicSignals: [CREDENTIAL_CLAIMS_FIELD, '2', ctxField],
+      publicSignals: [
+        CREDENTIAL_CLAIMS_FIELD,
+        '2',
+        currentTimestampField(nonceIssuedAt),
+        ctxField,
+      ],
     });
 
     const res = await request(app as Express)
@@ -810,7 +854,12 @@ describe('ZK-01: Context-tamper verification', () => {
       audience: VERIFIER_ID,
       contextCommitment: ctxField,
       issuedAt,
-      publicSignals: ['999999', '2', ctxField],
+      publicSignals: [
+        '999999',
+        '2',
+        currentTimestampField(issuedAt),
+        ctxField,
+      ],
     });
 
     const res = await request(app as Express)
@@ -853,7 +902,12 @@ describe('ZK-01: Context-tamper verification', () => {
       audience: VERIFIER_ID,
       contextCommitment: ctxField,
       issuedAt,
-      publicSignals: [CREDENTIAL_CLAIMS_FIELD, '2', '3'], // missing ctxField
+      publicSignals: [
+        CREDENTIAL_CLAIMS_FIELD,
+        '2',
+        currentTimestampField(issuedAt),
+        '3',
+      ], // missing ctxField
     });
 
     const res = await request(app as Express)
@@ -892,7 +946,12 @@ describe('ZK-01: Context-tamper verification', () => {
       audience: VERIFIER_ID,
       contextCommitment: ctxField,
       issuedAt,
-      publicSignals: [CREDENTIAL_CLAIMS_FIELD, ctxField, '2'],
+      publicSignals: [
+        CREDENTIAL_CLAIMS_FIELD,
+        '2',
+        ctxField,
+        currentTimestampField(issuedAt),
+      ],
     });
 
     const res = await request(app as Express)
@@ -931,7 +990,13 @@ describe('ZK-01: Context-tamper verification', () => {
       audience: VERIFIER_ID,
       contextCommitment: ctxField,
       issuedAt,
-      publicSignals: [CREDENTIAL_CLAIMS_FIELD, '2', ctxField, '999'],
+      publicSignals: [
+        CREDENTIAL_CLAIMS_FIELD,
+        '2',
+        currentTimestampField(issuedAt),
+        ctxField,
+        '999',
+      ],
     });
 
     const res = await request(app as Express)
@@ -967,6 +1032,7 @@ describe('ZK-01: Context-tamper verification', () => {
       {
         claimsHash: CREDENTIAL_CLAIMS_FIELD,
         ageThresholdYears: '21',
+        currentTimestamp: currentTimestampField(issuedAt),
         contextCommitment: ctxField,
       },
     );
@@ -976,7 +1042,12 @@ describe('ZK-01: Context-tamper verification', () => {
       audience: VERIFIER_ID,
       contextCommitment: ctxField,
       issuedAt,
-      publicSignals: [CREDENTIAL_CLAIMS_FIELD, '18', ctxField],
+      publicSignals: [
+        CREDENTIAL_CLAIMS_FIELD,
+        '18',
+        currentTimestampField(issuedAt),
+        ctxField,
+      ],
     });
 
     const res = await request(app as Express)
@@ -1016,7 +1087,12 @@ describe('ZK-01: Context-tamper verification', () => {
       audience: VERIFIER_ID,
       contextCommitment: ctxField,
       issuedAt,
-      publicSignals: [CREDENTIAL_CLAIMS_FIELD, '2', ctxField],
+      publicSignals: [
+        CREDENTIAL_CLAIMS_FIELD,
+        '2',
+        currentTimestampField(issuedAt),
+        ctxField,
+      ],
     });
 
     const res = await request(app as Express)
@@ -1059,7 +1135,12 @@ describe('ZK-01: Context-tamper verification', () => {
       audience: VERIFIER_ID,
       contextCommitment: ctxField,
       issuedAt,
-      publicSignals: [CREDENTIAL_CLAIMS_FIELD, '2', ctxField],
+      publicSignals: [
+        CREDENTIAL_CLAIMS_FIELD,
+        '2',
+        currentTimestampField(issuedAt),
+        ctxField,
+      ],
     });
 
     // First verification succeeds
@@ -1122,7 +1203,12 @@ describe('ZK-01: Context-tamper verification', () => {
                 valid: true,
                 proofId: 'proof-concurrent-id',
                 circuitName: 'ageCheck',
-                publicSignals: [CREDENTIAL_CLAIMS_FIELD, '2', ctxField],
+                publicSignals: [
+                  CREDENTIAL_CLAIMS_FIELD,
+                  '2',
+                  currentTimestampField(issuedAt),
+                  ctxField,
+                ],
                 verifiedAt: new Date(),
               }),
             50,
@@ -1135,7 +1221,12 @@ describe('ZK-01: Context-tamper verification', () => {
       audience: VERIFIER_ID,
       contextCommitment: ctxField,
       issuedAt,
-      publicSignals: [CREDENTIAL_CLAIMS_FIELD, '2', ctxField],
+      publicSignals: [
+        CREDENTIAL_CLAIMS_FIELD,
+        '2',
+        currentTimestampField(issuedAt),
+        ctxField,
+      ],
     });
 
     const [first, second] = await Promise.all([
@@ -1237,7 +1328,12 @@ describe('ZK-01: Context-tamper verification', () => {
       audience: VERIFIER_ID,
       contextCommitment: tamperedField,
       issuedAt,
-      publicSignals: [CREDENTIAL_CLAIMS_FIELD, '2', tamperedField],
+      publicSignals: [
+        CREDENTIAL_CLAIMS_FIELD,
+        '2',
+        currentTimestampField(issuedAt),
+        tamperedField,
+      ],
     });
 
     const res = await request(app as Express)
@@ -1291,7 +1387,12 @@ describe('ZK-01: Context-tamper verification', () => {
       audience: VERIFIER_ID,
       contextCommitment: tamperedField,
       issuedAt,
-      publicSignals: [CREDENTIAL_CLAIMS_FIELD, '2', tamperedField],
+      publicSignals: [
+        CREDENTIAL_CLAIMS_FIELD,
+        '2',
+        currentTimestampField(issuedAt),
+        tamperedField,
+      ],
     });
 
     const res = await request(app as Express)
@@ -1333,7 +1434,12 @@ describe('ZK-01: Context-tamper verification', () => {
       audience: VERIFIER_ID,
       contextCommitment: ctxField,
       issuedAt,
-      publicSignals: [CREDENTIAL_CLAIMS_FIELD, '2', ctxField],
+      publicSignals: [
+        CREDENTIAL_CLAIMS_FIELD,
+        '2',
+        currentTimestampField(issuedAt),
+        ctxField,
+      ],
     });
 
     const res = await request(app as Express)
