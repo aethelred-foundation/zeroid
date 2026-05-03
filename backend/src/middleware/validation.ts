@@ -171,6 +171,7 @@ export const registerIdentitySchema = z.object({
 
 export const issueCredentialSchema = z.object({
   credentialType: credentialTypeSchema,
+  organizationId: uuidSchema.optional(),
   subjectDid: didSchema,
   claims: z.record(z.unknown()),
   expiresAt: z.coerce.date().optional(),
@@ -192,7 +193,9 @@ export const issueCredentialSchema = z.object({
           subjectDid: didSchema,
           subjectId: z.string().min(1).max(120),
           credentialType: credentialTypeSchema,
+          organizationId: uuidSchema.nullable(),
           schemaId: uuidSchema.nullable(),
+          issuedAt: z.string().datetime(),
           expiresAt: z.string().datetime().nullable(),
           claimsHash: z.string().regex(/^[0-9a-f]{64}$/i),
         })

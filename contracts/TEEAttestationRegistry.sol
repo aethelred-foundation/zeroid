@@ -349,11 +349,12 @@ contract TEEAttestationRegistry is ITEEAttestation, AccessControl, Pausable, Ree
 
         // Check freshness if this is a re-attestation
         AttestationReport storage existing = _attestations[enclaveHash];
+        bool hadValidAttestation = existing.attestedAt != 0 && existing.isValid;
         if (existing.attestedAt != 0 && existing.isValid) {
             // This is a refresh — mark old one as replaced
             existing.isValid = false;
-            // No decrement of totalActiveAttestations — we'll increment again below
-        } else if (existing.attestedAt == 0) {
+        }
+        if (!hadValidAttestation) {
             unchecked { totalActiveAttestations++; }
         }
 

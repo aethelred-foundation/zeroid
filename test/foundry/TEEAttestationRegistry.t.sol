@@ -363,6 +363,36 @@ contract TEEAttestationRegistryTest is TestHelper {
         assertFalse(teeRegistry.isAttestationValid(MEASUREMENT_HASH));
     }
 
+    function test_SubmitAttestation_IncrementsCountAfterRevokedReattestation() public {
+        _registerAndSubmit();
+
+        vm.prank(alice);
+        teeRegistry.revokeAttestation(MEASUREMENT_HASH);
+        assertEq(teeRegistry.totalActiveAttestations(), 0);
+
+        vm.warp(block.timestamp + 1);
+        uint64 validity = 1 hours;
+        (uint64 notBefore, uint64 expiresAt) = _validityBounds(validity);
+        bytes memory sig = _signAttestation(
+            MEASUREMENT_HASH,
+            TEEPlatform.IntelSGX,
+            REPORT_DATA_HASH,
+            alice,
+            notBefore,
+            expiresAt
+        );
+
+        vm.prank(alice);
+        teeRegistry.submitAttestation(MEASUREMENT_HASH, TEEPlatform.IntelSGX, REPORT_DATA_HASH, sig, notBefore, expiresAt);
+
+        assertTrue(teeRegistry.isAttestationValid(MEASUREMENT_HASH));
+        assertEq(teeRegistry.totalActiveAttestations(), 1);
+
+        vm.prank(alice);
+        teeRegistry.revokeAttestation(MEASUREMENT_HASH);
+        assertEq(teeRegistry.totalActiveAttestations(), 0);
+    }
+
     function test_RevokeAttestation_RevertsNotFound() public {
         vm.prank(admin);
         vm.expectRevert(abi.encodeWithSelector(TEEAttestationRegistry.AttestationNotFound.selector, ENCLAVE_HASH));

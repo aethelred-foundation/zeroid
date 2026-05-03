@@ -122,6 +122,7 @@ contract CredentialRegistry is ICredentialRegistry, AccessControl, Pausable, Ree
     error SchemaNotApproved(bytes32 schemaHash);
     error InvalidExpiry(uint64 expiresAt);
     error SubjectIdentityNotActive(bytes32 subjectDid);
+    error IssuerIdentityNotActive(bytes32 issuerDid);
     error NotCredentialIssuer(bytes32 credentialHash, address caller);
     error InvalidTransition(CredentialStatus from, CredentialStatus to);
     error BatchSizeExceeded(uint32 size);
@@ -260,6 +261,9 @@ contract CredentialRegistry is ICredentialRegistry, AccessControl, Pausable, Ree
         }
 
         bytes32 issuerDid = _resolveCallerDid();
+        if (issuerDid == bytes32(0) || !identityRegistry.isActiveIdentity(issuerDid)) {
+            revert IssuerIdentityNotActive(issuerDid);
+        }
 
         _credentials[credentialHash] = Credential({
             credentialHash: credentialHash,

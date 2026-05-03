@@ -17,6 +17,8 @@ const PRIVATE_OIDC_HOSTNAME_SUFFIXES = [
 ];
 
 const isProductionRuntime = (): boolean => process.env.NODE_ENV === 'production';
+const ENTERPRISE_SECRET_HASH_PEPPER_ENV = 'ENTERPRISE_SECRET_HASH_PEPPER';
+const MIN_ENTERPRISE_SECRET_HASH_PEPPER_LENGTH = 48;
 
 function normalizeOidcHostname(hostname: string): string {
   return hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
@@ -373,7 +375,7 @@ export interface RegisteredClient {
   clientId: string;
   clientSecret?: string;
   clientSecretHash?: string;
-  clientSecretHashAlg?: 'sha256';
+  clientSecretHashAlg?: 'sha256' | 'hmac-sha256-v2';
   clientSecretExpiresAt?: number;
   registration: OIDCClientRegistration;
   createdAt: string;
@@ -734,7 +736,7 @@ export class OIDCBridge {
     const client: RegisteredClient = {
       clientId,
       clientSecretHash: this.hashClientSecret(clientSecret),
-      clientSecretHashAlg: 'sha256',
+      clientSecretHashAlg: this.currentClientSecretHashAlg(),
       clientSecretExpiresAt: now + OIDC_CLIENT_SECRET_TTL,
       registration: {
         ...parsed,
@@ -1143,6 +1145,22 @@ export class OIDCBridge {
     scope: string;
   }> {
     const refreshToken = request.refreshToken!;
+    if (
+      isProductionRuntime() &&
+      !this.isHashedCredentialStorageKey(refreshToken)
+    ) {
+      const legacyRefreshData = await this.refreshTokenMap.get(refreshToken);
+      if (legacyRefreshData) {
+        logger.error('oidc_plaintext_refresh_token_blocked', {
+          clientId: request.clientId,
+        });
+        throw new OIDCError(
+          'invalid_grant',
+          'Refresh token not found or already consumed',
+        );
+      }
+    }
+
     const refreshTokenKey = this.hashRefreshToken(refreshToken);
     let refreshData = await this.refreshTokenMap.get(refreshTokenKey);
     let refreshStorageKey = refreshTokenKey;
@@ -1884,7 +1902,7 @@ export class OIDCBridge {
           ...client,
           clientSecret: undefined,
           clientSecretHash: this.hashClientSecret(clientSecret),
-          clientSecretHashAlg: 'sha256',
+          clientSecretHashAlg: this.currentClientSecretHashAlg(),
         });
         logger.info('oidc_client_secret_migrated_to_hash', { clientId });
       }
@@ -2016,6 +2034,19 @@ export class OIDCBridge {
   }
 
   private hashClientSecret(clientSecret: string): string {
+    const pepper = this.getEnterpriseSecretHashPepper();
+    if (pepper) {
+      return this.hmacEnterpriseSecret(
+        'oidc-client-secret',
+        clientSecret,
+        pepper,
+      );
+    }
+
+    return this.hashLegacyClientSecret(clientSecret);
+  }
+
+  private hashLegacyClientSecret(clientSecret: string): string {
     return (
       'sha256:' +
       crypto
@@ -2027,6 +2058,19 @@ export class OIDCBridge {
   }
 
   private hashRefreshToken(refreshToken: string): string {
+    const pepper = this.getEnterpriseSecretHashPepper();
+    if (pepper) {
+      return this.hmacEnterpriseSecret(
+        'oidc-refresh-token',
+        refreshToken,
+        pepper,
+      );
+    }
+
+    return this.hashLegacyRefreshToken(refreshToken);
+  }
+
+  private hashLegacyRefreshToken(refreshToken: string): string {
     return (
       'sha256:' +
       crypto
@@ -2037,8 +2081,46 @@ export class OIDCBridge {
     );
   }
 
+  private hmacEnterpriseSecret(
+    context: string,
+    secret: string,
+    pepper: string,
+  ): string {
+    return (
+      'hmac-sha256-v2:' +
+      crypto
+        .createHmac('sha256', pepper)
+        .update(`zeroid:${context}:v2:`)
+        .update(secret)
+        .digest('base64url')
+    );
+  }
+
+  private getEnterpriseSecretHashPepper(): string | null {
+    const pepper = process.env[ENTERPRISE_SECRET_HASH_PEPPER_ENV]?.trim();
+    if (pepper && pepper.length >= MIN_ENTERPRISE_SECRET_HASH_PEPPER_LENGTH) {
+      return pepper;
+    }
+
+    if (isProductionRuntime()) {
+      throw new OIDCError(
+        'server_error',
+        `${ENTERPRISE_SECRET_HASH_PEPPER_ENV} must be configured in production and contain at least ${MIN_ENTERPRISE_SECRET_HASH_PEPPER_LENGTH} characters`,
+        500,
+      );
+    }
+
+    return null;
+  }
+
+  private currentClientSecretHashAlg(): 'sha256' | 'hmac-sha256-v2' {
+    return this.getEnterpriseSecretHashPepper()
+      ? 'hmac-sha256-v2'
+      : 'sha256';
+  }
+
   private isHashedCredentialStorageKey(value: string): boolean {
-    return /^sha256:[A-Za-z0-9_-]{43}$/.test(value);
+    return /^(sha256|hmac-sha256-v2):[A-Za-z0-9_-]{43}$/.test(value);
   }
 
   private verifyClientSecret(
@@ -2046,6 +2128,23 @@ export class OIDCBridge {
     presentedSecret: string,
   ): { valid: boolean; legacyPlaintext: boolean } {
     if (client.clientSecretHash) {
+      if (client.clientSecretHash.startsWith('sha256:')) {
+        if (isProductionRuntime()) {
+          logger.error('oidc_legacy_client_secret_hash_blocked', {
+            clientId: client.clientId,
+          });
+          return { valid: false, legacyPlaintext: false };
+        }
+
+        return {
+          valid: this.timingSafeStringEqual(
+            this.hashLegacyClientSecret(presentedSecret),
+            client.clientSecretHash,
+          ),
+          legacyPlaintext: false,
+        };
+      }
+
       return {
         valid: this.timingSafeStringEqual(
           this.hashClientSecret(presentedSecret),

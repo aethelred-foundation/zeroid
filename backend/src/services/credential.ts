@@ -166,6 +166,7 @@ class KMSCredentialSigner {
 // ---------------------------------------------------------------------------
 export interface IssueCredentialRequest {
   credentialType: string;
+  organizationId?: string;
   issuerId: string;
   issuerDid: string;
   subjectId: string;
@@ -195,7 +196,9 @@ export interface CredentialSignatureBinding {
   subjectDid: string;
   subjectId: string;
   credentialType: string;
+  organizationId: string | null;
   schemaId: string | null;
+  issuedAt: string;
   expiresAt: string | null;
   claimsHash: string;
 }
@@ -371,8 +374,16 @@ export class CredentialService {
       request.issuerId,
       request.credentialType,
       evaluatedJurisdictions,
+      request.organizationId,
     );
     if (trustPolicy.enforced && !trustPolicy.accredited) {
+      if (trustPolicy.denialReason === 'organization_scope_required') {
+        throw new CredentialError(
+          'Issuer trust accreditation must be scoped to an enterprise organization',
+          'CRED_ISSUER_TRUST_ORGANIZATION_REQUIRED',
+          403,
+        );
+      }
       if (trustPolicy.denialReason === 'no_trust_record') {
         throw new CredentialError(
           'Issuer has no active trust accreditation for credential issuance',
@@ -431,7 +442,13 @@ export class CredentialService {
       );
     }
 
-    const proof = await this.buildCredentialProof(request, issuer, claimsHash);
+    const issuedAt = this.resolveCredentialIssuedAt(request.issuerProof);
+    const proof = await this.buildCredentialProof(
+      request,
+      issuer,
+      claimsHash,
+      issuedAt,
+    );
 
     // Create the credential
     const credential = await prisma.credential.create({
@@ -444,6 +461,7 @@ export class CredentialService {
         claimsHash,
         proof: proof as any,
         expiresAt: request.expiresAt,
+        issuedAt,
         status: 'ACTIVE',
       },
     });
@@ -469,6 +487,7 @@ export class CredentialService {
             assuranceLevel: trustPolicy.assuranceLevel ?? null,
             evaluatedJurisdictions: trustPolicy.evaluatedJurisdictions,
             matchedJurisdictions: trustPolicy.matchedJurisdictions,
+            organizationId: request.organizationId ?? null,
           },
         },
       },
@@ -483,6 +502,7 @@ export class CredentialService {
     logger.info('credential_issued', {
       credentialId: credential.id,
       credentialType: request.credentialType,
+      organizationId: request.organizationId ?? null,
       subjectId: request.subjectId,
       keyVersion: this.signer.getKeyVersion(),
       trustPolicyEnforced: trustPolicy.enforced,
@@ -498,6 +518,7 @@ export class CredentialService {
     issuerId: string,
     credentialType: string,
     evaluatedJurisdictions: string[] = [],
+    organizationId?: string,
   ): Promise<{
     enforced: boolean;
     accredited: boolean;
@@ -509,13 +530,32 @@ export class CredentialService {
     denialReason?:
       | 'no_trust_record'
       | 'credential_type_not_accredited'
+      | 'organization_scope_required'
       | 'jurisdiction_not_accredited';
   }> {
+    if (!organizationId && isProductionRuntime()) {
+      logger.warn('credential_issuer_trust_policy_denied', {
+        issuerId,
+        credentialType,
+        evaluatedJurisdictions,
+        denialReason: 'organization_scope_required',
+      });
+
+      return {
+        enforced: true,
+        accredited: false,
+        matchedJurisdictions: [],
+        evaluatedJurisdictions,
+        denialReason: 'organization_scope_required',
+      };
+    }
+
     const issuerTrustModel = (prisma as any).issuerTrustRecord;
     if (!issuerTrustModel?.findMany) {
       logger.warn('credential_issuer_trust_policy_denied', {
         issuerId,
         credentialType,
+        organizationId,
         evaluatedJurisdictions,
         denialReason: 'no_trust_record',
       });
@@ -532,6 +572,7 @@ export class CredentialService {
     const records = await issuerTrustModel.findMany({
       where: {
         issuerIdentityId: issuerId,
+        ...(organizationId ? { organizationId } : {}),
       },
       orderBy: {
         updatedAt: 'desc',
@@ -542,6 +583,7 @@ export class CredentialService {
       logger.warn('credential_issuer_trust_policy_denied', {
         issuerId,
         credentialType,
+        organizationId,
         evaluatedJurisdictions,
         denialReason: 'no_trust_record',
       });
@@ -967,6 +1009,7 @@ export class CredentialService {
       issuerId: credential.issuerId,
       credentialType: credential.credentialType,
       claims: credential.claims as Record<string, unknown>,
+      proof: credential.proof,
     });
 
     return {
@@ -1248,14 +1291,25 @@ export class CredentialService {
     });
     checks.subjectActive = subject?.status === 'ACTIVE';
 
+    const proofRecord =
+      credential.proof && typeof credential.proof === 'object'
+        ? (credential.proof as Record<string, unknown>)
+        : {};
+    const proofBinding = this.parseCredentialSignatureBinding(
+      proofRecord.credentialBinding,
+    );
+    const organizationId = proofBinding?.organizationId ?? undefined;
+
     checks.signatureValid = await this.verifyProofSignature(
       currentHash,
       credential.issuerId,
-      credential.proof as Record<string, unknown>,
+      proofRecord,
       {
         credentialType: credential.credentialType,
         expiresAt: credential.expiresAt,
         issuerDid: issuer?.did,
+        issuedAt: credential.issuedAt,
+        organizationId,
         schemaId: credential.schemaId ?? null,
         subjectDid: subject?.did,
         subjectId: credential.subjectId,
@@ -1268,6 +1322,7 @@ export class CredentialService {
       this.extractCredentialJurisdictions(
         credential.claims as Record<string, unknown>,
       ),
+      organizationId,
     );
     checks.issuerTrustValid = issuerTrustPolicy.accredited;
 
@@ -1287,6 +1342,7 @@ export class CredentialService {
     issuerId: string;
     credentialType: string;
     claims: Record<string, unknown>;
+    proof?: unknown;
   }): Promise<CredentialEvidenceExport['trustLineage'] | undefined> {
     const issuerTrustModel = (prisma as any).issuerTrustRecord;
     const issuerKeyHistoryModel = (prisma as any).issuerKeyHistory;
@@ -1297,10 +1353,19 @@ export class CredentialService {
     const evaluatedJurisdictions = this.extractCredentialJurisdictions(
       credential.claims,
     );
+    const proofRecord =
+      credential.proof && typeof credential.proof === 'object'
+        ? (credential.proof as Record<string, unknown>)
+        : {};
+    const proofBinding = this.parseCredentialSignatureBinding(
+      proofRecord.credentialBinding,
+    );
+    const organizationId = proofBinding?.organizationId ?? undefined;
     const records = issuerTrustModel?.findMany
       ? await issuerTrustModel.findMany({
           where: {
             issuerIdentityId: credential.issuerId,
+            ...(organizationId ? { organizationId } : {}),
           },
           orderBy: {
             updatedAt: 'desc',
@@ -1484,9 +1549,10 @@ export class CredentialService {
   private async signCredentialForIssuer(
     request: IssueCredentialRequest,
     claimsHash: string,
+    issuedAt: Date,
   ): Promise<string> {
     const message = this.buildCredentialSignatureMessage(
-      this.buildCredentialSignatureBinding(request, claimsHash),
+      this.buildCredentialSignatureBinding(request, claimsHash, issuedAt),
     );
     const signature = await this.signer.sign(message);
     return signature.toString('base64url');
@@ -1502,9 +1568,15 @@ export class CredentialService {
       verificationMethod: string | null;
     },
     claimsHash: string,
+    issuedAt: Date,
   ): Promise<Record<string, unknown>> {
     if (request.issuerProof) {
-      return this.validateIssuerSubmittedProof(request, issuer, claimsHash);
+      return this.validateIssuerSubmittedProof(
+        request,
+        issuer,
+        claimsHash,
+        issuedAt,
+      );
     }
 
     if (isProductionRuntime()) {
@@ -1522,11 +1594,12 @@ export class CredentialService {
     const credentialBinding = this.buildCredentialSignatureBinding(
       request,
       claimsHash,
+      issuedAt,
     );
 
     return {
       type: this.signer.getProofType(),
-      created: new Date().toISOString(),
+      created: issuedAt.toISOString(),
       verificationMethod,
       proofPurpose: 'assertionMethod',
       issuerDid: request.issuerDid,
@@ -1535,6 +1608,7 @@ export class CredentialService {
       signatureValue: await this.signCredentialForIssuer(
         request,
         claimsHash,
+        issuedAt,
       ),
     };
   }
@@ -1549,6 +1623,7 @@ export class CredentialService {
       verificationMethod: string | null;
     },
     claimsHash: string,
+    issuedAt: Date,
   ): Record<string, unknown> {
     const proof = request.issuerProof!;
     const proofIssuerDid = proof.issuerDid ?? request.issuerDid;
@@ -1603,6 +1678,7 @@ export class CredentialService {
     const expectedBinding = this.buildCredentialSignatureBinding(
       request,
       claimsHash,
+      issuedAt,
     );
     const suppliedBinding = this.parseCredentialSignatureBinding(
       proof.credentialBinding,
@@ -1643,7 +1719,7 @@ export class CredentialService {
 
     return {
       type: proof.type ?? this.signer.getProofType(),
-      created: proof.created ?? new Date().toISOString(),
+      created: proof.created ?? issuedAt.toISOString(),
       verificationMethod,
       proofPurpose: 'assertionMethod',
       issuerDid: request.issuerDid,
@@ -1653,9 +1729,29 @@ export class CredentialService {
     };
   }
 
+  private resolveCredentialIssuedAt(
+    proof?: IssuerCredentialProof,
+  ): Date {
+    const signedIssuedAt = proof?.credentialBinding?.issuedAt;
+    if (!signedIssuedAt) {
+      return new Date();
+    }
+
+    const issuedAt = new Date(signedIssuedAt);
+    if (Number.isNaN(issuedAt.getTime())) {
+      throw new CredentialError(
+        'Issuer proof credential binding has an invalid issuedAt timestamp',
+        'CRED_ISSUER_PROOF_ISSUED_AT_INVALID',
+        400,
+      );
+    }
+    return issuedAt;
+  }
+
   private buildCredentialSignatureBinding(
     request: IssueCredentialRequest,
     claimsHash: string,
+    issuedAt: Date,
   ): CredentialSignatureBinding {
     return {
       version: 'zeroid.credential.signature.v2',
@@ -1665,7 +1761,9 @@ export class CredentialService {
       subjectDid: request.subjectDid,
       subjectId: request.subjectId,
       credentialType: request.credentialType,
+      organizationId: request.organizationId ?? null,
       schemaId: request.schemaId ?? null,
+      issuedAt: issuedAt.toISOString(),
       expiresAt: request.expiresAt ? request.expiresAt.toISOString() : null,
       claimsHash,
     };
@@ -1697,7 +1795,9 @@ export class CredentialService {
       typeof binding.subjectId !== 'string' ||
       typeof binding.credentialType !== 'string' ||
       typeof binding.claimsHash !== 'string' ||
+      !(typeof binding.organizationId === 'string' || binding.organizationId === null) ||
       !(typeof binding.schemaId === 'string' || binding.schemaId === null) ||
+      typeof binding.issuedAt !== 'string' ||
       !(typeof binding.expiresAt === 'string' || binding.expiresAt === null)
     ) {
       return null;
@@ -1711,7 +1811,9 @@ export class CredentialService {
       subjectDid: binding.subjectDid,
       subjectId: binding.subjectId,
       credentialType: binding.credentialType,
+      organizationId: binding.organizationId,
       schemaId: binding.schemaId,
+      issuedAt: binding.issuedAt,
       expiresAt: binding.expiresAt,
       claimsHash: binding.claimsHash,
     };
@@ -1725,6 +1827,8 @@ export class CredentialService {
       expiresAt?: Date | null;
       issuerDid?: string;
       issuerId: string;
+      issuedAt?: Date;
+      organizationId?: string | null;
       schemaId?: string | null;
       subjectDid?: string;
       subjectId?: string;
@@ -1738,7 +1842,10 @@ export class CredentialService {
       (!context.subjectDid || binding.subjectDid === context.subjectDid) &&
       (!context.credentialType ||
         binding.credentialType === context.credentialType) &&
+      binding.organizationId === (context.organizationId ?? null) &&
       binding.schemaId === (context.schemaId ?? null) &&
+      (!context.issuedAt ||
+        binding.issuedAt === context.issuedAt.toISOString()) &&
       binding.expiresAt ===
         (context.expiresAt ? context.expiresAt.toISOString() : null)
     );
@@ -1762,6 +1869,8 @@ export class CredentialService {
       credentialType?: string;
       expiresAt?: Date | null;
       issuerDid?: string;
+      issuedAt?: Date;
+      organizationId?: string | null;
       schemaId?: string | null;
       subjectDid?: string;
       subjectId?: string;
@@ -1777,7 +1886,11 @@ export class CredentialService {
     }
 
     const signature = Buffer.from(signatureValue, 'base64url');
-    const publicKey = await this.resolveVerificationPublicKey(proof, issuerId);
+    const publicKey = await this.resolveVerificationPublicKey(
+      proof,
+      issuerId,
+      credentialContext?.issuedAt,
+    );
     if (!publicKey) {
       logger.warn('credential_verify_no_public_key', { issuerId });
       return false;
@@ -1943,6 +2056,7 @@ export class CredentialService {
   private async resolveVerificationPublicKey(
     proof: Record<string, unknown>,
     issuerId: string,
+    issuedAt?: Date,
   ): Promise<crypto.KeyObject | null> {
     // -----------------------------------------------------------------------
     // Step 1: Per-issuer key resolution from identity table
@@ -1977,6 +2091,7 @@ export class CredentialService {
             const historicalKey = await this.resolveHistoricalIssuerKey(
               issuerIdentity.id ?? issuerId,
               issuerDid,
+              issuedAt,
               proofKeyVersion,
               proofVerificationMethod,
             );
@@ -2090,11 +2205,19 @@ export class CredentialService {
   private async resolveHistoricalIssuerKey(
     issuerIdentityId: string,
     issuerDid: string,
+    issuedAt?: Date,
     proofKeyVersion?: string,
     proofVerificationMethod?: string,
   ): Promise<crypto.KeyObject | null> {
     const issuerKeyHistoryModel = (prisma as any).issuerKeyHistory;
     if (!issuerKeyHistoryModel?.findFirst) {
+      return null;
+    }
+    if (!issuedAt) {
+      logger.warn('credential_verify_historical_key_missing_issued_at', {
+        issuerDid,
+        proofKeyVersion,
+      });
       return null;
     }
 
@@ -2107,6 +2230,8 @@ export class CredentialService {
           ? { verificationMethod: proofVerificationMethod }
           : {}),
         status: { in: ['ACTIVE', 'RETIRED'] },
+        validFrom: { lte: issuedAt },
+        OR: [{ validUntil: null }, { validUntil: { gt: issuedAt } }],
       },
       orderBy: {
         validFrom: 'desc',

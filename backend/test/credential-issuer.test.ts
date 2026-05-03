@@ -515,13 +515,21 @@ describe('CRED-01: Issuer-scoped credential verification', () => {
       signatureValue: legacySignature,
     });
 
-    const result = await (service as any).verifyProofSignature(claimsHash, ISSUER_ID, proof);
+    const issuedAt = new Date('2026-02-01T00:00:00.000Z');
+    const result = await (service as any).verifyProofSignature(
+      claimsHash,
+      ISSUER_ID,
+      proof,
+      { issuedAt },
+    );
     expect(result).toBe(true);
     expect(mockIssuerKeyHistoryFindFirst).toHaveBeenCalledWith(expect.objectContaining({
       where: expect.objectContaining({
         issuerIdentityId: ISSUER_ID,
         keyVersion: '1',
         verificationMethod: 'did:aethelred:issuer:alpha#assertion-key-1',
+        validFrom: { lte: issuedAt },
+        OR: [{ validUntil: null }, { validUntil: { gt: issuedAt } }],
       }),
     }));
     expect(mockLogger.info).toHaveBeenCalledWith(

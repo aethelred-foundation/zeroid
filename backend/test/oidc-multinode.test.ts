@@ -1031,6 +1031,62 @@ describe('OIDC multi-node correctness', () => {
     expect(tokens.access_token).toBeDefined();
   });
 
+  test('production stores OIDC client secrets with deployment pepper', async () => {
+    const previousNodeEnv = process.env.NODE_ENV;
+    const previousPepper = process.env.ENTERPRISE_SECRET_HASH_PEPPER;
+    process.env.NODE_ENV = 'production';
+    process.env.ENTERPRISE_SECRET_HASH_PEPPER = 'p'.repeat(64);
+
+    try {
+      const prodBridge = new OIDCBridge('https://id.zeroid.example.com/oidc');
+      const client = await prodBridge.registerClient({
+        clientName: 'Peppered Client',
+        redirectUris: [REDIRECT_URI],
+        postLogoutRedirectUris: [LOGOUT_URI],
+        grantTypes: ['authorization_code', 'refresh_token'],
+        responseTypes: ['code'],
+        tokenEndpointAuthMethod: 'client_secret_basic',
+        scopes: ['openid', 'profile', 'email'],
+        requirePkce: true,
+      });
+      const stored = JSON.parse(store.get(`oidc:clients:${client.clientId}`)!);
+      expect(stored.clientSecretHashAlg).toBe('hmac-sha256-v2');
+      expect(stored.clientSecretHash).toMatch(/^hmac-sha256-v2:/);
+      expect(stored.clientSecretHash).not.toContain(client.clientSecret);
+
+      const { verifier, challenge } = pkce();
+      const { code } = await authorizeCode(
+        prodBridge,
+        client.clientId,
+        'user-peppered-secret',
+        {
+          codeChallenge: challenge,
+          codeChallengeMethod: 'S256',
+        },
+      );
+      const tokens = await prodBridge.exchangeToken({
+        grantType: 'authorization_code',
+        code: code!,
+        redirectUri: REDIRECT_URI,
+        clientId: client.clientId,
+        clientSecret: client.clientSecret,
+        codeVerifier: verifier,
+      });
+      expect(tokens.access_token).toBeDefined();
+    } finally {
+      if (previousNodeEnv === undefined) {
+        delete process.env.NODE_ENV;
+      } else {
+        process.env.NODE_ENV = previousNodeEnv;
+      }
+      if (previousPepper === undefined) {
+        delete process.env.ENTERPRISE_SECRET_HASH_PEPPER;
+      } else {
+        process.env.ENTERPRISE_SECRET_HASH_PEPPER = previousPepper;
+      }
+    }
+  });
+
   test('legacy plaintext client secrets are migrated after successful authentication', async () => {
     const client = await registerTestClient(bridgeA);
     const clientKey = `oidc:clients:${client.clientId}`;

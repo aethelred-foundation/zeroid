@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 const routeRegistry: Record<
   string,
   Array<(req: any, res: any, next: (err?: unknown) => void) => unknown>
@@ -275,6 +277,28 @@ describe('OIDC token route client authentication', () => {
       refreshToken: undefined,
       scope: undefined,
     });
+  });
+
+  it('returns invalid_request when bridge request validation fails', async () => {
+    const parsed = z.object({ grantType: z.string() }).safeParse({
+      grantType: 123,
+    });
+    if (parsed.success) {
+      throw new Error('expected malformed OAuth fixture');
+    }
+    mockExchangeToken.mockRejectedValueOnce(parsed.error);
+
+    const response = await invokeRoute('POST', '/oidc/token', {
+      body: {
+        grant_type: 123,
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.body).toMatchObject({
+      error: 'invalid_request',
+    });
+    expect(response.body.error_description).toContain('grantType');
   });
 
   it('keeps the SAML bridge disabled without returning assertion material', async () => {

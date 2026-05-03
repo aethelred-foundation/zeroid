@@ -52,6 +52,7 @@ router.post(
     try {
       const {
         credentialType,
+        organizationId,
         subjectDid,
         claims,
         expiresAt,
@@ -74,6 +75,7 @@ router.post(
 
       const credential = await credentialService.issueCredential({
         credentialType,
+        organizationId,
         issuerId: issuer.id,
         issuerDid: issuer.did,
         subjectId: subject.id,

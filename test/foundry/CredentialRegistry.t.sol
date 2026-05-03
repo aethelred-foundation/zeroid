@@ -139,6 +139,18 @@ contract CredentialRegistryTest is TestHelper {
         registry.issueCredential(CREDENTIAL_HASH_1, SCHEMA_HASH_1, DID_HASH_2, expiry, MERKLE_ROOT_1);
     }
 
+    function test_IssueCredential_RevertsIssuerRoleWithoutActiveDid() public {
+        address unboundIssuer = carol;
+        uint64 expiry = uint64(block.timestamp + 365 days);
+
+        vm.prank(admin);
+        registry.grantRole(ISSUER_ROLE, unboundIssuer);
+
+        vm.prank(unboundIssuer);
+        vm.expectRevert(abi.encodeWithSelector(CredentialRegistry.IssuerIdentityNotActive.selector, bytes32(0)));
+        registry.issueCredential(CREDENTIAL_HASH_1, SCHEMA_HASH_1, DID_HASH_2, expiry, MERKLE_ROOT_1);
+    }
+
     // ════════════════════════════════════════════════════════════════
     // Credential Lifecycle
     // ════════════════════════════════════════════════════════════════

@@ -99,22 +99,27 @@ function sendPublicOAuthError(
   error: PublicOAuthRouteError,
   fallbackCode: string,
 ): void {
-  const statusCode =
+  const isValidationError = error instanceof z.ZodError;
+  const hasExplicitStatus =
     Number.isInteger(error.statusCode) &&
     error.statusCode! >= 400 &&
-    error.statusCode! < 600
-      ? error.statusCode!
-      : 500;
+    error.statusCode! < 600;
+  const statusCode =
+    isValidationError ? 400 : hasExplicitStatus ? error.statusCode! : 500;
   const isServerError = statusCode >= 500;
-  const protocolCode = isServerError
-    ? 'server_error'
-    : normalizeOAuthErrorCode(error.errorCode ?? error.code ?? fallbackCode);
+  const protocolCode = isValidationError
+    ? 'invalid_request'
+    : isServerError
+      ? 'server_error'
+      : normalizeOAuthErrorCode(error.errorCode ?? error.code ?? fallbackCode);
 
   res.status(statusCode).json({
     error: protocolCode,
-    error_description: isServerError
-      ? 'Internal server error'
-      : error.message,
+    error_description: isValidationError
+      ? formatOAuthValidationError(error)
+      : isServerError
+        ? 'Internal server error'
+        : error.message,
   });
 }
 
@@ -123,6 +128,16 @@ function normalizeOAuthErrorCode(code: string): string {
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9_]+/g, '_');
+}
+
+function formatOAuthValidationError(error: z.ZodError): string {
+  const details = error.issues
+    .map((issue) => {
+      const path = issue.path.length > 0 ? issue.path.join('.') : 'request';
+      return `${path}: ${issue.message}`;
+    })
+    .join('; ');
+  return details || 'Malformed OAuth request';
 }
 
 function buildOAuthRouteError(

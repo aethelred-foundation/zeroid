@@ -904,14 +904,11 @@ contract CrossChainIdentityBridge is AccessControl, Pausable, ReentrancyGuard {
      * @dev Verify a light client proof for a state root update.
      *
      *      Trust model: Full BLS aggregate signature verification from a sync
-     *      committee is prohibitively expensive on-chain. Instead, we use a
-     *      VERIFIED_PROOF_SUBMITTER_ROLE approach: only addresses that have been
-     *      granted VERIFIED_PROOF_SUBMITTER_ROLE (e.g., an off-chain verifier
-     *      service that validates BLS committee signatures before submitting)
-     *      are authorized to submit light client proofs. This converts the
-     *      trust assumption from "proof data is structurally valid" to
-     *      "the submitter has been vetted by governance to perform off-chain
-     *      BLS verification before relaying."
+     *      committee is prohibitively expensive on-chain. The proof therefore
+     *      must be a verifier signature over this exact state-root update. This
+     *      keeps the update cryptographically bound to the root, block number,
+     *      source chain, destination chain, and bridge contract instead of
+     *      accepting arbitrary bytes from a privileged caller.
      */
     function _verifyLightClientProof(
         uint256 chainId,
@@ -919,30 +916,27 @@ contract CrossChainIdentityBridge is AccessControl, Pausable, ReentrancyGuard {
         uint256 blockNumber,
         bytes calldata proof
     ) internal view returns (bool) {
-        // Verify proof is non-empty and well-formed
-        if (proof.length < 96) return false; // Minimum: 3 x 32-byte values
+        if (stateRoot == bytes32(0)) return false;
+        if (proof.length != 65) return false;
 
         // Verify block number is newer than current
         if (blockNumber <= _chains[chainId].latestBlockNumber) return false;
 
-        // Verify the proof commits to the state root
-        bytes32 proofCommitment = keccak256(
-            abi.encodePacked(chainId, stateRoot, blockNumber)
+        bytes32 messageHash = keccak256(
+            abi.encodePacked(
+                address(this),
+                block.chainid,
+                chainId,
+                stateRoot,
+                blockNumber,
+                _chains[chainId].latestStateRoot
+            )
         );
-        bytes32 proofHash = keccak256(proof);
-
-        // Structural validity check
-        if (proofHash == bytes32(0) || proofCommitment == bytes32(0)) return false;
-
-        // ZID-005: Require caller to have VERIFIED_PROOF_SUBMITTER_ROLE.
-        // This ensures only addresses that perform off-chain BLS committee
-        // signature verification can submit light client proofs.
-        require(
-            hasRole(VERIFIED_PROOF_SUBMITTER_ROLE, msg.sender),
-            "Caller not authorized as verified proof submitter"
+        address signer = ECDSA.recover(
+            MessageHashUtils.toEthSignedMessageHash(messageHash),
+            proof
         );
-
-        return true;
+        return hasRole(VERIFIED_PROOF_SUBMITTER_ROLE, signer);
     }
 
     /**
@@ -981,27 +975,10 @@ contract CrossChainIdentityBridge is AccessControl, Pausable, ReentrancyGuard {
     function _verifyFraudProof(
         BridgeMessage storage msg_,
         bytes calldata fraudEvidence
-    ) internal view returns (bool) {
-        if (fraudEvidence.length < 64) return false;
-
-        // Extract the counter-proof elements
-        bytes32 counterStateRoot;
-        bytes32 counterCredentialHash;
-        assembly {
-            counterStateRoot := calldataload(fraudEvidence.offset)
-            counterCredentialHash := calldataload(add(fraudEvidence.offset, 32))
-        }
-
-        // The fraud proof must demonstrate that the credential is NOT
-        // in the claimed state root
-        if (counterStateRoot != msg_.sourceStateRoot) return false;
-        if (counterCredentialHash != msg_.credentialHash) return false;
-
-        // Verify the counter-evidence (non-inclusion proof)
-        bytes memory counterProof = fraudEvidence[64:];
-        return !_verifyMerkleInclusion(
-            msg_.credentialHash, msg_.sourceStateRoot, counterProof
-        );
+    ) internal pure returns (bool) {
+        msg_;
+        fraudEvidence;
+        return false;
     }
 
     /// @dev Receive ETH for staking

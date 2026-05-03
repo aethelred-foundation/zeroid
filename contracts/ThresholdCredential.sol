@@ -63,6 +63,7 @@ contract ThresholdCredential is AccessControl, Pausable, ReentrancyGuard {
     error RecoveryAlreadyInitiated();
     error RecoveryCooldownActive();
     error SignerCountMismatch();
+    error InvalidPublicKey();
 
     // ──────────────────────────────────────────────────────────────────────
     // Events
@@ -260,6 +261,7 @@ contract ThresholdCredential is AccessControl, Pausable, ReentrancyGuard {
         if (threshold == 0 || threshold > totalSigners) revert InvalidThreshold();
         if (totalSigners > MAX_SIGNERS) revert InvalidThreshold();
         if (_configs[configId].active) revert ConfigurationAlreadyExists();
+        _requireValidNonZeroG1(groupPubKey);
 
         ThresholdConfig storage config = _configs[configId];
         config.threshold = threshold;
@@ -292,6 +294,7 @@ contract ThresholdCredential is AccessControl, Pausable, ReentrancyGuard {
         if (!config.active) revert ConfigurationNotFound();
         if (index == 0 || index > config.totalSigners) revert InvalidSignerIndex();
         if (_signers[configId][index].active) revert SignerAlreadyRegistered();
+        _requireValidNonZeroG1(pubShare);
 
         // ZID-009: Require non-zero G2 key
         require(g2Key.x[0] != 0 || g2Key.x[1] != 0, "G2 key must not be zero");
@@ -366,6 +369,7 @@ contract ThresholdCredential is AccessControl, Pausable, ReentrancyGuard {
         if (req.configId == bytes32(0)) revert RequestNotFound();
         if (req.finalized) revert RequestAlreadyFinalized();
         if (block.timestamp > req.expiresAt) revert RequestExpired();
+        if (!_isValidNonZeroG1(sigmaI)) revert InvalidPartialSignature();
 
         uint256 signerIndex = _signerIndices[req.configId][msg.sender];
         if (signerIndex == 0) revert SignerNotRegistered();
@@ -749,5 +753,13 @@ contract ThresholdCredential is AccessControl, Pausable, ReentrancyGuard {
 
         // Verify the hash matches the report
         return keccak256(enclaveReport) == attestationHash;
+    }
+
+    function _requireValidNonZeroG1(BN254.G1Point memory point) internal pure {
+        if (!_isValidNonZeroG1(point)) revert InvalidPublicKey();
+    }
+
+    function _isValidNonZeroG1(BN254.G1Point memory point) internal pure returns (bool) {
+        return !BN254.isZero(point) && BN254.isOnCurve(point);
     }
 }

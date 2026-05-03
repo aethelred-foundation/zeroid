@@ -96,11 +96,13 @@ function hashClaims(claims: Record<string, unknown>): string {
 function buildCredentialBinding(
   request: {
     credentialType: string;
+    organizationId?: string;
     issuerId: string;
     issuerDid: string;
     subjectId: string;
     subjectDid: string;
     claims: Record<string, unknown>;
+    issuedAt?: string;
   },
   claimsHash = hashClaims(request.claims),
 ) {
@@ -112,7 +114,9 @@ function buildCredentialBinding(
     subjectDid: request.subjectDid,
     subjectId: request.subjectId,
     credentialType: request.credentialType,
+    organizationId: request.organizationId ?? null,
     schemaId: null,
+    issuedAt: request.issuedAt ?? '2026-04-21T00:00:00.000Z',
     expiresAt: null,
     claimsHash,
   };
@@ -193,6 +197,7 @@ describe('Credential trust enforcement', () => {
 
   const baseRequest = {
     credentialType: 'kyc_enhanced',
+    organizationId: 'org-1',
     issuerId: 'issuer-1',
     issuerDid: 'did:aethelred:issuer:alpha',
     subjectId: 'subject-1',
@@ -228,6 +233,14 @@ describe('Credential trust enforcement', () => {
       statusCode: 403,
     });
     expect(mockIssuerTrustFindMany).toHaveBeenCalled();
+    expect(mockIssuerTrustFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          issuerIdentityId: 'issuer-1',
+          organizationId: 'org-1',
+        }),
+      }),
+    );
     expect(mockCredentialCreate).not.toHaveBeenCalled();
   });
 

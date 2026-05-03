@@ -95,6 +95,12 @@ contract ThresholdCredentialTest is TestHelper {
         tc.createConfig(CONFIG_ID, 2, 3, _g1());
     }
 
+    function test_CreateConfig_RevertsInvalidGroupPublicKey() public {
+        vm.prank(admin);
+        vm.expectRevert(ThresholdCredential.InvalidPublicKey.selector);
+        tc.createConfig(CONFIG_ID, 2, 3, BN254.G1Point(0, 0));
+    }
+
     // ════════════════════════════════════════════════════════════════
     // Signer Registration
     // ════════════════════════════════════════════════════════════════
@@ -146,6 +152,14 @@ contract ThresholdCredentialTest is TestHelper {
         tc.registerSigner(keccak256("nonexistent"), alice, 1, _g1(), _g2());
     }
 
+    function test_RegisterSigner_RevertsInvalidPublicKeyShare() public {
+        _createConfig();
+
+        vm.prank(admin);
+        vm.expectRevert(ThresholdCredential.InvalidPublicKey.selector);
+        tc.registerSigner(CONFIG_ID, alice, 1, BN254.G1Point(0, 0), _g2());
+    }
+
     // ════════════════════════════════════════════════════════════════
     // Credential Request
     // ════════════════════════════════════════════════════════════════
@@ -172,6 +186,22 @@ contract ThresholdCredentialTest is TestHelper {
         vm.prank(alice);
         vm.expectRevert(ThresholdCredential.ConfigurationNotActive.selector);
         tc.requestCredential(keccak256("bad"), CRED_HASH, new uint256[](0), 0);
+    }
+
+    function test_SubmitPartialSignature_RevertsInvalidSignaturePoint() public {
+        _createConfig();
+
+        vm.prank(admin);
+        tc.registerSigner(CONFIG_ID, alice, 1, _g1(), _g2());
+
+        uint256[] memory msgs = new uint256[](1);
+        msgs[0] = 123;
+
+        bytes32 requestId = tc.requestCredential(CONFIG_ID, CRED_HASH, msgs, 0);
+
+        vm.prank(alice);
+        vm.expectRevert(ThresholdCredential.InvalidPartialSignature.selector);
+        tc.submitPartialSignature(requestId, BN254.G1Point(0, 0), bytes32(0));
     }
 
     // ════════════════════════════════════════════════════════════════

@@ -43,6 +43,28 @@ contract CrossChainIdentityBridgeTest is TestHelper {
         bridge.grantRole(syncRole, target);
     }
 
+    function _signLightClientUpdate(
+        uint256 chainId,
+        bytes32 stateRoot,
+        uint256 blockNumber,
+        bytes32 previousRoot,
+        uint256 signerPk
+    ) internal view returns (bytes memory) {
+        bytes32 messageHash = keccak256(
+            abi.encodePacked(
+                address(bridge),
+                block.chainid,
+                chainId,
+                stateRoot,
+                blockNumber,
+                previousRoot
+            )
+        );
+        bytes32 ethSignedHash = MessageHashUtils.toEthSignedMessageHash(messageHash);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(signerPk, ethSignedHash);
+        return abi.encodePacked(r, s, v);
+    }
+
     // ════════════════════════════════════════════════════════════════
     // Deployment
     // ════════════════════════════════════════════════════════════════
@@ -112,8 +134,13 @@ contract CrossChainIdentityBridgeTest is TestHelper {
         bridge.grantRole(proofSubmitterRole, alice);
 
         bytes32 newRoot = keccak256("state:2");
-        bytes memory proof = new bytes(96); // minimum proof length
-        proof[0] = 0x01;
+        bytes memory proof = _signLightClientUpdate(
+            CHAIN_A,
+            newRoot,
+            1,
+            GENESIS_ROOT,
+            ALICE_PK
+        );
 
         vm.prank(alice);
         vm.expectEmit(true, false, false, true);
@@ -146,6 +173,31 @@ contract CrossChainIdentityBridgeTest is TestHelper {
         vm.prank(alice);
         vm.expectRevert(CrossChainIdentityBridge.InvalidLightClientUpdate.selector);
         bridge.updateLightClient(CHAIN_A, keccak256("root"), 1, new bytes(32));
+    }
+
+    function test_UpdateLightClient_RevertsMismatchedRootSignature() public {
+        _registerChain();
+
+        bytes32 updaterRole = bridge.LIGHT_CLIENT_UPDATER_ROLE();
+        bytes32 proofSubmitterRole = bridge.VERIFIED_PROOF_SUBMITTER_ROLE();
+        vm.prank(admin);
+        bridge.grantRole(updaterRole, alice);
+        vm.prank(admin);
+        bridge.grantRole(proofSubmitterRole, alice);
+
+        bytes32 signedRoot = keccak256("state:signed");
+        bytes32 submittedRoot = keccak256("state:submitted");
+        bytes memory proof = _signLightClientUpdate(
+            CHAIN_A,
+            signedRoot,
+            1,
+            GENESIS_ROOT,
+            ALICE_PK
+        );
+
+        vm.prank(alice);
+        vm.expectRevert(CrossChainIdentityBridge.InvalidLightClientUpdate.selector);
+        bridge.updateLightClient(CHAIN_A, submittedRoot, 1, proof);
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -258,6 +310,42 @@ contract CrossChainIdentityBridgeTest is TestHelper {
         vm.prank(alice);
         vm.expectRevert(CrossChainIdentityBridge.CircuitBreakerTripped.selector);
         bridge.bridgeCredential(CRED_HASH, CHAIN_A, "proof", keccak256("acc_root"));
+    }
+
+    function test_SubmitFraudProof_FailsClosedForUnauthenticatedEvidence() public {
+        _registerChain();
+        _registerOperator(alice);
+
+        bytes32 challengerRole = bridge.FRAUD_PROOF_CHALLENGER_ROLE();
+        vm.prank(admin);
+        bridge.grantRole(challengerRole, bob);
+
+        vm.prank(alice);
+        bytes32 messageHash = bridge.bridgeCredential(
+            CRED_HASH,
+            CHAIN_A,
+            "proof",
+            keccak256("acc_root")
+        );
+
+        bytes memory unauthenticatedEvidence = abi.encodePacked(
+            bytes32(0),
+            CRED_HASH,
+            bytes32("not-a-non-inclusion-proof")
+        );
+
+        vm.deal(bob, 1 ether);
+        uint256 bond = bridge.MIN_CHALLENGE_BOND();
+        vm.prank(bob);
+        vm.expectRevert(CrossChainIdentityBridge.InvalidFraudProof.selector);
+        bridge.submitFraudProof{value: bond}(
+            messageHash,
+            unauthenticatedEvidence
+        );
+
+        CrossChainIdentityBridge.OperatorInfo memory info = bridge.getOperatorInfo(alice);
+        assertEq(info.slashCount, 0);
+        assertEq(info.stakedAmount, 1 ether);
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -404,11 +492,16 @@ contract CrossChainIdentityBridgeTest is TestHelper {
         bridge.grantRole(updaterRole, alice);
 
         bytes32 newRoot = keccak256("state:2");
-        bytes memory proof = new bytes(96);
-        proof[0] = 0x01;
+        bytes memory proof = _signLightClientUpdate(
+            CHAIN_A,
+            newRoot,
+            1,
+            GENESIS_ROOT,
+            ALICE_PK
+        );
 
         vm.prank(alice);
-        vm.expectRevert("Caller not authorized as verified proof submitter");
+        vm.expectRevert(CrossChainIdentityBridge.InvalidLightClientUpdate.selector);
         bridge.updateLightClient(CHAIN_A, newRoot, 1, proof);
     }
 
