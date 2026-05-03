@@ -2,8 +2,10 @@ import { Router, Response } from 'express';
 import { z } from 'zod';
 import { logger } from '../../index';
 import { AuthenticatedRequest, authMiddleware } from '../../middleware/auth';
+import { requireEnterpriseContext } from '../../middleware/enterprise';
 import { apiRateLimiter } from '../../middleware/rateLimit';
 import { validate } from '../../middleware/validation';
+import { EnterpriseRole } from '../../services/enterprise/organization-service';
 import {
   complianceCopilotService,
   ComplianceCopilotError,
@@ -74,6 +76,18 @@ const SimulateChangeSchema = z.object({
 // ---------------------------------------------------------------------------
 
 const router = Router();
+const COMPLIANCE_READ_ROLES: EnterpriseRole[] = [
+  'viewer',
+  'operator',
+  'admin',
+  'compliance_officer',
+  'auditor',
+];
+const COMPLIANCE_WRITE_ROLES: EnterpriseRole[] = [
+  'operator',
+  'admin',
+  'compliance_officer',
+];
 
 // All AI compliance routes require authentication
 router.use(authMiddleware);
@@ -86,6 +100,7 @@ router.use(apiRateLimiter);
 router.post(
   '/screen',
   validate({ body: ScreenIdentitySchema }),
+  requireEnterpriseContext(COMPLIANCE_WRITE_ROLES),
   async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
       const result = await complianceCopilotService.screenIdentity(req.body);
@@ -114,6 +129,7 @@ router.post(
 router.post(
   '/report',
   validate({ body: GenerateReportSchema }),
+  requireEnterpriseContext(COMPLIANCE_WRITE_ROLES),
   async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
       const { entityId, reportType, jurisdiction } = req.body;
@@ -143,6 +159,7 @@ router.get(
     params: RiskAssessmentParamsSchema,
     query: RiskAssessmentQuerySchema,
   }),
+  requireEnterpriseContext(COMPLIANCE_READ_ROLES),
   async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
       const { identityId } = req.params;
@@ -183,6 +200,7 @@ router.get(
 router.post(
   '/copilot/query',
   validate({ body: CopilotQuerySchema }),
+  requireEnterpriseContext(COMPLIANCE_READ_ROLES),
   async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
       const response = await complianceCopilotService.queryComplianceCopilot(req.body);
@@ -204,6 +222,7 @@ router.post(
 router.get(
   '/alerts',
   validate({ query: AlertsQuerySchema }),
+  requireEnterpriseContext(COMPLIANCE_READ_ROLES),
   async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
       const { entityId, severity, limit } = req.query as unknown as {
@@ -263,6 +282,7 @@ router.get(
 router.post(
   '/simulate',
   validate({ body: SimulateChangeSchema }),
+  requireEnterpriseContext(COMPLIANCE_WRITE_ROLES),
   async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
       const { regulation, changes, jurisdiction } = req.body;
