@@ -95,6 +95,15 @@ interface ReportSection {
   evidence: Record<string, unknown>;
 }
 
+interface LatestScreeningSummary {
+  screenedAt: string | Date;
+  result: ScreeningResult;
+  matchScore: number;
+  matchedLists?: SanctionsListMatch[];
+  pepMatches?: PEPMatch[];
+  listsChecked?: string[];
+}
+
 export interface ComplianceGap {
   gapId: string;
   category: string;
@@ -447,6 +456,11 @@ export class ComplianceCopilotService {
         credentials: { where: { status: 'ACTIVE' } },
       },
     });
+    const latestScreening = this.parseLatestScreening(
+      await redis.get(`screening:latest:${entityId}`),
+    );
+    const screeningCurrent = this.isScreeningCurrent(latestScreening);
+    const screeningStatus = this.screeningReportStatus(latestScreening);
 
     // Section: Identity Verification
     if (reportType === 'kyc' || reportType === 'comprehensive') {
@@ -492,20 +506,22 @@ export class ComplianceCopilotService {
 
     // Section: AML Compliance
     if (reportType === 'aml' || reportType === 'comprehensive') {
-      const latestScreening = await redis.get(`screening:latest:${entityId}`);
-      const screeningCurrent = latestScreening
-        ? (Date.now() - JSON.parse(latestScreening).screenedAt) < 24 * 3600_000
-        : false;
-
       sections.push({
         title: 'Anti-Money Laundering (AML)',
-        status: screeningCurrent ? 'pass' : 'warning',
+        status: screeningStatus,
         findings: [
           `Sanctions screening: ${screeningCurrent ? 'current' : 'stale or missing'}`,
+          `Latest screening result: ${latestScreening?.result ?? 'missing'}`,
+          `Latest screening match score: ${latestScreening?.matchScore ?? 0}/100`,
           'Transaction monitoring: active',
           'Suspicious activity reports: none pending',
         ],
-        evidence: { screeningCurrent, lastScreening: latestScreening ? JSON.parse(latestScreening).screenedAt : null },
+        evidence: {
+          screeningCurrent,
+          lastScreening: latestScreening?.screenedAt ?? null,
+          screeningResult: latestScreening?.result ?? null,
+          matchScore: latestScreening?.matchScore ?? null,
+        },
       });
 
       if (!screeningCurrent) {
@@ -519,33 +535,60 @@ export class ComplianceCopilotService {
         });
         recommendations.push('Implement automated daily sanctions screening');
       }
+
+      if (screeningCurrent && latestScreening && latestScreening.result !== 'clear') {
+        gaps.push({
+          gapId: `gap-${crypto.randomUUID().slice(0, 8)}`,
+          category: 'sanctions_screening_result',
+          severity: latestScreening.result === 'confirmed_match' ? 'critical' : 'violation',
+          description: `Latest screening result is ${latestScreening.result} with score ${latestScreening.matchScore}/100`,
+          regulation: `${framework} - Sanctions/PEP Screening`,
+          remediation: latestScreening.result === 'confirmed_match'
+            ? 'Block the relationship and escalate immediately to compliance leadership'
+            : 'Place the relationship under manual review before approval',
+        });
+        recommendations.push('Resolve non-clear screening outcomes before relying on the compliance report');
+      }
     }
 
     // Section: Sanctions Screening
     if (reportType === 'sanctions' || reportType === 'comprehensive') {
+      const sanctionsMatches = latestScreening?.matchedLists?.length;
       sections.push({
         title: 'Sanctions & Restrictive Measures',
-        status: 'pass',
+        status: this.sanctionsSectionStatus(latestScreening),
         findings: [
-          'Checked against: OFAC SDN, EU Consolidated, UN Security Council, UK HMT',
-          'No confirmed matches found',
-          'Last screening: within compliance window',
+          `Checked against: ${(latestScreening?.listsChecked ?? ['OFAC SDN', 'EU Consolidated', 'UN Security Council', 'UK HMT']).join(', ')}`,
+          `Latest screening result: ${latestScreening?.result ?? 'missing'}`,
+          `Sanctions match count: ${sanctionsMatches ?? 'unavailable'}`,
+          `Last screening: ${screeningCurrent ? 'within compliance window' : 'stale or missing'}`,
         ],
-        evidence: { listsChecked: 4, confirmedMatches: 0 },
+        evidence: {
+          listsChecked: latestScreening?.listsChecked ?? null,
+          result: latestScreening?.result ?? null,
+          matchScore: latestScreening?.matchScore ?? null,
+          sanctionsMatchCount: sanctionsMatches ?? null,
+        },
       });
     }
 
     // Section: PEP Screening
     if (reportType === 'pep' || reportType === 'comprehensive') {
+      const pepMatches = latestScreening?.pepMatches?.length;
       sections.push({
         title: 'Politically Exposed Persons (PEP)',
-        status: 'pass',
+        status: this.pepSectionStatus(latestScreening),
         findings: [
-          'Screened against global PEP databases',
+          `Screened against global PEP databases: ${screeningCurrent ? 'current' : 'stale or missing'}`,
           'Included family members and close associates',
-          'No matches requiring enhanced due diligence',
+          `PEP match count: ${pepMatches ?? 'unavailable'}`,
+          `Latest screening result: ${latestScreening?.result ?? 'missing'}`,
         ],
-        evidence: { pepDatabasesChecked: 3, matchesFound: 0 },
+        evidence: {
+          pepDatabasesChecked: latestScreening?.listsChecked?.includes('pep_database') ? 1 : null,
+          matchesFound: pepMatches ?? null,
+          result: latestScreening?.result ?? null,
+        },
       });
     }
 
@@ -975,7 +1018,14 @@ export class ComplianceCopilotService {
     try {
       await redis.set(
         `screening:latest:${result.identityId}`,
-        JSON.stringify({ screenedAt: result.screenedAt, result: result.result, matchScore: result.matchScore }),
+        JSON.stringify({
+          screenedAt: result.screenedAt,
+          result: result.result,
+          matchScore: result.matchScore,
+          matchedLists: result.matchedLists,
+          pepMatches: result.pepMatches,
+          listsChecked: result.listsChecked,
+        }),
         'EX',
         7 * 86400,
       );
@@ -1020,6 +1070,48 @@ export class ComplianceCopilotService {
       CH: 'FINMA_AMLA',
     };
     return mapping[jurisdiction.toUpperCase()] ?? 'FATF';
+  }
+
+  private parseLatestScreening(raw: string | null): LatestScreeningSummary | null {
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw) as Partial<LatestScreeningSummary>;
+      if (!parsed.screenedAt || !parsed.result || typeof parsed.matchScore !== 'number') {
+        return null;
+      }
+      return parsed as LatestScreeningSummary;
+    } catch {
+      return null;
+    }
+  }
+
+  private isScreeningCurrent(summary: LatestScreeningSummary | null): boolean {
+    if (!summary) return false;
+    const screenedAtMs = new Date(summary.screenedAt).getTime();
+    return Number.isFinite(screenedAtMs) && Date.now() - screenedAtMs < 24 * 3600_000;
+  }
+
+  private screeningReportStatus(summary: LatestScreeningSummary | null): ReportSection['status'] {
+    if (!this.isScreeningCurrent(summary)) return 'warning';
+    if (summary?.result === 'confirmed_match') return 'fail';
+    if (summary?.result === 'potential_match' || summary?.result === 'inconclusive') return 'warning';
+    return 'pass';
+  }
+
+  private sanctionsSectionStatus(summary: LatestScreeningSummary | null): ReportSection['status'] {
+    if (!this.isScreeningCurrent(summary)) return 'warning';
+    const matchCount = summary?.matchedLists?.length;
+    if (matchCount && summary?.result === 'confirmed_match') return 'fail';
+    if (matchCount || (summary?.result !== 'clear' && matchCount === undefined)) return 'warning';
+    return 'pass';
+  }
+
+  private pepSectionStatus(summary: LatestScreeningSummary | null): ReportSection['status'] {
+    if (!this.isScreeningCurrent(summary)) return 'warning';
+    const matchCount = summary?.pepMatches?.length;
+    if (matchCount && summary?.result === 'confirmed_match') return 'fail';
+    if (matchCount || (summary?.result !== 'clear' && matchCount === undefined)) return 'warning';
+    return 'pass';
   }
 }
 
