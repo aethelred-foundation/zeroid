@@ -116,4 +116,26 @@ describe('identity DID resolution freshness', () => {
       },
     });
   });
+
+  it('does not treat failed government status objects as public verification evidence', async () => {
+    mockGetVerificationStatus.mockResolvedValueOnce({
+      verified: false,
+      provider: 'EMIRATES_ID',
+      referenceId: 'eid-failed',
+      verifiedFields: [],
+      verifiedAt: new Date('2026-04-28T00:00:00.000Z'),
+      expiresAt: new Date('2027-04-28T00:00:00.000Z'),
+    });
+
+    const response = await request(createApp())
+      .get('/identity/resolve/did:aethelred:alice')
+      .expect(200);
+
+    expect(response.body.data).toMatchObject({
+      governmentVerified: false,
+      verificationEvidence: {
+        government: null,
+      },
+    });
+  });
 });

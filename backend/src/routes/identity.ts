@@ -122,6 +122,7 @@ router.get(
           : Promise.resolve(false),
         governmentAPIService.getVerificationStatus(identity.id),
       ]);
+      const governmentVerified = govStatus?.verified === true;
 
       // Public resolution: return limited fields
       res.json({
@@ -130,12 +131,12 @@ router.get(
           publicKey: identity.publicKey,
           status: identity.status,
           teeAttested,
-          governmentVerified: Boolean(govStatus),
+          governmentVerified,
           verificationEvidence: {
             tee: teeAttested
               ? { verified: true }
               : null,
-            government: govStatus
+            government: governmentVerified
               ? {
                   verified: true,
                   provider: govStatus.provider,

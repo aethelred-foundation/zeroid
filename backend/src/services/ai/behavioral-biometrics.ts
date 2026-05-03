@@ -411,6 +411,11 @@ export class BehavioralBiometricsService {
     const keystrokeAnalysis = this.analyzeKeystrokes(session.keystrokes);
     const mouseAnalysis = this.analyzeMouseMovements(session.mouseEvents);
     const touchAnalysis = this.analyzeTouchBehavior(session.touchEvents);
+    const hasUsableBiometricSignal = this.hasUsableBiometricSignal(
+      keystrokeAnalysis,
+      mouseAnalysis,
+      touchAnalysis,
+    );
 
     // Get or create template for this identity
     const template = this.templates.get(session.identityId);
@@ -433,8 +438,11 @@ export class BehavioralBiometricsService {
       details.push('Building biometric profile (insufficient samples for matching)');
     }
 
-    // Update template with new session data
-    await this.updateTemplate(session.identityId, keystrokeAnalysis, mouseAnalysis, touchAnalysis);
+    if (hasUsableBiometricSignal) {
+      await this.updateTemplate(session.identityId, keystrokeAnalysis, mouseAnalysis, touchAnalysis);
+    } else {
+      details.push('Insufficient behavioral signal for liveness or template update');
+    }
 
     // Liveness detection
     const isLive = this.detectLiveness(keystrokeAnalysis, mouseAnalysis, touchAnalysis);
@@ -501,7 +509,13 @@ export class BehavioralBiometricsService {
     await this.persistMatchResult(result);
 
     // Update continuous auth score
-    this.updateContinuousAuth(session.identityId, session.sessionId, overallScore, isBotLikely);
+    this.updateContinuousAuth(
+      session.identityId,
+      session.sessionId,
+      overallScore,
+      isBotLikely,
+      hasUsableBiometricSignal,
+    );
 
     logger.info('biometric_session_processed', {
       matchId,
@@ -528,6 +542,7 @@ export class BehavioralBiometricsService {
     sessionId: string,
     newScore: number,
     isBotDetected: boolean,
+    hasUsableBiometricSignal: boolean,
   ): void {
     const key = `${identityId}:${sessionId}`;
     const existing = this.continuousScores.get(key);
@@ -547,6 +562,10 @@ export class BehavioralBiometricsService {
         alerts.push('Automated behavior detected during continuous authentication');
       }
 
+      if (!hasUsableBiometricSignal) {
+        alerts.push('Insufficient behavioral signal during continuous authentication');
+      }
+
       this.continuousScores.set(key, {
         identityId,
         sessionId,
@@ -561,7 +580,10 @@ export class BehavioralBiometricsService {
         sessionId,
         score: newScore,
         windowSize: 1,
-        alerts: isBotDetected ? ['Bot behavior detected on initial assessment'] : [],
+        alerts: [
+          ...(isBotDetected ? ['Bot behavior detected on initial assessment'] : []),
+          ...(!hasUsableBiometricSignal ? ['Insufficient behavioral signal on initial assessment'] : []),
+        ],
         lastUpdated: new Date(),
       });
     }
@@ -759,9 +781,21 @@ export class BehavioralBiometricsService {
     }
 
     // Require majority of available signals to pass
-    if (signals.length === 0) return true; // no data = benefit of the doubt
+    if (signals.length === 0) return false;
     const passCount = signals.filter((s) => s).length;
     return passCount / signals.length >= 0.5;
+  }
+
+  private hasUsableBiometricSignal(
+    keystroke: ReturnType<typeof this.analyzeKeystrokes>,
+    mouse: ReturnType<typeof this.analyzeMouseMovements>,
+    touch: ReturnType<typeof this.analyzeTouchBehavior>,
+  ): boolean {
+    return (
+      keystroke.dwellTimes.length >= 5 ||
+      mouse.accelerations.length >= 5 ||
+      touch.pressures.length >= 3
+    );
   }
 
   // -------------------------------------------------------------------------
