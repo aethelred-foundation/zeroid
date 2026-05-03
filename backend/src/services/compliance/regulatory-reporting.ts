@@ -413,9 +413,10 @@ export class RegulatoryReportingService {
   // -------------------------------------------------------------------------
   async fulfillDSAR(request: DSARRequest, organizationId?: string): Promise<GeneratedReport> {
     const parsed = DSARRequestSchema.parse(request);
+    this.assertDataSubjectRightsConnectorAvailable();
     const reportId = crypto.randomUUID();
 
-    // Simulate data collection across service boundaries
+    // Development-only local collection placeholder.
     const collectedData: Record<string, unknown> = {};
     for (const category of parsed.dataCategories) {
       collectedData[category] = {
@@ -466,6 +467,7 @@ export class RegulatoryReportingService {
   // -------------------------------------------------------------------------
   async processErasure(request: ErasureRequest, organizationId?: string): Promise<GeneratedReport> {
     const parsed = ErasureRequestSchema.parse(request);
+    this.assertDataSubjectRightsConnectorAvailable();
     const reportId = crypto.randomUUID();
 
     const erasureResults: Record<string, { erased: boolean; method: string; retainedReason?: string; retainUntil?: string }> = {};
@@ -908,6 +910,16 @@ export class RegulatoryReportingService {
     if (!report) return null;
     if (organizationId && report.organizationId !== organizationId) return null;
     return report;
+  }
+
+  private assertDataSubjectRightsConnectorAvailable(): void {
+    if (!isProductionRuntime()) return;
+
+    throw new ReportingError(
+      'Data subject rights connector is required in production',
+      'DATA_SUBJECT_RIGHTS_CONNECTOR_REQUIRED',
+      503,
+    );
   }
 
   private scheduleForFiling(reportId: string): void {

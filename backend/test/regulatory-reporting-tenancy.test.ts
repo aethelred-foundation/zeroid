@@ -1,4 +1,6 @@
 import {
+  DSARRequest,
+  ErasureRequest,
   RegulatoryReportingService,
   SARRequest,
 } from '../src/services/compliance/regulatory-reporting';
@@ -32,6 +34,31 @@ function sarRequest(entityId: string): SARRequest {
       relatedEntities: [],
     },
     priority: 'high',
+  };
+}
+
+function dsarRequest(requestorId: string): DSARRequest {
+  return {
+    reportType: 'DSAR',
+    requestorId,
+    requestorEmail: 'subject@example.com',
+    requestType: 'access',
+    dataCategories: ['personal_data', 'credential_history'],
+    jurisdiction: 'EU-GDPR',
+    verificationProof: 'verified-subject-proof',
+  };
+}
+
+function erasureRequest(requestorId: string): ErasureRequest {
+  return {
+    reportType: 'ERASURE',
+    requestorId,
+    requestorEmail: 'subject@example.com',
+    reason: 'consent_withdrawn',
+    dataCategories: ['communication_logs'],
+    jurisdiction: 'EU-GDPR',
+    verificationProof: 'verified-subject-proof',
+    retentionOverrides: [],
   };
 }
 
@@ -80,5 +107,26 @@ describe('RegulatoryReportingService tenant scoping', () => {
     });
 
     expect(service.getReport(report.reportId, 'org-a')?.status).toBe('draft');
+  });
+
+  it('fails closed for production data subject rights workflows without a connector', async () => {
+    process.env = { ...originalEnv, NODE_ENV: 'production' };
+    const service = new RegulatoryReportingService();
+
+    await expect(
+      service.fulfillDSAR(dsarRequest('subject-prod'), 'org-a'),
+    ).rejects.toMatchObject({
+      code: 'DATA_SUBJECT_RIGHTS_CONNECTOR_REQUIRED',
+      statusCode: 503,
+    });
+
+    await expect(
+      service.processErasure(erasureRequest('subject-prod'), 'org-a'),
+    ).rejects.toMatchObject({
+      code: 'DATA_SUBJECT_RIGHTS_CONNECTOR_REQUIRED',
+      statusCode: 503,
+    });
+
+    expect(service.listReports({ organizationId: 'org-a' })).toHaveLength(0);
   });
 });
