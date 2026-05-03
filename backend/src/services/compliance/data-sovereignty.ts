@@ -162,6 +162,33 @@ const EU_ADEQUACY_DECISIONS: Set<string> = new Set([
   'AD', 'AR', 'CA', 'FO', 'GG', 'IL', 'IM', 'JP', 'JE', 'NZ', 'KR', 'CH', 'GB', 'UY', 'US',
 ]);
 
+const KNOWN_TRANSFER_JURISDICTION_PREFIXES: Set<string> = new Set([
+  'AE', 'BH', 'DE', 'EU', 'FR', 'GB', 'IT', 'NL', 'SA', 'SG', 'UK', 'US',
+]);
+
+const SPECIAL_CATEGORY_DATA = new Set<CrossBorderTransfer['dataCategories'][number]>([
+  'biometric',
+  'health',
+  'criminal',
+]);
+
+const SPECIAL_CATEGORY_LEGAL_BASES = new Set<NonNullable<CrossBorderTransfer['legalBasis']>>([
+  'explicit_consent',
+  'vital_interests',
+  'public_interest',
+  'legal_claims',
+]);
+
+function addUnique(values: string[], value: string): void {
+  if (!values.includes(value)) {
+    values.push(value);
+  }
+}
+
+function normalizeSafeguard(value: string): string {
+  return value.trim().toLowerCase();
+}
+
 // ---------------------------------------------------------------------------
 // Data residency rules per jurisdiction
 // ---------------------------------------------------------------------------
@@ -212,7 +239,20 @@ export class DataSovereigntyService {
   } {
     const rules = this.getResidencyRules(jurisdiction, dataCategory);
     if (rules.length === 0) {
-      return { compliant: true, requiredRegion: null, encryptionRequired: false, encryptionStandard: 'AES-256-GCM', violations: [] };
+      const jurisdictionRules = this.getResidencyRules(jurisdiction);
+      const fallbackRule = jurisdictionRules[0];
+      const violation =
+        fallbackRule
+          ? `No residency rule configured for ${dataCategory} data under ${jurisdiction}; policy must be approved before storage in ${targetRegion}`
+          : `No residency policy configured for ${jurisdiction}; policy must be approved before storage in ${targetRegion}`;
+
+      return {
+        compliant: false,
+        requiredRegion: fallbackRule?.storageRegion ?? null,
+        encryptionRequired: fallbackRule?.encryptionRequired ?? true,
+        encryptionStandard: fallbackRule?.encryptionStandard ?? 'AES-256-GCM',
+        violations: [violation],
+      };
     }
 
     const rule = rules[0];
@@ -242,14 +282,29 @@ export class DataSovereigntyService {
 
     const sourceCountry = parsed.sourceJurisdiction.split('-')[0];
     const targetCountry = parsed.targetJurisdiction.split('-')[0];
+    const isCrossBorder = parsed.sourceJurisdiction !== parsed.targetJurisdiction;
     const isEuSource = ['EU', 'DE', 'FR', 'IT', 'ES', 'NL'].includes(sourceCountry);
     const isEuTarget = ['EU', 'DE', 'FR', 'IT', 'ES', 'NL'].includes(targetCountry);
+    const hasSpecialCategoryData = parsed.dataCategories.some((category) =>
+      SPECIAL_CATEGORY_DATA.has(category),
+    );
 
     const requiredSafeguards: string[] = [];
     const conditions: string[] = [];
     const regulatoryNotifications: string[] = [];
     let legalBasis = parsed.legalBasis ?? null;
     let riskLevel: TransferAssessmentResult['riskLevel'] = 'low';
+
+    if (
+      isCrossBorder &&
+      (
+        !KNOWN_TRANSFER_JURISDICTION_PREFIXES.has(sourceCountry) ||
+        !KNOWN_TRANSFER_JURISDICTION_PREFIXES.has(targetCountry)
+      )
+    ) {
+      riskLevel = 'prohibited';
+      conditions.push('Unrecognized transfer jurisdiction requires approved data-sovereignty policy before transfer');
+    }
 
     // EU outbound transfer rules (GDPR Chapter V)
     if (isEuSource && !isEuTarget) {
@@ -258,17 +313,21 @@ export class DataSovereigntyService {
         riskLevel = 'low';
       } else {
         legalBasis = legalBasis ?? 'standard_contractual_clauses';
-        requiredSafeguards.push('Standard Contractual Clauses (EU 2021/914)');
-        requiredSafeguards.push('Transfer Impact Assessment required');
+        addUnique(requiredSafeguards, 'Standard Contractual Clauses (EU 2021/914)');
+        addUnique(requiredSafeguards, 'Transfer Impact Assessment required');
         riskLevel = 'medium';
         conditions.push('Recipient must demonstrate equivalent data protection');
       }
 
       if (parsed.dataCategories.includes('biometric') || parsed.dataCategories.includes('health')) {
         riskLevel = 'high';
-        requiredSafeguards.push('Explicit consent of data subject for special categories');
-        requiredSafeguards.push('Additional technical measures (pseudonymization/encryption)');
-        regulatoryNotifications.push('DPA notification may be required for Art. 9 data transfer');
+        addUnique(requiredSafeguards, 'Explicit consent of data subject for special categories');
+        addUnique(requiredSafeguards, 'Additional technical measures (pseudonymization/encryption)');
+        addUnique(regulatoryNotifications, 'DPA notification may be required for Art. 9 data transfer');
+        if (!parsed.legalBasis || !SPECIAL_CATEGORY_LEGAL_BASES.has(parsed.legalBasis)) {
+          riskLevel = 'prohibited';
+          conditions.push('Special category EU transfers require an explicit Art. 9-compatible legal basis');
+        }
       }
     }
 
@@ -277,17 +336,37 @@ export class DataSovereigntyService {
       const sensitiveCats = parsed.dataCategories.filter((c) => ['biometric', 'health', 'criminal'].includes(c));
       if (sensitiveCats.length > 0) {
         riskLevel = 'high';
-        requiredSafeguards.push('UAE PDPL consent for sensitive data cross-border transfer');
+        addUnique(requiredSafeguards, 'UAE PDPL consent for sensitive data cross-border transfer');
         conditions.push('Adequate protection level in target jurisdiction required');
+        if (parsed.legalBasis !== 'explicit_consent') {
+          riskLevel = 'prohibited';
+          conditions.push('UAE sensitive data transfers require explicit consent before export');
+        }
       }
     }
 
     // Saudi restrictions
     if (sourceCountry === 'SA') {
       riskLevel = riskLevel === 'low' ? 'medium' : riskLevel;
-      requiredSafeguards.push('SAMA approval for financial data transfers');
+      addUnique(requiredSafeguards, 'SAMA approval for financial data transfers');
       conditions.push('Data must not include classified government data');
-      regulatoryNotifications.push('NDMO notification required for personal data transfer');
+      addUnique(regulatoryNotifications, 'NDMO notification required for personal data transfer');
+    }
+
+    if (isCrossBorder && hasSpecialCategoryData && !parsed.legalBasis) {
+      riskLevel = 'prohibited';
+      conditions.push('Special category cross-border transfers require an explicit legal basis');
+    }
+
+    const recipientSafeguards = new Set(
+      parsed.recipientInfo.safeguards.map(normalizeSafeguard),
+    );
+    const missingSafeguards = requiredSafeguards.filter(
+      (safeguard) => !recipientSafeguards.has(normalizeSafeguard(safeguard)),
+    );
+    if (missingSafeguards.length > 0) {
+      riskLevel = 'prohibited';
+      conditions.push(`Required safeguards must be evidenced before transfer: ${missingSafeguards.join(', ')}`);
     }
 
     const allowed = (riskLevel as string) !== 'prohibited';
@@ -371,7 +450,20 @@ export class DataSovereigntyService {
       transaction_monitoring: ['entity_id', 'transaction_amount', 'transaction_date', 'counterparty_id'],
     };
 
-    const allowedForPurpose = minimizationRules[purpose] ?? requestedFields;
+    const allowedForPurpose = minimizationRules[purpose];
+    if (!allowedForPurpose) {
+      logger.warn('minimization_policy_missing', {
+        purpose,
+        jurisdiction,
+        requested: requestedFields.length,
+      });
+      return {
+        allowedFields: [],
+        deniedFields: [...requestedFields],
+        reason: `No data minimization rule configured for purpose "${purpose}" under ${jurisdiction}`,
+      };
+    }
+
     const allowedFields = requestedFields.filter((f) => allowedForPurpose.includes(f));
     const deniedFields = requestedFields.filter((f) => !allowedForPurpose.includes(f));
 

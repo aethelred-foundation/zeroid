@@ -411,8 +411,10 @@ export class JurisdictionEngine extends EventEmitter {
     const hasCriticalFailure = rules.some((r) => r.status === 'fail');
     const hasWarning = rules.some((r) => r.status === 'warning');
 
-    if (missingCredentials.length > 0 || hasCriticalFailure) {
+    if (missingCredentials.length > 0) {
       overallStatus = missingCredentials.length === requiredCreds.length ? 'non_compliant' : 'partial';
+    } else if (hasCriticalFailure) {
+      overallStatus = 'non_compliant';
     } else if (hasWarning) {
       overallStatus = 'pending_review';
     }
@@ -459,6 +461,26 @@ export class JurisdictionEngine extends EventEmitter {
       name: 'Credential Freshness',
       status: staleCredentials.length === 0 ? 'pass' : 'warning',
       detail: staleCredentials.length === 0 ? 'All credentials within validity period' : `${staleCredentials.length} credential(s) older than 1 year`,
+    });
+
+    const maxClockSkewMs = 5 * 60 * 1000;
+    const expiredCredentials = request.credentials.filter(
+      (c) => c.expiresAt && new Date(c.expiresAt).getTime() <= now,
+    );
+    const futureIssuedCredentials = request.credentials.filter(
+      (c) => new Date(c.issuedAt).getTime() > now + maxClockSkewMs,
+    );
+    const invalidCredentialTypes = [
+      ...expiredCredentials.map((c) => `${c.credentialType}:expired`),
+      ...futureIssuedCredentials.map((c) => `${c.credentialType}:future_issued`),
+    ];
+    rules.push({
+      ruleId: crypto.randomUUID(),
+      name: 'Credential Validity Window',
+      status: invalidCredentialTypes.length === 0 ? 'pass' : 'fail',
+      detail: invalidCredentialTypes.length === 0
+        ? 'All credentials are within their issuance and expiry windows'
+        : `Invalid credential validity windows: ${invalidCredentialTypes.join(', ')}`,
     });
 
     // Issuer jurisdiction match
