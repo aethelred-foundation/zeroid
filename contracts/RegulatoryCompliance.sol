@@ -57,6 +57,10 @@ contract RegulatoryCompliance is AccessControl, Pausable, ReentrancyGuard {
     error InvalidKYCLevel();
     error RuleAlreadyExists();
     error RuleNotFound();
+    error InvalidValidityPeriod();
+    error InvalidSanctionsList();
+    error InvalidReportCommitment();
+    error InvalidReportPeriod();
 
     // ──────────────────────────────────────────────────────────────────────
     // Events
@@ -254,6 +258,7 @@ contract RegulatoryCompliance is AccessControl, Pausable, ReentrancyGuard {
     // ──────────────────────────────────────────────────────────────────────
 
     uint256 public constant DEFAULT_ATTESTATION_VALIDITY = 365 days;
+    uint256 public constant MAX_ATTESTATION_VALIDITY = 730 days;
     uint256 public constant FATF_TRAVEL_RULE_THRESHOLD = 1000 ether; // ~$1000 equivalent
     uint256 public constant MAX_RULES_PER_JURISDICTION = 50;
 
@@ -406,7 +411,7 @@ contract RegulatoryCompliance is AccessControl, Pausable, ReentrancyGuard {
             ruleType: ruleType,
             description: description,
             requiredCredentialType: requiredCredentialType,
-            validityPeriod: validityPeriod > 0 ? validityPeriod : DEFAULT_ATTESTATION_VALIDITY,
+            validityPeriod: _normalizeValidityPeriod(validityPeriod),
             mandatory: mandatory,
             active: true
         });
@@ -448,7 +453,7 @@ contract RegulatoryCompliance is AccessControl, Pausable, ReentrancyGuard {
             revert InvalidKYCLevel();
         }
 
-        uint256 validity = validityPeriod > 0 ? validityPeriod : DEFAULT_ATTESTATION_VALIDITY;
+        uint256 validity = _normalizeValidityPeriod(validityPeriod);
 
         ComplianceStatus oldStatus = _attestations[credentialHash][jurisdictionId].status;
 
@@ -552,6 +557,8 @@ contract RegulatoryCompliance is AccessControl, Pausable, ReentrancyGuard {
     ) external onlyRole(COMPLIANCE_OFFICER_ROLE) whenNotPaused {
         if (_reports[reportId].submittedAt != 0) revert ReportAlreadySubmitted();
         if (!_jurisdictions[jurisdictionId].active) revert JurisdictionNotActive();
+        if (reportId == bytes32(0) || reportHash == bytes32(0)) revert InvalidReportCommitment();
+        if (periodStart >= periodEnd) revert InvalidReportPeriod();
 
         _reports[reportId] = RegulatoryReport({
             reportId: reportId,
@@ -587,6 +594,9 @@ contract RegulatoryCompliance is AccessControl, Pausable, ReentrancyGuard {
         bytes32 sourceHash
     ) external onlyRole(SANCTIONS_ORACLE_ROLE) whenNotPaused {
         if (!_jurisdictions[jurisdictionId].active) revert JurisdictionNotActive();
+        if (merkleRoot == bytes32(0) || sourceHash == bytes32(0) || listSize == 0) {
+            revert InvalidSanctionsList();
+        }
 
         _sanctionsLists[jurisdictionId] = SanctionsList({
             merkleRoot: merkleRoot,
@@ -725,9 +735,7 @@ contract RegulatoryCompliance is AccessControl, Pausable, ReentrancyGuard {
             trustedListHash: trustedListHash,
             issuerHash: issuerHash,
             issuedAt: block.timestamp,
-            expiresAt: validityPeriod > 0
-                ? block.timestamp + validityPeriod
-                : block.timestamp + DEFAULT_ATTESTATION_VALIDITY,
+            expiresAt: block.timestamp + _normalizeValidityPeriod(validityPeriod),
             active: true
         });
 
@@ -809,6 +817,12 @@ contract RegulatoryCompliance is AccessControl, Pausable, ReentrancyGuard {
         }
         if (att.expiresAt != 0 && block.timestamp > att.expiresAt) return false;
         return true;
+    }
+
+    function _normalizeValidityPeriod(uint256 validityPeriod) internal pure returns (uint256) {
+        uint256 normalized = validityPeriod > 0 ? validityPeriod : DEFAULT_ATTESTATION_VALIDITY;
+        if (normalized > MAX_ATTESTATION_VALIDITY) revert InvalidValidityPeriod();
+        return normalized;
     }
 
     /**

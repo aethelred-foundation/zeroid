@@ -64,6 +64,7 @@ contract RegulatoryComplianceTest is TestHelper {
 
     function test_Constants() public view {
         assertEq(rc.DEFAULT_ATTESTATION_VALIDITY(), 365 days);
+        assertEq(rc.MAX_ATTESTATION_VALIDITY(), 730 days);
         assertEq(rc.FATF_TRAVEL_RULE_THRESHOLD(), 1000 ether);
         assertEq(rc.MAX_RULES_PER_JURISDICTION(), 50);
     }
@@ -166,6 +167,23 @@ contract RegulatoryComplianceTest is TestHelper {
         rc.addComplianceRule(JURISDICTION_US, RULE_KYC, "KYC", "desc", bytes32(0), 0, true);
     }
 
+    function test_AddComplianceRule_RevertsValidityTooLong() public {
+        _registerUS();
+        uint256 tooLong = rc.MAX_ATTESTATION_VALIDITY() + 1;
+
+        vm.prank(admin);
+        vm.expectRevert(RegulatoryCompliance.InvalidValidityPeriod.selector);
+        rc.addComplianceRule(
+            JURISDICTION_US,
+            RULE_KYC,
+            "KYC",
+            "desc",
+            bytes32(0),
+            tooLong,
+            true
+        );
+    }
+
     // ════════════════════════════════════════════════════════════════
     // Compliance Attestations
     // ════════════════════════════════════════════════════════════════
@@ -222,6 +240,23 @@ contract RegulatoryComplianceTest is TestHelper {
             RegulatoryCompliance.KYCLevel.Full,
             new bytes32[](0),
             0
+        );
+    }
+
+    function test_IssueComplianceAttestation_RevertsValidityTooLong() public {
+        _registerUS();
+        uint256 tooLong = rc.MAX_ATTESTATION_VALIDITY() + 1;
+
+        vm.prank(admin);
+        vm.expectRevert(RegulatoryCompliance.InvalidValidityPeriod.selector);
+        rc.issueComplianceAttestation(
+            CRED_HASH,
+            JURISDICTION_US,
+            RegulatoryCompliance.ComplianceStatus.Compliant,
+            keccak256("att"),
+            RegulatoryCompliance.KYCLevel.Enhanced,
+            new bytes32[](0),
+            tooLong
         );
     }
 
@@ -328,6 +363,26 @@ contract RegulatoryComplianceTest is TestHelper {
         rc.commitReport(REPORT_ID, keccak256("unknown"), keccak256("data"), "SAR", 1000, 2000);
     }
 
+    function test_CommitReport_RevertsInvalidCommitment() public {
+        _registerUS();
+
+        vm.prank(admin);
+        vm.expectRevert(RegulatoryCompliance.InvalidReportCommitment.selector);
+        rc.commitReport(bytes32(0), JURISDICTION_US, keccak256("data"), "SAR", 1000, 2000);
+
+        vm.prank(admin);
+        vm.expectRevert(RegulatoryCompliance.InvalidReportCommitment.selector);
+        rc.commitReport(REPORT_ID, JURISDICTION_US, bytes32(0), "SAR", 1000, 2000);
+    }
+
+    function test_CommitReport_RevertsInvalidPeriod() public {
+        _registerUS();
+
+        vm.prank(admin);
+        vm.expectRevert(RegulatoryCompliance.InvalidReportPeriod.selector);
+        rc.commitReport(REPORT_ID, JURISDICTION_US, keccak256("data"), "SAR", 2000, 1000);
+    }
+
     // ════════════════════════════════════════════════════════════════
     // Sanctions Screening
     // ════════════════════════════════════════════════════════════════
@@ -350,6 +405,22 @@ contract RegulatoryComplianceTest is TestHelper {
         vm.prank(admin);
         vm.expectRevert(RegulatoryCompliance.JurisdictionNotActive.selector);
         rc.updateSanctionsList(keccak256("bad"), keccak256("root"), 100, keccak256("src"));
+    }
+
+    function test_UpdateSanctionsList_RevertsInvalidList() public {
+        _registerUS();
+
+        vm.prank(admin);
+        vm.expectRevert(RegulatoryCompliance.InvalidSanctionsList.selector);
+        rc.updateSanctionsList(JURISDICTION_US, bytes32(0), 100, keccak256("src"));
+
+        vm.prank(admin);
+        vm.expectRevert(RegulatoryCompliance.InvalidSanctionsList.selector);
+        rc.updateSanctionsList(JURISDICTION_US, keccak256("root"), 0, keccak256("src"));
+
+        vm.prank(admin);
+        vm.expectRevert(RegulatoryCompliance.InvalidSanctionsList.selector);
+        rc.updateSanctionsList(JURISDICTION_US, keccak256("root"), 100, bytes32(0));
     }
 
     function test_ScreenSanctions_NoHit() public {
@@ -429,6 +500,20 @@ contract RegulatoryComplianceTest is TestHelper {
         vm.expectRevert(RegulatoryCompliance.InvalidEIDASLevel.selector);
         rc.markEIDASCredential(
             CRED_HASH, RegulatoryCompliance.EIDASLevel.None, keccak256("tl"), keccak256("i"), 0
+        );
+    }
+
+    function test_MarkEIDASCredential_RevertsValidityTooLong() public {
+        uint256 tooLong = rc.MAX_ATTESTATION_VALIDITY() + 1;
+
+        vm.prank(admin);
+        vm.expectRevert(RegulatoryCompliance.InvalidValidityPeriod.selector);
+        rc.markEIDASCredential(
+            CRED_HASH,
+            RegulatoryCompliance.EIDASLevel.High,
+            keccak256("tl"),
+            keccak256("i"),
+            tooLong
         );
     }
 
