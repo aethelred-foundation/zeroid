@@ -125,6 +125,11 @@ type ScopedFalsePositiveDecision = FalsePositiveDecision & {
   entityId: string;
 };
 
+type ScreeningRequestSnapshot = {
+  request: ScreeningRequest;
+  organizationId?: string;
+};
+
 export interface SanctionsListReadiness {
   listName: SanctionsListName;
   entryCount: number;
@@ -186,6 +191,7 @@ export class SanctionsScreeningService {
   private sanctionsLists: Map<string, SanctionsListEntry[]> = new Map();
   private sanctionsListMetadata: Map<string, SanctionsListMetadata> = new Map();
   private screeningResults: Map<string, ScreeningResult> = new Map();
+  private screeningRequests: Map<string, ScreeningRequestSnapshot> = new Map();
   private auditLog: AuditEntry[] = [];
   private falsePositives: Map<string, ScopedFalsePositiveDecision> = new Map();
   private continuousMonitoringEntities: Set<string> = new Set();
@@ -267,6 +273,10 @@ export class SanctionsScreeningService {
     };
 
     this.screeningResults.set(screeningId, result);
+    this.screeningRequests.set(screeningId, {
+      request: this.cloneScreeningRequest(parsed),
+      ...(scopeOrganizationId ? { organizationId: scopeOrganizationId } : {}),
+    });
     this.logAudit(screeningId, 'screening_completed', 'system', {
       entityId: parsed.entityId,
       matchCount: resolved.length,
@@ -660,6 +670,10 @@ export class SanctionsScreeningService {
 
       if (lastResult) {
         logger.info('re_screening_on_list_update', { entityId, organizationId, listName });
+        const snapshot = this.screeningRequests.get(lastResult.screeningId);
+        if (snapshot?.request.screenAgainst.includes(listName)) {
+          results.push(await this.screenEntity(snapshot.request, organizationId));
+        }
       }
     }
 
@@ -822,6 +836,16 @@ export class SanctionsScreeningService {
       return 'potential_match';
     }
     return 'clear';
+  }
+
+  private cloneScreeningRequest(request: ScreeningRequest): ScreeningRequest {
+    return {
+      ...request,
+      names: request.names.map((name) => ({ ...name })),
+      identifiers: request.identifiers.map((identifier) => ({ ...identifier })),
+      addresses: request.addresses.map((address) => ({ ...address })),
+      screenAgainst: [...request.screenAgainst],
+    };
   }
 
   private assertScreeningListsReady(screenAgainst: SanctionsListName[]): void {

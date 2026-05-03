@@ -173,6 +173,27 @@ describe('SanctionsScreeningService readiness', () => {
     expect(service.getAuditTrail(orgAResult.screeningId, 'org-b')).toEqual([]);
   });
 
+  it('re-screens continuously monitored entities after list updates', async () => {
+    const service = new SanctionsScreeningService();
+    service.updateSanctionsList('ofac_sdn', []);
+
+    const initial = await service.screenEntity(request, 'org-a');
+    expect(initial.overallRisk).toBe('clear');
+
+    service.enableContinuousMonitoring('entity-1', 'org-a');
+
+    const refreshed = await service.onListUpdate('ofac_sdn', [listEntry]);
+
+    expect(refreshed).toHaveLength(1);
+    expect(refreshed[0]).toMatchObject({
+      organizationId: 'org-a',
+      entityId: 'entity-1',
+      overallRisk: 'potential_match',
+    });
+    expect(refreshed[0].screeningId).not.toBe(initial.screeningId);
+    expect(service.getEntityScreenings('entity-1', 'org-a')).toHaveLength(2);
+  });
+
   it('blocks production screening when list metadata is stale', async () => {
     process.env.NODE_ENV = 'production';
     process.env.SANCTIONS_LIST_MAX_AGE_HOURS = '1';
