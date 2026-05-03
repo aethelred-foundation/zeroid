@@ -12,11 +12,15 @@ contract GovernanceModuleTest is TestHelper {
     function setUp() public {
         gov = new GovernanceModule(admin, 1 days, 1);
 
-        // Set up voter (alice) with weight
-        vm.startPrank(admin);
-        gov.setVoterWeight(alice, 1);
-        gov.setVoterWeight(bob, 1);
-        vm.stopPrank();
+        // Set up voters through the same timelocked path used in production.
+        _executeGovernanceOperation(
+            abi.encodeWithSelector(gov.setVoterWeight.selector, alice, 1),
+            keccak256("bootstrap:alice")
+        );
+        _executeGovernanceOperation(
+            abi.encodeWithSelector(gov.setVoterWeight.selector, bob, 1),
+            keccak256("bootstrap:bob")
+        );
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -51,19 +55,31 @@ contract GovernanceModuleTest is TestHelper {
     // ════════════════════════════════════════════════════════════════
 
     function test_SetVoterWeight() public {
-        vm.prank(admin);
-        vm.expectEmit(true, false, false, true);
-        emit GovernanceModule.VoterWeightSet(carol, 5);
-        gov.setVoterWeight(carol, 5);
+        _executeGovernanceOperation(
+            abi.encodeWithSelector(gov.setVoterWeight.selector, carol, 5),
+            keccak256("set-voter:carol")
+        );
 
         assertEq(gov.getVoterWeight(carol), 5);
         assertTrue(gov.hasRole(gov.VOTER_ROLE(), carol));
     }
 
-    function test_SetVoterWeight_RevertsZeroAddress() public {
+    function test_SetVoterWeight_RevertsWithoutTimelock() public {
         vm.prank(admin);
+        vm.expectRevert(GovernanceModule.GovernanceTimelockRequired.selector);
+        gov.setVoterWeight(carol, 5);
+    }
+
+    function test_SetVoterWeight_RevertsZeroAddress() public {
+        bytes memory data = abi.encodeWithSelector(gov.setVoterWeight.selector, address(0), 1);
+        bytes32 salt = keccak256("set-voter:zero");
+
+        vm.prank(admin);
+        gov.scheduleGovernanceOperation(data, salt);
+        vm.warp(block.timestamp + gov.EXECUTION_TIMELOCK() + 1);
+
         vm.expectRevert("Zero voter");
-        gov.setVoterWeight(address(0), 1);
+        gov.executeGovernanceOperation(data, salt);
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -236,8 +252,10 @@ contract GovernanceModuleTest is TestHelper {
 
     function test_Proposal_Defeated_NoQuorum() public {
         // Set quorum to 10
-        vm.prank(admin);
-        gov.setQuorum(10);
+        _executeGovernanceOperation(
+            abi.encodeWithSelector(gov.setQuorum.selector, 10),
+            keccak256("set-quorum:10")
+        );
 
         _createSchemaProposal();
 
@@ -334,7 +352,13 @@ contract GovernanceModuleTest is TestHelper {
         _createAndExecuteSchemaProposal();
 
         vm.prank(admin);
+        vm.expectRevert(GovernanceModule.GovernanceTimelockRequired.selector);
         gov.revokeSchema(SCHEMA_HASH);
+
+        _executeGovernanceOperation(
+            abi.encodeWithSelector(gov.revokeSchema.selector, SCHEMA_HASH),
+            keccak256("revoke-schema")
+        );
 
         assertFalse(gov.isApprovedSchema(SCHEMA_HASH));
     }
@@ -353,7 +377,13 @@ contract GovernanceModuleTest is TestHelper {
         gov.executeProposal(1);
 
         vm.prank(admin);
+        vm.expectRevert(GovernanceModule.GovernanceTimelockRequired.selector);
         gov.removeIssuer(ISSUER_DID);
+
+        _executeGovernanceOperation(
+            abi.encodeWithSelector(gov.removeIssuer.selector, ISSUER_DID),
+            keccak256("remove-issuer")
+        );
 
         assertFalse(gov.isApprovedIssuer(ISSUER_DID));
     }
@@ -363,33 +393,94 @@ contract GovernanceModuleTest is TestHelper {
     // ════════════════════════════════════════════════════════════════
 
     function test_SetVotingPeriod() public {
-        vm.prank(admin);
-        vm.expectEmit(false, false, false, true);
-        emit GovernanceModule.VotingPeriodUpdated(1 days, 7 days);
-        gov.setVotingPeriod(7 days);
+        _executeGovernanceOperation(
+            abi.encodeWithSelector(gov.setVotingPeriod.selector, uint64(7 days)),
+            keccak256("set-voting-period:7d")
+        );
 
         assertEq(gov.votingPeriod(), 7 days);
     }
 
     function test_SetVotingPeriod_RevertsInvalid() public {
+        bytes memory data = abi.encodeWithSelector(gov.setVotingPeriod.selector, uint64(1 hours));
+        bytes32 salt = keccak256("set-voting-period:invalid");
+
         vm.prank(admin);
+        gov.scheduleGovernanceOperation(data, salt);
+        vm.warp(block.timestamp + gov.EXECUTION_TIMELOCK() + 1);
+
         vm.expectRevert(abi.encodeWithSelector(GovernanceModule.InvalidVotingPeriod.selector, uint64(1 hours)));
-        gov.setVotingPeriod(1 hours);
+        gov.executeGovernanceOperation(data, salt);
     }
 
     function test_SetQuorum() public {
-        vm.prank(admin);
-        vm.expectEmit(false, false, false, true);
-        emit GovernanceModule.QuorumUpdated(1, 5);
-        gov.setQuorum(5);
+        _executeGovernanceOperation(
+            abi.encodeWithSelector(gov.setQuorum.selector, 5),
+            keccak256("set-quorum:5")
+        );
 
         assertEq(gov.quorumRequired(), 5);
     }
 
     function test_SetQuorum_RevertsZero() public {
+        bytes memory data = abi.encodeWithSelector(gov.setQuorum.selector, 0);
+        bytes32 salt = keccak256("set-quorum:zero");
+
         vm.prank(admin);
+        gov.scheduleGovernanceOperation(data, salt);
+        vm.warp(block.timestamp + gov.EXECUTION_TIMELOCK() + 1);
+
         vm.expectRevert("Zero quorum");
-        gov.setQuorum(0);
+        gov.executeGovernanceOperation(data, salt);
+    }
+
+    function test_GovernanceOperation_RevertsBeforeTimelock() public {
+        bytes memory data = abi.encodeWithSelector(gov.setQuorum.selector, 5);
+        bytes32 salt = keccak256("set-quorum:early");
+
+        vm.prank(admin);
+        bytes32 operationId = gov.scheduleGovernanceOperation(data, salt);
+        uint64 eta = gov.getGovernanceOperationEta(operationId);
+
+        vm.expectRevert(abi.encodeWithSelector(GovernanceModule.ExecutionTimelockNotExpired.selector, eta));
+        gov.executeGovernanceOperation(data, salt);
+    }
+
+    function test_GovernanceOperation_RevertsAfterExecutionWindow() public {
+        bytes memory data = abi.encodeWithSelector(gov.setQuorum.selector, 5);
+        bytes32 salt = keccak256("set-quorum:expired");
+
+        vm.prank(admin);
+        bytes32 operationId = gov.scheduleGovernanceOperation(data, salt);
+
+        vm.warp(block.timestamp + gov.EXECUTION_TIMELOCK() + gov.EXECUTION_WINDOW() + 1);
+        vm.expectRevert(abi.encodeWithSelector(GovernanceModule.GovernanceOperationWindowExpired.selector, operationId));
+        gov.executeGovernanceOperation(data, salt);
+    }
+
+    function test_GovernanceOperation_RejectsUnsupportedSelector() public {
+        bytes memory data = abi.encodeWithSelector(gov.pause.selector);
+
+        vm.prank(admin);
+        vm.expectRevert(GovernanceModule.InvalidGovernanceOperation.selector);
+        gov.scheduleGovernanceOperation(data, keccak256("pause-not-allowed"));
+    }
+
+    function test_GovernanceOperation_Cancel() public {
+        bytes memory data = abi.encodeWithSelector(gov.setQuorum.selector, 5);
+        bytes32 salt = keccak256("set-quorum:cancel");
+
+        vm.prank(admin);
+        bytes32 operationId = gov.scheduleGovernanceOperation(data, salt);
+        assertGt(gov.getGovernanceOperationEta(operationId), 0);
+
+        vm.prank(admin);
+        gov.cancelGovernanceOperation(data, salt);
+        assertEq(gov.getGovernanceOperationEta(operationId), 0);
+
+        vm.warp(block.timestamp + gov.EXECUTION_TIMELOCK() + 1);
+        vm.expectRevert(abi.encodeWithSelector(GovernanceModule.GovernanceOperationNotScheduled.selector, operationId));
+        gov.executeGovernanceOperation(data, salt);
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -461,5 +552,12 @@ contract GovernanceModuleTest is TestHelper {
         vm.warp(afterVoting + 24 hours + 1);
         vm.prank(admin);
         gov.executeProposal(1);
+    }
+
+    function _executeGovernanceOperation(bytes memory data, bytes32 salt) internal returns (bytes32 operationId) {
+        vm.prank(admin);
+        operationId = gov.scheduleGovernanceOperation(data, salt);
+        vm.warp(block.timestamp + gov.EXECUTION_TIMELOCK() + 1);
+        gov.executeGovernanceOperation(data, salt);
     }
 }

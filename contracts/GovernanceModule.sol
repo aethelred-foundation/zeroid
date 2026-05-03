@@ -113,6 +113,9 @@ contract GovernanceModule is IGovernanceModule, AccessControl, Pausable, Reentra
     /// @dev Voter weights: voter => voting power
     mapping(address => uint256) private _voterWeights;
 
+    /// @dev Timelocked governance operation eta by operation hash
+    mapping(bytes32 => uint64) private _governanceOperationEtas;
+
     /// @notice Next proposal ID
     uint256 public nextProposalId;
 
@@ -146,6 +149,9 @@ contract GovernanceModule is IGovernanceModule, AccessControl, Pausable, Reentra
     event QuorumUpdated(uint256 oldQuorum, uint256 newQuorum);
     event VoterWeightSet(address indexed voter, uint256 weight);
     event ProposalQueued(uint256 indexed proposalId, uint64 executionEta);
+    event GovernanceOperationScheduled(bytes32 indexed operationId, bytes4 indexed selector, uint64 executionEta);
+    event GovernanceOperationCancelled(bytes32 indexed operationId);
+    event GovernanceOperationExecuted(bytes32 indexed operationId);
 
     // ──────────────────────────────────────────────────────────────
     // Errors
@@ -166,6 +172,12 @@ contract GovernanceModule is IGovernanceModule, AccessControl, Pausable, Reentra
     error IssuerAlreadyApproved(bytes32 issuerDid);
     error InvalidVotingPeriod(uint64 period);
     error NoAttributes();
+    error GovernanceTimelockRequired();
+    error InvalidGovernanceOperation();
+    error GovernanceOperationAlreadyScheduled(bytes32 operationId);
+    error GovernanceOperationNotScheduled(bytes32 operationId);
+    error GovernanceOperationWindowExpired(bytes32 operationId);
+    error GovernanceOperationExecutionFailed(bytes32 operationId);
 
     // ──────────────────────────────────────────────────────────────
     // Constructor
@@ -194,6 +206,11 @@ contract GovernanceModule is IGovernanceModule, AccessControl, Pausable, Reentra
         _voterWeights[admin] = 1;
     }
 
+    modifier onlyGovernanceExecution() {
+        if (msg.sender != address(this)) revert GovernanceTimelockRequired();
+        _;
+    }
+
     // ──────────────────────────────────────────────────────────────
     // Voter Management
     // ──────────────────────────────────────────────────────────────
@@ -201,7 +218,7 @@ contract GovernanceModule is IGovernanceModule, AccessControl, Pausable, Reentra
     /// @notice Set voting weight for a voter
     /// @param voter The voter address
     /// @param weight The voting power to assign
-    function setVoterWeight(address voter, uint256 weight) external onlyRole(GOVERNANCE_ROLE) {
+    function setVoterWeight(address voter, uint256 weight) external onlyGovernanceExecution {
         require(voter != address(0), "Zero voter");
         _voterWeights[voter] = weight;
         if (weight > 0 && !hasRole(VOTER_ROLE, voter)) {
@@ -415,21 +432,95 @@ contract GovernanceModule is IGovernanceModule, AccessControl, Pausable, Reentra
         return _approvedIssuers[issuerDid];
     }
 
+    // ──────────────────────────────────────────────────────────────
+    // Timelocked Governance Operations
+    // ──────────────────────────────────────────────────────────────
+
+    /// @notice Schedule a whitelisted governance maintenance operation.
+    /// @dev The operation executes as a self-call after EXECUTION_TIMELOCK.
+    function scheduleGovernanceOperation(bytes calldata data, bytes32 salt)
+        external
+        onlyRole(GOVERNANCE_ROLE)
+        returns (bytes32 operationId)
+    {
+        bytes4 selector = _validateGovernanceOperation(data);
+        operationId = hashGovernanceOperation(data, salt);
+        if (_governanceOperationEtas[operationId] != 0) {
+            revert GovernanceOperationAlreadyScheduled(operationId);
+        }
+
+        uint64 executionEta = uint64(block.timestamp) + EXECUTION_TIMELOCK;
+        _governanceOperationEtas[operationId] = executionEta;
+        emit GovernanceOperationScheduled(operationId, selector, executionEta);
+    }
+
+    /// @notice Cancel a pending governance maintenance operation.
+    function cancelGovernanceOperation(bytes calldata data, bytes32 salt)
+        external
+        onlyRole(GOVERNANCE_ROLE)
+    {
+        bytes32 operationId = hashGovernanceOperation(data, salt);
+        if (_governanceOperationEtas[operationId] == 0) {
+            revert GovernanceOperationNotScheduled(operationId);
+        }
+
+        delete _governanceOperationEtas[operationId];
+        emit GovernanceOperationCancelled(operationId);
+    }
+
+    /// @notice Execute a scheduled governance operation after its timelock.
+    function executeGovernanceOperation(bytes calldata data, bytes32 salt) external nonReentrant {
+        _validateGovernanceOperation(data);
+        bytes32 operationId = hashGovernanceOperation(data, salt);
+        uint64 executionEta = _governanceOperationEtas[operationId];
+        if (executionEta == 0) revert GovernanceOperationNotScheduled(operationId);
+        if (block.timestamp < executionEta) revert ExecutionTimelockNotExpired(executionEta);
+        if (block.timestamp > executionEta + EXECUTION_WINDOW) {
+            revert GovernanceOperationWindowExpired(operationId);
+        }
+
+        delete _governanceOperationEtas[operationId];
+
+        (bool ok, bytes memory returndata) = address(this).call(data);
+        if (!ok) {
+            if (returndata.length > 0) {
+                assembly {
+                    revert(add(returndata, 32), mload(returndata))
+                }
+            }
+            revert GovernanceOperationExecutionFailed(operationId);
+        }
+
+        emit GovernanceOperationExecuted(operationId);
+    }
+
+    /// @notice Return the eta for a scheduled governance operation.
+    function getGovernanceOperationEta(bytes32 operationId) external view returns (uint64) {
+        return _governanceOperationEtas[operationId];
+    }
+
+    /// @notice Hash the operation payload and salt used by the timelock.
+    function hashGovernanceOperation(bytes calldata data, bytes32 salt) public view returns (bytes32) {
+        return keccak256(abi.encode(address(this), block.chainid, data, salt));
+    }
+
     /// @notice Get full schema details
     function getSchema(bytes32 schemaHash) external view returns (CredentialSchema memory) {
         return _schemas[schemaHash];
     }
 
-    /// @notice Revoke a schema (governance only, outside proposal system for emergencies)
-    function revokeSchema(bytes32 schemaHash) external onlyRole(GOVERNANCE_ROLE) {
+    /// @notice Revoke a schema through a scheduled governance operation.
+    function revokeSchema(bytes32 schemaHash) external onlyGovernanceExecution {
         _schemas[schemaHash].isActive = false;
         emit SchemaRevoked(schemaHash, uint64(block.timestamp));
     }
 
-    /// @notice Remove a trusted issuer (governance only, outside proposal system)
-    function removeIssuer(bytes32 issuerDid) external onlyRole(GOVERNANCE_ROLE) {
-        _approvedIssuers[issuerDid] = false;
-        unchecked { if (totalIssuers > 0) totalIssuers--; }
+    /// @notice Remove a trusted issuer through a scheduled governance operation.
+    function removeIssuer(bytes32 issuerDid) external onlyGovernanceExecution {
+        if (_approvedIssuers[issuerDid]) {
+            _approvedIssuers[issuerDid] = false;
+            unchecked { if (totalIssuers > 0) totalIssuers--; }
+        }
         emit IssuerRemoved(issuerDid, uint64(block.timestamp));
     }
 
@@ -490,7 +581,7 @@ contract GovernanceModule is IGovernanceModule, AccessControl, Pausable, Reentra
     // ──────────────────────────────────────────────────────────────
 
     /// @notice Update the voting period
-    function setVotingPeriod(uint64 newPeriod) external onlyRole(GOVERNANCE_ROLE) {
+    function setVotingPeriod(uint64 newPeriod) external onlyGovernanceExecution {
         if (newPeriod < MIN_VOTING_PERIOD || newPeriod > MAX_VOTING_PERIOD) {
             revert InvalidVotingPeriod(newPeriod);
         }
@@ -500,11 +591,28 @@ contract GovernanceModule is IGovernanceModule, AccessControl, Pausable, Reentra
     }
 
     /// @notice Update the quorum requirement
-    function setQuorum(uint256 newQuorum) external onlyRole(GOVERNANCE_ROLE) {
+    function setQuorum(uint256 newQuorum) external onlyGovernanceExecution {
         require(newQuorum > 0, "Zero quorum");
         uint256 oldQuorum = quorumRequired;
         quorumRequired = newQuorum;
         emit QuorumUpdated(oldQuorum, newQuorum);
+    }
+
+    function _validateGovernanceOperation(bytes calldata data) internal pure returns (bytes4 selector) {
+        if (data.length < 4) revert InvalidGovernanceOperation();
+        assembly {
+            selector := calldataload(data.offset)
+        }
+
+        if (
+            selector != this.setVoterWeight.selector &&
+            selector != this.revokeSchema.selector &&
+            selector != this.removeIssuer.selector &&
+            selector != this.setVotingPeriod.selector &&
+            selector != this.setQuorum.selector
+        ) {
+            revert InvalidGovernanceOperation();
+        }
     }
 
     // ──────────────────────────────────────────────────────────────

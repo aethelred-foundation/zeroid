@@ -742,7 +742,7 @@ contract AccumulatorRevocation is AccessControl, Pausable, ReentrancyGuard {
     function _deriveFiatShamirChallenge(
         bytes storage base,
         bytes calldata result_
-    ) internal view returns (uint256 l) {
+    ) internal pure returns (uint256 l) {
         l = uint256(keccak256(abi.encodePacked(
             keccak256(base),
             keccak256(result_)

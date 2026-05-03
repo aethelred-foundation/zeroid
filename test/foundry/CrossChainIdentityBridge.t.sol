@@ -610,7 +610,7 @@ contract CrossChainIdentityBridgeTest is TestHelper {
     // ZID-006: Revocation Sync Timelock
     // ════════════════════════════════════════════════════════════════
 
-    function _prepareSyncData() internal returns (
+    function _prepareSyncData() internal view returns (
         CrossChainIdentityBridge.RevocationSync memory sync,
         bytes32 syncKey
     ) {
@@ -625,7 +625,7 @@ contract CrossChainIdentityBridgeTest is TestHelper {
         bytes32 prevRoot,
         bytes32 newRoot,
         uint256 epoch
-    ) internal returns (
+    ) internal view returns (
         CrossChainIdentityBridge.RevocationSync memory sync,
         bytes32 syncKey
     ) {
