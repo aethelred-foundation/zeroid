@@ -265,7 +265,7 @@ export class FraudDetectionService {
     // 8. Compute composite risk score
     const overallScore = this.computeCompositeScore(factors, modelOutput);
     const severity = this.classifySeverity(overallScore);
-    const decision = this.makeDecision(modelOutput, overallScore);
+    const decision = this.makeDecision(modelOutput, overallScore, factors);
 
     // 9. Generate human-readable explanations
     const explanations = this.generateExplanations(factors, overallScore, decision);
@@ -879,9 +879,19 @@ export class FraudDetectionService {
 
     // Blend: 60% factor-based, 40% model-based
     const blendedScore = factorScore * 0.6 + modelRisk * 0.4;
+    const factorFloor = this.computeExplicitRiskFloor(factors);
 
     // Clamp to [0, 100]
-    return Math.round(Math.max(0, Math.min(100, blendedScore)));
+    return Math.round(Math.max(0, Math.min(100, Math.max(blendedScore, factorFloor))));
+  }
+
+  private computeExplicitRiskFloor(factors: RiskFactor[]): number {
+    const peakFactorScore = factors.reduce((maxScore, factor) => Math.max(maxScore, factor.score), 0);
+
+    if (peakFactorScore >= 90) return 85;
+    if (peakFactorScore >= 75) return 70;
+    if (peakFactorScore >= 60) return 55;
+    return 0;
   }
 
   // -------------------------------------------------------------------------
@@ -900,9 +910,20 @@ export class FraudDetectionService {
   private makeDecision(
     modelOutput: number[],
     overallScore: number,
+    factors: RiskFactor[],
   ): 'allow' | 'challenge' | 'block' | 'review' {
     // Hard block threshold
     if (overallScore >= 90) return 'block';
+
+    const peakFactorScore = factors.reduce((maxScore, factor) => Math.max(maxScore, factor.score), 0);
+
+    if (peakFactorScore >= 90) {
+      return 'block';
+    }
+
+    if (peakFactorScore >= 75) {
+      return 'review';
+    }
 
     // Use model output class probabilities
     const maxProb = Math.max(...modelOutput);
