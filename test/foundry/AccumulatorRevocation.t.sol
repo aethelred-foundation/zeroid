@@ -453,9 +453,10 @@ contract AccumulatorRevocationTest is TestHelper {
 
         // Q = V^{floor(prime/l)} mod N (real MODEXP)
         bytes memory proof = _buildWesolowskiProof(initialValue, newVal, prime);
+        uint16 primeCounter = _computeHashToPrimeCounter(CRED_1);
 
         vm.prank(admin);
-        acc.revokeCredential(ACC_ID, CRED_1, newVal, proof);
+        acc.revokeCredential(ACC_ID, CRED_1, newVal, proof, primeCounter);
 
         assertTrue(acc.isRevoked(ACC_ID, CRED_1));
         assertEq(acc.totalRevocations(), 1);
@@ -471,13 +472,14 @@ contract AccumulatorRevocationTest is TestHelper {
 
         uint256 prime = _computeHashToPrime(CRED_1);
         bytes memory newVal = _modexpUint(initialValue, prime, rsaModulus);
+        uint16 primeCounter = _computeHashToPrimeCounter(CRED_1);
 
         // Forged proof: arbitrary quotient
         bytes memory forgedProof = _buildPadded(42);
 
         vm.prank(admin);
         vm.expectRevert(AccumulatorRevocation.InvalidAccumulatorValue.selector);
-        acc.revokeCredential(ACC_ID, CRED_1, newVal, forgedProof);
+        acc.revokeCredential(ACC_ID, CRED_1, newVal, forgedProof, primeCounter);
     }
 
     function test_RevokeCredential_RejectsWrongNewValue() public {
@@ -486,13 +488,27 @@ contract AccumulatorRevocationTest is TestHelper {
         uint256 prime = _computeHashToPrime(CRED_1);
         bytes memory correctNewVal = _modexpUint(initialValue, prime, rsaModulus);
         bytes memory proof = _buildWesolowskiProof(initialValue, correctNewVal, prime);
+        uint16 primeCounter = _computeHashToPrimeCounter(CRED_1);
 
         // Submit with wrong V'
         bytes memory wrongNewVal = _buildPadded(42);
 
         vm.prank(admin);
         vm.expectRevert(AccumulatorRevocation.InvalidAccumulatorValue.selector);
-        acc.revokeCredential(ACC_ID, CRED_1, wrongNewVal, proof);
+        acc.revokeCredential(ACC_ID, CRED_1, wrongNewVal, proof, primeCounter);
+    }
+
+    function test_RevokeCredential_RevertsInvalidPrimeHint() public {
+        _setupAndInit();
+
+        uint256 prime = _computeHashToPrime(CRED_1);
+        bytes memory newVal = _modexpUint(initialValue, prime, rsaModulus);
+        bytes memory proof = _buildWesolowskiProof(initialValue, newVal, prime);
+        uint16 badCounter = _firstCompositeHashToPrimeCounter(CRED_1);
+
+        vm.prank(admin);
+        vm.expectRevert(AccumulatorRevocation.InvalidPrimeHint.selector);
+        acc.revokeCredential(ACC_ID, CRED_1, newVal, proof, badCounter);
     }
 
     function test_RevokeCredential_RevertsAlreadyRevoked() public {
@@ -501,20 +517,21 @@ contract AccumulatorRevocationTest is TestHelper {
         uint256 prime = _computeHashToPrime(CRED_1);
         bytes memory newVal = _modexpUint(initialValue, prime, rsaModulus);
         bytes memory proof = _buildWesolowskiProof(initialValue, newVal, prime);
+        uint16 primeCounter = _computeHashToPrimeCounter(CRED_1);
 
         vm.prank(admin);
-        acc.revokeCredential(ACC_ID, CRED_1, newVal, proof);
+        acc.revokeCredential(ACC_ID, CRED_1, newVal, proof, primeCounter);
 
         vm.prank(admin);
         vm.expectRevert(AccumulatorRevocation.CredentialAlreadyRevoked.selector);
-        acc.revokeCredential(ACC_ID, CRED_1, newVal, proof);
+        acc.revokeCredential(ACC_ID, CRED_1, newVal, proof, primeCounter);
     }
 
     function test_RevokeCredential_RevertsNotInitialized() public {
         _setupParams();
         vm.prank(admin);
         vm.expectRevert(AccumulatorRevocation.AccumulatorNotInitialized.selector);
-        acc.revokeCredential(keccak256("bad"), CRED_1, new bytes(256), new bytes(256));
+        acc.revokeCredential(keccak256("bad"), CRED_1, new bytes(256), new bytes(256), 0);
     }
 
     function test_RevokeCredential_RevertsWhenPaused() public {
@@ -523,7 +540,7 @@ contract AccumulatorRevocationTest is TestHelper {
         acc.pause();
         vm.prank(admin);
         vm.expectRevert();
-        acc.revokeCredential(ACC_ID, CRED_1, new bytes(256), new bytes(256));
+        acc.revokeCredential(ACC_ID, CRED_1, new bytes(256), new bytes(256), 0);
     }
 
     function test_RevokeCredential_RevertsWithoutVerifier() public {
@@ -535,7 +552,7 @@ contract AccumulatorRevocationTest is TestHelper {
 
         vm.prank(admin);
         vm.expectRevert(AccumulatorRevocation.ExponentiationVerifierNotSet.selector);
-        acc2.revokeCredential(ACC_ID, CRED_1, new bytes(256), new bytes(256));
+        acc2.revokeCredential(ACC_ID, CRED_1, new bytes(256), new bytes(256), 0);
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -583,6 +600,7 @@ contract AccumulatorRevocationTest is TestHelper {
 
         AccumulatorRevocation.BatchUpdate memory batch = AccumulatorRevocation.BatchUpdate({
             credentialHashes: creds,
+            primeCounters: _primeCounters(creds),
             newAccumulatorValue: newVal,
             proof: proof,
             targetEpoch: 1
@@ -608,6 +626,7 @@ contract AccumulatorRevocationTest is TestHelper {
 
         AccumulatorRevocation.BatchUpdate memory batch = AccumulatorRevocation.BatchUpdate({
             credentialHashes: creds,
+            primeCounters: _primeCounters(creds),
             newAccumulatorValue: newVal,
             proof: proof,
             targetEpoch: 1
@@ -620,12 +639,13 @@ contract AccumulatorRevocationTest is TestHelper {
         assertEq(acc.totalRevocations(), 1);
     }
 
-    /// @notice Gas budget regression test: assert that per-credential and fixed
-    ///         costs stay within the budget assumed by MAX_BATCH_SIZE = 2.
+    /// @notice Gas budget regression test: assert that hinted-prime
+    ///         per-credential and fixed costs stay within the budget assumed by
+    ///         MAX_BATCH_SIZE = 2.
     ///
     ///         Methodology (adversarial regression benchmark):
-    ///         1. Scan for adversarial credential hashes with the highest
-    ///            _hashToPrime iteration counts (worst-case Miller-Rabin gas).
+    ///         1. Scan for adversarial credential hashes with high
+    ///            hash-to-prime counters, then submit those counters as hints.
     ///         2. Deploy a FRESH AccumulatorRevocation + WesolowskiVerifier for
     ///            each measurement, isolating per-measurement state.
     ///         3. Measure 1-credential batch gas on fresh instance #1.
@@ -726,6 +746,7 @@ contract AccumulatorRevocationTest is TestHelper {
 
             AccumulatorRevocation.BatchUpdate memory batch = AccumulatorRevocation.BatchUpdate({
                 credentialHashes: creds,
+                primeCounters: _primeCounters(creds),
                 newAccumulatorValue: newVal,
                 proof: proof,
                 targetEpoch: 1
@@ -759,6 +780,7 @@ contract AccumulatorRevocationTest is TestHelper {
 
             AccumulatorRevocation.BatchUpdate memory batch = AccumulatorRevocation.BatchUpdate({
                 credentialHashes: creds,
+                primeCounters: _primeCounters(creds),
                 newAccumulatorValue: newVal,
                 proof: proof,
                 targetEpoch: 1
@@ -785,6 +807,37 @@ contract AccumulatorRevocationTest is TestHelper {
         return 1000;
     }
 
+    function _computeHashToPrimeCounter(bytes32 credentialHash) internal view returns (uint16) {
+        uint256 counter = _countHashToPrimeIterations(
+            credentialHash,
+            "ZeroID.AccRev.H2P.v1"
+        );
+        require(counter < acc.MAX_HASH_TO_PRIME_COUNTER(), "no prime found");
+        return uint16(counter);
+    }
+
+    function _firstCompositeHashToPrimeCounter(bytes32 credentialHash) internal view returns (uint16) {
+        bytes memory domain = "ZeroID.AccRev.H2P.v1";
+        for (uint256 counter = 0; counter < 1000; counter++) {
+            uint256 candidate = uint256(
+                keccak256(abi.encodePacked(domain, credentialHash, counter))
+            ) | 1;
+            if (!_millerRabinCheck(candidate)) return uint16(counter);
+        }
+        revert("no composite found");
+    }
+
+    function _primeCounters(bytes32[] memory credentialHashes)
+        internal
+        view
+        returns (uint16[] memory counters)
+    {
+        counters = new uint16[](credentialHashes.length);
+        for (uint256 i = 0; i < credentialHashes.length; i++) {
+            counters[i] = _computeHashToPrimeCounter(credentialHashes[i]);
+        }
+    }
+
     function test_BatchRevoke_RevertsNotInitialized() public {
         _setupParams();
         bytes32[] memory creds = new bytes32[](1);
@@ -792,6 +845,7 @@ contract AccumulatorRevocationTest is TestHelper {
 
         AccumulatorRevocation.BatchUpdate memory batch = AccumulatorRevocation.BatchUpdate({
             credentialHashes: creds,
+            primeCounters: _primeCounters(creds),
             newAccumulatorValue: new bytes(256),
             proof: new bytes(256),
             targetEpoch: 1
@@ -807,6 +861,7 @@ contract AccumulatorRevocationTest is TestHelper {
         bytes32[] memory creds = new bytes32[](0);
         AccumulatorRevocation.BatchUpdate memory batch = AccumulatorRevocation.BatchUpdate({
             credentialHashes: creds,
+            primeCounters: _primeCounters(creds),
             newAccumulatorValue: new bytes(256),
             proof: new bytes(256),
             targetEpoch: 1
@@ -824,6 +879,7 @@ contract AccumulatorRevocationTest is TestHelper {
 
         AccumulatorRevocation.BatchUpdate memory batch = AccumulatorRevocation.BatchUpdate({
             credentialHashes: creds,
+            primeCounters: _primeCounters(creds),
             newAccumulatorValue: new bytes(256),
             proof: new bytes(256),
             targetEpoch: 1
@@ -831,6 +887,24 @@ contract AccumulatorRevocationTest is TestHelper {
 
         vm.prank(admin);
         vm.expectRevert(AccumulatorRevocation.BatchTooLarge.selector);
+        acc.batchRevoke(ACC_ID, batch);
+    }
+
+    function test_BatchRevoke_RevertsPrimeCounterLengthMismatch() public {
+        _setupAndInit();
+        bytes32[] memory creds = new bytes32[](1);
+        creds[0] = CRED_1;
+
+        AccumulatorRevocation.BatchUpdate memory batch = AccumulatorRevocation.BatchUpdate({
+            credentialHashes: creds,
+            primeCounters: new uint16[](0),
+            newAccumulatorValue: new bytes(256),
+            proof: new bytes(256),
+            targetEpoch: 1
+        });
+
+        vm.prank(admin);
+        vm.expectRevert(AccumulatorRevocation.InvalidPrimeHint.selector);
         acc.batchRevoke(ACC_ID, batch);
     }
 
@@ -845,6 +919,7 @@ contract AccumulatorRevocationTest is TestHelper {
 
         AccumulatorRevocation.BatchUpdate memory batch = AccumulatorRevocation.BatchUpdate({
             credentialHashes: creds,
+            primeCounters: _primeCounters(creds),
             newAccumulatorValue: newVal,
             proof: forgedProof,
             targetEpoch: 1
@@ -899,8 +974,9 @@ contract AccumulatorRevocationTest is TestHelper {
         uint256 prime = _computeHashToPrime(CRED_1);
         bytes memory newVal = _modexpUint(initialValue, prime, rsaModulus);
         bytes memory proof = _buildWesolowskiProof(initialValue, newVal, prime);
+        uint16 primeCounter = _computeHashToPrimeCounter(CRED_1);
         vm.prank(admin);
-        acc.revokeCredential(ACC_ID, CRED_1, newVal, proof);
+        acc.revokeCredential(ACC_ID, CRED_1, newVal, proof, primeCounter);
 
         AccumulatorRevocation.NonMembershipWitness memory witness = AccumulatorRevocation.NonMembershipWitness({
             d: new bytes(256), b: new bytes(256), credentialHash: CRED_1, epoch: 1

@@ -120,6 +120,19 @@ contract AccumulatorRevocationFuzzTest is TestHelper {
         revert("no prime found");
     }
 
+    function _computeHashToPrimeCounter(bytes32 credentialHash) internal view returns (uint16) {
+        bytes memory DOMAIN = "ZeroID.AccRev.H2P.v1";
+        uint256 counter = 0;
+        while (counter < 1000) {
+            uint256 candidate = uint256(
+                keccak256(abi.encodePacked(DOMAIN, credentialHash, counter))
+            ) | 1;
+            if (_millerRabin(candidate)) return uint16(counter);
+            unchecked { ++counter; }
+        }
+        revert("no prime found");
+    }
+
     /// @dev Independent Miller-Rabin using the MODEXP precompile with
     ///      witnesses [73..173] — deliberately different from the contract's
     ///      witnesses [2..71] to provide independent verification.
@@ -396,16 +409,17 @@ contract AccumulatorRevocationFuzzTest is TestHelper {
         uint256 prime = _computeHashToPrime(credHash);
         bytes memory newVal = _modexpUint(initialValue, prime, rsaModulus);
         bytes memory proof = _buildWesolowskiProof(initialValue, newVal, prime);
+        uint16 primeCounter = _computeHashToPrimeCounter(credHash);
 
         // First revocation succeeds
         vm.prank(admin);
-        acc.revokeCredential(ACC_ID, credHash, newVal, proof);
+        acc.revokeCredential(ACC_ID, credHash, newVal, proof, primeCounter);
         assertTrue(acc.isRevoked(ACC_ID, credHash));
 
         // Second revocation must revert
         vm.prank(admin);
         vm.expectRevert(AccumulatorRevocation.CredentialAlreadyRevoked.selector);
-        acc.revokeCredential(ACC_ID, credHash, newVal, proof);
+        acc.revokeCredential(ACC_ID, credHash, newVal, proof, primeCounter);
     }
 
     // ════════════════════════════════════════════════════════════════════
@@ -463,6 +477,7 @@ contract AccumulatorRevocationFuzzTest is TestHelper {
 
         AccumulatorRevocation.BatchUpdate memory batch = AccumulatorRevocation.BatchUpdate({
             credentialHashes: creds,
+            primeCounters: new uint16[](0),
             newAccumulatorValue: new bytes(256),
             proof: new bytes(256),
             targetEpoch: 1

@@ -57,6 +57,19 @@ contract AccumulatorRevocationHandler is Test {
         revert("no prime found");
     }
 
+    function _computeHashToPrimeCounter(bytes32 credentialHash) internal view returns (uint16) {
+        bytes memory DOMAIN = "ZeroID.AccRev.H2P.v1";
+        uint256 counter = 0;
+        while (counter < 1000) {
+            uint256 candidate = uint256(
+                keccak256(abi.encodePacked(DOMAIN, credentialHash, counter))
+            ) | 1;
+            if (_millerRabinCheck(candidate)) return uint16(counter);
+            unchecked { ++counter; }
+        }
+        revert("no prime found");
+    }
+
     function _millerRabinCheck(uint256 n) internal view returns (bool) {
         if (n < 2) return false;
         if (n < 4) return true;
@@ -157,17 +170,18 @@ contract AccumulatorRevocationHandler is Test {
     // ── Handler actions ──────────────────────────────────────────────
 
     /// @notice Revoke a single fresh credential with a valid proof.
-    function revokeSingle(uint256 seed) external {
+    function revokeSingle(uint256) external {
         bytes32 credHash = keccak256(abi.encodePacked("handler_cred", _credCounter));
         _credCounter++;
 
         uint256 prime = _computeHashToPrime(credHash);
+        uint16 primeCounter = _computeHashToPrimeCounter(credHash);
         bytes memory currentVal = _currentValue;
         bytes memory newVal = _modexpUint(currentVal, prime, rsaModulus);
         bytes memory proof = _buildWesolowskiProof(currentVal, newVal, prime);
 
         vm.prank(admin);
-        acc.revokeCredential(accId, credHash, newVal, proof);
+        acc.revokeCredential(accId, credHash, newVal, proof, primeCounter);
 
         _currentValue = newVal;
         ghost_revokeCount++;
@@ -179,7 +193,7 @@ contract AccumulatorRevocationHandler is Test {
     }
 
     /// @notice Publish a witness update delta (a simpler operation).
-    function publishWitness(uint256 seed) external {
+    function publishWitness(uint256) external {
         (, uint256 epoch, , ) = acc.getCurrentState(accId);
 
         AccumulatorRevocation.WitnessUpdateDelta memory delta = AccumulatorRevocation.WitnessUpdateDelta({

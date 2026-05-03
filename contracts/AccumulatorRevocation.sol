@@ -57,6 +57,7 @@ contract AccumulatorRevocation is AccessControl, Pausable, ReentrancyGuard {
     error ZeroValueNotAllowed();
     error ExponentiationVerifierNotSet();
     error ZKVerifierNotSet();
+    error InvalidPrimeHint();
 
     // ──────────────────────────────────────────────────────────────────────
     // Events
@@ -154,6 +155,7 @@ contract AccumulatorRevocation is AccessControl, Pausable, ReentrancyGuard {
     /// @notice Batch revocation update
     struct BatchUpdate {
         bytes32[] credentialHashes;  // Credentials to revoke
+        uint16[] primeCounters;      // Off-chain H2P counters, verified on-chain
         bytes newAccumulatorValue;   // New V after all revocations
         bytes proof;                 // ABI-encoded Wesolowski quotient Q (modulus-sized)
         uint256 targetEpoch;         // Expected new epoch
@@ -183,17 +185,13 @@ contract AccumulatorRevocation is AccessControl, Pausable, ReentrancyGuard {
     uint256 public constant MIN_MODULUS_BITS = 2048;
     uint256 private constant SNARK_SCALAR_FIELD =
         21888242871839275222246405745257275088548364400416034343698204186575808495617;
-    /// @dev Empirical gas profile (2048-bit RSA modulus, 20-round Miller-Rabin):
-    ///      Adversarial worst-case: credential hashes requiring ~580 iterations
-    ///      of the _hashToPrime search consume ~8.5M gas (single credential).
-    ///      Marginal cost per additional worst-case credential: ~7.8M gas.
-    ///      At 30M block gas limit with 20% safety margin (24M budget):
-    ///        MAX_BATCH_SIZE = 1 + floor((24M - 8.5M) / 7.8M) = 2
-    ///      Figures are from adversarial regression benchmarks with fresh-deploy
-    ///      isolation. Warm-slot discount from same-tx setup is ~16K gas
-    ///      (<0.1% of measured values), accounted for in the test assertion.
-    ///      Larger batches should be split into multiple transactions.
+    /// @dev Batch size is intentionally small because each revoked credential
+    ///      still requires one Miller-Rabin verification and one modular
+    ///      reduction. Hash-to-prime counters are computed off-chain and
+    ///      verified on-chain, so revocation gas is bounded by batch size
+    ///      instead of by adversarial credential hashes.
     uint256 public constant MAX_BATCH_SIZE = 2;
+    uint256 public constant MAX_HASH_TO_PRIME_COUNTER = 1000;
     uint256 public constant SNAPSHOT_RETENTION = 365 days;
 
     /// @notice Domain separator for hashing credentials to primes
@@ -381,19 +379,21 @@ contract AccumulatorRevocation is AccessControl, Pausable, ReentrancyGuard {
      * @param credentialHash   Hash of the credential to revoke
      * @param newValue         New accumulator value: V' = V^{H(credential)} mod N
      * @param proof            ABI-encoded Wesolowski quotient Q (modulus-sized bytes)
+     * @param primeCounter     Off-chain H2P counter for credentialHash
      */
     function revokeCredential(
         bytes32 accId,
         bytes32 credentialHash,
         bytes calldata newValue,
-        bytes calldata proof
+        bytes calldata proof,
+        uint16 primeCounter
     ) external onlyRole(REVOCATION_AUTHORITY_ROLE) whenNotPaused nonReentrant {
         AccumulatorState storage acc = _accumulators[accId];
         if (!acc.initialized) revert AccumulatorNotInitialized();
         if (_revoked[accId][credentialHash]) revert CredentialAlreadyRevoked();
 
         // Verify the exponentiation proof: V' = V^{H(credentialHash)} mod N
-        if (!_verifyExponentiationProof(acc, credentialHash, newValue, proof)) {
+        if (!_verifyExponentiationProof(acc, credentialHash, primeCounter, newValue, proof)) {
             revert InvalidAccumulatorValue();
         }
 
@@ -435,6 +435,9 @@ contract AccumulatorRevocation is AccessControl, Pausable, ReentrancyGuard {
         if (!acc.initialized) revert AccumulatorNotInitialized();
         if (batch.credentialHashes.length == 0) revert ZeroValueNotAllowed();
         if (batch.credentialHashes.length > MAX_BATCH_SIZE) revert BatchTooLarge();
+        if (batch.primeCounters.length != batch.credentialHashes.length) {
+            revert InvalidPrimeHint();
+        }
 
         // Verify no credential is already revoked
         for (uint256 i = 0; i < batch.credentialHashes.length; i++) {
@@ -634,7 +637,7 @@ contract AccumulatorRevocation is AccessControl, Pausable, ReentrancyGuard {
         uint256 candidate;
         uint256 counter = 0;
 
-        while (counter < 1000) {
+        while (counter < MAX_HASH_TO_PRIME_COUNTER) {
             candidate = uint256(
                 keccak256(abi.encodePacked(HASH_TO_PRIME_DOMAIN, credentialHash, counter))
             );
@@ -646,6 +649,27 @@ contract AccumulatorRevocation is AccessControl, Pausable, ReentrancyGuard {
             unchecked { ++counter; }
         }
         revert("hashToPrime: no prime found in 1000 iterations");
+    }
+
+    /**
+     * @dev Verify a caller-supplied hash-to-prime counter and return the prime.
+     *      This keeps revocation gas bounded while preserving on-chain validation
+     *      of the exact domain-separated candidate and its primality.
+     */
+    function _hashToPrimeWithHint(
+        bytes32 credentialHash,
+        uint16 primeCounter
+    ) internal view returns (uint256 candidate) {
+        if (uint256(primeCounter) >= MAX_HASH_TO_PRIME_COUNTER) {
+            revert InvalidPrimeHint();
+        }
+
+        candidate = uint256(
+            keccak256(abi.encodePacked(HASH_TO_PRIME_DOMAIN, credentialHash, uint256(primeCounter)))
+        ) | 1;
+        if (!_isProbablyPrime(candidate)) {
+            revert InvalidPrimeHint();
+        }
     }
 
     /**
@@ -759,6 +783,7 @@ contract AccumulatorRevocation is AccessControl, Pausable, ReentrancyGuard {
     function _verifyExponentiationProof(
         AccumulatorState storage acc,
         bytes32 credentialHash,
+        uint16 primeCounter,
         bytes calldata newValue,
         bytes calldata proof
     ) internal view returns (bool) {
@@ -767,7 +792,7 @@ contract AccumulatorRevocation is AccessControl, Pausable, ReentrancyGuard {
         }
         if (newValue.length == 0) return false;
 
-        uint256 prime = _hashToPrime(credentialHash);
+        uint256 prime = _hashToPrimeWithHint(credentialHash, primeCounter);
 
         // The proof IS the Wesolowski quotient Q (modulus-sized, big-endian)
         bytes calldata quotientQ = proof;
@@ -812,7 +837,10 @@ contract AccumulatorRevocation is AccessControl, Pausable, ReentrancyGuard {
         // This produces the TRUE remainder without needing a big-number product.
         uint256 r = 1;
         for (uint256 i = 0; i < batch.credentialHashes.length; i++) {
-            uint256 prime = _hashToPrime(batch.credentialHashes[i]);
+            uint256 prime = _hashToPrimeWithHint(
+                batch.credentialHashes[i],
+                batch.primeCounters[i]
+            );
             r = mulmod(r, prime, l);
         }
 
