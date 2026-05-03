@@ -159,6 +159,7 @@ contract CredentialRegistry is ICredentialRegistry, AccessControl, Pausable, Ree
         require(_identityRegistry != address(0), "Zero registry");
 
         identityRegistry = IIdentityRegistry(_identityRegistry);
+        currentRevocationEpoch = 1;
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _grantRole(ADMIN_ROLE, admin);

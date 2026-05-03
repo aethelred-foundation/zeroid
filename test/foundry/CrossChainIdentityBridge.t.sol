@@ -348,6 +348,49 @@ contract CrossChainIdentityBridgeTest is TestHelper {
         assertEq(info.stakedAmount, 1 ether);
     }
 
+    function test_SubmitFraudProof_SlashesInvalidMerkleInclusionMessage() public {
+        _registerChain();
+        _registerOperator(alice);
+
+        bytes32 challengerRole = bridge.FRAUD_PROOF_CHALLENGER_ROLE();
+        vm.prank(admin);
+        bridge.grantRole(challengerRole, bob);
+
+        vm.prank(alice);
+        bytes32 messageHash = bridge.bridgeCredential(
+            CRED_HASH,
+            CHAIN_A,
+            "invalid-merkle-proof",
+            keccak256("acc_root")
+        );
+
+        CrossChainIdentityBridge.BridgeMessage memory message = bridge.getMessage(messageHash);
+        bytes memory fraudEvidence = abi.encode(
+            bridge.FRAUD_PROOF_INVALID_MERKLE_INCLUSION(),
+            messageHash,
+            message.credentialHash,
+            message.sourceStateRoot,
+            keccak256(message.merkleProof)
+        );
+
+        vm.deal(bob, 1 ether);
+        uint256 bond = bridge.MIN_CHALLENGE_BOND();
+        vm.prank(bob);
+        vm.expectEmit(true, true, true, true);
+        emit CrossChainIdentityBridge.FraudProofSubmitted(
+            messageHash,
+            bob,
+            alice,
+            block.timestamp
+        );
+        bridge.submitFraudProof{value: bond}(messageHash, fraudEvidence);
+
+        CrossChainIdentityBridge.OperatorInfo memory info = bridge.getOperatorInfo(alice);
+        assertEq(info.slashCount, 1);
+        assertEq(info.stakedAmount, 0.5 ether);
+        assertFalse(info.active);
+    }
+
     // ════════════════════════════════════════════════════════════════
     // Circuit Breaker
     // ════════════════════════════════════════════════════════════════

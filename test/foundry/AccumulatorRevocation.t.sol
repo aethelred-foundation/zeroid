@@ -59,6 +59,8 @@ contract AccumulatorRevocationTest is TestHelper {
     bytes32 constant CRED_1 = keccak256("cred:1");
     bytes32 constant CRED_2 = keccak256("cred:2");
     bytes32 constant CRED_3 = keccak256("cred:3");
+    uint256 constant SNARK_SCALAR_FIELD =
+        21888242871839275222246405745257275088548364400416034343698204186575808495617;
 
     bytes rsaModulus;
     bytes generator;
@@ -106,6 +108,10 @@ contract AccumulatorRevocationTest is TestHelper {
         _setupParams();
         vm.prank(admin);
         acc.initializeAccumulator(ACC_ID, initialValue);
+    }
+
+    function _toSnarkField(bytes32 digest) internal pure returns (uint256) {
+        return uint256(digest) % SNARK_SCALAR_FIELD;
     }
 
     // ── MODEXP helper (calls precompile) ─────────────────────────────
@@ -861,8 +867,8 @@ contract AccumulatorRevocationTest is TestHelper {
 
         (bytes32 valueHash, , , ) = acc.getCurrentState(ACC_ID);
         uint256[] memory publicInputs = new uint256[](3);
-        publicInputs[0] = uint256(keccak256(abi.encodePacked(valueHash, CRED_1)));
-        publicInputs[1] = uint256(keccak256(generator));
+        publicInputs[0] = _toSnarkField(keccak256(abi.encodePacked(valueHash, CRED_1)));
+        publicInputs[1] = _toSnarkField(keccak256(generator));
         publicInputs[2] = 0;
 
         Groth16Proof memory proof = _dummyProof();
@@ -943,8 +949,8 @@ contract AccumulatorRevocationTest is TestHelper {
 
         (bytes32 valueHash, , , ) = acc.getCurrentState(ACC_ID);
         uint256[] memory publicInputs = new uint256[](3);
-        publicInputs[0] = uint256(keccak256(abi.encodePacked(valueHash, CRED_1)));
-        publicInputs[1] = uint256(keccak256(generator));
+        publicInputs[0] = _toSnarkField(keccak256(abi.encodePacked(valueHash, CRED_1)));
+        publicInputs[1] = _toSnarkField(keccak256(generator));
         publicInputs[2] = 0;
 
         Groth16Proof memory proof = _dummyProof();

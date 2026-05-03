@@ -1661,45 +1661,68 @@ export class TEEAttestationService {
       );
     }
 
-    // ── Check TCB signing cert chain against both CRLs ─────────────────
+    // ── Check collateral signing cert chains against both CRLs ─────────
     if (collateral.tcbSigningCertChain) {
-      const chainCerts = this.parsePemChain(collateral.tcbSigningCertChain);
-      if (chainCerts.length > 0) {
-        const leafCert = new crypto.X509Certificate(chainCerts[0]);
-        const leafSerial = this.normalizeCertificateSerial(
-          leafCert.serialNumber,
-        );
+      this.assertCollateralSigningChainNotRevoked(
+        collateral.tcbSigningCertChain,
+        'TCB signing certificate',
+        pckRevokedSerials,
+        rootRevokedSerials,
+      );
+    }
 
-        if (pckRevokedSerials.has(leafSerial)) {
-          throw new AttestationError(
-            `TCB signing certificate (serial: ${leafSerial}) is revoked in PCK CRL`,
-            'TEE_CERT_REVOKED',
-          );
-        }
-        if (rootRevokedSerials.has(leafSerial)) {
-          throw new AttestationError(
-            `TCB signing certificate (serial: ${leafSerial}) is revoked in Root CA CRL`,
-            'TEE_CERT_REVOKED',
-          );
-        }
-
-        // Check intermediate CA serial against root CRL
-        if (chainCerts.length > 1) {
-          const intermediateCert = new crypto.X509Certificate(chainCerts[1]);
-          const intermediateSerial = this.normalizeCertificateSerial(
-            intermediateCert.serialNumber,
-          );
-          if (rootRevokedSerials.has(intermediateSerial)) {
-            throw new AttestationError(
-              `Intermediate CA certificate (serial: ${intermediateSerial}) is revoked in Root CA CRL`,
-              'TEE_CERT_REVOKED',
-            );
-          }
-        }
-      }
+    if (collateral.qeIdentitySigningCertChain) {
+      this.assertCollateralSigningChainNotRevoked(
+        collateral.qeIdentitySigningCertChain,
+        'QE identity signing certificate',
+        pckRevokedSerials,
+        rootRevokedSerials,
+      );
     }
 
     logger.info('certificate_revocation_check_passed');
+  }
+
+  private assertCollateralSigningChainNotRevoked(
+    chainPem: string,
+    chainLabel: string,
+    pckRevokedSerials: Set<string>,
+    rootRevokedSerials: Set<string>,
+  ): void {
+    const chainCerts = this.parsePemChain(chainPem);
+    if (chainCerts.length === 0) {
+      return;
+    }
+
+    const leafCert = new crypto.X509Certificate(chainCerts[0]);
+    const leafSerial = this.normalizeCertificateSerial(leafCert.serialNumber);
+
+    if (pckRevokedSerials.has(leafSerial)) {
+      throw new AttestationError(
+        `${chainLabel} (serial: ${leafSerial}) is revoked in PCK CRL`,
+        'TEE_CERT_REVOKED',
+      );
+    }
+
+    if (rootRevokedSerials.has(leafSerial)) {
+      throw new AttestationError(
+        `${chainLabel} (serial: ${leafSerial}) is revoked in Root CA CRL`,
+        'TEE_CERT_REVOKED',
+      );
+    }
+
+    if (chainCerts.length > 1) {
+      const intermediateCert = new crypto.X509Certificate(chainCerts[1]);
+      const intermediateSerial = this.normalizeCertificateSerial(
+        intermediateCert.serialNumber,
+      );
+      if (rootRevokedSerials.has(intermediateSerial)) {
+        throw new AttestationError(
+          `${chainLabel} intermediate CA certificate (serial: ${intermediateSerial}) is revoked in Root CA CRL`,
+          'TEE_CERT_REVOKED',
+        );
+      }
+    }
   }
 
   private assertQuotePckCertificatesNotRevoked(

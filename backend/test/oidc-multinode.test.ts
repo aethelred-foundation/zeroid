@@ -60,6 +60,7 @@ jest.mock('https', () => ({
 // ---------------------------------------------------------------------------
 const store = new Map<string, string>();
 const setStore = new Map<string, Set<string>>();
+const mockOrganizationMemberFindFirst = jest.fn();
 
 const redisMock = {
   get: jest.fn(async (key: string) => store.get(key) ?? null),
@@ -149,6 +150,9 @@ jest.mock('../src/index', () => {
     prisma: {
       $connect: jest.fn(),
       $disconnect: jest.fn(),
+      organizationMember: {
+        findFirst: mockOrganizationMemberFindFirst,
+      },
     },
     metricsRegistry: {},
   };
@@ -281,6 +285,7 @@ describe('OIDC multi-node correctness', () => {
     store.clear();
     setStore.clear();
     jest.clearAllMocks();
+    mockOrganizationMemberFindFirst.mockResolvedValue({ id: 'membership-1' });
     fetchMock.mockResolvedValue({ ok: true, status: 200 });
   });
 
@@ -1705,6 +1710,31 @@ describe('OIDC multi-node correctness', () => {
 
     expect(tokens.access_token).toBeDefined();
     expect(tokens.refresh_token).toBeDefined();
+  });
+
+  test('tenant-owned client authorization rejects subjects outside the organization', async () => {
+    const client = await registerOwnedClient(bridgeA, {
+      organizationId: 'org-governed',
+      registeredByIdentityId: 'admin-tenant',
+      registeredByRole: 'admin',
+    });
+    mockOrganizationMemberFindFirst.mockResolvedValueOnce(null);
+
+    await expect(
+      authorizeCode(bridgeB, client.clientId, 'outside-user-1'),
+    ).rejects.toMatchObject({
+      errorCode: 'access_denied',
+      statusCode: 403,
+    });
+
+    expect(mockOrganizationMemberFindFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          organizationId: 'org-governed',
+          identityId: 'outside-user-1',
+        }),
+      }),
+    );
   });
 
   // 8. Deactivation must block both new auth and refresh reuse

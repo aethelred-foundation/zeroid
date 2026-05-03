@@ -6,6 +6,8 @@ const routeRegistry: Record<
 > = {};
 
 const mockExchangeToken = jest.fn();
+const mockAuthorize = jest.fn();
+const mockIdentityFindUnique = jest.fn();
 
 jest.mock('express', () => {
   const createRouter = () => {
@@ -85,11 +87,19 @@ jest.mock('../src/services/enterprise/oidc-bridge', () => ({
   oidcBridge: {
     getDiscoveryDocument: jest.fn(),
     getJWKS: jest.fn(),
+    authorize: mockAuthorize,
     exchangeToken: mockExchangeToken,
   },
   OIDCClientRegistrationSchema: {
     safeParse: (value: unknown) => ({ success: true, data: value }),
   },
+}));
+
+jest.mock('../src/services/enterprise/oidc-claims', () => ({
+  buildTrustedOIDCClaims: jest.fn(async () => ({
+    sub: 'identity-1',
+    name: 'Test Subject',
+  })),
 }));
 
 jest.mock('../src/services/enterprise/sla-monitor', () => ({
@@ -129,7 +139,11 @@ jest.mock('../src/services/enterprise/policy-exception-service', () => ({
 }));
 
 jest.mock('../src/index', () => ({
-  prisma: {},
+  prisma: {
+    identity: {
+      findUnique: mockIdentityFindUnique,
+    },
+  },
 }));
 
 import '../src/routes/enterprise/integration';
@@ -140,8 +154,11 @@ async function invokeRoute(
   options: {
     body?: Record<string, unknown>;
     headers?: Record<string, string>;
+    identity?: Record<string, unknown>;
+    sessionId?: string;
+    sessionAuthTime?: number;
   } = {},
-): Promise<{ statusCode: number; body: any }> {
+): Promise<{ statusCode: number; body: any; redirectUrl?: string }> {
   const handlers = routeRegistry[`${method} ${path}`];
   if (!handlers) {
     throw new Error(`Route not registered: ${method} ${path}`);
@@ -153,10 +170,14 @@ async function invokeRoute(
     params: {},
     query: {},
     path,
+    identity: options.identity,
+    sessionId: options.sessionId,
+    sessionAuthTime: options.sessionAuthTime,
   };
 
   let statusCode = 200;
   let responseBody: any;
+  let redirectUrl: string | undefined;
   let ended = false;
 
   const res: Record<string, any> = {
@@ -166,6 +187,17 @@ async function invokeRoute(
     },
     json(payload: any) {
       responseBody = payload;
+      ended = true;
+      return res;
+    },
+    redirect(codeOrUrl: number | string, maybeUrl?: string) {
+      if (typeof codeOrUrl === 'number') {
+        statusCode = codeOrUrl;
+        redirectUrl = maybeUrl;
+      } else {
+        statusCode = 302;
+        redirectUrl = codeOrUrl;
+      }
       ended = true;
       return res;
     },
@@ -198,7 +230,7 @@ async function invokeRoute(
     });
   }
 
-  return { statusCode, body: responseBody };
+  return { statusCode, body: responseBody, redirectUrl };
 }
 
 function basicAuth(clientId: string, clientSecret: string): string {
@@ -213,6 +245,18 @@ describe('OIDC token route client authentication', () => {
       token_type: 'Bearer',
       expires_in: 3600,
       scope: 'openid',
+    });
+    mockAuthorize.mockResolvedValue({
+      redirectUrl: 'https://app.example.com/callback?code=secret-code&state=state-1',
+      code: 'secret-code',
+      sessionId: 'session-1',
+    });
+    mockIdentityFindUnique.mockResolvedValue({
+      displayName: 'Test Subject',
+      metadata: {},
+      status: 'ACTIVE',
+      teeAttestationId: null,
+      updatedAt: new Date('2026-01-01T00:00:00Z'),
     });
   });
 
@@ -277,6 +321,45 @@ describe('OIDC token route client authentication', () => {
       refreshToken: undefined,
       scope: undefined,
     });
+  });
+
+  it('redirects OIDC authorization responses instead of serializing raw codes', async () => {
+    const response = await invokeRoute('POST', '/oidc/authorize', {
+      identity: {
+        id: 'identity-1',
+        status: 'ACTIVE',
+      },
+      sessionId: 'platform-session-1',
+      sessionAuthTime: 123456,
+      body: {
+        client_id: 'client-1',
+        redirect_uri: 'https://app.example.com/callback',
+        response_type: 'code',
+        scope: 'openid profile',
+        state: 'state-1',
+        nonce: 'nonce-1',
+        code_challenge: 'a'.repeat(43),
+        code_challenge_method: 'S256',
+      },
+    });
+
+    expect(response.statusCode).toBe(302);
+    expect(response.redirectUrl).toBe(
+      'https://app.example.com/callback?code=secret-code&state=state-1',
+    );
+    expect(response.body).toBeUndefined();
+    expect(mockAuthorize).toHaveBeenCalledWith(
+      expect.objectContaining({
+        clientId: 'client-1',
+        redirectUri: 'https://app.example.com/callback',
+      }),
+      'identity-1',
+      expect.any(Object),
+      expect.objectContaining({
+        platformSessionId: 'platform-session-1',
+        platformAuthTime: 123456,
+      }),
+    );
   });
 
   it('returns invalid_request when bridge request validation fails', async () => {

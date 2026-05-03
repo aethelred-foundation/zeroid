@@ -297,6 +297,24 @@ contract ThresholdCredentialTest is TestHelper {
         assertFalse(active);
     }
 
+    function test_ExecuteRecovery_RevertsWhenCallerLowersGuardianThreshold() public {
+        _createConfig();
+        _createConfig2();
+
+        bytes32 guardianRole = tc.GUARDIAN_ROLE();
+        vm.prank(admin);
+        tc.grantRole(guardianRole, alice);
+
+        vm.prank(alice);
+        tc.initiateEmergencyRecovery(CONFIG_ID, CONFIG_ID_2);
+
+        vm.warp(block.timestamp + 48 hours + 1);
+
+        vm.prank(alice);
+        vm.expectRevert(ThresholdCredential.InsufficientGuardianApprovals.selector);
+        tc.executeRecovery(CONFIG_ID, 1);
+    }
+
     function test_EmergencyRecovery_RevertsAlreadyInitiated() public {
         _createConfig();
         _createConfig2();

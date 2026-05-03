@@ -181,6 +181,8 @@ contract AccumulatorRevocation is AccessControl, Pausable, ReentrancyGuard {
     // ──────────────────────────────────────────────────────────────────────
 
     uint256 public constant MIN_MODULUS_BITS = 2048;
+    uint256 private constant SNARK_SCALAR_FIELD =
+        21888242871839275222246405745257275088548364400416034343698204186575808495617;
     /// @dev Empirical gas profile (2048-bit RSA modulus, 20-round Miller-Rabin):
     ///      Adversarial worst-case: credential hashes requiring ~580 iterations
     ///      of the _hashToPrime search consume ~8.5M gas (single credential).
@@ -846,11 +848,11 @@ contract AccumulatorRevocation is AccessControl, Pausable, ReentrancyGuard {
 
         // Build the public inputs that the circuit must satisfy
         uint256[] memory publicInputs = new uint256[](3);
-        publicInputs[0] = uint256(keccak256(abi.encodePacked(
+        publicInputs[0] = _toSnarkField(keccak256(abi.encodePacked(
             acc.currentValueHash,
             witness.credentialHash
         )));
-        publicInputs[1] = uint256(keccak256(_params.generator));
+        publicInputs[1] = _toSnarkField(keccak256(_params.generator));
         publicInputs[2] = witness.epoch;
 
         // Delegate to the external Groth16 verifier (BN254 pairing precompile)
@@ -870,13 +872,17 @@ contract AccumulatorRevocation is AccessControl, Pausable, ReentrancyGuard {
         Groth16Proof memory proof = abi.decode(zkProof, (Groth16Proof));
 
         uint256[] memory publicInputs = new uint256[](3);
-        publicInputs[0] = uint256(keccak256(abi.encodePacked(
+        publicInputs[0] = _toSnarkField(keccak256(abi.encodePacked(
             snapshotValueHash,
             witness.credentialHash
         )));
-        publicInputs[1] = uint256(keccak256(_params.generator));
+        publicInputs[1] = _toSnarkField(keccak256(_params.generator));
         publicInputs[2] = witness.epoch;
 
         return zkVerifier.verifyProof(nonMembershipCircuitId, proof, publicInputs);
+    }
+
+    function _toSnarkField(bytes32 digest) internal pure returns (uint256) {
+        return uint256(digest) % SNARK_SCALAR_FIELD;
     }
 }

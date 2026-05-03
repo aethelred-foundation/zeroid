@@ -29,10 +29,6 @@ contract CredentialRegistryTest is TestHelper {
         vm.prank(admin);
         registry.approveSchema(SCHEMA_HASH_1);
 
-        // Advance revocation epoch so first credential doesn't get index (0,0,0)
-        // which is indistinguishable from "not assigned" in isRevokedInBitmap
-        vm.prank(admin);
-        registry.advanceRevocationEpoch();
     }
 
     // ════════════════════════════════════════════════════════════════

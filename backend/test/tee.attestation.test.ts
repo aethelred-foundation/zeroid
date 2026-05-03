@@ -610,6 +610,27 @@ describe('checkCertificateRevocation', () => {
     jest.restoreAllMocks();
   });
 
+  it('rejects when the QE identity signing certificate serial is in the PCK CRL', () => {
+    const qeIdentitySigningCertSerial = '01' + crypto.randomBytes(15).toString('hex');
+    const collateral = buildCollateral({
+      hierarchy,
+      qeIdentitySigningCertSerial,
+      revokedSerials: [qeIdentitySigningCertSerial],
+    });
+
+    jest.spyOn(priv(), 'verifyCrlSignature').mockReturnValue(undefined);
+    jest.spyOn(priv(), 'validateCrlFreshness').mockReturnValue(undefined);
+
+    expect(() =>
+      priv().checkCertificateRevocation({
+        ...collateral,
+        pckCrlIssuerChain: '',
+      }),
+    ).toThrow(expect.objectContaining({ code: 'TEE_CERT_REVOKED' }));
+
+    jest.restoreAllMocks();
+  });
+
   it('extracts revoked serials correctly from DER CRL with multiple entries', () => {
     // Use serials with high bit clear (first byte < 0x80) so DER INTEGER
     // encoding doesn't prepend a 0x00 padding byte, keeping hex representation stable.

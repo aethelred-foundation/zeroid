@@ -235,6 +235,7 @@ contract CrossChainIdentityBridge is AccessControl, Pausable, ReentrancyGuard {
     uint256 public constant STAKE_LOCK_PERIOD = 7 days;
     uint256 public constant MIN_CHALLENGE_BOND = 0.1 ether;
     uint256 public constant CHALLENGE_WINDOW = 1 hours;
+    uint8 public constant FRAUD_PROOF_INVALID_MERKLE_INCLUSION = 1;
 
     // ──────────────────────────────────────────────────────────────────────
     // State
@@ -975,10 +976,28 @@ contract CrossChainIdentityBridge is AccessControl, Pausable, ReentrancyGuard {
     function _verifyFraudProof(
         BridgeMessage storage msg_,
         bytes calldata fraudEvidence
-    ) internal pure returns (bool) {
-        msg_;
-        fraudEvidence;
-        return false;
+    ) internal view returns (bool) {
+        if (fraudEvidence.length != 160) return false;
+
+        (
+            uint8 evidenceType,
+            bytes32 evidenceMessageHash,
+            bytes32 evidenceCredentialHash,
+            bytes32 evidenceStateRoot,
+            bytes32 evidenceMerkleProofHash
+        ) = abi.decode(fraudEvidence, (uint8, bytes32, bytes32, bytes32, bytes32));
+
+        if (evidenceType != FRAUD_PROOF_INVALID_MERKLE_INCLUSION) return false;
+        if (evidenceMessageHash != msg_.messageHash) return false;
+        if (evidenceCredentialHash != msg_.credentialHash) return false;
+        if (evidenceStateRoot != msg_.sourceStateRoot) return false;
+        if (evidenceMerkleProofHash != keccak256(msg_.merkleProof)) return false;
+
+        return !_verifyMerkleInclusion(
+            msg_.credentialHash,
+            msg_.sourceStateRoot,
+            msg_.merkleProof
+        );
     }
 
     /// @dev Receive ETH for staking

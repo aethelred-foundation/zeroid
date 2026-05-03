@@ -474,6 +474,7 @@ export interface CollateralBuildOptions {
   tamperQeIdentity?: boolean;
   corruptQeIdentitySignature?: boolean;
   wrongQeIdentitySigningKey?: crypto.KeyPairKeyObjectResult;
+  qeIdentitySigningCertSerial?: string;
 }
 
 export interface BuiltCollateral {
@@ -572,7 +573,7 @@ export function buildCollateral(opts: CollateralBuildOptions): BuiltCollateral {
     issuer: 'CN=Test SGX Intermediate CA',
     publicKey: qeIdSigningKey.publicKey,
     signingKey: hierarchy.intermediateKey.privateKey,
-    serialNumber: crypto.randomBytes(16).toString('hex'),
+    serialNumber: opts.qeIdentitySigningCertSerial ?? crypto.randomBytes(16).toString('hex'),
     notBefore: now,
     notAfter: new Date(now.getTime() + 365 * 86400000),
     isCA: false,

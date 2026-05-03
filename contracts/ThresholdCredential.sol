@@ -64,6 +64,7 @@ contract ThresholdCredential is AccessControl, Pausable, ReentrancyGuard {
     error RecoveryCooldownActive();
     error SignerCountMismatch();
     error InvalidPublicKey();
+    error InvalidRecoveryConfig();
 
     // ──────────────────────────────────────────────────────────────────────
     // Events
@@ -197,6 +198,7 @@ contract ThresholdCredential is AccessControl, Pausable, ReentrancyGuard {
     uint256 public constant KEY_ROTATION_WINDOW = 7 days;
     uint256 public constant RECOVERY_COOLDOWN = 48 hours;
     uint256 public constant MAX_SIGNERS = 100;
+    uint256 public recoveryApprovalThreshold = 2;
 
     // ──────────────────────────────────────────────────────────────────────
     // State
@@ -273,6 +275,17 @@ contract ThresholdCredential is AccessControl, Pausable, ReentrancyGuard {
         _configIds.push(configId);
 
         emit ThresholdConfigCreated(configId, threshold, totalSigners, block.timestamp);
+    }
+
+    /**
+     * @notice Set the minimum guardian approvals required for emergency recovery.
+     * @dev The threshold is a contract-level floor; executeRecovery callers cannot lower it.
+     */
+    function setRecoveryApprovalThreshold(
+        uint256 threshold
+    ) external onlyRole(CONFIG_MANAGER_ROLE) whenNotPaused {
+        if (threshold < 2) revert InvalidThreshold();
+        recoveryApprovalThreshold = threshold;
     }
 
     /**
@@ -514,6 +527,9 @@ contract ThresholdCredential is AccessControl, Pausable, ReentrancyGuard {
     ) external onlyRole(GUARDIAN_ROLE) whenNotPaused {
         RecoveryState storage recovery = _recoveryStates[configId];
         if (recovery.initiated) revert RecoveryAlreadyInitiated();
+        if (!_configs[configId].active || !_configs[newConfigId].active) {
+            revert InvalidRecoveryConfig();
+        }
 
         recovery.initiated = true;
         recovery.initiator = msg.sender;
@@ -556,7 +572,10 @@ contract ThresholdCredential is AccessControl, Pausable, ReentrancyGuard {
         RecoveryState storage recovery = _recoveryStates[configId];
         if (!recovery.initiated) revert RecoveryNotInitiated();
         if (block.timestamp < recovery.cooldownEndsAt) revert RecoveryCooldownActive();
-        if (recovery.approvalCount < requiredApprovals) {
+        uint256 required = requiredApprovals > recoveryApprovalThreshold
+            ? requiredApprovals
+            : recoveryApprovalThreshold;
+        if (recovery.approvalCount < required) {
             revert InsufficientGuardianApprovals();
         }
 

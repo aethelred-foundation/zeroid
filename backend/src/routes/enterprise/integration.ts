@@ -2545,7 +2545,7 @@ router.post(
           platformAuthTime: authReq.sessionAuthTime,
         },
       );
-      res.status(200).json({ data: result });
+      res.redirect(302, result.redirectUrl);
     } catch (err) {
       const error = err as Error & { statusCode?: number; errorCode?: string };
       logger.error('oidc_authorize_error', { error: error.message });

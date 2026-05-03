@@ -4,7 +4,7 @@ import crypto from 'crypto';
 import * as https from 'https';
 import * as net from 'net';
 import { promises as dns } from 'dns';
-import { redis } from '../../index';
+import { prisma, redis } from '../../index';
 
 const PRIVATE_OIDC_HOSTNAME_SUFFIXES = [
   '.corp',
@@ -804,6 +804,7 @@ export class OIDCBridge {
     if (!client || !this.isClientActive(client)) {
       throw new OIDCError('invalid_client', 'Client not found or inactive');
     }
+    await this.assertSubjectAuthorizedForClient(client, subjectId);
     this.assertClientGrantAllowed(client, 'authorization_code');
 
     if (parsed.responseType !== 'code') {
@@ -2570,6 +2571,43 @@ export class OIDCBridge {
 
   private isClientActive(client: RegisteredClient): boolean {
     return client.active && (client.status ?? 'active') === 'active';
+  }
+
+  private async assertSubjectAuthorizedForClient(
+    client: RegisteredClient,
+    subjectId: string,
+  ): Promise<void> {
+    if (!client.organizationId) {
+      return;
+    }
+
+    const organizationMember = (prisma as any).organizationMember;
+    if (!organizationMember?.findFirst) {
+      throw new OIDCError(
+        'server_error',
+        'Enterprise tenant membership verification is unavailable',
+        500,
+      );
+    }
+
+    const membership = await organizationMember.findFirst({
+      where: {
+        organizationId: client.organizationId,
+        identityId: subjectId,
+        joinedAt: { not: null },
+      },
+      select: {
+        id: true,
+      },
+    });
+
+    if (!membership) {
+      throw new OIDCError(
+        'access_denied',
+        'Subject is not a member of the client organization',
+        403,
+      );
+    }
   }
 
   private async requireOwnedClient(
