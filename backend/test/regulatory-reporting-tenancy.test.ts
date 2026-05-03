@@ -36,6 +36,12 @@ function sarRequest(entityId: string): SARRequest {
 }
 
 describe('RegulatoryReportingService tenant scoping', () => {
+  const originalEnv = { ...process.env };
+
+  afterEach(() => {
+    process.env = { ...originalEnv };
+  });
+
   it('isolates report reads, dashboards, and mutations by organization', async () => {
     const service = new RegulatoryReportingService();
     const orgAReport = await service.generateSAR(sarRequest('entity-a'), 'org-a');
@@ -59,5 +65,20 @@ describe('RegulatoryReportingService tenant scoping', () => {
 
     const submission = await service.submitReport(orgAReport.reportId, 'org-a');
     expect(submission.filingReference).toMatch(/^SAR-/);
+  });
+
+  it('fails closed for production submissions without an authority connector', async () => {
+    process.env = { ...originalEnv, NODE_ENV: 'production' };
+    const service = new RegulatoryReportingService();
+    const report = await service.generateSAR(sarRequest('entity-prod'), 'org-a');
+
+    await expect(
+      service.submitReport(report.reportId, 'org-a'),
+    ).rejects.toMatchObject({
+      code: 'REPORT_SUBMISSION_CONNECTOR_REQUIRED',
+      statusCode: 503,
+    });
+
+    expect(service.getReport(report.reportId, 'org-a')?.status).toBe('draft');
   });
 });

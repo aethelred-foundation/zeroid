@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { createLogger, format, transports } from 'winston';
 import crypto from 'crypto';
+import { isProductionRuntime } from '../production-safety';
 
 // ---------------------------------------------------------------------------
 // Logger
@@ -673,6 +674,14 @@ export class RegulatoryReportingService {
 
     if (report.status === 'submitted' || report.status === 'accepted') {
       throw new ReportingError('Report already submitted', 'ALREADY_SUBMITTED', 409);
+    }
+
+    if (isProductionRuntime()) {
+      throw new ReportingError(
+        'Regulatory authority submission connector is required in production',
+        'REPORT_SUBMISSION_CONNECTOR_REQUIRED',
+        503,
+      );
     }
 
     // Simulate regulatory API submission
