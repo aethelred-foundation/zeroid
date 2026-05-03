@@ -6,12 +6,14 @@ import "./helpers/TestHelper.sol";
 contract CredentialRegistryTest is TestHelper {
     ZeroID public zeroid;
     CredentialRegistry public registry;
+    GovernanceModule public governance;
 
     bytes32 constant ISSUER_ROLE = keccak256("ISSUER_ROLE");
 
     function setUp() public {
         zeroid = new ZeroID(admin);
-        registry = new CredentialRegistry(admin, address(zeroid));
+        governance = new GovernanceModule(admin, 1 days, 1);
+        registry = new CredentialRegistry(admin, address(zeroid), address(governance));
 
         // Register issuer identity (alice) — she needs a DID for resolveByController
         vm.prank(alice);
@@ -25,6 +27,9 @@ contract CredentialRegistryTest is TestHelper {
         vm.prank(admin);
         registry.grantRole(ISSUER_ROLE, alice);
 
+        _approveGovernanceSchema(SCHEMA_HASH_1);
+        _approveGovernanceIssuer(DID_HASH_1);
+
         // Approve a schema
         vm.prank(admin);
         registry.approveSchema(SCHEMA_HASH_1);
@@ -37,16 +42,22 @@ contract CredentialRegistryTest is TestHelper {
 
     function test_Constructor_SetsRegistry() public view {
         assertEq(address(registry.identityRegistry()), address(zeroid));
+        assertEq(address(registry.governanceModule()), address(governance));
     }
 
     function test_Constructor_RevertsZeroAdmin() public {
         vm.expectRevert("Zero admin");
-        new CredentialRegistry(address(0), address(zeroid));
+        new CredentialRegistry(address(0), address(zeroid), address(governance));
     }
 
     function test_Constructor_RevertsZeroRegistry() public {
         vm.expectRevert("Zero registry");
-        new CredentialRegistry(admin, address(0));
+        new CredentialRegistry(admin, address(0), address(governance));
+    }
+
+    function test_Constructor_RevertsZeroGovernance() public {
+        vm.expectRevert("Zero governance");
+        new CredentialRegistry(admin, address(zeroid), address(0));
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -113,6 +124,18 @@ contract CredentialRegistryTest is TestHelper {
         registry.issueCredential(CREDENTIAL_HASH_1, badSchema, DID_HASH_2, expiry, MERKLE_ROOT_1);
     }
 
+    function test_IssueCredential_RevertsSchemaWithoutGovernanceApproval() public {
+        bytes32 localOnlySchema = keccak256("schema:local-only");
+        uint64 expiry = uint64(block.timestamp + 365 days);
+
+        vm.prank(admin);
+        registry.approveSchema(localOnlySchema);
+
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(CredentialRegistry.SchemaNotApproved.selector, localOnlySchema));
+        registry.issueCredential(CREDENTIAL_HASH_1, localOnlySchema, DID_HASH_2, expiry, MERKLE_ROOT_1);
+    }
+
     function test_IssueCredential_RevertsSubjectNotActive() public {
         bytes32 inactiveDid = keccak256("did:zeroid:inactive");
         uint64 expiry = uint64(block.timestamp + 365 days);
@@ -145,6 +168,20 @@ contract CredentialRegistryTest is TestHelper {
         vm.prank(unboundIssuer);
         vm.expectRevert(abi.encodeWithSelector(CredentialRegistry.IssuerIdentityNotActive.selector, bytes32(0)));
         registry.issueCredential(CREDENTIAL_HASH_1, SCHEMA_HASH_1, DID_HASH_2, expiry, MERKLE_ROOT_1);
+    }
+
+    function test_IssueCredential_RevertsIssuerWithoutGovernanceApproval() public {
+        uint64 expiry = uint64(block.timestamp + 365 days);
+
+        vm.prank(carol);
+        zeroid.registerIdentity(DID_HASH_3, keccak256("recovery:carol"));
+
+        vm.prank(admin);
+        registry.grantRole(ISSUER_ROLE, carol);
+
+        vm.prank(carol);
+        vm.expectRevert(abi.encodeWithSelector(CredentialRegistry.IssuerNotApproved.selector, DID_HASH_3));
+        registry.issueCredential(CREDENTIAL_HASH_2, SCHEMA_HASH_1, DID_HASH_2, expiry, MERKLE_ROOT_1);
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -326,5 +363,32 @@ contract CredentialRegistryTest is TestHelper {
         vm.prank(alice);
         vm.expectRevert();
         registry.issueCredential(CREDENTIAL_HASH_1, SCHEMA_HASH_1, DID_HASH_2, expiry, MERKLE_ROOT_1);
+    }
+
+    function _approveGovernanceSchema(bytes32 schemaHash) internal {
+        bytes32[] memory attrs = new bytes32[](1);
+        attrs[0] = keccak256("attr:registry-test");
+
+        vm.prank(admin);
+        uint256 proposalId = governance.proposeSchema(schemaHash, "Registry Test Schema", attrs);
+        _passAndExecuteGovernanceProposal(proposalId);
+    }
+
+    function _approveGovernanceIssuer(bytes32 issuerDid) internal {
+        vm.prank(admin);
+        uint256 proposalId = governance.proposeIssuer(issuerDid);
+        _passAndExecuteGovernanceProposal(proposalId);
+    }
+
+    function _passAndExecuteGovernanceProposal(uint256 proposalId) internal {
+        vm.prank(admin);
+        governance.castVote(proposalId, true);
+
+        vm.warp(block.timestamp + governance.votingPeriod() + 1);
+        governance.queueProposal(proposalId);
+
+        vm.warp(block.timestamp + governance.EXECUTION_TIMELOCK() + 1);
+        vm.prank(admin);
+        governance.executeProposal(proposalId);
     }
 }

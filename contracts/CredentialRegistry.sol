@@ -65,6 +65,9 @@ contract CredentialRegistry is ICredentialRegistry, AccessControl, Pausable, Ree
     /// @notice ZeroID identity registry for DID validation
     IIdentityRegistry public immutable identityRegistry;
 
+    /// @notice Governance source of truth for approved issuers and schemas
+    IGovernanceModule public immutable governanceModule;
+
     // ──────────────────────────────────────────────────────────────
     // Storage
     // ──────────────────────────────────────────────────────────────
@@ -123,6 +126,7 @@ contract CredentialRegistry is ICredentialRegistry, AccessControl, Pausable, Ree
     error InvalidExpiry(uint64 expiresAt);
     error SubjectIdentityNotActive(bytes32 subjectDid);
     error IssuerIdentityNotActive(bytes32 issuerDid);
+    error IssuerNotApproved(bytes32 issuerDid);
     error NotCredentialIssuer(bytes32 credentialHash, address caller);
     error InvalidTransition(CredentialStatus from, CredentialStatus to);
     error BatchSizeExceeded(uint32 size);
@@ -154,11 +158,14 @@ contract CredentialRegistry is ICredentialRegistry, AccessControl, Pausable, Ree
 
     /// @param admin Initial admin address
     /// @param _identityRegistry Address of the ZeroID identity registry
-    constructor(address admin, address _identityRegistry) {
+    /// @param _governanceModule Address of the governance approval registry
+    constructor(address admin, address _identityRegistry, address _governanceModule) {
         require(admin != address(0), "Zero admin");
         require(_identityRegistry != address(0), "Zero registry");
+        require(_governanceModule != address(0), "Zero governance");
 
         identityRegistry = IIdentityRegistry(_identityRegistry);
+        governanceModule = IGovernanceModule(_governanceModule);
         currentRevocationEpoch = 1;
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
@@ -253,7 +260,9 @@ contract CredentialRegistry is ICredentialRegistry, AccessControl, Pausable, Ree
     ) internal {
         if (credentialHash == bytes32(0)) revert CredentialNotFound(credentialHash);
         if (_credentials[credentialHash].issuedAt != 0) revert CredentialAlreadyExists(credentialHash);
-        if (!_approvedSchemas[schemaHash]) revert SchemaNotApproved(schemaHash);
+        if (!_approvedSchemas[schemaHash] || !governanceModule.isApprovedSchema(schemaHash)) {
+            revert SchemaNotApproved(schemaHash);
+        }
         if (!identityRegistry.isActiveIdentity(subjectDid)) revert SubjectIdentityNotActive(subjectDid);
 
         uint64 now64 = uint64(block.timestamp);
@@ -264,6 +273,9 @@ contract CredentialRegistry is ICredentialRegistry, AccessControl, Pausable, Ree
         bytes32 issuerDid = _resolveCallerDid();
         if (issuerDid == bytes32(0) || !identityRegistry.isActiveIdentity(issuerDid)) {
             revert IssuerIdentityNotActive(issuerDid);
+        }
+        if (!governanceModule.isApprovedIssuer(issuerDid)) {
+            revert IssuerNotApproved(issuerDid);
         }
 
         _credentials[credentialHash] = Credential({
