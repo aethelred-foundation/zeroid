@@ -94,6 +94,15 @@ contract CrossChainIdentityBridgeTest is TestHelper {
         );
     }
 
+    function _singleLeafRoot(
+        bytes32 leaf,
+        bytes32 sibling
+    ) internal pure returns (bytes32) {
+        return leaf <= sibling
+            ? keccak256(abi.encodePacked(leaf, sibling))
+            : keccak256(abi.encodePacked(sibling, leaf));
+    }
+
     // ════════════════════════════════════════════════════════════════
     // Deployment
     // ════════════════════════════════════════════════════════════════
@@ -350,6 +359,58 @@ contract CrossChainIdentityBridgeTest is TestHelper {
         bridge.bridgeCredential(CRED_HASH, CHAIN_A, "proof", keccak256("acc_root"));
     }
 
+    function test_BridgeCredential_MarksPendingBridge() public {
+        _registerChain();
+        _registerSourceChain();
+        _registerOperator(alice);
+
+        vm.prank(alice);
+        bridge.bridgeCredential(CRED_HASH, CHAIN_A, "proof", keccak256("acc_root"));
+
+        assertTrue(bridge.isCredentialBridgePending(CRED_HASH, CHAIN_A));
+        assertFalse(bridge.isCredentialBridged(CRED_HASH, CHAIN_A));
+    }
+
+    function test_BridgeCredential_RevertsDuplicatePendingBridge() public {
+        _registerChain();
+        _registerSourceChain();
+        _registerOperator(alice);
+
+        vm.prank(alice);
+        bridge.bridgeCredential(CRED_HASH, CHAIN_A, "proof", keccak256("acc_root"));
+
+        vm.prank(alice);
+        vm.expectRevert(CrossChainIdentityBridge.CredentialAlreadyBridged.selector);
+        bridge.bridgeCredential(CRED_HASH, CHAIN_A, "proof", keccak256("acc_root"));
+    }
+
+    function test_FinalizeCredential_ClearsPendingAndMarksBridged() public {
+        bytes32 sibling = keccak256("cred:bridge:sibling");
+        bytes memory merkleProof = abi.encodePacked(sibling);
+        bytes32 sourceRoot = _singleLeafRoot(CRED_HASH, sibling);
+
+        vm.prank(admin);
+        bridge.registerChain(block.chainid, sourceRoot, 1 hours, 50, 1 hours);
+        _registerChain();
+        _registerOperator(alice);
+
+        vm.prank(alice);
+        bytes32 messageHash = bridge.bridgeCredential(
+            CRED_HASH,
+            CHAIN_A,
+            merkleProof,
+            keccak256("acc_root")
+        );
+
+        assertTrue(bridge.isCredentialBridgePending(CRED_HASH, CHAIN_A));
+
+        vm.warp(block.timestamp + 1 hours + 1);
+        bridge.finalizeCredential(messageHash);
+
+        assertFalse(bridge.isCredentialBridgePending(CRED_HASH, CHAIN_A));
+        assertTrue(bridge.isCredentialBridged(CRED_HASH, CHAIN_A));
+    }
+
     function test_SubmitFraudProof_FailsClosedForUnauthenticatedEvidence() public {
         _registerChain();
         _registerSourceChain();
@@ -420,6 +481,7 @@ contract CrossChainIdentityBridgeTest is TestHelper {
         assertEq(info.slashCount, 1);
         assertEq(info.stakedAmount, 0.5 ether);
         assertFalse(info.active);
+        assertFalse(bridge.isCredentialBridgePending(CRED_HASH, CHAIN_A));
     }
 
     function test_SubmitFraudProof_UsesConfiguredFraudProofDeadline() public {

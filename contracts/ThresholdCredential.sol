@@ -5,6 +5,7 @@ import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {BN254} from "./libraries/BN254.sol";
+import {ITEEAttestation, AttestationReport} from "./interfaces/IZeroID.sol";
 
 /**
  * @title ThresholdCredential
@@ -59,6 +60,7 @@ contract ThresholdCredential is AccessControl, Pausable, ReentrancyGuard {
     error KeyRotationNotInProgress();
     error InsufficientGuardianApprovals();
     error InvalidTEEAttestation();
+    error TEEAttestationRegistryNotConfigured();
     error RecoveryNotInitiated();
     error RecoveryAlreadyInitiated();
     error RecoveryCooldownActive();
@@ -134,6 +136,8 @@ contract ThresholdCredential is AccessControl, Pausable, ReentrancyGuard {
         address indexed signer,
         bytes32 attestationHash
     );
+
+    event TEEAttestationRegistryUpdated(address indexed registry);
 
     // ──────────────────────────────────────────────────────────────────────
     // Structs
@@ -228,6 +232,9 @@ contract ThresholdCredential is AccessControl, Pausable, ReentrancyGuard {
     /// @notice TEE attestation registry: signer => latest attestation
     mapping(address => bytes32) private _teeAttestations;
 
+    /// @notice Registry that verifies enclave attestations and lifecycle state.
+    ITEEAttestation public teeAttestationRegistry;
+
     /// @notice All config IDs for enumeration
     bytes32[] private _configIds;
 
@@ -241,6 +248,19 @@ contract ThresholdCredential is AccessControl, Pausable, ReentrancyGuard {
     constructor(address admin) {
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _grantRole(CONFIG_MANAGER_ROLE, admin);
+    }
+
+    /**
+     * @notice Configure the canonical TEE attestation registry.
+     * @dev Threshold signing only records attestations that the registry already
+     *      marks valid and bound to the submitting signer.
+     */
+    function setTEEAttestationRegistry(
+        address registry
+    ) external onlyRole(CONFIG_MANAGER_ROLE) {
+        if (registry == address(0)) revert TEEAttestationRegistryNotConfigured();
+        teeAttestationRegistry = ITEEAttestation(registry);
+        emit TEEAttestationRegistryUpdated(registry);
     }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -405,6 +425,9 @@ contract ThresholdCredential is AccessControl, Pausable, ReentrancyGuard {
 
         // Record TEE attestation if provided
         if (teeProof != bytes32(0)) {
+            if (!_isTrustedTEEAttestation(msg.sender, teeProof)) {
+                revert InvalidTEEAttestation();
+            }
             _teeAttestations[msg.sender] = teeProof;
             signer.teeAttestation = teeProof;
             emit TEEAttestationRecorded(req.configId, msg.sender, teeProof);
@@ -596,11 +619,12 @@ contract ThresholdCredential is AccessControl, Pausable, ReentrancyGuard {
 
     /**
      * @notice Record a TEE attestation for a signer.
-     * @dev Signers running in a TEE (e.g., SGX/TDX) can submit attestation reports
-     *      that are verified and stored on-chain.
+     * @dev The attestation hash is treated as an enclave hash in
+     *      TEEAttestationRegistry. Raw report verification belongs to that
+     *      registry; this contract only records registry-validated claims.
      * @param configId          The configuration
-     * @param attestationHash   Hash of the full TEE attestation report
-     * @param enclaveReport     Enclave measurement and report data
+     * @param attestationHash   Registry-attested enclave hash
+     * @param enclaveReport     Must be empty; retained for ABI compatibility
      */
     function recordTEEAttestation(
         bytes32 configId,
@@ -610,8 +634,8 @@ contract ThresholdCredential is AccessControl, Pausable, ReentrancyGuard {
         uint256 signerIndex = _signerIndices[configId][msg.sender];
         if (signerIndex == 0) revert SignerNotRegistered();
 
-        // Verify enclave report structure (simplified)
-        if (!_verifyTEEReport(enclaveReport, attestationHash)) {
+        if (enclaveReport.length != 0) revert InvalidTEEAttestation();
+        if (!_isTrustedTEEAttestation(msg.sender, attestationHash)) {
             revert InvalidTEEAttestation();
         }
 
@@ -759,19 +783,16 @@ contract ThresholdCredential is AccessControl, Pausable, ReentrancyGuard {
         return signer.g2Key;
     }
 
-    /**
-     * @dev Verify a TEE attestation report.
-     *      In production, this would parse Intel SGX/TDX attestation structures.
-     */
-    function _verifyTEEReport(
-        bytes calldata enclaveReport,
+    function _isTrustedTEEAttestation(
+        address signer,
         bytes32 attestationHash
-    ) internal pure returns (bool) {
-        // Minimum report size for SGX attestation
-        if (enclaveReport.length < 64) return false;
+    ) internal view returns (bool) {
+        ITEEAttestation registry = teeAttestationRegistry;
+        if (address(registry) == address(0)) revert TEEAttestationRegistryNotConfigured();
+        if (!registry.isAttestationValid(attestationHash)) return false;
 
-        // Verify the hash matches the report
-        return keccak256(enclaveReport) == attestationHash;
+        AttestationReport memory report = registry.getAttestation(attestationHash);
+        return report.nodeOperator == signer;
     }
 
     function _requireValidNonZeroG1(BN254.G1Point memory point) internal pure {

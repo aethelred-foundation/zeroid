@@ -516,10 +516,11 @@ contract AIAgentRegistry is AccessControl, Pausable, ReentrancyGuard {
             revert InvalidReputationScore();
         }
 
-        // Check for cycles: toAgent must not already delegate to fromAgent
-        // (simplified cycle detection via depth limit)
-        if (_grants[toAgentId][capabilityId].active &&
-            _grants[toAgentId][capabilityId].delegatedFrom == toAgentId) {
+        if (_grants[toAgentId][capabilityId].active) {
+            revert CapabilityAlreadyGranted();
+        }
+
+        if (_wouldCreateDelegationCycle(fromAgentId, toAgentId, capabilityId)) {
             revert DelegationCycleDetected();
         }
 
@@ -827,6 +828,25 @@ contract AIAgentRegistry is AccessControl, Pausable, ReentrancyGuard {
         if (agent.registeredAt == 0) revert AgentNotRegistered();
         if (agent.status == AgentStatus.Suspended) revert AgentSuspended();
         if (agent.status == AgentStatus.Revoked) revert AgentRevoked();
+    }
+
+    function _wouldCreateDelegationCycle(
+        bytes32 fromAgentId,
+        bytes32 toAgentId,
+        bytes32 capabilityId
+    ) internal view returns (bool) {
+        bytes32 currentAgentId = fromAgentId;
+        for (uint256 depth = 0; depth <= MAX_DELEGATION_DEPTH; ) {
+            if (currentAgentId == toAgentId) return true;
+
+            bytes32 parent = _grants[currentAgentId][capabilityId].delegatedFrom;
+            if (parent == bytes32(0)) return false;
+            currentAgentId = parent;
+
+            unchecked { ++depth; }
+        }
+
+        return true;
     }
 
     function _enforceRateLimit(bytes32 agentId, bytes32 capabilityId) internal {

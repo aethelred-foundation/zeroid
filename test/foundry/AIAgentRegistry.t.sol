@@ -316,6 +316,38 @@ contract AIAgentRegistryTest is TestHelper {
         registry.delegateCapability(AGENT_1, AGENT_2, CAP_VERIFY, 0);
     }
 
+    function test_DelegateCapability_RevertsTargetAlreadyGranted() public {
+        _registerAgent1();
+        _registerAgent2();
+
+        vm.startPrank(admin);
+        registry.grantCapability(AGENT_1, CAP_VERIFY, 0);
+        registry.grantCapability(AGENT_2, CAP_VERIFY, 0);
+        vm.stopPrank();
+
+        vm.prank(alice);
+        vm.expectRevert(AIAgentRegistry.CapabilityAlreadyGranted.selector);
+        registry.delegateCapability(AGENT_1, AGENT_2, CAP_VERIFY, 0);
+    }
+
+    function test_DelegateCapability_RevertsCycleAfterParentRevoked() public {
+        _registerAgent1();
+        _registerAgent2();
+
+        vm.prank(admin);
+        registry.grantCapability(AGENT_1, CAP_VERIFY, 0);
+
+        vm.prank(alice);
+        registry.delegateCapability(AGENT_1, AGENT_2, CAP_VERIFY, 0);
+
+        vm.prank(admin);
+        registry.revokeCapability(AGENT_1, CAP_VERIFY);
+
+        vm.prank(bob);
+        vm.expectRevert(AIAgentRegistry.DelegationCycleDetected.selector);
+        registry.delegateCapability(AGENT_2, AGENT_1, CAP_VERIFY, 0);
+    }
+
     function test_RevokeDelegation_Success() public {
         _registerAgent1();
         _registerAgent2();

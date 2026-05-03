@@ -3,15 +3,74 @@ pragma solidity ^0.8.20;
 
 import "./helpers/TestHelper.sol";
 
+contract MockTEEAttestationRegistry is ITEEAttestation {
+    mapping(bytes32 => AttestationReport) private reports;
+
+    function setAttestation(
+        bytes32 enclaveHash,
+        address nodeOperator,
+        bool isValid,
+        uint64 expiresAt
+    ) external {
+        reports[enclaveHash] = AttestationReport({
+            enclaveHash: enclaveHash,
+            platform: TEEPlatform.IntelSGX,
+            attestedAt: uint64(block.timestamp),
+            expiresAt: expiresAt,
+            reportDataHash: keccak256(abi.encodePacked(enclaveHash, nodeOperator)),
+            nodeOperator: nodeOperator,
+            isValid: isValid
+        });
+    }
+
+    function submitAttestation(
+        bytes32 enclaveHash,
+        TEEPlatform platform,
+        bytes32 reportDataHash,
+        bytes calldata,
+        uint64,
+        uint64 expiresAt
+    ) external override {
+        reports[enclaveHash] = AttestationReport({
+            enclaveHash: enclaveHash,
+            platform: platform,
+            attestedAt: uint64(block.timestamp),
+            expiresAt: expiresAt,
+            reportDataHash: reportDataHash,
+            nodeOperator: msg.sender,
+            isValid: true
+        });
+    }
+
+    function revokeAttestation(bytes32 enclaveHash) external override {
+        reports[enclaveHash].isValid = false;
+        emit AttestationRevoked(enclaveHash, uint64(block.timestamp));
+    }
+
+    function isAttestationValid(bytes32 enclaveHash) external view override returns (bool) {
+        AttestationReport storage report = reports[enclaveHash];
+        return report.isValid && block.timestamp < report.expiresAt;
+    }
+
+    function getAttestation(
+        bytes32 enclaveHash
+    ) external view override returns (AttestationReport memory) {
+        return reports[enclaveHash];
+    }
+}
+
 contract ThresholdCredentialTest is TestHelper {
     ThresholdCredential public tc;
+    MockTEEAttestationRegistry public teeRegistry;
 
     bytes32 constant CONFIG_ID = keccak256("config:threshold:1");
     bytes32 constant CONFIG_ID_2 = keccak256("config:threshold:2");
     bytes32 constant CRED_HASH = keccak256("cred:threshold:1");
+    bytes32 constant ENCLAVE_HASH = keccak256("tee:threshold:alice");
 
     function setUp() public {
         tc = new ThresholdCredential(admin);
+        teeRegistry = new MockTEEAttestationRegistry();
     }
 
     function _g1() internal pure returns (BN254.G1Point memory) {
@@ -389,5 +448,115 @@ contract ThresholdCredentialTest is TestHelper {
         (address signerAddr, bool active, ) = tc.getSigner(CONFIG_ID, 1);
         assertEq(signerAddr, alice);
         assertTrue(active);
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    // TEE Attestation Binding
+    // ════════════════════════════════════════════════════════════════
+
+    function test_SetTEEAttestationRegistry_Success() public {
+        vm.prank(admin);
+        vm.expectEmit(true, false, false, true);
+        emit ThresholdCredential.TEEAttestationRegistryUpdated(address(teeRegistry));
+        tc.setTEEAttestationRegistry(address(teeRegistry));
+
+        assertEq(address(tc.teeAttestationRegistry()), address(teeRegistry));
+    }
+
+    function test_SetTEEAttestationRegistry_RevertsZeroAddress() public {
+        vm.prank(admin);
+        vm.expectRevert(ThresholdCredential.TEEAttestationRegistryNotConfigured.selector);
+        tc.setTEEAttestationRegistry(address(0));
+    }
+
+    function test_RecordTEEAttestation_RevertsWithoutRegistry() public {
+        _createConfig();
+        vm.prank(admin);
+        tc.registerSigner(CONFIG_ID, alice, 1, _g1(), _g2());
+
+        vm.prank(alice);
+        vm.expectRevert(ThresholdCredential.TEEAttestationRegistryNotConfigured.selector);
+        tc.recordTEEAttestation(CONFIG_ID, ENCLAVE_HASH, "");
+    }
+
+    function test_RecordTEEAttestation_RecordsRegistryBoundSigner() public {
+        _createConfig();
+        vm.prank(admin);
+        tc.registerSigner(CONFIG_ID, alice, 1, _g1(), _g2());
+        vm.prank(admin);
+        tc.setTEEAttestationRegistry(address(teeRegistry));
+
+        teeRegistry.setAttestation(
+            ENCLAVE_HASH,
+            alice,
+            true,
+            uint64(block.timestamp + 1 days)
+        );
+
+        vm.prank(alice);
+        vm.expectEmit(true, true, false, true);
+        emit ThresholdCredential.TEEAttestationRecorded(CONFIG_ID, alice, ENCLAVE_HASH);
+        tc.recordTEEAttestation(CONFIG_ID, ENCLAVE_HASH, "");
+
+        (, , bytes32 attestationHash) = tc.getSigner(CONFIG_ID, 1);
+        assertEq(attestationHash, ENCLAVE_HASH);
+    }
+
+    function test_RecordTEEAttestation_RevertsForWrongOperator() public {
+        _createConfig();
+        vm.prank(admin);
+        tc.registerSigner(CONFIG_ID, alice, 1, _g1(), _g2());
+        vm.prank(admin);
+        tc.setTEEAttestationRegistry(address(teeRegistry));
+
+        teeRegistry.setAttestation(
+            ENCLAVE_HASH,
+            bob,
+            true,
+            uint64(block.timestamp + 1 days)
+        );
+
+        vm.prank(alice);
+        vm.expectRevert(ThresholdCredential.InvalidTEEAttestation.selector);
+        tc.recordTEEAttestation(CONFIG_ID, ENCLAVE_HASH, "");
+    }
+
+    function test_RecordTEEAttestation_RevertsForExpiredAttestation() public {
+        _createConfig();
+        vm.prank(admin);
+        tc.registerSigner(CONFIG_ID, alice, 1, _g1(), _g2());
+        vm.prank(admin);
+        tc.setTEEAttestationRegistry(address(teeRegistry));
+
+        teeRegistry.setAttestation(
+            ENCLAVE_HASH,
+            alice,
+            true,
+            uint64(block.timestamp + 1)
+        );
+        vm.warp(block.timestamp + 2);
+
+        vm.prank(alice);
+        vm.expectRevert(ThresholdCredential.InvalidTEEAttestation.selector);
+        tc.recordTEEAttestation(CONFIG_ID, ENCLAVE_HASH, "");
+    }
+
+    function test_RecordTEEAttestation_RevertsRawReportBytes() public {
+        _createConfig();
+        vm.prank(admin);
+        tc.registerSigner(CONFIG_ID, alice, 1, _g1(), _g2());
+        vm.prank(admin);
+        tc.setTEEAttestationRegistry(address(teeRegistry));
+
+        teeRegistry.setAttestation(
+            ENCLAVE_HASH,
+            alice,
+            true,
+            uint64(block.timestamp + 1 days)
+        );
+
+        vm.prank(alice);
+        vm.expectRevert(ThresholdCredential.InvalidTEEAttestation.selector);
+        tc.recordTEEAttestation(CONFIG_ID, ENCLAVE_HASH, hex"1234");
     }
 }

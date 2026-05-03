@@ -253,6 +253,9 @@ contract CrossChainIdentityBridge is AccessControl, Pausable, ReentrancyGuard {
     /// @notice Bridged credentials: credentialHash => destChain => bridged
     mapping(bytes32 => mapping(uint256 => bool)) private _bridgedCredentials;
 
+    /// @notice Pending bridge messages: credentialHash => destChain => pending
+    mapping(bytes32 => mapping(uint256 => bool)) private _pendingBridgedCredentials;
+
     /// @notice Cross-chain accumulator roots: chainId => latest root
     mapping(uint256 => bytes32) private _crossChainAccumulatorRoots;
 
@@ -496,8 +499,11 @@ contract CrossChainIdentityBridge is AccessControl, Pausable, ReentrancyGuard {
             revert ChainNotSupported();
         }
 
-        // Check not already bridged
-        if (_bridgedCredentials[credentialHash][destChain]) {
+        // Check not already bridged or queued for the same destination.
+        if (
+            _bridgedCredentials[credentialHash][destChain] ||
+            _pendingBridgedCredentials[credentialHash][destChain]
+        ) {
             revert CredentialAlreadyBridged();
         }
 
@@ -525,6 +531,7 @@ contract CrossChainIdentityBridge is AccessControl, Pausable, ReentrancyGuard {
             status: BridgeMessageStatus.Pending,
             fraudProofDeadline: block.timestamp + destConfig.fraudProofWindow
         });
+        _pendingBridgedCredentials[credentialHash][destChain] = true;
 
         _operators[msg.sender].totalRelayed += 1;
         destConfig.bridgeCount += 1;
@@ -551,6 +558,7 @@ contract CrossChainIdentityBridge is AccessControl, Pausable, ReentrancyGuard {
         }
 
         msg_.status = BridgeMessageStatus.Finalized;
+        _pendingBridgedCredentials[msg_.credentialHash][msg_.destChain] = false;
         _bridgedCredentials[msg_.credentialHash][msg_.destChain] = true;
 
         emit CredentialReceived(
@@ -591,6 +599,7 @@ contract CrossChainIdentityBridge is AccessControl, Pausable, ReentrancyGuard {
         _challengeBonds[messageHash][msg.sender] = msg.value;
 
         msg_.status = BridgeMessageStatus.Challenged;
+        _pendingBridgedCredentials[msg_.credentialHash][msg_.destChain] = false;
 
         // Slash the operator
         _slashOperator(msg_.operator, messageHash);
@@ -836,6 +845,13 @@ contract CrossChainIdentityBridge is AccessControl, Pausable, ReentrancyGuard {
 
     function isCredentialBridged(bytes32 credentialHash, uint256 chainId) external view returns (bool) {
         return _bridgedCredentials[credentialHash][chainId];
+    }
+
+    /**
+     * @notice Check whether a credential bridge message is pending for a destination.
+     */
+    function isCredentialBridgePending(bytes32 credentialHash, uint256 chainId) external view returns (bool) {
+        return _pendingBridgedCredentials[credentialHash][chainId];
     }
 
     function getCrossChainAccumulatorRoot(uint256 chainId) external view returns (bytes32) {
