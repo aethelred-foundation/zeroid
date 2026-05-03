@@ -490,6 +490,11 @@ contract CrossChainIdentityBridge is AccessControl, Pausable, ReentrancyGuard {
         if (!destConfig.active) revert ChainNotSupported();
         if (destConfig.circuitBreakerActive) revert CircuitBreakerTripped();
 
+        ChainConfig storage sourceConfig = _chains[block.chainid];
+        if (!sourceConfig.active || sourceConfig.latestStateRoot == bytes32(0)) {
+            revert ChainNotSupported();
+        }
+
         // Check not already bridged
         if (_bridgedCredentials[credentialHash][destChain]) {
             revert CredentialAlreadyBridged();
@@ -511,7 +516,7 @@ contract CrossChainIdentityBridge is AccessControl, Pausable, ReentrancyGuard {
             credentialHash: credentialHash,
             sourceChain: block.chainid,
             destChain: destChain,
-            sourceStateRoot: _chains[block.chainid].latestStateRoot,
+            sourceStateRoot: sourceConfig.latestStateRoot,
             merkleProof: merkleProof,
             accumulatorRoot: accumulatorRoot,
             timestamp: block.timestamp,

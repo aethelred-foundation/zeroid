@@ -31,6 +31,11 @@ contract CrossChainIdentityBridgeTest is TestHelper {
         bridge.registerChain(CHAIN_B, keccak256("genesis:chainB"), 1 hours, 50, 1 hours);
     }
 
+    function _registerSourceChain() internal {
+        vm.prank(admin);
+        bridge.registerChain(block.chainid, keccak256("genesis:local"), 1 hours, 50, 1 hours);
+    }
+
     function _registerOperator(address op) internal {
         vm.deal(op, 3 ether);
         vm.prank(op);
@@ -300,6 +305,15 @@ contract CrossChainIdentityBridgeTest is TestHelper {
         bridge.bridgeCredential(CRED_HASH, 999, "proof", keccak256("acc_root"));
     }
 
+    function test_BridgeCredential_RevertsWhenSourceChainNotRegistered() public {
+        _registerChain();
+        _registerOperator(alice);
+
+        vm.prank(alice);
+        vm.expectRevert(CrossChainIdentityBridge.ChainNotSupported.selector);
+        bridge.bridgeCredential(CRED_HASH, CHAIN_A, "proof", keccak256("acc_root"));
+    }
+
     function test_BridgeCredential_RevertsCircuitBreaker() public {
         _registerChain();
         _registerOperator(alice);
@@ -314,6 +328,7 @@ contract CrossChainIdentityBridgeTest is TestHelper {
 
     function test_SubmitFraudProof_FailsClosedForUnauthenticatedEvidence() public {
         _registerChain();
+        _registerSourceChain();
         _registerOperator(alice);
 
         bytes32 challengerRole = bridge.FRAUD_PROOF_CHALLENGER_ROLE();
@@ -350,6 +365,7 @@ contract CrossChainIdentityBridgeTest is TestHelper {
 
     function test_SubmitFraudProof_SlashesInvalidMerkleInclusionMessage() public {
         _registerChain();
+        _registerSourceChain();
         _registerOperator(alice);
 
         bytes32 challengerRole = bridge.FRAUD_PROOF_CHALLENGER_ROLE();
