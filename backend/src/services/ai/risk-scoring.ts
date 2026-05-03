@@ -162,6 +162,14 @@ const JURISDICTION_CONFIGS: Map<string, JurisdictionConfig> = new Map([
   }],
 ]);
 
+const REVIEW_REQUIRED_FACTOR_NAMES = new Set([
+  'identity_not_found',
+  'identity_data_unavailable',
+  'credential_data_unavailable',
+  'no_credentials',
+  'transaction_data_unavailable',
+]);
+
 // ---------------------------------------------------------------------------
 // Risk Scoring Service
 // ---------------------------------------------------------------------------
@@ -215,11 +223,15 @@ export class RiskScoringService {
     factors.push(...networkResult.factors);
 
     // Weighted composite score
-    const compositeScore = Math.round(
+    const weightedCompositeScore = Math.round(
       identityScore * config.weights.identity +
       credentialScore * config.weights.credential +
       transactionScore * config.weights.transaction +
       networkScore * config.weights.network,
+    );
+    const compositeScore = Math.max(
+      weightedCompositeScore,
+      this.computeEvidenceGapFloor(factors, config),
     );
 
     const breakdown: RiskScoreBreakdown = {
@@ -380,7 +392,18 @@ export class RiskScoringService {
         identityId,
         error: (err as Error).message,
       });
-      return { score: 50, factors: [{ name: 'identity_data_unavailable', category: 'identity', rawValue: 1, normalizedScore: 50, weight: 1.0, impact: 'neutral', explanation: 'Unable to compute full identity risk — partial data' }] };
+      return {
+        score: 70,
+        factors: [{
+          name: 'identity_data_unavailable',
+          category: 'identity',
+          rawValue: 1,
+          normalizedScore: 70,
+          weight: 1.0,
+          impact: 'increasing',
+          explanation: 'Unable to compute identity risk from the datastore',
+        }],
+      };
     }
   }
 
@@ -518,7 +541,18 @@ export class RiskScoringService {
         entityId,
         error: (err as Error).message,
       });
-      return { score: 50, factors: [] };
+      return {
+        score: 70,
+        factors: [{
+          name: 'credential_data_unavailable',
+          category: 'credential',
+          rawValue: 1,
+          normalizedScore: 70,
+          weight: 1.0,
+          impact: 'increasing',
+          explanation: 'Unable to compute credential risk from the datastore',
+        }],
+      };
     }
   }
 
@@ -542,12 +576,12 @@ export class RiskScoringService {
         name: 'transaction_data_unavailable',
         category: 'transaction',
         rawValue: 1,
-        normalizedScore: 40,
+        normalizedScore: 65,
         weight: 1.0,
         impact: 'increasing',
-        explanation: 'Transaction risk signals not available — baseline risk applied',
+        explanation: 'Transaction risk signals not available — manual review required',
       });
-      return { score: 40, factors };
+      return { score: 65, factors };
     }
 
     // Value magnitude risk
@@ -736,6 +770,14 @@ export class RiskScoringService {
     if (compositeScore >= config.thresholds.reject) return 'reject';
     if (compositeScore >= config.thresholds.review) return 'review';
     return 'approve';
+  }
+
+  private computeEvidenceGapFloor(
+    factors: RiskFactorDetail[],
+    config: JurisdictionConfig,
+  ): number {
+    const requiresReview = factors.some((factor) => REVIEW_REQUIRED_FACTOR_NAMES.has(factor.name));
+    return requiresReview ? config.thresholds.review : 0;
   }
 
   // -------------------------------------------------------------------------
