@@ -61,6 +61,7 @@ jest.mock('https', () => ({
 const store = new Map<string, string>();
 const setStore = new Map<string, Set<string>>();
 const mockOrganizationMemberFindFirst = jest.fn();
+const mockIdentityFindUnique = jest.fn();
 
 const redisMock = {
   get: jest.fn(async (key: string) => store.get(key) ?? null),
@@ -150,6 +151,9 @@ jest.mock('../src/index', () => {
     prisma: {
       $connect: jest.fn(),
       $disconnect: jest.fn(),
+      identity: {
+        findUnique: mockIdentityFindUnique,
+      },
       organizationMember: {
         findFirst: mockOrganizationMemberFindFirst,
       },
@@ -266,7 +270,11 @@ async function authorizeCode(
       platformAuthTime: opts?.platformAuthTime,
     },
   );
-  return result;
+  const code = new URL(result.redirectUrl).searchParams.get('code');
+  if (!code) {
+    throw new Error('authorize response did not include a code redirect');
+  }
+  return { ...result, code };
 }
 
 // ---------------------------------------------------------------------------
@@ -285,6 +293,10 @@ describe('OIDC multi-node correctness', () => {
     store.clear();
     setStore.clear();
     jest.clearAllMocks();
+    mockIdentityFindUnique.mockImplementation(async ({ where }) => ({
+      id: where.id,
+      status: 'ACTIVE',
+    }));
     mockOrganizationMemberFindFirst.mockResolvedValue({ id: 'membership-1' });
     fetchMock.mockResolvedValue({ ok: true, status: 200 });
   });
@@ -1735,6 +1747,27 @@ describe('OIDC multi-node correctness', () => {
         }),
       }),
     );
+  });
+
+  test('tenant-owned client authorization rejects inactive subjects before issuing codes', async () => {
+    const client = await registerOwnedClient(bridgeA, {
+      organizationId: 'org-governed',
+      registeredByIdentityId: 'admin-tenant',
+      registeredByRole: 'admin',
+    });
+    mockIdentityFindUnique.mockResolvedValueOnce({
+      id: 'inactive-user-1',
+      status: 'SUSPENDED',
+    });
+
+    await expect(
+      authorizeCode(bridgeB, client.clientId, 'inactive-user-1'),
+    ).rejects.toMatchObject({
+      errorCode: 'access_denied',
+      statusCode: 403,
+    });
+
+    expect(mockOrganizationMemberFindFirst).not.toHaveBeenCalled();
   });
 
   // 8. Deactivation must block both new auth and refresh reuse

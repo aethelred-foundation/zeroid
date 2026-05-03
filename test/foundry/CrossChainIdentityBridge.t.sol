@@ -31,6 +31,11 @@ contract CrossChainIdentityBridgeTest is TestHelper {
         bridge.registerChain(CHAIN_B, keccak256("genesis:chainB"), 1 hours, 50, 1 hours);
     }
 
+    function _registerChainWithFraudWindow(uint256 fraudProofWindow) internal {
+        vm.prank(admin);
+        bridge.registerChain(CHAIN_A, GENESIS_ROOT, fraudProofWindow, 50, 1 hours);
+    }
+
     function _registerSourceChain() internal {
         vm.prank(admin);
         bridge.registerChain(block.chainid, keccak256("genesis:local"), 1 hours, 50, 1 hours);
@@ -46,6 +51,12 @@ contract CrossChainIdentityBridgeTest is TestHelper {
         bytes32 syncRole = bridge.REVOCATION_SYNC_ROLE();
         vm.prank(admin);
         bridge.grantRole(syncRole, target);
+    }
+
+    function _grantFraudProofChallengerRole(address target) internal {
+        bytes32 challengerRole = bridge.FRAUD_PROOF_CHALLENGER_ROLE();
+        vm.prank(admin);
+        bridge.grantRole(challengerRole, target);
     }
 
     function _signLightClientUpdate(
@@ -68,6 +79,19 @@ contract CrossChainIdentityBridgeTest is TestHelper {
         bytes32 ethSignedHash = MessageHashUtils.toEthSignedMessageHash(messageHash);
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(signerPk, ethSignedHash);
         return abi.encodePacked(r, s, v);
+    }
+
+    function _buildFraudEvidence(
+        bytes32 messageHash
+    ) internal view returns (bytes memory) {
+        CrossChainIdentityBridge.BridgeMessage memory message = bridge.getMessage(messageHash);
+        return abi.encode(
+            bridge.FRAUD_PROOF_INVALID_MERKLE_INCLUSION(),
+            messageHash,
+            message.credentialHash,
+            message.sourceStateRoot,
+            keccak256(message.merkleProof)
+        );
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -368,9 +392,7 @@ contract CrossChainIdentityBridgeTest is TestHelper {
         _registerSourceChain();
         _registerOperator(alice);
 
-        bytes32 challengerRole = bridge.FRAUD_PROOF_CHALLENGER_ROLE();
-        vm.prank(admin);
-        bridge.grantRole(challengerRole, bob);
+        _grantFraudProofChallengerRole(bob);
 
         vm.prank(alice);
         bytes32 messageHash = bridge.bridgeCredential(
@@ -380,14 +402,7 @@ contract CrossChainIdentityBridgeTest is TestHelper {
             keccak256("acc_root")
         );
 
-        CrossChainIdentityBridge.BridgeMessage memory message = bridge.getMessage(messageHash);
-        bytes memory fraudEvidence = abi.encode(
-            bridge.FRAUD_PROOF_INVALID_MERKLE_INCLUSION(),
-            messageHash,
-            message.credentialHash,
-            message.sourceStateRoot,
-            keccak256(message.merkleProof)
-        );
+        bytes memory fraudEvidence = _buildFraudEvidence(messageHash);
 
         vm.deal(bob, 1 ether);
         uint256 bond = bridge.MIN_CHALLENGE_BOND();
@@ -405,6 +420,33 @@ contract CrossChainIdentityBridgeTest is TestHelper {
         assertEq(info.slashCount, 1);
         assertEq(info.stakedAmount, 0.5 ether);
         assertFalse(info.active);
+    }
+
+    function test_SubmitFraudProof_UsesConfiguredFraudProofDeadline() public {
+        _registerChainWithFraudWindow(3 hours);
+        _registerSourceChain();
+        _registerOperator(alice);
+        _grantFraudProofChallengerRole(bob);
+
+        vm.prank(alice);
+        bytes32 messageHash = bridge.bridgeCredential(
+            CRED_HASH,
+            CHAIN_A,
+            "invalid-merkle-proof",
+            keccak256("acc_root")
+        );
+
+        vm.warp(block.timestamp + bridge.CHALLENGE_WINDOW() + 1);
+        bytes memory fraudEvidence = _buildFraudEvidence(messageHash);
+
+        vm.deal(bob, 1 ether);
+        uint256 bond = bridge.MIN_CHALLENGE_BOND();
+        vm.prank(bob);
+        bridge.submitFraudProof{value: bond}(messageHash, fraudEvidence);
+
+        CrossChainIdentityBridge.OperatorInfo memory info = bridge.getOperatorInfo(alice);
+        assertEq(info.slashCount, 1);
+        assertEq(info.stakedAmount, 0.5 ether);
     }
 
     // ════════════════════════════════════════════════════════════════
@@ -576,6 +618,17 @@ contract CrossChainIdentityBridgeTest is TestHelper {
         bytes32 newRoot = keccak256("accumulator:new");
         uint256 epoch = 1;
 
+        return _prepareSyncData(prevRoot, newRoot, epoch);
+    }
+
+    function _prepareSyncData(
+        bytes32 prevRoot,
+        bytes32 newRoot,
+        uint256 epoch
+    ) internal returns (
+        CrossChainIdentityBridge.RevocationSync memory sync,
+        bytes32 syncKey
+    ) {
         // Build the same message hash the contract computes in syncRevocation():
         // keccak256(abi.encodePacked(previousRoot, accumulatorRoot, epoch, sourceChain, block.chainid))
         bytes32 messageHash = keccak256(
@@ -629,6 +682,54 @@ contract CrossChainIdentityBridgeTest is TestHelper {
         bridge.finalizeRevocationSync(syncKey);
 
         assertEq(bridge.getCrossChainAccumulatorRoot(CHAIN_A), sync.accumulatorRoot);
+    }
+
+    function test_SyncRevocation_RevertsWhenPreviousRootIsStale() public {
+        _registerChain();
+        _registerOperator(alice);
+        _grantRevocationSyncRole(alice);
+
+        bytes32 rootA = keccak256("accumulator:root:a");
+        (CrossChainIdentityBridge.RevocationSync memory syncA, bytes32 syncKeyA) =
+            _prepareSyncData(bytes32(0), rootA, 1);
+
+        vm.prank(alice);
+        bridge.syncRevocation(syncA);
+
+        vm.warp(block.timestamp + 1 hours + 1);
+        bridge.finalizeRevocationSync(syncKeyA);
+
+        bytes32 rootB = keccak256("accumulator:root:b");
+        (CrossChainIdentityBridge.RevocationSync memory staleSync, ) =
+            _prepareSyncData(bytes32(0), rootB, 2);
+
+        vm.prank(alice);
+        vm.expectRevert(CrossChainIdentityBridge.RevocationSyncFailed.selector);
+        bridge.syncRevocation(staleSync);
+    }
+
+    function test_FinalizeRevocationSync_RevertsWhenRootWasSuperseded() public {
+        _registerChain();
+        _registerOperator(alice);
+        _grantRevocationSyncRole(alice);
+
+        bytes32 rootA = keccak256("accumulator:root:a");
+        bytes32 rootB = keccak256("accumulator:root:b");
+        (CrossChainIdentityBridge.RevocationSync memory syncA, bytes32 syncKeyA) =
+            _prepareSyncData(bytes32(0), rootA, 1);
+        (CrossChainIdentityBridge.RevocationSync memory syncB, bytes32 syncKeyB) =
+            _prepareSyncData(bytes32(0), rootB, 2);
+
+        vm.prank(alice);
+        bridge.syncRevocation(syncA);
+        vm.prank(alice);
+        bridge.syncRevocation(syncB);
+
+        vm.warp(block.timestamp + 1 hours + 1);
+        bridge.finalizeRevocationSync(syncKeyA);
+
+        vm.expectRevert("Root already superseded");
+        bridge.finalizeRevocationSync(syncKeyB);
     }
 
     function test_FinalizeRevocationSync_RevertsBeforeDelay() public {

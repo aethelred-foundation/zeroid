@@ -294,6 +294,7 @@ contract CrossChainIdentityBridge is AccessControl, Pausable, ReentrancyGuard {
     /// @notice Pending revocation sync data
     struct PendingRevocationSync {
         uint256 sourceChain;
+        bytes32 previousRoot;
         bytes32 accumulatorRoot;
         uint256 epoch;
         uint256 readyAt;
@@ -565,7 +566,7 @@ contract CrossChainIdentityBridge is AccessControl, Pausable, ReentrancyGuard {
      * @notice Submit a fraud proof against a pending bridge message.
      *         Only authorized challengers may submit. A challenge bond is required
      *         and will be slashed if the challenge is invalid. Challenges must be
-     *         submitted within CHALLENGE_WINDOW of the message's creation.
+     *         submitted before the message-specific fraud proof deadline.
      * @param messageHash   The message being challenged
      * @param fraudEvidence  Proof that the message is invalid
      */
@@ -579,10 +580,6 @@ contract CrossChainIdentityBridge is AccessControl, Pausable, ReentrancyGuard {
         BridgeMessage storage msg_ = _messages[messageHash];
         if (msg_.status != BridgeMessageStatus.Pending) revert FraudProofWindowExpired();
         if (block.timestamp > msg_.fraudProofDeadline) revert FraudProofWindowExpired();
-
-        // Enforce challenge window: fraud proofs can only be submitted within
-        // CHALLENGE_WINDOW after the message was relayed
-        if (block.timestamp > msg_.timestamp + CHALLENGE_WINDOW) revert ChallengeWindowExpired();
 
         // Verify the fraud proof
         if (!_verifyFraudProof(msg_, fraudEvidence)) {
@@ -645,6 +642,9 @@ contract CrossChainIdentityBridge is AccessControl, Pausable, ReentrancyGuard {
         if (sync.epoch <= _crossChainAccumulatorEpochs[sync.sourceChain]) {
             revert RevocationSyncFailed();
         }
+        if (sync.previousRoot != _crossChainAccumulatorRoots[sync.sourceChain]) {
+            revert RevocationSyncFailed();
+        }
 
         // ZID-006: Queue the sync with a timelock instead of applying immediately
         bytes32 syncKey = keccak256(
@@ -653,6 +653,7 @@ contract CrossChainIdentityBridge is AccessControl, Pausable, ReentrancyGuard {
 
         _pendingRevocationSyncs[syncKey] = PendingRevocationSync({
             sourceChain: sync.sourceChain,
+            previousRoot: sync.previousRoot,
             accumulatorRoot: sync.accumulatorRoot,
             epoch: sync.epoch,
             readyAt: block.timestamp + revocationSyncDelay,
@@ -680,6 +681,10 @@ contract CrossChainIdentityBridge is AccessControl, Pausable, ReentrancyGuard {
         require(
             pending.epoch > _crossChainAccumulatorEpochs[pending.sourceChain],
             "Epoch already superseded"
+        );
+        require(
+            pending.previousRoot == _crossChainAccumulatorRoots[pending.sourceChain],
+            "Root already superseded"
         );
 
         _crossChainAccumulatorRoots[pending.sourceChain] = pending.accumulatorRoot;

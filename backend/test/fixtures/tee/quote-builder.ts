@@ -58,6 +58,7 @@ export interface QuoteBuildOptions {
   pceSvn?: number;
   qeVendorId?: string;
   cpuSvn?: string;
+  debug?: boolean;
   mrenclave?: string;
   mrsigner?: string;
   isvProdId?: number;
@@ -348,6 +349,9 @@ export function buildQuote(opts: QuoteBuildOptions = {}): QuoteComponents {
   // Build ISV Report Body (384 bytes)
   const isvReportBody = Buffer.alloc(REPORT_BODY_SIZE);
   Buffer.from(cpuSvn, 'hex').copy(isvReportBody, 0);
+  if (opts.debug) {
+    isvReportBody[48] = 0x02;
+  }
   Buffer.from(mrenclave, 'hex').copy(isvReportBody, 64);
   Buffer.from(mrsigner, 'hex').copy(isvReportBody, 128);
   isvReportBody.writeUInt16LE(isvProdId, 256);

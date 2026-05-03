@@ -97,6 +97,8 @@ interface SGXQuoteHeader {
 
 interface SGXReportBody {
   cpuSvn: string;
+  attributes: string;
+  debug: boolean;
   mrenclave: string;
   mrsigner: string;
   isvProdId: number;
@@ -188,6 +190,8 @@ const INTEL_PCS_API_KEY = process.env.INTEL_PCS_API_KEY ?? '';
 const TEE_ATTESTATION_CHALLENGE_TTL_SECONDS = 300;
 const TEE_ATTESTATION_CHALLENGE_AUDIENCE =
   'zeroid:tee-attestation-challenge:v1';
+const SGX_TEE_TYPE = 0;
+const SGX_FLAGS_DEBUG = 0x02;
 const TEE_COLLATERAL_FETCH_TIMEOUT_MS = 10_000;
 const TEE_COLLATERAL_RESPONSE_MAX_BYTES = 8 * 1024 * 1024;
 const ATTESTATION_VALIDITY_HOURS = parseInt(
@@ -437,8 +441,10 @@ export class TEEAttestationService {
 
       // 9. Build result
       const now = new Date();
-      const expiresAt = new Date(
-        now.getTime() + ATTESTATION_VALIDITY_HOURS * 3600_000,
+      const expiresAt = this.computeAttestationExpiresAt(now, collateral);
+      const cacheTtlSeconds = Math.max(
+        1,
+        Math.floor((expiresAt.getTime() - now.getTime()) / 1000),
       );
 
       const result: TEEAttestationResult = {
@@ -469,7 +475,7 @@ export class TEEAttestationService {
         `tee:attestation:${attestationId}`,
         JSON.stringify(result),
         'EX',
-        ATTESTATION_VALIDITY_HOURS * 3600,
+        cacheTtlSeconds,
       );
 
       // 12. Audit log
@@ -564,6 +570,89 @@ export class TEEAttestationService {
     return null;
   }
 
+  private computeAttestationExpiresAt(
+    now: Date,
+    collateral: PCCSCollateral,
+  ): Date {
+    const nowMs = now.getTime();
+    const deadlines = [
+      nowMs + ATTESTATION_VALIDITY_HOURS * 3600_000,
+      ...this.extractCollateralNextUpdates(collateral),
+    ].filter((value) => Number.isFinite(value));
+    const expiresAtMs = Math.min(...deadlines);
+
+    if (expiresAtMs <= nowMs) {
+      throw new AttestationError(
+        'Collateral expires before attestation cache can be issued',
+        'TEE_COLLATERAL_EXPIRED',
+      );
+    }
+
+    return new Date(expiresAtMs);
+  }
+
+  private extractCollateralNextUpdates(collateral: PCCSCollateral): number[] {
+    const deadlines: number[] = [];
+
+    const tcbInfoWrapper = JSON.parse(collateral.tcbInfo) as {
+      tcbInfo?: { nextUpdate?: string };
+    };
+    const tcbNextUpdate = this.parseCollateralNextUpdate(
+      tcbInfoWrapper.tcbInfo?.nextUpdate,
+      'TCB info',
+    );
+    deadlines.push(tcbNextUpdate);
+
+    const qeIdentityWrapper = JSON.parse(collateral.qeIdentity) as {
+      enclaveIdentity?: { nextUpdate?: string };
+    };
+    const qeNextUpdate = this.parseCollateralNextUpdate(
+      qeIdentityWrapper.enclaveIdentity?.nextUpdate,
+      'QE identity',
+    );
+    deadlines.push(qeNextUpdate);
+
+    const rootCrlMetadata = this.parseCrlTbsMetadata(
+      this.parseCrlToDer(collateral.rootCaCrl, 'Root CA CRL'),
+      'Root CA CRL',
+    );
+    if (rootCrlMetadata.nextUpdate) {
+      deadlines.push(rootCrlMetadata.nextUpdate);
+    }
+
+    const pckCrlMetadata = this.parseCrlTbsMetadata(
+      this.parseCrlToDer(collateral.pckCrl, 'PCK CRL'),
+      'PCK CRL',
+    );
+    if (pckCrlMetadata.nextUpdate) {
+      deadlines.push(pckCrlMetadata.nextUpdate);
+    }
+
+    return deadlines;
+  }
+
+  private parseCollateralNextUpdate(
+    value: string | undefined,
+    label: string,
+  ): number {
+    if (!value) {
+      throw new AttestationError(
+        `${label} missing nextUpdate field`,
+        'TEE_COLLATERAL_NO_NEXT_UPDATE',
+      );
+    }
+
+    const timestamp = new Date(value).getTime();
+    if (!Number.isFinite(timestamp)) {
+      throw new AttestationError(
+        `${label} nextUpdate is invalid: ${value}`,
+        'TEE_COLLATERAL_NEXT_UPDATE_INVALID',
+      );
+    }
+
+    return timestamp;
+  }
+
   // -------------------------------------------------------------------------
   // Internal: Parse SGX DCAP quote binary
   // -------------------------------------------------------------------------
@@ -585,10 +674,13 @@ export class TEEAttestationService {
     };
 
     const reportOffset = 48;
+    const attributes = quoteBuffer.subarray(reportOffset + 48, reportOffset + 64);
     const reportBody: SGXReportBody = {
       cpuSvn: quoteBuffer
         .subarray(reportOffset, reportOffset + 16)
         .toString('hex'),
+      attributes: attributes.toString('hex'),
+      debug: (attributes[0] & SGX_FLAGS_DEBUG) !== 0,
       mrenclave: quoteBuffer
         .subarray(reportOffset + 64, reportOffset + 96)
         .toString('hex'),
@@ -610,7 +702,7 @@ export class TEEAttestationService {
   // -------------------------------------------------------------------------
   private validateQuoteStructure(
     header: SGXQuoteHeader,
-    _reportBody: SGXReportBody,
+    reportBody: SGXReportBody,
   ): void {
     if (header.version !== 3 && header.version !== 4) {
       throw new AttestationError(
@@ -623,6 +715,20 @@ export class TEEAttestationService {
       throw new AttestationError(
         `Unsupported attestation key type: ${header.attestKeyType}`,
         'TEE_UNSUPPORTED_KEY_TYPE',
+      );
+    }
+
+    if (header.teeType !== SGX_TEE_TYPE) {
+      throw new AttestationError(
+        `Unsupported TEE type: ${header.teeType}`,
+        'TEE_UNSUPPORTED_TEE_TYPE',
+      );
+    }
+
+    if (reportBody.debug) {
+      throw new AttestationError(
+        'Debug SGX enclaves are not accepted by production attestation policy',
+        'TEE_DEBUG_ENCLAVE',
       );
     }
 
@@ -728,11 +834,27 @@ export class TEEAttestationService {
   private async getAndDeleteChallengeFallback(
     challengeKey: string,
   ): Promise<string | null> {
-    const raw = await redis.get(challengeKey);
-    if (raw) {
-      await redis.del(challengeKey);
+    if (typeof (redis as any).eval !== 'function') {
+      throw new AttestationError(
+        'Atomic TEE attestation challenge consumption is unavailable',
+        'TEE_CHALLENGE_ATOMIC_CONSUME_UNAVAILABLE',
+        500,
+      );
     }
-    return raw;
+
+    const result = await (redis as any).eval(
+      `
+      local value = redis.call('GET', KEYS[1])
+      if value then
+        redis.call('DEL', KEYS[1])
+      end
+      return value
+      `,
+      1,
+      challengeKey,
+    );
+
+    return typeof result === 'string' ? result : null;
   }
 
   private attestationChallengeKey(challenge: string): string {
@@ -2223,7 +2345,15 @@ export class TEEAttestationService {
       );
     }
 
-    const signingCert = new crypto.X509Certificate(chainCerts[0]);
+    let signingCert: crypto.X509Certificate;
+    try {
+      signingCert = new crypto.X509Certificate(chainCerts[0]);
+    } catch (err) {
+      throw new AttestationError(
+        `TCB signing certificate is malformed: ${(err as Error).message}`,
+        'TEE_TCB_SIGNATURE_INVALID',
+      );
+    }
 
     // Verify the signing certificate chains to Intel Root CA
     // (already done in verifyCertificateChain, but verify the signing cert

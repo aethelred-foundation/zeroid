@@ -64,6 +64,7 @@ jest.mock('../src/index', () => {
       set: jest.fn().mockResolvedValue('OK'),
       getdel: jest.fn().mockResolvedValue(null),
       del: jest.fn().mockResolvedValue(1),
+      eval: jest.fn().mockResolvedValue(null),
     },
     prisma: {
       identity: {
@@ -96,6 +97,7 @@ const mockedRedis = redis as unknown as {
   set: jest.Mock;
   getdel: jest.Mock;
   del: jest.Mock;
+  eval: jest.Mock;
 };
 const mockedIdentity = prisma.identity as unknown as {
   findFirst: jest.Mock;
@@ -107,6 +109,7 @@ describe('isAttestationValid', () => {
     mockedRedis.set.mockResolvedValue('OK');
     mockedRedis.getdel.mockResolvedValue(null);
     mockedRedis.del.mockResolvedValue(1);
+    mockedRedis.eval.mockResolvedValue(null);
     mockedIdentity.findFirst.mockResolvedValue(null);
   });
 
@@ -169,6 +172,7 @@ describe('TEE attestation challenge binding', () => {
     mockedRedis.set.mockResolvedValue('OK');
     mockedRedis.getdel.mockResolvedValue(null);
     mockedRedis.del.mockResolvedValue(1);
+    mockedRedis.eval.mockResolvedValue(null);
   });
 
   it('issues a one-time challenge with the expected reportData commitment', async () => {
@@ -237,6 +241,60 @@ describe('TEE attestation challenge binding', () => {
     ).rejects.toMatchObject({ code: 'TEE_CHALLENGE_INVALID' });
   });
 
+  it('uses atomic Redis scripting when GETDEL is unavailable', async () => {
+    const keyPair = generateP256KeyPair();
+    const publicKeyDer = keyPair.publicKey.export({ format: 'der', type: 'spki' }) as Buffer;
+    const publicKey = publicKeyDer.toString('base64');
+    const issued = await service.issueAttestationChallenge({
+      identityId: 'identity-1',
+      did: 'did:zero:identity-1',
+      publicKey,
+    });
+    const storedRecord = mockedRedis.set.mock.calls[0][1];
+    const originalGetdel = (redis as any).getdel;
+    (redis as any).getdel = undefined;
+    mockedRedis.eval.mockResolvedValueOnce(storedRecord);
+
+    try {
+      const consumed = await priv().consumeAttestationChallenge({
+        identityId: 'identity-1',
+        did: 'did:zero:identity-1',
+        publicKey,
+        enclaveType: 'SGX',
+        quote: 'unused',
+        challenge: issued.challenge,
+      });
+
+      expect(consumed.challenge).toBe(issued.challenge);
+      expect(mockedRedis.eval).toHaveBeenCalledWith(
+        expect.stringContaining("redis.call('GET'"),
+        1,
+        expect.stringMatching(/^tee:challenge:/),
+      );
+    } finally {
+      (redis as any).getdel = originalGetdel;
+    }
+  });
+
+  it('fails closed when no atomic challenge consume primitive is available', async () => {
+    const originalGetdel = (redis as any).getdel;
+    const originalEval = (redis as any).eval;
+    (redis as any).getdel = undefined;
+    (redis as any).eval = undefined;
+
+    try {
+      await expect(
+        priv().getAndDeleteChallengeFallback('tee:challenge:missing'),
+      ).rejects.toMatchObject({
+        code: 'TEE_CHALLENGE_ATOMIC_CONSUME_UNAVAILABLE',
+        statusCode: 500,
+      });
+    } finally {
+      (redis as any).getdel = originalGetdel;
+      (redis as any).eval = originalEval;
+    }
+  });
+
   it('requires reportData to include the challenge commitment suffix', async () => {
     const keyPair = generateP256KeyPair();
     const publicKeyDer = keyPair.publicKey.export({ format: 'der', type: 'spki' }) as Buffer;
@@ -275,6 +333,21 @@ describe('TEE attestation challenge binding', () => {
         challenge: '',
       }),
     ).rejects.toMatchObject({ code: 'TEE_CHALLENGE_REQUIRED' });
+  });
+
+  it('rejects full attestation requests from debug SGX enclaves', async () => {
+    const q = buildQuote({ hierarchy, debug: true });
+
+    await expect(
+      service.verifyAttestation({
+        identityId: 'identity-1',
+        did: 'did:zero:identity-1',
+        publicKey: q.boundPublicKey,
+        enclaveType: 'SGX',
+        quote: q.quoteBase64,
+        challenge: 'challenge-test-value',
+      }),
+    ).rejects.toMatchObject({ code: 'TEE_DEBUG_ENCLAVE' });
   });
 });
 
@@ -761,6 +834,25 @@ describe('validateCollateralFreshness', () => {
     expect(() => {
       priv().validateCollateralFreshness(collateral);
     }).not.toThrow();
+  });
+
+  it('caps cached attestation validity at the earliest collateral nextUpdate', () => {
+    const now = new Date();
+    const tcbNextUpdate = new Date(now.getTime() + 60 * 60_000);
+    const qeNextUpdate = new Date(now.getTime() + 2 * 60 * 60_000);
+    const crlNextUpdate = new Date(now.getTime() + 3 * 60 * 60_000);
+    const collateral = buildCollateral({
+      hierarchy,
+      tcbIssueDate: now.toISOString(),
+      tcbNextUpdate: tcbNextUpdate.toISOString(),
+      qeIssueDate: now.toISOString(),
+      qeNextUpdate: qeNextUpdate.toISOString(),
+      crlNextUpdate,
+    });
+
+    const expiresAt = priv().computeAttestationExpiresAt(now, collateral);
+
+    expect(expiresAt.toISOString()).toBe(tcbNextUpdate.toISOString());
   });
 
   it('rejects stale QE identity collateral → TEE_QE_IDENTITY_STALE', () => {

@@ -103,6 +103,7 @@ function buildCredentialBinding(
     subjectDid: string;
     claims: Record<string, unknown>;
     issuedAt?: string;
+    expiresAt?: Date;
   },
   claimsHash = hashClaims(request.claims),
 ) {
@@ -116,8 +117,8 @@ function buildCredentialBinding(
     credentialType: request.credentialType,
     organizationId: request.organizationId ?? null,
     schemaId: null,
-    issuedAt: request.issuedAt ?? '2026-04-21T00:00:00.000Z',
-    expiresAt: null,
+    issuedAt: request.issuedAt ?? new Date().toISOString(),
+    expiresAt: request.expiresAt ? request.expiresAt.toISOString() : null,
     claimsHash,
   };
 }
@@ -327,6 +328,69 @@ describe('Credential trust enforcement', () => {
       }),
     ).rejects.toMatchObject<Partial<CredentialError>>({
       code: 'CRED_ISSUER_PROOF_BINDING_MISMATCH',
+    });
+  });
+
+  it('rejects an expired issuer-submitted proof envelope', async () => {
+    const staleBinding = buildCredentialBinding({
+      ...baseRequest,
+      issuedAt: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
+    });
+    const issuerProof = buildIssuerProof({
+      credentialBinding: staleBinding,
+      signatureValue: signCredentialBinding(staleBinding),
+    });
+
+    await expect(
+      service.issueCredential({
+        ...baseRequest,
+        issuerProof,
+      }),
+    ).rejects.toMatchObject<Partial<CredentialError>>({
+      code: 'CRED_ISSUER_PROOF_EXPIRED',
+    });
+  });
+
+  it('rejects an issuer-submitted proof envelope dated too far in the future', async () => {
+    const futureBinding = buildCredentialBinding({
+      ...baseRequest,
+      issuedAt: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+    });
+    const issuerProof = buildIssuerProof({
+      credentialBinding: futureBinding,
+      signatureValue: signCredentialBinding(futureBinding),
+    });
+
+    await expect(
+      service.issueCredential({
+        ...baseRequest,
+        issuerProof,
+      }),
+    ).rejects.toMatchObject<Partial<CredentialError>>({
+      code: 'CRED_ISSUER_PROOF_ISSUED_AT_FUTURE',
+    });
+  });
+
+  it('rejects credentials that expire before the signed issuance timestamp', async () => {
+    const issuedAt = new Date().toISOString();
+    const credentialBinding = buildCredentialBinding({
+      ...baseRequest,
+      issuedAt,
+      expiresAt: new Date(Date.parse(issuedAt) - 1000),
+    });
+    const issuerProof = buildIssuerProof({
+      credentialBinding,
+      signatureValue: signCredentialBinding(credentialBinding),
+    });
+
+    await expect(
+      service.issueCredential({
+        ...baseRequest,
+        expiresAt: new Date(Date.parse(issuedAt) - 1000),
+        issuerProof,
+      }),
+    ).rejects.toMatchObject<Partial<CredentialError>>({
+      code: 'CRED_EXPIRATION_BEFORE_ISSUANCE',
     });
   });
 

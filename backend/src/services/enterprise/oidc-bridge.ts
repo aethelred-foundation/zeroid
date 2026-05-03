@@ -796,7 +796,6 @@ export class OIDCBridge {
     } = {},
   ): Promise<{
     redirectUrl: string;
-    code?: string;
     sessionId: string;
   }> {
     const parsed = AuthorizationRequestSchema.parse(request);
@@ -804,6 +803,7 @@ export class OIDCBridge {
     if (!client || !this.isClientActive(client)) {
       throw new OIDCError('invalid_client', 'Client not found or inactive');
     }
+    await this.assertSubjectActive(subjectId);
     await this.assertSubjectAuthorizedForClient(client, subjectId);
     this.assertClientGrantAllowed(client, 'authorization_code');
 
@@ -906,7 +906,7 @@ export class OIDCBridge {
         clientId: parsed.clientId,
         sessionId,
       });
-      return { redirectUrl: redirectUrl.toString(), code, sessionId };
+      return { redirectUrl: redirectUrl.toString(), sessionId };
     }
 
     // Implicit flow (id_token)
@@ -2571,6 +2571,36 @@ export class OIDCBridge {
 
   private isClientActive(client: RegisteredClient): boolean {
     return client.active && (client.status ?? 'active') === 'active';
+  }
+
+  private async assertSubjectActive(subjectId: string): Promise<void> {
+    const identity = (prisma as any).identity;
+    if (!identity?.findUnique) {
+      if (isProductionRuntime()) {
+        throw new OIDCError(
+          'server_error',
+          'Subject status verification is unavailable',
+          500,
+        );
+      }
+      return;
+    }
+
+    const subject = await identity.findUnique({
+      where: { id: subjectId },
+      select: {
+        id: true,
+        status: true,
+      },
+    });
+
+    if (!subject || subject.status !== 'ACTIVE') {
+      throw new OIDCError(
+        'access_denied',
+        'Subject not found or inactive',
+        403,
+      );
+    }
   }
 
   private async assertSubjectAuthorizedForClient(

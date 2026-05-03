@@ -171,7 +171,7 @@ async function authorizeCode(
   clientId: string,
   subjectId: string,
 ) {
-  return bridge.authorize(
+  const result = await bridge.authorize(
     {
       clientId,
       redirectUri: REDIRECT_URI,
@@ -183,6 +183,11 @@ async function authorizeCode(
     subjectId,
     { name: 'Test User', email: 'test@example.com', email_verified: true },
   );
+  const code = new URL(result.redirectUrl).searchParams.get('code');
+  if (!code) {
+    throw new Error('authorize response did not include a code redirect');
+  }
+  return { ...result, code };
 }
 
 function settleResults<T>(results: PromiseSettledResult<T>[]): {

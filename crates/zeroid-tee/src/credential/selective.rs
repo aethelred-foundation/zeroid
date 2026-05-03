@@ -298,7 +298,6 @@ mod tests {
     #[test]
     fn verify_disclosure_proof_wrong_root() {
         let attrs = sample_attributes();
-        let root = compute_credential_root(&attrs).unwrap();
         let req = DisclosureRequest::new(vec!["name".into()]);
         let proof = create_disclosure_proof(&attrs, &req).unwrap();
         let wrong_root = [0xFF; 32];

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { createLogger, format, transports } from 'winston';
 import crypto from 'crypto';
+import * as net from 'net';
 import { prisma, redis } from '../../index';
 
 // ---------------------------------------------------------------------------
@@ -15,6 +16,105 @@ const logger = createLogger({
 
 const ENTERPRISE_SECRET_HASH_PEPPER_ENV = 'ENTERPRISE_SECRET_HASH_PEPPER';
 const MIN_ENTERPRISE_SECRET_HASH_PEPPER_LENGTH = 48;
+const IPV4_BITS = 32;
+const IPV6_BITS = 128;
+
+interface ParsedIpAddress {
+  family: 4 | 6;
+  value: bigint;
+}
+
+function normalizeIpAddress(value: string): string | null {
+  const normalized = value.trim().toLowerCase().replace(/^\[|\]$/g, '');
+  if (!normalized) return null;
+
+  const mappedIpv4 = extractIpv4MappedAddress(normalized);
+  if (mappedIpv4) return mappedIpv4;
+
+  return net.isIP(normalized) ? normalized : null;
+}
+
+function extractIpv4MappedAddress(value: string): string | null {
+  const dotted = value.match(/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i);
+  if (dotted && net.isIP(dotted[1]) === 4) return dotted[1];
+
+  const hexadecimal = value.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/i);
+  if (!hexadecimal) return null;
+
+  const high = parseInt(hexadecimal[1], 16);
+  const low = parseInt(hexadecimal[2], 16);
+  const ipv4 = [
+    (high >> 8) & 0xff,
+    high & 0xff,
+    (low >> 8) & 0xff,
+    low & 0xff,
+  ].join('.');
+
+  return net.isIP(ipv4) === 4 ? ipv4 : null;
+}
+
+function parseIpAddress(value: string): ParsedIpAddress | null {
+  const normalized = normalizeIpAddress(value);
+  if (!normalized) return null;
+
+  const family = net.isIP(normalized);
+  if (family === 4) {
+    return {
+      family,
+      value: normalized
+        .split('.')
+        .map((part) => Number(part))
+        .reduce((acc, octet) => (acc << 8n) + BigInt(octet), 0n),
+    };
+  }
+
+  if (family !== 6) return null;
+  const expanded = expandIpv6Address(normalized);
+  if (!expanded) return null;
+
+  return {
+    family,
+    value: expanded.reduce((acc, part) => (acc << 16n) + BigInt(part), 0n),
+  };
+}
+
+function expandIpv6Address(value: string): number[] | null {
+  if (value.includes('%')) return null;
+  const sections = value.split('::');
+  if (sections.length > 2) return null;
+
+  const left = sections[0] ? sections[0].split(':') : [];
+  const right = sections.length === 2 && sections[1] ? sections[1].split(':') : [];
+  if (sections.length === 1 && left.length !== 8) return null;
+
+  const missing = 8 - left.length - right.length;
+  if (missing < 0 || (sections.length === 1 && missing !== 0)) return null;
+
+  const parts = [...left, ...Array(missing).fill('0'), ...right];
+  if (parts.length !== 8) return null;
+
+  const parsed = parts.map((part) => {
+    if (!/^[0-9a-f]{1,4}$/i.test(part)) return Number.NaN;
+    return parseInt(part, 16);
+  });
+
+  return parsed.every((part) => Number.isInteger(part) && part >= 0 && part <= 0xffff)
+    ? parsed
+    : null;
+}
+
+function isValidIpAllowlistEntry(value: string): boolean {
+  const [address, prefix, extra] = value.trim().split('/');
+  if (extra !== undefined || !parseIpAddress(address)) return false;
+  if (prefix === undefined) return true;
+
+  if (!/^\d+$/.test(prefix)) return false;
+  const parsedIp = parseIpAddress(address);
+  if (!parsedIp) return false;
+  const prefixLength = Number(prefix);
+  const maxPrefix = parsedIp.family === 4 ? IPV4_BITS : IPV6_BITS;
+  return prefixLength >= 0 && prefixLength <= maxPrefix;
+}
 
 // ---------------------------------------------------------------------------
 // Zod Schemas
@@ -41,7 +141,17 @@ export const CreateAPIKeySchema = z.object({
   scopes: z.array(APIKeyScopeSchema).min(1),
   environment: z.enum(['sandbox', 'production']),
   expiresInDays: z.number().int().min(1).max(365).default(90),
-  ipAllowlist: z.array(z.string()).default([]),
+  ipAllowlist: z
+    .array(
+      z
+        .string()
+        .trim()
+        .refine(
+          isValidIpAllowlistEntry,
+          'IP allowlist entries must be IP addresses or CIDR ranges',
+        ),
+    )
+    .default([]),
   dailyQuota: z.number().int().min(100).max(10_000_000).default(10000),
   monthlyQuota: z.number().int().min(1000).max(100_000_000).default(1_000_000),
   rateLimit: z
@@ -384,7 +494,7 @@ export class APIGateway {
     }
 
     // IP allowlist check
-    if (key.ipAllowlist.length > 0 && !key.ipAllowlist.includes(requestIp)) {
+    if (key.ipAllowlist.length > 0 && !this.isRequestIpAllowed(requestIp, key.ipAllowlist)) {
       throw new GatewayError(
         'Request IP not in allowlist',
         'IP_NOT_ALLOWED',
@@ -707,6 +817,39 @@ export class APIGateway {
       leftBuffer.length === rightBuffer.length &&
       crypto.timingSafeEqual(leftBuffer, rightBuffer)
     );
+  }
+
+  private isRequestIpAllowed(requestIp: string, allowlist: string[]): boolean {
+    const parsedRequestIp = parseIpAddress(requestIp);
+    if (!parsedRequestIp) return false;
+
+    return allowlist.some((entry) =>
+      this.ipAllowlistEntryMatches(parsedRequestIp, entry),
+    );
+  }
+
+  private ipAllowlistEntryMatches(
+    requestIp: ParsedIpAddress,
+    entry: string,
+  ): boolean {
+    const [address, prefix] = entry.trim().split('/');
+    const parsedEntry = parseIpAddress(address);
+    if (!parsedEntry || parsedEntry.family !== requestIp.family) {
+      return false;
+    }
+
+    if (prefix === undefined) {
+      return parsedEntry.value === requestIp.value;
+    }
+
+    const prefixLength = Number(prefix);
+    const width = requestIp.family === 4 ? IPV4_BITS : IPV6_BITS;
+    if (!Number.isInteger(prefixLength) || prefixLength < 0 || prefixLength > width) {
+      return false;
+    }
+
+    const hostBits = BigInt(width - prefixLength);
+    return (parsedEntry.value >> hostBits) === (requestIp.value >> hostBits);
   }
 
   private resolveOAuth2RequestedScopes(

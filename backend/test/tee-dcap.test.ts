@@ -82,6 +82,7 @@ interface QuoteBuilderOptions {
   pceSvn?: number;
   qeVendorId?: string; // 16 bytes hex
   cpuSvn?: string; // 16 bytes hex (32 chars)
+  debug?: boolean;
   mrenclave?: string; // 32 bytes hex
   mrsigner?: string; // 32 bytes hex
   isvProdId?: number;
@@ -110,6 +111,9 @@ function buildSyntheticQuote(opts: QuoteBuilderOptions = {}): Buffer {
   const reportBody = Buffer.alloc(REPORT_BODY_SIZE);
   const cpuSvn = opts.cpuSvn ?? '0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a';
   Buffer.from(cpuSvn, 'hex').copy(reportBody, 0);
+  if (opts.debug) {
+    reportBody[48] = 0x02;
+  }
   const mrenclave = opts.mrenclave ?? crypto.randomBytes(32).toString('hex');
   Buffer.from(mrenclave, 'hex').copy(reportBody, 64);
   const mrsigner = opts.mrsigner ?? crypto.randomBytes(32).toString('hex');
@@ -270,6 +274,13 @@ describe('TEEAttestationService — DCAP Regression Tests', () => {
       expect(reportBody.isvSvn).toBe(0x1234);
     });
 
+    it('parses SGX debug attributes from the report body', () => {
+      const quote = buildSyntheticQuote({ debug: true });
+      const { reportBody } = svc.parseQuote(quote);
+      expect(reportBody.debug).toBe(true);
+      expect(reportBody.attributes.slice(0, 2)).toBe('02');
+    });
+
     it('handles zero-valued fields without error', () => {
       const quote = buildSyntheticQuote({
         version: 3,
@@ -315,6 +326,17 @@ describe('TEEAttestationService — DCAP Regression Tests', () => {
     it('rejects attestKeyType != 2 (non-ECDSA)', () => {
       const header = { version: 3, attestKeyType: 3, teeType: 0, qeSvn: 5, pceSvn: 10, qeVendorId: INTEL_QE_VENDOR };
       expectAttestationError(() => svc.validateQuoteStructure(header, {}), 'TEE_UNSUPPORTED_KEY_TYPE');
+    });
+
+    it('rejects non-SGX quote teeType values', () => {
+      const header = { version: 3, attestKeyType: 2, teeType: 0x81, qeSvn: 5, pceSvn: 10, qeVendorId: INTEL_QE_VENDOR };
+      expectAttestationError(() => svc.validateQuoteStructure(header, {}), 'TEE_UNSUPPORTED_TEE_TYPE');
+    });
+
+    it('rejects debug SGX enclave quotes', () => {
+      const quote = buildSyntheticQuote({ debug: true });
+      const { header, reportBody } = svc.parseQuote(quote);
+      expectAttestationError(() => svc.validateQuoteStructure(header, reportBody), 'TEE_DEBUG_ENCLAVE');
     });
 
     it('rejects unknown QE vendor ID', () => {

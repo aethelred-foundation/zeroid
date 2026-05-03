@@ -13,6 +13,8 @@ pub struct AttestationVerifier {
     policies: Vec<AttestationPolicy>,
     /// Known-good enclave measurements across all platforms.
     trusted_measurements: Vec<[u8; 32]>,
+    /// Explicit development escape hatch for unpinned measurements.
+    allow_unpinned_measurements: bool,
 }
 
 impl AttestationVerifier {
@@ -21,6 +23,7 @@ impl AttestationVerifier {
         Self {
             policies: Vec::new(),
             trusted_measurements: Vec::new(),
+            allow_unpinned_measurements: false,
         }
     }
 
@@ -33,7 +36,17 @@ impl AttestationVerifier {
                 AttestationPolicy::new(Platform::ArmTrustZone),
             ],
             trusted_measurements: Vec::new(),
+            allow_unpinned_measurements: false,
         }
+    }
+
+    /// Permit reports without pinned measurements for local development only.
+    ///
+    /// Production callers should register exact measurements with
+    /// [`add_trusted_measurement`] or policy-specific `allow_measurement`.
+    pub fn allow_unpinned_measurements_for_dev(mut self) -> Self {
+        self.allow_unpinned_measurements = true;
+        self
     }
 
     /// Register a platform-specific attestation policy.
@@ -55,7 +68,7 @@ impl AttestationVerifier {
     /// Checks:
     /// 1. The platform is supported and has a policy.
     /// 2. The report satisfies the policy (freshness, window, measurement).
-    /// 3. The enclave measurement is in the trusted set (if any are registered).
+    /// 3. The enclave measurement is in the trusted set.
     ///
     /// On success, returns a copy of the report with `is_valid` set to `true`.
     pub fn verify(&self, report: &AttestationReport, now: u64) -> Result<AttestationReport> {
@@ -80,7 +93,16 @@ impl AttestationVerifier {
         // Evaluate the policy
         policy.evaluate(report, now)?;
 
-        // Check trusted measurements (if any registered)
+        let policy_has_pinned_measurements = !policy.allowed_measurements.is_empty();
+        if self.trusted_measurements.is_empty()
+            && !policy_has_pinned_measurements
+            && !self.allow_unpinned_measurements
+        {
+            return Err(ZeroIdTeeError::InvalidAttestation(
+                "no trusted enclave measurements registered".into(),
+            ));
+        }
+
         if !self.trusted_measurements.is_empty()
             && !self.trusted_measurements.contains(&report.enclave_hash)
         {
@@ -222,8 +244,22 @@ mod tests {
     }
 
     #[test]
-    fn verify_no_trusted_measurements_accepts_any() {
+    fn verify_no_trusted_measurements_rejects_by_default() {
         let v = AttestationVerifier::with_defaults();
+        let report = sgx_report(1000, 2000);
+        let result = v.verify(&report, 1500);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ZeroIdTeeError::InvalidAttestation(msg) => {
+                assert!(msg.contains("no trusted enclave measurements"));
+            }
+            other => panic!("expected InvalidAttestation, got: {other}"),
+        }
+    }
+
+    #[test]
+    fn verify_no_trusted_measurements_requires_explicit_dev_escape_hatch() {
+        let v = AttestationVerifier::with_defaults().allow_unpinned_measurements_for_dev();
         let report = sgx_report(1000, 2000);
         let result = v.verify(&report, 1500).unwrap();
         assert!(result.is_valid);

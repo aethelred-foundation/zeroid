@@ -607,6 +607,85 @@ describe('APIGateway persistence', () => {
     });
   });
 
+  it('matches API key IP allowlists with CIDR ranges and IPv4-mapped request addresses', async () => {
+    mockApiKeyCreate.mockResolvedValue({});
+    mockApiKeyUpdate.mockResolvedValue({});
+
+    const result = await apiGateway.createAPIKey('org-cidr', {
+      name: 'CIDR checked key',
+      scopes: ['credentials:read'],
+      environment: 'production',
+      expiresInDays: 30,
+      ipAllowlist: ['203.0.113.0/24'],
+      dailyQuota: 1000,
+      monthlyQuota: 1000,
+      rateLimit: { requestsPerSecond: 100, burstSize: 100 },
+      metadata: {},
+    });
+    const keyHash = crypto
+      .createHash('sha256')
+      .update(result.apiKey)
+      .digest('hex');
+
+    mockApiKeyFindUnique.mockResolvedValue({
+      id: result.apiKeyId,
+      organizationId: 'org-cidr',
+      name: 'CIDR checked key',
+      keyHash,
+      keyPrefix: result.apiKey.substring(0, 12),
+      scopes: ['credentials:read'],
+      environment: 'production',
+      rateLimitPerMinute: 6000,
+      ipAllowlist: ['203.0.113.0/24'],
+      expiresAt: new Date(result.expiresAt),
+      isActive: true,
+      lastUsedAt: null,
+      createdAt: new Date(),
+    });
+
+    await expect(
+      apiGateway.authenticateRequest(result.apiKey, '::ffff:203.0.113.42', [
+        'credentials:read',
+      ]),
+    ).resolves.toMatchObject({
+      apiKeyId: result.apiKeyId,
+      clientId: 'org-cidr',
+    });
+
+    await expect(
+      apiGateway.authenticateRequest(result.apiKey, '203.0.114.42', [
+        'credentials:read',
+      ]),
+    ).rejects.toMatchObject({
+      code: 'IP_NOT_ALLOWED',
+      statusCode: 403,
+    });
+  });
+
+  it('rejects malformed API key allowlist entries before storing them', async () => {
+    await expect(
+      apiGateway.createAPIKey('org-invalid-allowlist', {
+        name: 'Bad allowlist',
+        scopes: ['credentials:read'],
+        environment: 'production',
+        expiresInDays: 30,
+        ipAllowlist: ['not-an-address'],
+        dailyQuota: 1000,
+        monthlyQuota: 1000,
+        rateLimit: { requestsPerSecond: 100, burstSize: 100 },
+        metadata: {},
+      }),
+    ).rejects.toMatchObject({
+      issues: expect.arrayContaining([
+        expect.objectContaining({
+          message: 'IP allowlist entries must be IP addresses or CIDR ranges',
+        }),
+      ]),
+    });
+
+    expect(mockApiKeyCreate).not.toHaveBeenCalled();
+  });
+
   it('persists API usage logs in the durable analytics store', async () => {
     mockApiUsageLogCreate.mockResolvedValue({});
 

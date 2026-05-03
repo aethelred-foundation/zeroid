@@ -248,7 +248,6 @@ describe('OIDC token route client authentication', () => {
     });
     mockAuthorize.mockResolvedValue({
       redirectUrl: 'https://app.example.com/callback?code=secret-code&state=state-1',
-      code: 'secret-code',
       sessionId: 'session-1',
     });
     mockIdentityFindUnique.mockResolvedValue({

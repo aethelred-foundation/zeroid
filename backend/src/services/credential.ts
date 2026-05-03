@@ -13,6 +13,8 @@ const isProductionRuntime = (): boolean =>
 const allowLegacyPlatformCredentialVerification = (): boolean =>
   process.env.ALLOW_LEGACY_PLATFORM_CREDENTIAL_SIGNING === 'true' &&
   !isProductionRuntime();
+const ISSUER_PROOF_MAX_AGE_MS = 5 * 60 * 1000;
+const ISSUER_PROOF_FUTURE_SKEW_MS = 60 * 1000;
 
 // ---------------------------------------------------------------------------
 // Custom error (declared early so KMS classes can reference it)
@@ -443,6 +445,7 @@ export class CredentialService {
     }
 
     const issuedAt = this.resolveCredentialIssuedAt(request.issuerProof);
+    this.assertCredentialExpiryAfterIssue(request.expiresAt, issuedAt);
     const proof = await this.buildCredentialProof(
       request,
       issuer,
@@ -1745,7 +1748,42 @@ export class CredentialService {
         400,
       );
     }
+
+    const proofAgeMs = Date.now() - issuedAt.getTime();
+    if (proofAgeMs > ISSUER_PROOF_MAX_AGE_MS) {
+      throw new CredentialError(
+        'Issuer proof credential binding has expired',
+        'CRED_ISSUER_PROOF_EXPIRED',
+        400,
+      );
+    }
+
+    if (proofAgeMs < -ISSUER_PROOF_FUTURE_SKEW_MS) {
+      throw new CredentialError(
+        'Issuer proof credential binding is dated too far in the future',
+        'CRED_ISSUER_PROOF_ISSUED_AT_FUTURE',
+        400,
+      );
+    }
+
     return issuedAt;
+  }
+
+  private assertCredentialExpiryAfterIssue(
+    expiresAt: Date | undefined,
+    issuedAt: Date,
+  ): void {
+    if (!expiresAt) {
+      return;
+    }
+
+    if (expiresAt <= issuedAt) {
+      throw new CredentialError(
+        'Credential expiration must be after the issuance timestamp',
+        'CRED_EXPIRATION_BEFORE_ISSUANCE',
+        400,
+      );
+    }
   }
 
   private buildCredentialSignatureBinding(
