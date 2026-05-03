@@ -1,5 +1,12 @@
 import crypto from 'crypto';
 import { prisma, logger, redis } from '../../index';
+import {
+  SANCTIONS_LIST_NAMES,
+  sanctionsScreeningService,
+  ScreeningRequest,
+  ScreeningResult as AuthoritativeScreeningResult,
+} from '../compliance/sanctions-screening';
+import { isProductionRuntime } from '../production-safety';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -207,6 +214,10 @@ export class ComplianceCopilotService {
   // Sanctions & PEP screening
   // -------------------------------------------------------------------------
   async screenIdentity(request: SanctionsScreeningRequest): Promise<SanctionsScreeningResult> {
+    if (isProductionRuntime()) {
+      return this.screenIdentityWithSignedLists(request);
+    }
+
     const screeningId = `scr-${crypto.randomUUID()}`;
     const startTime = performance.now();
 
@@ -317,6 +328,97 @@ export class ComplianceCopilotService {
     });
 
     return screeningResult;
+  }
+
+  private async screenIdentityWithSignedLists(
+    request: SanctionsScreeningRequest,
+  ): Promise<SanctionsScreeningResult> {
+    try {
+      const result = await sanctionsScreeningService.screenEntity(
+        this.toAuthoritativeScreeningRequest(request),
+      );
+      return this.fromAuthoritativeScreeningResult(result);
+    } catch (err) {
+      logger.error('production_screening_unavailable', {
+        identityId: request.identityId,
+        error: (err as Error).message,
+        code: (err as Error & { code?: string }).code,
+      });
+      throw new ComplianceCopilotError(
+        'Production sanctions screening is unavailable until signed sanctions and PEP list data are configured.',
+        'PRODUCTION_SCREENING_UNAVAILABLE',
+        503,
+      );
+    }
+  }
+
+  private toAuthoritativeScreeningRequest(
+    request: SanctionsScreeningRequest,
+  ): ScreeningRequest {
+    return {
+      entityId: request.identityId,
+      entityType: 'individual',
+      names: [
+        { fullName: request.fullName, nameType: 'primary', script: 'latin' },
+        ...(request.aliases ?? []).map((alias) => ({
+          fullName: alias,
+          nameType: 'alias' as const,
+          script: 'latin' as const,
+        })),
+      ],
+      dateOfBirth: request.dateOfBirth,
+      nationality: request.nationality,
+      identifiers: (request.documentNumbers ?? []).map((value) => ({
+        type: 'national_id' as const,
+        value,
+        country: request.nationality,
+      })),
+      addresses: request.nationality ? [{ country: request.nationality }] : [],
+      screenAgainst: [...SANCTIONS_LIST_NAMES],
+    };
+  }
+
+  private fromAuthoritativeScreeningResult(
+    result: AuthoritativeScreeningResult,
+  ): SanctionsScreeningResult {
+    const activeMatches = result.matches.filter((match) => match.status !== 'false_positive');
+    const nonPepMatches = result.matches.filter((match) => match.listSource !== 'pep_database');
+    const pepMatches = result.matches.filter((match) => match.listSource === 'pep_database');
+    const matchScore = activeMatches.length > 0
+      ? Math.round(Math.max(...activeMatches.map((match) => match.matchScore)) * 100)
+      : 0;
+
+    return {
+      screeningId: result.screeningId,
+      identityId: result.entityId,
+      result: result.overallRisk,
+      matchScore,
+      matchedLists: nonPepMatches.map((match) => ({
+        listName: match.listSource,
+        listSource: match.listSource,
+        matchedName: match.matchedName,
+        matchConfidence: match.matchScore,
+        entityType: 'individual',
+        sanctions: match.listingDetails.programs,
+        listedSince: new Date(match.listingDetails.listedDate),
+        lastUpdated: new Date(result.timestamp),
+        sdnId: match.listEntryId,
+      })),
+      pepMatches: pepMatches.map((match) => ({
+        name: match.matchedName,
+        position: match.listingDetails.remarks || 'Politically exposed person match',
+        country: 'UNKNOWN',
+        level: 'senior_official',
+        active: match.status !== 'false_positive',
+        matchConfidence: match.matchScore,
+        source: match.listSource,
+      })),
+      adverseMedia: [],
+      riskIndicators: activeMatches.map((match) => `${match.listSource}:${match.status}`),
+      screenedAt: new Date(result.timestamp),
+      expiresAt: new Date(result.nextScreeningDate),
+      listsChecked: result.listsScreened,
+    };
   }
 
   // -------------------------------------------------------------------------
