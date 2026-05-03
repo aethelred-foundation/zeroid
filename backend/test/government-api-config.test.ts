@@ -49,6 +49,7 @@ describe('GovernmentAPIService production configuration', () => {
     mockRedisGet.mockResolvedValue(null);
     mockIdentityFindUnique.mockResolvedValue(null);
     process.env = { ...ORIGINAL_ENV, NODE_ENV: 'production' };
+    process.env.GOVERNMENT_CACHE_HASH_PEPPER = 'g'.repeat(64);
     delete process.env.UAE_PASS_REDIRECT_URI_ALLOWLIST;
     delete process.env.GOVERNMENT_REDIRECT_URI_ALLOWLIST;
     dnsLookupSpy = jest.spyOn(dns, 'lookup').mockResolvedValue([
@@ -237,6 +238,27 @@ describe('GovernmentAPIService production configuration', () => {
     expect(https.request).not.toHaveBeenCalled();
   });
 
+  it('requires a government cache hash pepper in production', async () => {
+    process.env.EMIRATES_ID_API_URL = 'https://eid.gov.example';
+    process.env.EMIRATES_ID_API_KEY = 'key-1';
+    process.env.EMIRATES_ID_API_SECRET = 'secret-1';
+    delete process.env.GOVERNMENT_CACHE_HASH_PEPPER;
+    global.fetch = jest.fn() as unknown as typeof fetch;
+    const service = new GovernmentAPIService();
+
+    await expect(service.verifyEmiratesID({
+      idNumber: '784-1990-1234567-1',
+      dateOfBirth: '1990-01-01',
+      identityId: 'identity-1',
+    })).rejects.toMatchObject({
+      code: 'GOV_CACHE_HASH_PEPPER_MISSING',
+      statusCode: 500,
+    });
+    expect(mockRedisGet).not.toHaveBeenCalled();
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(https.request).not.toHaveBeenCalled();
+  });
+
   it('pins vetted DNS address during Emirates ID verification', async () => {
     process.env.EMIRATES_ID_API_URL = 'https://eid.gov.example';
     process.env.EMIRATES_ID_API_KEY = 'key-1';
@@ -395,15 +417,15 @@ describe('GovernmentAPIService production configuration', () => {
     });
 
     const fullInputHash = crypto
-      .createHash('sha256')
+      .createHmac('sha256', process.env.GOVERNMENT_CACHE_HASH_PEPPER!)
+      .update('zeroid:government-verification-cache:v2:')
       .update('784-1990-1234567-1:1990-01-01')
-      .digest('hex')
-      .slice(0, 16);
+      .digest('hex');
     const idOnlyHash = crypto
-      .createHash('sha256')
+      .createHmac('sha256', process.env.GOVERNMENT_CACHE_HASH_PEPPER!)
+      .update('zeroid:government-verification-cache:v2:')
       .update('784-1990-1234567-1')
-      .digest('hex')
-      .slice(0, 16);
+      .digest('hex');
 
     expect(mockRedisGet).toHaveBeenCalledWith(`gov:eid:${fullInputHash}`);
     expect(mockRedisGet).not.toHaveBeenCalledWith(`gov:eid:${idOnlyHash}`);

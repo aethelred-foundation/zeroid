@@ -12,6 +12,7 @@ const MIN_JWT_SECRET_LENGTH = 48;
 const MIN_POLICY_RECEIPT_SECRET_LENGTH = 48;
 const MIN_ENTERPRISE_SECRET_HASH_PEPPER_LENGTH = 48;
 const MIN_IDENTITY_RECOVERY_HASH_PEPPER_LENGTH = 48;
+const MIN_GOVERNMENT_CACHE_HASH_PEPPER_LENGTH = 48;
 const DEFAULT_DEVELOPMENT_CORS_ORIGINS = ['http://localhost:3000'];
 const REQUIRED_SECRET_KEY_BYTES = 32;
 const MAX_PRODUCTION_SANCTIONS_LIST_AGE_HOURS = 24;
@@ -144,6 +145,7 @@ export function checkedProductionSafetyControls(): string[] {
     'POLICY_RECEIPT_SIGNING_SECRET',
     'ENTERPRISE_SECRET_HASH_PEPPER',
     'IDENTITY_RECOVERY_HASH_PEPPER',
+    'GOVERNMENT_CACHE_HASH_PEPPER',
     'OIDC_ISSUER_URL',
     'OIDC_SIGNING_KEYPAIR',
     'CREDENTIAL_SIGNING_KMS',
@@ -348,6 +350,26 @@ export function collectProductionSafetyViolations(
     violations.push({
       control: 'IDENTITY_RECOVERY_HASH_PEPPER',
       risk: 'Identity recovery hash pepper must not use a known development or test placeholder',
+    });
+  }
+
+  const governmentCacheHashPepper = env.GOVERNMENT_CACHE_HASH_PEPPER?.trim();
+  if (!governmentCacheHashPepper) {
+    violations.push({
+      control: 'GOVERNMENT_CACHE_HASH_PEPPER',
+      risk: 'Production government verification cache keys require a deployment pepper to resist offline Emirates ID correlation after datastore disclosure',
+    });
+  } else if (
+    governmentCacheHashPepper.length < MIN_GOVERNMENT_CACHE_HASH_PEPPER_LENGTH
+  ) {
+    violations.push({
+      control: 'GOVERNMENT_CACHE_HASH_PEPPER',
+      risk: `Government verification cache hash pepper must be at least ${MIN_GOVERNMENT_CACHE_HASH_PEPPER_LENGTH} characters`,
+    });
+  } else if (isKnownUnsafeJwtSecret(governmentCacheHashPepper)) {
+    violations.push({
+      control: 'GOVERNMENT_CACHE_HASH_PEPPER',
+      risk: 'Government verification cache hash pepper must not use a known development or test placeholder',
     });
   }
 

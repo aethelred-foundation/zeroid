@@ -65,6 +65,8 @@ const UAE_PASS_SCOPE = 'urn:uae:digitalid:profile:general';
 const GOVERNMENT_API_TIMEOUT_MS = 10_000;
 const GOVERNMENT_RESPONSE_MAX_BYTES = 2 * 1024 * 1024;
 const GOVERNMENT_ERROR_PREVIEW_BYTES = 2 * 1024;
+const GOVERNMENT_CACHE_HASH_PEPPER_ENV = 'GOVERNMENT_CACHE_HASH_PEPPER';
+const MIN_GOVERNMENT_CACHE_HASH_PEPPER_LENGTH = 48;
 const PRIVATE_GOVERNMENT_HOSTNAME_SUFFIXES = [
   '.corp',
   '.home',
@@ -828,7 +830,33 @@ export class GovernmentAPIService {
   }
 
   private hashSensitiveData(data: string): string {
+    const pepper = this.getGovernmentCacheHashPepper();
+    if (pepper) {
+      return crypto
+        .createHmac('sha256', pepper)
+        .update('zeroid:government-verification-cache:v2:')
+        .update(data)
+        .digest('hex');
+    }
+
     return crypto.createHash('sha256').update(data).digest('hex').slice(0, 16);
+  }
+
+  private getGovernmentCacheHashPepper(): string | null {
+    const pepper = process.env[GOVERNMENT_CACHE_HASH_PEPPER_ENV]?.trim();
+    if (pepper && pepper.length >= MIN_GOVERNMENT_CACHE_HASH_PEPPER_LENGTH) {
+      return pepper;
+    }
+
+    if (isProductionRuntime()) {
+      throw new GovernmentAPIError(
+        `${GOVERNMENT_CACHE_HASH_PEPPER_ENV} must be configured in production and contain at least ${MIN_GOVERNMENT_CACHE_HASH_PEPPER_LENGTH} characters`,
+        'GOV_CACHE_HASH_PEPPER_MISSING',
+        500,
+      );
+    }
+
+    return null;
   }
 
   private createIdentityScopedCachedVerificationResult(

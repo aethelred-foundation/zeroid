@@ -39,6 +39,7 @@ const PROD_BASE_ENV: NodeJS.ProcessEnv = {
   POLICY_RECEIPT_SIGNING_SECRET: 'r'.repeat(64),
   ENTERPRISE_SECRET_HASH_PEPPER: 'e'.repeat(64),
   IDENTITY_RECOVERY_HASH_PEPPER: 'i'.repeat(64),
+  GOVERNMENT_CACHE_HASH_PEPPER: 'g'.repeat(64),
   OIDC_ISSUER_URL: 'https://id.zeroid.example/enterprise/oidc',
   OIDC_SIGNING_PRIVATE_KEY: oidcPrivateKey,
   OIDC_SIGNING_PUBLIC_KEY: oidcPublicKey,
@@ -366,6 +367,32 @@ describe('production safety controls', () => {
       IDENTITY_RECOVERY_HASH_PEPPER: 'change-me',
     })).toEqual([
       expect.objectContaining({ control: 'IDENTITY_RECOVERY_HASH_PEPPER' }),
+    ]);
+  });
+
+  it('requires a strong government cache hash pepper in production', () => {
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      METRICS_PUBLIC_DISABLED: 'true',
+      GOVERNMENT_CACHE_HASH_PEPPER: '',
+    })).toEqual([
+      expect.objectContaining({ control: 'GOVERNMENT_CACHE_HASH_PEPPER' }),
+    ]);
+
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      METRICS_PUBLIC_DISABLED: 'true',
+      GOVERNMENT_CACHE_HASH_PEPPER: 'short-pepper',
+    })).toEqual([
+      expect.objectContaining({ control: 'GOVERNMENT_CACHE_HASH_PEPPER' }),
+    ]);
+
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      METRICS_PUBLIC_DISABLED: 'true',
+      GOVERNMENT_CACHE_HASH_PEPPER: 'change-me',
+    })).toEqual([
+      expect.objectContaining({ control: 'GOVERNMENT_CACHE_HASH_PEPPER' }),
     ]);
   });
 
