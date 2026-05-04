@@ -112,6 +112,17 @@ export const verificationCounter = new Counter({
 // Express application
 // ---------------------------------------------------------------------------
 const app = express();
+app.disable('x-powered-by');
+
+const trustedProxy = process.env.TRUSTED_PROXY
+  ?.split(',')
+  .map((entry) => entry.trim())
+  .filter((entry) => entry.length > 0);
+
+if (trustedProxy && trustedProxy.length > 0) {
+  app.set('trust proxy', trustedProxy);
+  logger.info('trusted_proxy_configured', { proxyCount: trustedProxy.length });
+}
 
 const publicHealthLimiter = createRateLimiter({
   windowMs: 60_000,
