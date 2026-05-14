@@ -163,4 +163,53 @@ describe('buildTrustedOIDCClaims', () => {
 
     expect(claims).toEqual({ updated_at: 1777334400 });
   });
+
+  it('does not emit verified claims when government evidence has no verification timestamp', async () => {
+    mockGetVerificationStatus.mockResolvedValueOnce({
+      verified: true,
+      provider: 'EMIRATES_ID',
+      referenceId: 'eid-no-timestamp',
+      verifiedFields: ['fullName', 'email'],
+      expiresAt: new Date('2027-04-28T00:00:00.000Z'),
+    });
+
+    const claims = await buildTrustedOIDCClaims('identity-4', {
+      displayName: null,
+      metadata: {
+        verified_oidc_claims: {
+          name: 'Undated Alice',
+          email: 'undated@example.test',
+        },
+      },
+      teeAttestationId: null,
+      updatedAt: new Date('2026-04-28T00:00:00.000Z'),
+    });
+
+    expect(claims).toEqual({ updated_at: 1777334400 });
+  });
+
+  it('does not emit verified claims from stale government evidence even before expiry', async () => {
+    mockGetVerificationStatus.mockResolvedValueOnce({
+      verified: true,
+      provider: 'EMIRATES_ID',
+      referenceId: 'eid-stale',
+      verifiedFields: ['fullName', 'email'],
+      verifiedAt: new Date('2024-04-28T00:00:00.000Z'),
+      expiresAt: new Date('2027-04-28T00:00:00.000Z'),
+    });
+
+    const claims = await buildTrustedOIDCClaims('identity-5', {
+      displayName: null,
+      metadata: {
+        verified_oidc_claims: {
+          name: 'Stale Alice',
+          email: 'stale@example.test',
+        },
+      },
+      teeAttestationId: null,
+      updatedAt: new Date('2026-04-28T00:00:00.000Z'),
+    });
+
+    expect(claims).toEqual({ updated_at: 1777334400 });
+  });
 });

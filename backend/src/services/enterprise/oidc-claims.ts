@@ -56,6 +56,8 @@ const ADDRESS_CLAIMS = new Set([
   'postal_code',
   'country',
 ]);
+const DEFAULT_GOVERNMENT_EVIDENCE_MAX_AGE_DAYS = 365;
+const GOVERNMENT_EVIDENCE_FUTURE_SKEW_MS = 5 * 60 * 1000;
 
 export async function buildTrustedOIDCClaims(
   subjectId: string,
@@ -186,8 +188,22 @@ function isCurrentGovernmentStatus(
     return false;
   }
 
+  const verifiedAt = parseDate(governmentStatus.verifiedAt);
+  if (!verifiedAt) {
+    return false;
+  }
+
+  const now = Date.now();
+  if (verifiedAt.getTime() > now + GOVERNMENT_EVIDENCE_FUTURE_SKEW_MS) {
+    return false;
+  }
+
+  if (now - verifiedAt.getTime() > getGovernmentEvidenceMaxAgeMs()) {
+    return false;
+  }
+
   const expiresAt = parseDate(governmentStatus.expiresAt);
-  return !expiresAt || expiresAt.getTime() > Date.now();
+  return !expiresAt || expiresAt.getTime() > now;
 }
 
 function sanitizeStringClaim(claimName: string, value: unknown): string | null {
@@ -249,6 +265,18 @@ function parseDate(value: Date | string | undefined): Date | null {
   if (!value) return null;
   const parsed = value instanceof Date ? value : new Date(value);
   return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function getGovernmentEvidenceMaxAgeMs(): number {
+  const configuredDays = Number(
+    process.env.OIDC_GOVERNMENT_EVIDENCE_MAX_AGE_DAYS ??
+      DEFAULT_GOVERNMENT_EVIDENCE_MAX_AGE_DAYS,
+  );
+  const days =
+    Number.isFinite(configuredDays) && configuredDays > 0
+      ? configuredDays
+      : DEFAULT_GOVERNMENT_EVIDENCE_MAX_AGE_DAYS;
+  return days * 24 * 60 * 60 * 1000;
 }
 
 async function getDefaultTrustedOIDCClaimDependencies(): Promise<TrustedOIDCClaimDependencies> {
