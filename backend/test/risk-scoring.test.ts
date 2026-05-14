@@ -131,22 +131,29 @@ describe('RiskScoringService evidence gap guardrails', () => {
     expect(assessment.decision).toBe('review');
   });
 
-  it('does not approve when credential risk cannot be computed', async () => {
+  it('fails closed when identity risk cannot be computed', async () => {
+    mockIdentityFindUnique.mockRejectedValue(new Error('datastore unavailable'));
+
+    await expect(
+      new RiskScoringService().assessRisk('identity-1', 'identity', 'US'),
+    ).rejects.toMatchObject({
+      code: 'RISK_IDENTITY_DATA_UNAVAILABLE',
+      statusCode: 503,
+    });
+
+    expect(mockAuditLogCreate).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when credential risk cannot be computed', async () => {
     mockCredentialFindMany.mockRejectedValue(new Error('datastore unavailable'));
 
-    const assessment = await new RiskScoringService().assessRisk(
-      'credential-1',
-      'credential',
-      'US',
-    );
+    await expect(
+      new RiskScoringService().assessRisk('credential-1', 'credential', 'US'),
+    ).rejects.toMatchObject({
+      code: 'RISK_CREDENTIAL_DATA_UNAVAILABLE',
+      statusCode: 503,
+    });
 
-    expect(assessment.factors).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        name: 'credential_data_unavailable',
-        normalizedScore: 70,
-      }),
-    ]));
-    expect(assessment.compositeScore).toBeGreaterThanOrEqual(55);
-    expect(assessment.decision).toBe('review');
+    expect(mockAuditLogCreate).not.toHaveBeenCalled();
   });
 });

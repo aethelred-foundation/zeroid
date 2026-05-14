@@ -392,18 +392,11 @@ export class RiskScoringService {
         identityId,
         error: (err as Error).message,
       });
-      return {
-        score: 70,
-        factors: [{
-          name: 'identity_data_unavailable',
-          category: 'identity',
-          rawValue: 1,
-          normalizedScore: 70,
-          weight: 1.0,
-          impact: 'increasing',
-          explanation: 'Unable to compute identity risk from the datastore',
-        }],
-      };
+      throw new RiskScoringError(
+        'Unable to compute identity risk from the datastore',
+        'RISK_IDENTITY_DATA_UNAVAILABLE',
+        503,
+      );
     }
   }
 
@@ -541,18 +534,11 @@ export class RiskScoringService {
         entityId,
         error: (err as Error).message,
       });
-      return {
-        score: 70,
-        factors: [{
-          name: 'credential_data_unavailable',
-          category: 'credential',
-          rawValue: 1,
-          normalizedScore: 70,
-          weight: 1.0,
-          impact: 'increasing',
-          explanation: 'Unable to compute credential risk from the datastore',
-        }],
-      };
+      throw new RiskScoringError(
+        'Unable to compute credential risk from the datastore',
+        'RISK_CREDENTIAL_DATA_UNAVAILABLE',
+        503,
+      );
     }
   }
 
