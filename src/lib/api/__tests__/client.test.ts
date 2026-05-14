@@ -555,111 +555,236 @@ describe("apiClient.getSchema()", () => {
 });
 
 describe("apiClient.submitProof()", () => {
-  it("calls POST /api/v1/proofs/submit", async () => {
-    const proof = { circuitId: "age", publicInputs: [], proof: "data" };
-    mockFetch.mockResolvedValue(jsonResponse({ verified: true }));
+  it("calls POST /api/v1/verification/zk-verify with context-bound proof data", async () => {
+    const proof = {
+      id: "proof-1",
+      circuitId: "0xage",
+      circuitName: "age_verification",
+      proofSystem: "groth16",
+      proof: {
+        a: ["1", "2"],
+        b: [["3", "4"], ["5", "6"]],
+        c: ["7", "8"],
+      },
+      publicInputs: ["11", "22"],
+      publicOutputs: [],
+      generatedAt: 1,
+      validityDuration: 300,
+      proofHash: "0xproof",
+      nonce: "nonce-value-with-min-length",
+      audience: "identity-verifier-1",
+      contextCommitment: "12345",
+      issuedAt: 1760000000000,
+    };
+    mockFetch.mockResolvedValue(
+      jsonResponse({
+        valid: true,
+        proofId: "proof-1",
+        circuitName: "age_verification",
+        verifiedAt: 1760000000000,
+      }),
+    );
     const result = await apiClient.submitProof(proof as any, "auth");
-    expect(result).toEqual({ verified: true });
+    expect(result).toMatchObject({
+      valid: true,
+      proofHash: "0xproof",
+      circuitId: "0xage",
+      verifiedAt: 1760000000,
+    });
     const [url, init] = mockFetch.mock.calls[0];
-    expect(url).toContain("/api/v1/proofs/submit");
+    expect(url).toContain("/api/v1/verification/zk-verify");
     expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body)).toMatchObject({
+      circuitName: "age_verification",
+      nonce: "nonce-value-with-min-length",
+      audience: "identity-verifier-1",
+      proof: {
+        pi_a: ["1", "2"],
+        pi_c: ["7", "8"],
+      },
+    });
+  });
+
+  it("rejects proof submissions without context binding metadata before network I/O", async () => {
+    const proof = {
+      id: "proof-1",
+      circuitId: "0xage",
+      circuitName: "age_verification",
+      proofSystem: "groth16",
+      proof: {
+        a: ["1", "2"],
+        b: [["3", "4"], ["5", "6"]],
+        c: ["7", "8"],
+      },
+      publicInputs: ["11", "22"],
+      publicOutputs: [],
+      generatedAt: 1,
+      validityDuration: 300,
+      proofHash: "0xproof",
+    };
+
+    await expect(apiClient.submitProof(proof as any, "auth")).rejects.toMatchObject({
+      code: "PROOF_CONTEXT_REQUIRED",
+      statusCode: 400,
+    });
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 });
 
 describe("apiClient.listProofRequests()", () => {
-  it("calls GET /api/v1/proofs/requests with subject param", async () => {
-    mockFetch.mockResolvedValue(jsonResponse([]));
-    await apiClient.listProofRequests("0xdid" as `0x${string}`, "auth");
-    const [url, init] = mockFetch.mock.calls[0];
-    expect(url).toContain("/api/v1/proofs/requests");
-    const parsed = new URL(url);
-    expect(parsed.searchParams.get("subject")).toBe("0xdid");
-    expect(init.headers["Authorization"]).toBe("Bearer auth");
+  it("fails closed because the backend does not expose a proof request inbox", async () => {
+    await expect(
+      apiClient.listProofRequests("0xdid" as `0x${string}`, "auth"),
+    ).rejects.toMatchObject({
+      code: "PROOF_REQUEST_INBOX_UNAVAILABLE",
+      statusCode: 501,
+    });
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 });
 
 describe("apiClient.getVerificationResult()", () => {
-  it("calls GET /api/v1/proofs/verifications/{id}", async () => {
-    mockFetch.mockResolvedValue(jsonResponse({ status: "verified" }));
-    await apiClient.getVerificationResult("req-123");
-    expect(mockFetch.mock.calls[0][0]).toContain(
-      "/api/v1/proofs/verifications/req-123",
+  it("loads recent verification history and maps the requested result", async () => {
+    mockFetch.mockResolvedValue(
+      jsonResponse([
+        {
+          id: "req-123",
+          result: "VERIFIED",
+          completedAt: "2026-01-01T00:00:00.000Z",
+        },
+      ]),
     );
+    const result = await apiClient.getVerificationResult("req-123");
+    expect(result).toMatchObject({
+      requestId: "req-123",
+      verified: true,
+    });
+    expect(mockFetch.mock.calls[0][0]).toContain(
+      "/api/v1/verification/history",
+    );
+  });
+
+  it("returns a typed not-found error when history does not contain the result", async () => {
+    mockFetch.mockResolvedValue(jsonResponse([]));
+    await expect(apiClient.getVerificationResult("missing")).rejects.toMatchObject({
+      code: "VERIFICATION_RESULT_NOT_FOUND",
+      statusCode: 404,
+    });
   });
 });
 
 describe("apiClient.listTEENodes()", () => {
-  it("calls GET /api/v1/tee/nodes", async () => {
-    mockFetch.mockResolvedValue(jsonResponse([{ id: "node1" }]));
-    const result = await apiClient.listTEENodes();
-    expect(result).toEqual([{ id: "node1" }]);
-    expect(mockFetch.mock.calls[0][0]).toContain("/api/v1/tee/nodes");
+  it("fails closed because node discovery is not exposed", async () => {
+    await expect(apiClient.listTEENodes()).rejects.toMatchObject({
+      code: "TEE_NODE_DISCOVERY_UNAVAILABLE",
+      statusCode: 501,
+    });
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 });
 
 describe("apiClient.getAttestation()", () => {
-  it("calls GET /api/v1/tee/attestation/{hash}", async () => {
-    mockFetch.mockResolvedValue(jsonResponse({ enclaveHash: "0xenc" }));
-    await apiClient.getAttestation("0xenc" as `0x${string}`);
-    expect(mockFetch.mock.calls[0][0]).toContain(
-      "/api/v1/tee/attestation/0xenc",
-    );
+  it("fails closed because enclave-hash lookup is not exposed", async () => {
+    await expect(apiClient.getAttestation("0xenc" as `0x${string}`)).rejects.toMatchObject({
+      code: "TEE_ATTESTATION_LOOKUP_UNAVAILABLE",
+      statusCode: 501,
+    });
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 });
 
 describe("apiClient.requestBiometricVerification()", () => {
-  it("calls POST /api/v1/tee/biometric/verify", async () => {
+  it("fails closed because biometric verification is not exposed", async () => {
     const payload = {
       subjectDidHash: "0xsub" as `0x${string}`,
       enclaveHash: "0xenc" as `0x${string}`,
       biometricData: "base64data",
     };
-    mockFetch.mockResolvedValue(
-      jsonResponse({ verificationId: "v1", status: "pending" }),
-    );
-    const result = await apiClient.requestBiometricVerification(
-      payload,
-      "auth",
-    );
-    expect(result).toEqual({ verificationId: "v1", status: "pending" });
-    const [url, init] = mockFetch.mock.calls[0];
-    expect(url).toContain("/api/v1/tee/biometric/verify");
-    expect(init.method).toBe("POST");
-    expect(JSON.parse(init.body)).toEqual(payload);
+    await expect(
+      apiClient.requestBiometricVerification(payload, "auth"),
+    ).rejects.toMatchObject({
+      code: "BIOMETRIC_VERIFICATION_UNAVAILABLE",
+      statusCode: 501,
+    });
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 });
 
 describe("apiClient.createVerificationRequest()", () => {
-  it("calls POST /api/v1/verifications", async () => {
+  it("fails closed because verifier-created requests are not exposed", async () => {
     const payload = {
       verifierDid: "0xv",
       subjectDid: "0xs",
       schemaHash: "0xsch",
     };
-    mockFetch.mockResolvedValue(jsonResponse({ id: "vr1", status: "pending" }));
-    const result = await apiClient.createVerificationRequest(
-      payload as any,
-      "auth",
-    );
-    expect(result).toEqual({ id: "vr1", status: "pending" });
-    expect(mockFetch.mock.calls[0][0]).toContain("/api/v1/verifications");
-    expect(mockFetch.mock.calls[0][1].method).toBe("POST");
+    await expect(
+      apiClient.createVerificationRequest(payload as any, "auth"),
+    ).rejects.toMatchObject({
+      code: "VERIFICATION_REQUEST_CREATE_UNAVAILABLE",
+      statusCode: 501,
+    });
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 });
 
 describe("apiClient.respondToVerification()", () => {
-  it("calls POST /api/v1/verifications/{id}/respond", async () => {
-    const payload = { consent: true, proof: { circuitId: "age" } };
-    mockFetch.mockResolvedValue(jsonResponse({ status: "verified" }));
+  it("verifies the supplied proof through /api/v1/verification/zk-verify", async () => {
+    const proof = {
+      id: "proof-1",
+      circuitId: "0xage",
+      circuitName: "age_verification",
+      proofSystem: "groth16",
+      proof: {
+        a: ["1", "2"],
+        b: [["3", "4"], ["5", "6"]],
+        c: ["7", "8"],
+      },
+      publicInputs: ["11", "22"],
+      publicOutputs: [],
+      generatedAt: 1,
+      validityDuration: 300,
+      proofHash: "0xproof",
+      nonce: "nonce-value-with-min-length",
+      audience: "identity-verifier-1",
+      contextCommitment: "12345",
+      issuedAt: 1760000000000,
+    };
+    const payload = { consent: true, proof };
+    mockFetch.mockResolvedValue(
+      jsonResponse({
+        valid: true,
+        proofId: "proof-1",
+        circuitName: "age_verification",
+        verifiedAt: 1760000000000,
+      }),
+    );
     const result = await apiClient.respondToVerification(
       "req-1",
       payload as any,
       "auth",
     );
-    expect(result).toEqual({ status: "verified" });
+    expect(result).toMatchObject({
+      requestId: "req-1",
+      verified: true,
+      verifiedAt: 1760000000,
+    });
     const [url, init] = mockFetch.mock.calls[0];
-    expect(url).toContain("/api/v1/verifications/req-1/respond");
+    expect(url).toContain("/api/v1/verification/zk-verify");
     expect(init.method).toBe("POST");
+  });
+
+  it("returns a local rejection result when consent is denied", async () => {
+    const result = await apiClient.respondToVerification(
+      "req-1",
+      { consent: false },
+      "auth",
+    );
+    expect(result).toMatchObject({
+      requestId: "req-1",
+      verified: false,
+      reason: "User declined verification",
+    });
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 });
 

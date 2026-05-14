@@ -51,6 +51,33 @@ type BackendResponseEnvelope<T> = Partial<ApiResponse<T>> & {
   pagination?: BackendPagination;
 };
 
+type BackendGroth16Proof = {
+  pi_a: string[];
+  pi_b: string[][];
+  pi_c: string[];
+  protocol: string;
+  curve: string;
+};
+
+type BackendVerificationHistoryEntry = {
+  id: string;
+  verificationType?: string;
+  result?: string;
+  requestedAt?: string | number | Date;
+  completedAt?: string | number | Date | null;
+  credentialId?: string;
+  verifierId?: string;
+  subjectId?: string;
+};
+
+type BackendZkVerificationResult = {
+  valid?: boolean;
+  proofId?: string;
+  circuitName?: string;
+  verifiedAt?: string | number | Date;
+  error?: string;
+};
+
 // ============================================================================
 // Error Class
 // ============================================================================
@@ -241,6 +268,136 @@ async function del<T>(
   return result.data as T;
 }
 
+function unsupportedFeature(message: string, code: string): never {
+  throw new ZeroIDApiError(message, code, 501);
+}
+
+function toUnixTimestamp(value: unknown): number {
+  if (typeof value === "number") {
+    return value > 10_000_000_000 ? Math.floor(value / 1000) : value;
+  }
+  if (typeof value === "string" || value instanceof Date) {
+    const time = new Date(value).getTime();
+    if (!Number.isNaN(time)) return Math.floor(time / 1000);
+  }
+  return Math.floor(Date.now() / 1000);
+}
+
+function asStringArray(value: unknown): string[] | undefined {
+  return Array.isArray(value) && value.every((item) => typeof item === "string")
+    ? value
+    : undefined;
+}
+
+function toBackendGroth16Proof(proof: ZKProof): BackendGroth16Proof {
+  const raw = proof.proof as unknown as Record<string, unknown>;
+  const piA = asStringArray(raw.pi_a);
+  const piB = Array.isArray(raw.pi_b)
+    ? raw.pi_b.filter(Array.isArray).map((row) => row.map(String))
+    : undefined;
+  const piC = asStringArray(raw.pi_c);
+  if (piA && piB && piC) {
+    return {
+      pi_a: piA,
+      pi_b: piB,
+      pi_c: piC,
+      protocol: String(raw.protocol ?? proof.protocol ?? proof.proofSystem),
+      curve: String(raw.curve ?? proof.curve ?? "bn128"),
+    };
+  }
+
+  if (Array.isArray(raw.a) && Array.isArray(raw.b) && Array.isArray(raw.c)) {
+    return {
+      pi_a: raw.a.map(String),
+      pi_b: raw.b.filter(Array.isArray).map((row) => row.map(String)),
+      pi_c: raw.c.map(String),
+      protocol: proof.protocol ?? proof.proofSystem,
+      curve: proof.curve ?? "bn128",
+    };
+  }
+
+  throw new ZeroIDApiError(
+    "Proof payload is not a supported Groth16 proof shape.",
+    "PROOF_SHAPE_UNSUPPORTED",
+    400,
+  );
+}
+
+function getProofContextField(
+  proof: ZKProof,
+  field: "nonce" | "audience" | "contextCommitment" | "issuedAt",
+): string | number | undefined {
+  const record = proof as unknown as Record<string, unknown>;
+  const value = record[field];
+  if (typeof value === "string" || typeof value === "number") return value;
+  return undefined;
+}
+
+function buildZkVerifyPayload(proof: ZKProof) {
+  const nonce = getProofContextField(proof, "nonce");
+  const audience = getProofContextField(proof, "audience");
+  const contextCommitment = getProofContextField(proof, "contextCommitment");
+  const issuedAt = getProofContextField(proof, "issuedAt");
+  const publicSignals =
+    asStringArray((proof as unknown as Record<string, unknown>).publicSignals) ??
+    proof.publicInputs;
+
+  if (
+    typeof nonce !== "string" ||
+    typeof audience !== "string" ||
+    typeof contextCommitment !== "string" ||
+    typeof issuedAt !== "number"
+  ) {
+    throw new ZeroIDApiError(
+      "Proof submission requires nonce, audience, issuedAt, and contextCommitment from /api/v1/verification/zk-proof.",
+      "PROOF_CONTEXT_REQUIRED",
+      400,
+    );
+  }
+
+  return {
+    proof: toBackendGroth16Proof(proof),
+    publicSignals,
+    circuitName: proof.circuitName,
+    nonce,
+    audience,
+    contextCommitment,
+    issuedAt,
+  };
+}
+
+async function submitZkProof(
+  proof: ZKProof,
+  authToken: string,
+): Promise<ProofVerification> {
+  const result = await post<BackendZkVerificationResult>(
+    "/api/v1/verification/zk-verify",
+    buildZkVerifyPayload(proof),
+    authToken,
+  );
+
+  return {
+    valid: result.valid === true,
+    proofHash: (proof.proofHash ?? proof.hash ?? `0x${result.proofId ?? proof.id}`) as Bytes32,
+    circuitId: proof.circuitId,
+    verifiedAt: toUnixTimestamp(result.verifiedAt),
+    error: result.error,
+  };
+}
+
+function historyEntryToVerificationResult(
+  entry: BackendVerificationHistoryEntry,
+): VerificationResult {
+  const verified = entry.result === "VERIFIED";
+  return {
+    requestId: entry.id,
+    verified,
+    attributeResults: [],
+    verifiedAt: toUnixTimestamp(entry.completedAt ?? entry.requestedAt),
+    error: verified ? undefined : entry.result,
+  };
+}
+
 // ============================================================================
 // Public API Client
 // ============================================================================
@@ -386,18 +543,17 @@ export const apiClient = {
     proof: ZKProof,
     authToken: string,
   ): Promise<ProofVerification> {
-    return post<ProofVerification>("/api/v1/proofs/submit", proof, authToken);
+    return submitZkProof(proof, authToken);
   },
 
   /** Fetch pending proof requests for the current user */
   async listProofRequests(
-    subjectDidHash: Bytes32,
-    authToken: string,
+    _subjectDidHash: Bytes32,
+    _authToken: string,
   ): Promise<ProofRequest[]> {
-    return get<ProofRequest[]>(
-      "/api/v1/proofs/requests",
-      { subject: subjectDidHash },
-      authToken,
+    unsupportedFeature(
+      "Proof request inbox is not exposed by the backend API; use verification history for completed records.",
+      "PROOF_REQUEST_INBOX_UNAVAILABLE",
     );
   },
 
@@ -406,11 +562,20 @@ export const apiClient = {
     requestId: string,
     authToken?: string,
   ): Promise<VerificationResult> {
-    return get<VerificationResult>(
-      `/api/v1/proofs/verifications/${requestId}`,
-      undefined,
+    const history = await get<BackendVerificationHistoryEntry[]>(
+      "/api/v1/verification/history",
+      { limit: 100 },
       authToken,
     );
+    const entry = history.find((item) => item.id === requestId);
+    if (!entry) {
+      throw new ZeroIDApiError(
+        "Verification result was not found in recent history.",
+        "VERIFICATION_RESULT_NOT_FOUND",
+        404,
+      );
+    }
+    return historyEntryToVerificationResult(entry);
   },
 
   // --------------------------------------------------------------------------
@@ -419,12 +584,19 @@ export const apiClient = {
 
   /** List available TEE nodes */
   async listTEENodes(): Promise<TEENode[]> {
-    return get<TEENode[]>("/api/v1/tee/nodes");
+    unsupportedFeature(
+      "TEE node discovery is not exposed by the backend API.",
+      "TEE_NODE_DISCOVERY_UNAVAILABLE",
+    );
   },
 
   /** Get attestation details for a specific enclave */
   async getAttestation(enclaveHash: Bytes32): Promise<TEEAttestation> {
-    return get<TEEAttestation>(`/api/v1/tee/attestation/${enclaveHash}`);
+    void enclaveHash;
+    unsupportedFeature(
+      "TEE attestation lookup by enclave hash is not exposed by the backend API.",
+      "TEE_ATTESTATION_LOOKUP_UNAVAILABLE",
+    );
   },
 
   /** Request biometric verification via a TEE node */
@@ -436,7 +608,12 @@ export const apiClient = {
     },
     authToken: string,
   ): Promise<{ verificationId: string; status: string }> {
-    return post("/api/v1/tee/biometric/verify", payload, authToken);
+    void payload;
+    void authToken;
+    unsupportedFeature(
+      "Biometric verification is not exposed by the backend API.",
+      "BIOMETRIC_VERIFICATION_UNAVAILABLE",
+    );
   },
 
   // --------------------------------------------------------------------------
@@ -451,10 +628,11 @@ export const apiClient = {
     >,
     authToken: string,
   ): Promise<VerificationRequest> {
-    return post<VerificationRequest>(
-      "/api/v1/verifications",
-      payload,
-      authToken,
+    void payload;
+    void authToken;
+    unsupportedFeature(
+      "Verifier-created proof requests are not exposed by the backend API.",
+      "VERIFICATION_REQUEST_CREATE_UNAVAILABLE",
     );
   },
 
@@ -464,11 +642,33 @@ export const apiClient = {
     payload: { consent: boolean; proof?: ZKProof },
     authToken: string,
   ): Promise<VerificationResult> {
-    return post<VerificationResult>(
-      `/api/v1/verifications/${requestId}/respond`,
-      payload,
-      authToken,
-    );
+    if (!payload.consent) {
+      return {
+        requestId,
+        verified: false,
+        attributeResults: [],
+        verifiedAt: Math.floor(Date.now() / 1000),
+        reason: "User declined verification",
+      };
+    }
+    if (!payload.proof) {
+      throw new ZeroIDApiError(
+        "Verification response requires a proof when consent is granted.",
+        "VERIFICATION_PROOF_REQUIRED",
+        400,
+      );
+    }
+
+    const proofResult = await submitZkProof(payload.proof, authToken);
+    return {
+      requestId,
+      verified: proofResult.valid,
+      proof: payload.proof,
+      attributeResults: [],
+      verifiedAt: proofResult.verifiedAt,
+      txHash: proofResult.txHash,
+      error: proofResult.error,
+    };
   },
 
   // --------------------------------------------------------------------------
