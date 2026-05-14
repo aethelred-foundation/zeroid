@@ -32,6 +32,12 @@ type BackendAttestationResult = {
   reportData?: string;
 };
 
+type BackendAttestationChallenge = {
+  challenge: string;
+  reportData?: string;
+  expiresAt?: string | number;
+};
+
 function unsupportedTEEQuery(message: string): never {
   throw new Error(message);
 }
@@ -76,8 +82,12 @@ export function useVerifyAttestation() {
 
   return useMutation({
     mutationFn: async (params: VerifyAttestationParams) => {
-      if (!params.nonce) {
-        throw new Error("TEE attestation requires a server-issued challenge.");
+      const challenge = await apiClient.post<BackendAttestationChallenge>(
+        "/api/v1/verification/tee-challenge",
+        {},
+      );
+      if (!challenge.challenge) {
+        throw new Error("TEE attestation challenge response was malformed.");
       }
 
       const result = await apiClient.post<BackendAttestationResult>(
@@ -85,10 +95,11 @@ export function useVerifyAttestation() {
         {
           enclaveType: "SGX",
           quote: params.quote,
-          challenge: params.nonce,
+          challenge: challenge.challenge,
           userData: JSON.stringify({
             expectedMrEnclave: params.expectedMrEnclave,
             expectedMrSigner: params.expectedMrSigner,
+            expectedReportData: challenge.reportData,
           }),
         },
       );
@@ -131,7 +142,9 @@ export function useTEENodes(activeOnly = true) {
   return useQuery({
     queryKey: ["teeNodes", activeOnly],
     queryFn: async () =>
-      unsupportedTEEQuery("TEE node discovery is not exposed by the backend API."),
+      unsupportedTEEQuery(
+        "TEE node discovery is not exposed by the backend API.",
+      ),
     staleTime: 60_000,
     refetchInterval: 120_000,
   });
@@ -160,7 +173,9 @@ export function useTEENetworkStatus() {
   return useQuery({
     queryKey: ["teeNetworkStatus"],
     queryFn: async () =>
-      unsupportedTEEQuery("TEE network status is not exposed by the backend API."),
+      unsupportedTEEQuery(
+        "TEE network status is not exposed by the backend API.",
+      ),
     staleTime: 30_000,
     refetchInterval: 60_000,
   });

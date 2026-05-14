@@ -47,8 +47,8 @@ const apiKeys = [
   {
     id: "k1",
     name: "Production - Main",
-    key: "zid_live_sk_7x9...a3f2",
-    prefix: "zid_live_sk_",
+    key: null,
+    prefix: "zid_live_",
     created: "Jan 15, 2026",
     lastUsed: "2 min ago",
     status: "active" as const,
@@ -58,8 +58,8 @@ const apiKeys = [
   {
     id: "k2",
     name: "Production - Mobile",
-    key: "zid_live_pk_4m2...b8e1",
-    prefix: "zid_live_pk_",
+    key: null,
+    prefix: "zid_live_",
     created: "Feb 3, 2026",
     lastUsed: "15 min ago",
     status: "active" as const,
@@ -69,8 +69,8 @@ const apiKeys = [
   {
     id: "k3",
     name: "Sandbox - Testing",
-    key: "zid_test_sk_9r1...c4d7",
-    prefix: "zid_test_sk_",
+    key: null,
+    prefix: "zid_test_",
     created: "Mar 1, 2026",
     lastUsed: "1h ago",
     status: "active" as const,
@@ -80,8 +80,8 @@ const apiKeys = [
   {
     id: "k4",
     name: "Legacy - Deprecated",
-    key: "zid_live_sk_2p8...f1a9",
-    prefix: "zid_live_sk_",
+    key: null,
+    prefix: "zid_live_",
     created: "Sep 10, 2025",
     lastUsed: "30d ago",
     status: "revoked" as const,
@@ -138,31 +138,31 @@ const usageData = [
 
 const topEndpoints = [
   {
-    endpoint: "/v1/credentials/verify",
+    endpoint: "/api/v1/credentials/{id}/verify",
     calls: 48293,
     avgLatency: "38ms",
     errorRate: "0.01%",
   },
   {
-    endpoint: "/v1/credentials/issue",
+    endpoint: "/api/v1/credentials",
     calls: 23847,
     avgLatency: "124ms",
     errorRate: "0.05%",
   },
   {
-    endpoint: "/v1/proof/generate",
+    endpoint: "/api/v1/verification/zk-proof",
     calls: 18932,
     avgLatency: "287ms",
     errorRate: "0.02%",
   },
   {
-    endpoint: "/v1/identity/resolve",
+    endpoint: "/api/v1/identity/resolve/{did}",
     calls: 15421,
     avgLatency: "22ms",
     errorRate: "0.00%",
   },
   {
-    endpoint: "/v1/screening/run",
+    endpoint: "/api/v1/enterprise/compliance/screen",
     calls: 8934,
     avgLatency: "1.2s",
     errorRate: "0.08%",
@@ -216,7 +216,7 @@ const sdkSnippets: Record<string, string> = {
   typescript: `import { ZeroID } from '@aethelred/zeroid-sdk';
 
 const client = new ZeroID({
-  apiKey: 'zid_live_sk_...',
+  apiKey: process.env.ZEROID_API_KEY!,
   network: 'mainnet',
 });
 
@@ -225,10 +225,11 @@ const result = await client.credentials.verify({
   credentialId: 'cred_abc123',
   proofType: 'zk-snark',
 });`,
-  python: `from aethelred import ZeroID
+  python: `import os
+from aethelred import ZeroID
 
 client = ZeroID(
-    api_key="zid_live_sk_...",
+    api_key=os.environ["ZEROID_API_KEY"],
     network="mainnet",
 )
 
@@ -240,7 +241,7 @@ result = client.credentials.verify(
   rust: `use aethelred_zeroid::Client;
 
 let client = Client::new(
-    "zid_live_sk_...",
+    std::env::var("ZEROID_API_KEY")?,
     Network::Mainnet,
 );
 
@@ -249,10 +250,14 @@ let result = client
     .credentials()
     .verify("cred_abc123", ProofType::ZkSnark)
     .await?;`,
-  go: `import "github.com/aethelred/zeroid-go"
+  go: `import (
+    "os"
+
+    zeroid "github.com/aethelred/zeroid-go"
+)
 
 client := zeroid.NewClient(
-    "zid_live_sk_...",
+    os.Getenv("ZEROID_API_KEY"),
     zeroid.Mainnet,
 )
 
@@ -451,30 +456,40 @@ export default function EnterprisePage() {
                       <div className="font-medium text-sm">{key.name}</div>
                       <div className="flex items-center gap-2 mt-1">
                         <code className="text-xs text-zero-500 font-mono">
-                          {revealedKeys.has(key.id)
+                          {key.key && revealedKeys.has(key.id)
                             ? key.key
                             : `${key.prefix}${"*".repeat(12)}`}
                         </code>
-                        <button
-                          onClick={() => toggleReveal(key.id)}
-                          className="text-zero-600 hover:text-white"
-                        >
-                          {revealedKeys.has(key.id) ? (
-                            <EyeOff className="w-3 h-3" />
-                          ) : (
-                            <Eye className="w-3 h-3" />
-                          )}
-                        </button>
-                        <button
-                          onClick={() => handleCopy(key.key, key.id)}
-                          className="text-zero-600 hover:text-white"
-                        >
-                          {copiedKey === key.id ? (
-                            <CheckCircle2 className="w-3 h-3 text-emerald-400" />
-                          ) : (
-                            <Copy className="w-3 h-3" />
-                          )}
-                        </button>
+                        {key.key ? (
+                          <>
+                            <button
+                              onClick={() => toggleReveal(key.id)}
+                              className="text-zero-600 hover:text-white"
+                            >
+                              {revealedKeys.has(key.id) ? (
+                                <EyeOff className="w-3 h-3" />
+                              ) : (
+                                <Eye className="w-3 h-3" />
+                              )}
+                            </button>
+                            <button
+                              onClick={() =>
+                                key.key && handleCopy(key.key, key.id)
+                              }
+                              className="text-zero-600 hover:text-white"
+                            >
+                              {copiedKey === key.id ? (
+                                <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                              ) : (
+                                <Copy className="w-3 h-3" />
+                              )}
+                            </button>
+                          </>
+                        ) : (
+                          <span className="text-[10px] text-zero-600">
+                            shown once at creation
+                          </span>
+                        )}
                       </div>
                       <div className="flex items-center gap-2 mt-1">
                         {key.scope.map((s) => (

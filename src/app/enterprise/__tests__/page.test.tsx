@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, act } from "@testing-library/react";
 
 jest.mock("next/navigation", () => ({
   useRouter: () => ({ push: jest.fn(), back: jest.fn() }),
@@ -134,7 +134,9 @@ describe("EnterprisePage", () => {
     fireEvent.click(usageTab!);
     expect(screen.getByText("API Calls This Week")).toBeInTheDocument();
     expect(screen.getByText("Top Endpoints")).toBeInTheDocument();
-    expect(screen.getByText("/v1/credentials/verify")).toBeInTheDocument();
+    expect(
+      screen.getByText("/api/v1/credentials/{id}/verify"),
+    ).toBeInTheDocument();
   });
 
   it("switches to SDK & Docs tab and shows SDK downloads", () => {
@@ -158,29 +160,20 @@ describe("EnterprisePage", () => {
     // API keys are shown by default with masked values containing asterisks
     const maskedKeys = screen.getAllByText(/\*{12}/);
     expect(maskedKeys.length).toBeGreaterThanOrEqual(1);
-    // Find and click a reveal/hide button (they are near the key codes)
-    const codeElements = screen.getAllByText(/zid_live_sk_/);
-    const firstKeyContainer = codeElements[0].closest("div");
-    const revealBtn = firstKeyContainer?.querySelectorAll("button")[0];
-    if (revealBtn) {
-      fireEvent.click(revealBtn);
-      // After reveal, the actual key text should be visible
-      expect(screen.getByText(/7x9.*a3f2/)).toBeInTheDocument();
-    }
+    expect(
+      screen.getAllByText("shown once at creation").length,
+    ).toBeGreaterThan(0);
+    expect(screen.queryByText(/zid_live_sk_/i)).not.toBeInTheDocument();
   });
 
-  it("copies API key to clipboard", () => {
+  it("does not expose stored API key secrets for copying", () => {
     const writeTextMock = jest.fn().mockResolvedValue(undefined);
     Object.assign(navigator, { clipboard: { writeText: writeTextMock } });
     render(<EnterprisePage />);
-    // Find copy buttons near the key codes
-    const codeElements = screen.getAllByText(/zid_live_sk_/);
-    const firstKeyContainer = codeElements[0].closest("div");
-    const copyBtn = firstKeyContainer?.querySelectorAll("button")[1];
-    if (copyBtn) {
-      fireEvent.click(copyBtn);
-      expect(writeTextMock).toHaveBeenCalled();
-    }
+    expect(
+      screen.getAllByText("shown once at creation").length,
+    ).toBeGreaterThan(0);
+    expect(writeTextMock).not.toHaveBeenCalled();
   });
 
   it("shows team RBAC permissions table", () => {
@@ -214,23 +207,11 @@ describe("EnterprisePage", () => {
 
   it("toggles API key visibility off again (reveal then hide)", () => {
     render(<EnterprisePage />);
-    // Find and click reveal button
-    const codeElements = screen.getAllByText(/zid_live_sk_/);
-    const firstKeyContainer = codeElements[0].closest("div");
-    const revealBtn = firstKeyContainer?.querySelectorAll("button")[0];
-    expect(revealBtn).toBeTruthy();
-    // First click: reveal key
-    fireEvent.click(revealBtn!);
-    expect(screen.getByText(/7x9.*a3f2/)).toBeInTheDocument();
-    // Re-query after re-render to get fresh button reference
-    const updatedCodeElements = screen.getAllByText(/7x9.*a3f2/);
-    const updatedContainer = updatedCodeElements[0].closest("div");
-    const hideBtn = updatedContainer?.querySelectorAll("button")[0];
-    expect(hideBtn).toBeTruthy();
-    // Second click: hide key (covers next.delete branch)
-    fireEvent.click(hideBtn!);
-    // Key should be masked again
-    expect(screen.queryByText(/7x9.*a3f2/)).not.toBeInTheDocument();
+    expect(screen.getAllByText(/\*{12}/).length).toBeGreaterThanOrEqual(1);
+    expect(
+      screen.getAllByText("shown once at creation").length,
+    ).toBeGreaterThan(0);
+    expect(screen.queryByText(/zid_live_sk_/i)).not.toBeInTheDocument();
   });
 
   it("copies SDK snippet to clipboard and clears copied state after timeout", () => {
@@ -246,7 +227,9 @@ describe("EnterprisePage", () => {
     fireEvent.click(copyButtons[copyButtons.length - 1]);
     expect(writeTextMock).toHaveBeenCalled();
     // Advance timer to trigger setCopiedKey(null) callback
-    jest.advanceTimersByTime(2000);
+    act(() => {
+      jest.advanceTimersByTime(2000);
+    });
     jest.useRealTimers();
   });
 });

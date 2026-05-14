@@ -28,9 +28,10 @@ import type {
 } from "@/types";
 import { API_BASE_URL } from "@/config/constants";
 import { withRetry, withTimeout } from "@/lib/utils";
-import type {
-  BackendIdentityRegistrationPayload,
-  BackendIdentityRegistrationResult,
+import {
+  getIdentityAuthToken,
+  type BackendIdentityRegistrationPayload,
+  type BackendIdentityRegistrationResult,
 } from "@/lib/identity/registration";
 
 // ============================================================================
@@ -39,6 +40,15 @@ import type {
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_RETRIES = 2;
+const DEFAULT_AUTH_PATH_PREFIXES = [
+  "/api/v1/credentials",
+  "/api/v1/verification",
+  "/api/v1/governance",
+  "/api/v1/audit",
+  "/api/v1/enterprise",
+  "/api/v1/ai",
+  "/api/v1/identity/me",
+];
 
 type BackendPagination = {
   page?: number;
@@ -138,6 +148,19 @@ function buildUrl(
   return url.toString();
 }
 
+function shouldAttachStoredAuthToken(path: string): boolean {
+  return DEFAULT_AUTH_PATH_PREFIXES.some((prefix) => path.startsWith(prefix));
+}
+
+function resolveAuthToken(
+  path: string,
+  explicitToken?: string,
+): string | undefined {
+  if (explicitToken !== undefined) return explicitToken;
+  if (!shouldAttachStoredAuthToken(path)) return undefined;
+  return getIdentityAuthToken();
+}
+
 /**
  * Core fetch wrapper. Adds auth headers, content-type, request ID,
  * and normalises errors into `ZeroIDApiError` instances.
@@ -154,6 +177,7 @@ async function request<T>(
 ): Promise<ApiResponse<T>> {
   const { body, params, authToken, timeoutMs = DEFAULT_TIMEOUT_MS } = options;
   const requestId = generateRequestId();
+  const resolvedAuthToken = resolveAuthToken(path, authToken);
 
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -161,8 +185,8 @@ async function request<T>(
     Accept: "application/json",
   };
 
-  if (authToken) {
-    headers["Authorization"] = `Bearer ${authToken}`;
+  if (resolvedAuthToken) {
+    headers["Authorization"] = `Bearer ${resolvedAuthToken}`;
   }
 
   const fetchPromise = fetch(buildUrl(path, params), {
@@ -203,7 +227,7 @@ async function request<T>(
             message:
               typeof errorPayload === "string"
                 ? errorPayload
-                : payload.message ?? response.statusText,
+                : (payload.message ?? response.statusText),
             details: payload.details,
           };
     throw new ZeroIDApiError(
@@ -353,8 +377,9 @@ function buildZkVerifyPayload(proof: ZKProof) {
   const contextCommitment = getProofContextField(proof, "contextCommitment");
   const issuedAt = getProofContextField(proof, "issuedAt");
   const publicSignals =
-    asStringArray((proof as unknown as Record<string, unknown>).publicSignals) ??
-    proof.publicInputs;
+    asStringArray(
+      (proof as unknown as Record<string, unknown>).publicSignals,
+    ) ?? proof.publicInputs;
 
   if (
     typeof nonce !== "string" ||
@@ -392,7 +417,9 @@ async function submitZkProof(
 
   return {
     valid: result.valid === true,
-    proofHash: (proof.proofHash ?? proof.hash ?? `0x${result.proofId ?? proof.id}`) as Bytes32,
+    proofHash: (proof.proofHash ??
+      proof.hash ??
+      `0x${result.proofId ?? proof.id}`) as Bytes32,
     circuitId: proof.circuitId,
     verifiedAt: toUnixTimestamp(result.verifiedAt),
     error: result.error,
@@ -483,9 +510,11 @@ export const apiClient = {
         }),
       DEFAULT_RETRIES,
     );
-    const pagination = (result as ApiResponse<Credential[]> & {
-      pagination?: BackendPagination;
-    }).pagination;
+    const pagination = (
+      result as ApiResponse<Credential[]> & {
+        pagination?: BackendPagination;
+      }
+    ).pagination;
     const items = result.data ?? [];
     const resolvedPage = pagination?.page ?? page;
     const resolvedPageSize = pagination?.limit ?? pageSize;
@@ -524,9 +553,11 @@ export const apiClient = {
         }),
       DEFAULT_RETRIES,
     );
-    const pagination = (result as ApiResponse<CredentialSchema[]> & {
-      pagination?: BackendPagination;
-    }).pagination;
+    const pagination = (
+      result as ApiResponse<CredentialSchema[]> & {
+        pagination?: BackendPagination;
+      }
+    ).pagination;
     const items = result.data ?? [];
     const resolvedPage = pagination?.page ?? page;
     const resolvedPageSize = pagination?.limit ?? pageSize;

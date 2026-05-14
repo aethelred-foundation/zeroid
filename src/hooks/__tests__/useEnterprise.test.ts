@@ -34,6 +34,17 @@ jest.mock("@/lib/api/client", () => ({
     put: jest.fn(),
     del: jest.fn(),
   },
+  ZeroIDApiError: class ZeroIDApiError extends Error {
+    code: string;
+    statusCode: number;
+
+    constructor(message: string, code: string, statusCode: number) {
+      super(message);
+      this.name = "ZeroIDApiError";
+      this.code = code;
+      this.statusCode = statusCode;
+    }
+  },
 }));
 const mockApiClient = jest.requireMock("@/lib/api/client").apiClient;
 
@@ -83,7 +94,6 @@ describe("useAPIKeys", () => {
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(mockApiClient.get).toHaveBeenCalledWith(
       "/api/v1/enterprise/api-keys",
-      { owner: mockAddress },
     );
   });
 
@@ -104,38 +114,41 @@ describe("useAPIKeys", () => {
 // ===========================================================================
 
 describe("useCreateAPIKey", () => {
-  const mockKeyWithSecret = {
-    id: "key-1",
-    name: "Production",
-    keyPrefix: "zid_live_",
-    scopes: ["identity:read"],
-    secret: "zid_live_abc123",
-    isActive: true,
-    usageCount: 0,
-    rateLimit: 1000,
-    rateLimitWindow: 60,
-    allowedOrigins: [],
-    allowedIPs: [],
-    createdAt: "2026-01-01T00:00:00Z",
+  const mockCreateResult = {
+    apiKey: "zid_live_abc123",
+    apiKeyId: "key-1",
+    expiresAt: "2026-04-01T00:00:00Z",
   };
 
   it("creates API key and shows success toast", async () => {
-    mockApiClient.post.mockResolvedValue(mockKeyWithSecret);
+    mockApiClient.post.mockResolvedValue(mockCreateResult);
     const { result } = renderHook(() => useCreateAPIKey(), {
       wrapper: createWrapper(),
     });
 
+    const config = {
+      name: "Production",
+      scopes: ["identity:read", "credentials:read"] as any,
+      environment: "production" as const,
+      expiresInDays: 90,
+      ipAllowlist: ["203.0.113.10/32"],
+      dailyQuota: 10000,
+      monthlyQuota: 1_000_000,
+      rateLimit: {
+        requestsPerSecond: 100,
+        burstSize: 200,
+      },
+      metadata: { tier: "enterprise" },
+    };
+
     await act(async () => {
-      await result.current.mutateAsync({
-        name: "Production",
-        scopes: ["identity:read"] as any,
-        rateLimit: 1000,
-        rateLimitWindow: 60,
-        allowedOrigins: [],
-        allowedIPs: [],
-      });
+      await result.current.mutateAsync(config);
     });
 
+    expect(mockApiClient.post).toHaveBeenCalledWith(
+      "/api/v1/enterprise/api-keys",
+      config,
+    );
     expect(mockToast.success).toHaveBeenCalledWith("API key created", {
       description: expect.stringContaining("Production"),
       duration: 10_000,
@@ -153,11 +166,8 @@ describe("useCreateAPIKey", () => {
         await result.current.mutateAsync({
           name: "X",
           scopes: [],
-          rateLimit: 100,
-          rateLimitWindow: 60,
-          allowedOrigins: [],
-          allowedIPs: [],
-        });
+          environment: "sandbox",
+        } as any);
       } catch {}
     });
 
@@ -184,6 +194,7 @@ describe("useRevokeAPIKey", () => {
 
     expect(mockApiClient.del).toHaveBeenCalledWith(
       "/api/v1/enterprise/api-keys/key-1",
+      { reason: "Revoked by client" },
     );
     expect(mockToast.success).toHaveBeenCalledWith("API key revoked");
   });
@@ -222,7 +233,6 @@ describe("useWebhooks", () => {
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(mockApiClient.get).toHaveBeenCalledWith(
       "/api/v1/enterprise/webhooks",
-      { owner: mockAddress },
     );
   });
 
@@ -246,20 +256,16 @@ describe("useRegisterWebhook", () => {
   const mockWebhook = {
     id: "wh-1",
     url: "https://example.com/hook",
-    events: ["identity.created", "credential.issued"],
+    events: ["identity.registered", "credential.issued"],
     createdAt: "2026-01-01T00:00:00Z",
     updatedAt: "2026-01-01T00:00:00Z",
-    enabled: true,
-    retryPolicy: {
-      maxRetries: 3,
-      initialDelayMs: 1000,
-      maxDelayMs: 30000,
-      backoffMultiplier: 2,
+    active: true,
+    health: {
+      status: "healthy",
+      successRate: 100,
+      totalDeliveries: 0,
+      failedDeliveries: 0,
     },
-    successRate: 100,
-    totalDeliveries: 0,
-    failedDeliveries: 0,
-    signingKeyId: "sk-1",
   };
 
   it("registers webhook and shows success toast", async () => {
@@ -268,20 +274,32 @@ describe("useRegisterWebhook", () => {
       wrapper: createWrapper(),
     });
 
+    const config = {
+      url: "https://example.com/hook",
+      events: ["identity.registered", "credential.issued"] as any,
+      active: true,
+      description: "Production events",
+      headers: { "x-customer-id": "acme" },
+    };
+
     await act(async () => {
-      await result.current.mutateAsync({
-        url: "https://example.com/hook",
-        events: ["identity.created", "credential.issued"] as any,
-        retryPolicy: {
-          maxRetries: 3,
-          initialDelayMs: 1000,
-          maxDelayMs: 30000,
-          backoffMultiplier: 2,
-        },
-        enabled: true,
-      });
+      await result.current.mutateAsync(config);
     });
 
+    expect(mockApiClient.post).toHaveBeenCalledWith(
+      "/api/v1/enterprise/webhooks",
+      {
+        url: "https://example.com/hook",
+        events: ["identity.registered", "credential.issued"],
+        secret: undefined,
+        description: "Production events",
+        active: true,
+        metadata: {},
+        batchDelivery: false,
+        batchIntervalMs: 5_000,
+        headers: { "x-customer-id": "acme" },
+      },
+    );
     expect(mockToast.success).toHaveBeenCalledWith("Webhook registered", {
       description: expect.stringContaining("2 event type(s)"),
     });
@@ -298,14 +316,8 @@ describe("useRegisterWebhook", () => {
         await result.current.mutateAsync({
           url: "bad",
           events: [],
-          retryPolicy: {
-            maxRetries: 3,
-            initialDelayMs: 1000,
-            maxDelayMs: 30000,
-            backoffMultiplier: 2,
-          },
           enabled: true,
-        });
+        } as any);
       } catch {}
     });
 
@@ -321,72 +333,7 @@ describe("useRegisterWebhook", () => {
 // ===========================================================================
 
 describe("useTestWebhook", () => {
-  it("shows success toast when webhook test delivered", async () => {
-    mockApiClient.post.mockResolvedValue({
-      webhookId: "wh-1",
-      delivered: true,
-      statusCode: 200,
-      responseTimeMs: 150,
-      testedAt: "2026-01-01T00:00:00Z",
-    });
-    const { result } = renderHook(() => useTestWebhook(), {
-      wrapper: createWrapper(),
-    });
-
-    await act(async () => {
-      await result.current.mutateAsync("wh-1");
-    });
-
-    expect(mockToast.success).toHaveBeenCalledWith("Webhook test delivered", {
-      description: "Status 200, 150ms",
-    });
-  });
-
-  it("shows error toast when webhook test fails", async () => {
-    mockApiClient.post.mockResolvedValue({
-      webhookId: "wh-1",
-      delivered: false,
-      statusCode: 500,
-      responseTimeMs: 5000,
-      error: "Server error",
-      testedAt: "2026-01-01T00:00:00Z",
-    });
-    const { result } = renderHook(() => useTestWebhook(), {
-      wrapper: createWrapper(),
-    });
-
-    await act(async () => {
-      await result.current.mutateAsync("wh-1");
-    });
-
-    expect(mockToast.error).toHaveBeenCalledWith("Webhook test failed", {
-      description: "Server error",
-    });
-  });
-
-  it("shows status code in description when error is undefined", async () => {
-    mockApiClient.post.mockResolvedValue({
-      webhookId: "wh-1",
-      delivered: false,
-      statusCode: 503,
-      responseTimeMs: 5000,
-      testedAt: "2026-01-01T00:00:00Z",
-    });
-    const { result } = renderHook(() => useTestWebhook(), {
-      wrapper: createWrapper(),
-    });
-
-    await act(async () => {
-      await result.current.mutateAsync("wh-1");
-    });
-
-    expect(mockToast.error).toHaveBeenCalledWith("Webhook test failed", {
-      description: "Status 503",
-    });
-  });
-
-  it("shows error toast on request failure", async () => {
-    mockApiClient.post.mockRejectedValue(new Error("Network"));
+  it("fails closed because ad-hoc webhook tests are not exposed", async () => {
     const { result } = renderHook(() => useTestWebhook(), {
       wrapper: createWrapper(),
     });
@@ -397,9 +344,14 @@ describe("useTestWebhook", () => {
       } catch {}
     });
 
+    expect(mockApiClient.post).not.toHaveBeenCalled();
+
     expect(mockToast.error).toHaveBeenCalledWith(
       "Webhook test request failed",
-      { description: "Network" },
+      {
+        description:
+          "Ad-hoc webhook test delivery is not exposed by the backend API.",
+      },
     );
   });
 });
@@ -409,36 +361,55 @@ describe("useTestWebhook", () => {
 // ===========================================================================
 
 describe("useSLAReport", () => {
+  const mockSLAReport = {
+    periodStart: "2026-01-01T00:00:00Z",
+    periodEnd: "2026-02-01T00:00:00Z",
+    generatedAt: "2026-02-01T00:00:00Z",
+    components: [
+      {
+        component: "api_gateway",
+        uptimeTarget: 99.9,
+        uptimeActual: 99.99,
+        latencyP99Actual: 180,
+        totalRequests: 1000,
+        totalErrors: 2,
+      },
+    ],
+    violations: [],
+    overallCompliance: true,
+  };
+
   it("fetches SLA report with default period", async () => {
-    mockApiClient.get.mockResolvedValue({
-      period: "month",
-      uptimePercent: 99.99,
-    });
+    mockApiClient.get.mockResolvedValue(mockSLAReport);
     const { result } = renderHook(() => useSLAReport(), {
       wrapper: createWrapper(),
     });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(mockApiClient.get).toHaveBeenCalledWith("/api/v1/enterprise/sla", {
+    expect(mockApiClient.get).toHaveBeenCalledWith(
+      "/api/v1/enterprise/sla/report",
+      { period: 30 },
+    );
+    expect(result.current.data).toMatchObject({
       period: "month",
-      owner: mockAddress,
+      uptimePercent: 99.99,
+      totalRequests: 1000,
+      failedRequests: 2,
+      complianceMet: true,
     });
   });
 
   it("accepts custom period", async () => {
-    mockApiClient.get.mockResolvedValue({
-      period: "quarter",
-      uptimePercent: 99.95,
-    });
+    mockApiClient.get.mockResolvedValue(mockSLAReport);
     const { result } = renderHook(() => useSLAReport("quarter"), {
       wrapper: createWrapper(),
     });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(mockApiClient.get).toHaveBeenCalledWith("/api/v1/enterprise/sla", {
-      period: "quarter",
-      owner: mockAddress,
-    });
+    expect(mockApiClient.get).toHaveBeenCalledWith(
+      "/api/v1/enterprise/sla/report",
+      { period: 90 },
+    );
   });
 
   it("is disabled when no address", () => {
@@ -458,35 +429,54 @@ describe("useSLAReport", () => {
 // ===========================================================================
 
 describe("useUsageMetrics", () => {
+  const mockAnalytics = {
+    totalRequests: 50000,
+    totalErrors: 10,
+    averageLatencyMs: 45,
+    endpointBreakdown: {
+      "GET /api/v1/credentials": {
+        count: 25000,
+        errors: 5,
+        avgLatencyMs: 32,
+      },
+    },
+    dailyUsage: [{ date: "2026-01-01", requests: 1000, errors: 1 }],
+  };
+
   it("fetches usage metrics with default period", async () => {
-    mockApiClient.get.mockResolvedValue({
-      period: "month",
-      totalAPIRequests: 50000,
-    });
+    mockApiClient.get.mockResolvedValue(mockAnalytics);
     const { result } = renderHook(() => useUsageMetrics(), {
       wrapper: createWrapper(),
     });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(mockApiClient.get).toHaveBeenCalledWith("/api/v1/enterprise/usage", {
+      period: 30,
+    });
+    expect(result.current.data).toMatchObject({
       period: "month",
-      owner: mockAddress,
+      totalAPIRequests: 50000,
+      breakdownByEndpoint: [
+        {
+          endpoint: "/api/v1/credentials",
+          method: "GET",
+          requestCount: 25000,
+          avgResponseTimeMs: 32,
+          errorCount: 5,
+        },
+      ],
     });
   });
 
   it("accepts custom period", async () => {
-    mockApiClient.get.mockResolvedValue({
-      period: "week",
-      totalAPIRequests: 10000,
-    });
+    mockApiClient.get.mockResolvedValue(mockAnalytics);
     const { result } = renderHook(() => useUsageMetrics("week"), {
       wrapper: createWrapper(),
     });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(mockApiClient.get).toHaveBeenCalledWith("/api/v1/enterprise/usage", {
-      period: "week",
-      owner: mockAddress,
+      period: 7,
     });
   });
 

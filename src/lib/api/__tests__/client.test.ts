@@ -91,6 +91,7 @@ function parseFailResponse(status = 200) {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  window.sessionStorage.clear();
   // Default: withRetry just calls fn once
   mockWithRetry.mockImplementation(async (fn: () => Promise<unknown>) => fn());
   // Default: withTimeout just awaits the promise
@@ -160,6 +161,26 @@ describe("request internals (tested via apiClient methods)", () => {
   it("omits Authorization header when authToken is not provided", async () => {
     mockFetch.mockResolvedValue(jsonResponse({ status: "ok" }));
     await apiClient.health();
+    const [, init] = mockFetch.mock.calls[0];
+    expect(init.headers["Authorization"]).toBeUndefined();
+  });
+
+  it("uses the stored session token for protected routes by default", async () => {
+    window.sessionStorage.setItem("zeroid.identity.authToken", "stored-token");
+    mockFetch.mockResolvedValue(jsonResponse({ hash: "0xcred" }));
+
+    await apiClient.getCredential("0xcred" as `0x${string}`);
+
+    const [, init] = mockFetch.mock.calls[0];
+    expect(init.headers["Authorization"]).toBe("Bearer stored-token");
+  });
+
+  it("does not send the stored session token to public health checks", async () => {
+    window.sessionStorage.setItem("zeroid.identity.authToken", "stored-token");
+    mockFetch.mockResolvedValue(jsonResponse({ status: "ok" }));
+
+    await apiClient.health();
+
     const [, init] = mockFetch.mock.calls[0];
     expect(init.headers["Authorization"]).toBeUndefined();
   });
@@ -481,7 +502,11 @@ describe("apiClient.listCredentials()", () => {
       }),
     });
 
-    const result = await apiClient.listCredentials("0xsub" as `0x${string}`, 3, 5);
+    const result = await apiClient.listCredentials(
+      "0xsub" as `0x${string}`,
+      3,
+      5,
+    );
 
     const [url] = mockFetch.mock.calls[0];
     const parsed = new URL(url);
@@ -574,7 +599,10 @@ describe("apiClient.submitProof()", () => {
       proofSystem: "groth16",
       proof: {
         a: ["1", "2"],
-        b: [["3", "4"], ["5", "6"]],
+        b: [
+          ["3", "4"],
+          ["5", "6"],
+        ],
         c: ["7", "8"],
       },
       publicInputs: ["11", "22"],
@@ -624,7 +652,10 @@ describe("apiClient.submitProof()", () => {
       proofSystem: "groth16",
       proof: {
         a: ["1", "2"],
-        b: [["3", "4"], ["5", "6"]],
+        b: [
+          ["3", "4"],
+          ["5", "6"],
+        ],
         c: ["7", "8"],
       },
       publicInputs: ["11", "22"],
@@ -634,7 +665,9 @@ describe("apiClient.submitProof()", () => {
       proofHash: "0xproof",
     };
 
-    await expect(apiClient.submitProof(proof as any, "auth")).rejects.toMatchObject({
+    await expect(
+      apiClient.submitProof(proof as any, "auth"),
+    ).rejects.toMatchObject({
       code: "PROOF_CONTEXT_REQUIRED",
       statusCode: 400,
     });
@@ -677,7 +710,9 @@ describe("apiClient.getVerificationResult()", () => {
 
   it("returns a typed not-found error when history does not contain the result", async () => {
     mockFetch.mockResolvedValue(jsonResponse([]));
-    await expect(apiClient.getVerificationResult("missing")).rejects.toMatchObject({
+    await expect(
+      apiClient.getVerificationResult("missing"),
+    ).rejects.toMatchObject({
       code: "VERIFICATION_RESULT_NOT_FOUND",
       statusCode: 404,
     });
@@ -696,7 +731,9 @@ describe("apiClient.listTEENodes()", () => {
 
 describe("apiClient.getAttestation()", () => {
   it("fails closed because enclave-hash lookup is not exposed", async () => {
-    await expect(apiClient.getAttestation("0xenc" as `0x${string}`)).rejects.toMatchObject({
+    await expect(
+      apiClient.getAttestation("0xenc" as `0x${string}`),
+    ).rejects.toMatchObject({
       code: "TEE_ATTESTATION_LOOKUP_UNAVAILABLE",
       statusCode: 501,
     });
@@ -747,7 +784,10 @@ describe("apiClient.respondToVerification()", () => {
       proofSystem: "groth16",
       proof: {
         a: ["1", "2"],
-        b: [["3", "4"], ["5", "6"]],
+        b: [
+          ["3", "4"],
+          ["5", "6"],
+        ],
         c: ["7", "8"],
       },
       publicInputs: ["11", "22"],

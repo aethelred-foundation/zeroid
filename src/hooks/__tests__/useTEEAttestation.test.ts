@@ -136,7 +136,12 @@ describe("useAttestationStatus", () => {
 
 describe("useVerifyAttestation", () => {
   it("shows success toast when attestation is valid", async () => {
-    mockApiClient.post.mockResolvedValue({
+    mockApiClient.post.mockResolvedValueOnce({
+      challenge: "server-issued-challenge-with-minimum-length",
+      reportData: "0xreportdata",
+      expiresAt: "2026-01-01T00:05:00Z",
+    });
+    mockApiClient.post.mockResolvedValueOnce({
       verified: true,
       attestationId: "enc-001-abcdefgh12345678",
     });
@@ -153,12 +158,17 @@ describe("useVerifyAttestation", () => {
       } as any);
     });
 
+    expect(mockApiClient.post).toHaveBeenNthCalledWith(
+      1,
+      "/api/v1/verification/tee-challenge",
+      {},
+    );
     expect(mockApiClient.post).toHaveBeenCalledWith(
       "/api/v1/verification/tee-attest",
       expect.objectContaining({
         enclaveType: "SGX",
         quote: "0xquote",
-        challenge: "0xnonce",
+        challenge: "server-issued-challenge-with-minimum-length",
       }),
     );
     expect(mockToast.success).toHaveBeenCalledWith("Attestation verified", {
@@ -167,7 +177,12 @@ describe("useVerifyAttestation", () => {
   });
 
   it("shows error toast when attestation is invalid", async () => {
-    mockApiClient.post.mockResolvedValue({
+    mockApiClient.post.mockResolvedValueOnce({
+      challenge: "server-issued-challenge-with-minimum-length",
+      reportData: "0xreportdata",
+      expiresAt: "2026-01-01T00:05:00Z",
+    });
+    mockApiClient.post.mockResolvedValueOnce({
       verified: false,
       attestationId: "enc-1",
     });
@@ -193,7 +208,7 @@ describe("useVerifyAttestation", () => {
   });
 
   it("shows error toast on network failure", async () => {
-    mockApiClient.post.mockRejectedValue(new Error("Connection refused"));
+    mockApiClient.post.mockRejectedValueOnce(new Error("Connection refused"));
     const { result } = renderHook(() => useVerifyAttestation(), {
       wrapper: createWrapper(),
     });
