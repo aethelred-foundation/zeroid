@@ -8,7 +8,7 @@
 import { useAccount } from "wagmi";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { apiClient } from "@/lib/api/client";
+import { apiClient, ZeroIDApiError } from "@/lib/api/client";
 import type {
   VerificationRequest,
   VerificationResponse,
@@ -32,6 +32,10 @@ function toBackendVerificationResult(status?: VerificationStatus): string | unde
   return mapped[String(status).toLowerCase()] ?? String(status).toUpperCase();
 }
 
+function unsupportedVerificationRequestFlow(message: string, code: string): never {
+  throw new ZeroIDApiError(message, code, 501);
+}
+
 // ---------------------------------------------------------------------------
 // Create a verification request (as a verifier)
 // ---------------------------------------------------------------------------
@@ -41,20 +45,15 @@ export function useCreateVerificationRequest() {
   const { address } = useAccount();
 
   return useMutation({
-    mutationFn: async (params: CreateVerificationParams) => {
-      const response = await apiClient.post<{ requestId: string }>(
-        "/v1/verification/request",
-        {
-          verifierAddress: address,
-          subjectDid: params.subjectDid,
-          requiredCredentials: params.requiredCredentials,
-          requiredAttributes: params.requiredAttributes,
-          purpose: params.purpose,
-          expiresIn: params.expiresIn ?? 86400,
-          callbackUrl: params.callbackUrl,
-        },
+    mutationFn: async (
+      params: CreateVerificationParams,
+    ): Promise<{ requestId: string }> => {
+      void params;
+      void address;
+      unsupportedVerificationRequestFlow(
+        "Verifier-created request inboxes are not exposed by the backend API. Use context-bound ZK proof generation and /api/v1/verification/zk-verify instead.",
+        "VERIFICATION_REQUEST_CREATE_UNAVAILABLE",
       );
-      return response;
     },
     onSuccess: (data) => {
       toast.success("Verification request created", {
@@ -83,16 +82,13 @@ export function useRespondToVerification() {
       requestId: string;
       selectedAttributes: AttributeSelection[];
       proofData: string;
-    }) => {
-      const response = await apiClient.post<VerificationResponse>(
-        `/v1/verification/${params.requestId}/respond`,
-        {
-          holderAddress: address,
-          selectedAttributes: params.selectedAttributes,
-          zkProof: params.proofData,
-        },
+    }): Promise<VerificationResponse> => {
+      void params;
+      void address;
+      unsupportedVerificationRequestFlow(
+        "Verification request responses are not exposed by the backend API. Submit context-bound proofs through /api/v1/verification/zk-verify.",
+        "VERIFICATION_REQUEST_RESPONSE_UNAVAILABLE",
       );
-      return response;
     },
     onSuccess: () => {
       toast.success("Verification response submitted");
@@ -112,26 +108,19 @@ export function useRespondToVerification() {
 export function useSelectAttributes(requestId: string | undefined) {
   const { address } = useAccount();
 
-  return useQuery({
+  return useQuery<{
+    request: VerificationRequest;
+    availableAttributes: AttributeSelection[];
+    requiredAttributes: VerificationRequest["requiredAttributes"];
+  }>({
     queryKey: ["attributeSelection", requestId, address],
     queryFn: async () => {
-      const request = await apiClient.get<VerificationRequest>(
-        `/v1/verification/${requestId}`,
+      void requestId;
+      void address;
+      unsupportedVerificationRequestFlow(
+        "Verification request detail and credential attribute selection endpoints are not exposed by the backend API.",
+        "VERIFICATION_REQUEST_DETAIL_UNAVAILABLE",
       );
-      const requiredCredentials = request.requiredCredentials ?? [];
-      const requiredAttributes =
-        request.requiredAttributes ?? request.requestedAttributes ?? [];
-
-      const userCredentials = await apiClient.get<AttributeSelection[]>(
-        `/v1/credentials/${address}/attributes`,
-        { schemaIds: requiredCredentials.join(",") },
-      );
-
-      return {
-        request,
-        availableAttributes: userCredentials,
-        requiredAttributes,
-      };
     },
     enabled: !!requestId && !!address,
     staleTime: 60_000,

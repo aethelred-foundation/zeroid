@@ -6,11 +6,25 @@
  */
 
 import { useCallback } from "react";
-import { useAccount, useReadContract, useWriteContract } from "wagmi";
+import {
+  useAccount,
+  useReadContract,
+  useSignMessage,
+  useWriteContract,
+} from "wagmi";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { type Address, type Hash } from "viem";
 import { toast } from "sonner";
 import { apiClient } from "@/lib/api/client";
+import {
+  buildRegistrationMessage,
+  extractRegistrationPublicKey,
+  getIdentityAuthToken,
+  getRegistrationDid,
+  normalizeRecoveryHash,
+  recoverRegistrationPublicKey,
+  storeIdentityAuthToken,
+} from "@/lib/identity/registration";
 import {
   IDENTITY_REGISTRY_ADDRESS,
   IDENTITY_REGISTRY_ABI,
@@ -68,7 +82,7 @@ export function useIdentityProfile() {
   return useQuery({
     queryKey: ["identity", "profile", address],
     queryFn: () =>
-      apiClient.get<IdentityProfile>(`/v1/identity/${address}/profile`),
+      apiClient.get<IdentityProfile>(`/api/v1/identity/address/${address}`),
     enabled: !!address,
     staleTime: 30_000,
   });
@@ -81,10 +95,28 @@ export function useIdentityProfile() {
 export function useCreateIdentity() {
   const queryClient = useQueryClient();
   const { writeContractAsync } = useWriteContract();
+  const { signMessageAsync } = useSignMessage();
   const { address } = useAccount();
 
   return useMutation({
     mutationFn: async (params: CreateIdentityParams): Promise<Hash> => {
+      const recoveryHash = normalizeRecoveryHash(params.didDocumentHash);
+      const did = getRegistrationDid(params.didDocument, address);
+      let publicKey = extractRegistrationPublicKey(params.publicKeys);
+
+      if (!publicKey) {
+        if (!address) {
+          throw new Error("Wallet must be connected to register an identity.");
+        }
+        const message = buildRegistrationMessage({
+          did,
+          controller: address,
+          recoveryHash,
+        });
+        const signature = await signMessageAsync({ message });
+        publicKey = await recoverRegistrationPublicKey(message, signature);
+      }
+
       // Register DID document hash on-chain
       const hash = await writeContractAsync({
         address: IDENTITY_REGISTRY_ADDRESS as Address,
@@ -94,12 +126,17 @@ export function useCreateIdentity() {
       });
 
       // Persist full DID document via API
-      await apiClient.post("/v1/identity/register", {
-        ownerAddress: address,
-        txHash: hash,
-        didDocument: params.didDocument,
-        publicKeys: params.publicKeys,
+      const registration = await apiClient.registerIdentity({
+        did,
+        publicKey,
+        recoveryHash,
+        metadata: {
+          controller: address?.toLowerCase(),
+          txHash: hash,
+          didDocument: params.didDocument,
+        },
       });
+      storeIdentityAuthToken(registration.token);
 
       return hash;
     },
@@ -119,7 +156,11 @@ export function useUpdateProfile() {
 
   return useMutation({
     mutationFn: (params: UpdateProfileParams) =>
-      apiClient.put(`/v1/identity/${address}/profile`, params),
+      apiClient.patch(
+        "/api/v1/identity/me",
+        toBackendProfileUpdate(params),
+        getIdentityAuthToken(),
+      ),
     onSuccess: () => {
       toast.success("Profile updated");
       queryClient.invalidateQueries({
@@ -130,6 +171,37 @@ export function useUpdateProfile() {
       toast.error("Profile update failed", { description: err.message });
     },
   });
+}
+
+function toBackendProfileUpdate(params: UpdateProfileParams): {
+  displayName?: string;
+  metadata?: Record<string, unknown>;
+} {
+  const raw = params as Record<string, unknown>;
+  const metadata: Record<string, unknown> = {};
+  const existingMetadata = raw.metadata;
+  if (
+    existingMetadata &&
+    typeof existingMetadata === "object" &&
+    !Array.isArray(existingMetadata)
+  ) {
+    Object.assign(metadata, existingMetadata);
+  }
+  if (typeof raw.avatarUri === "string") {
+    metadata.avatarUri = raw.avatarUri;
+  }
+
+  const update = {
+    displayName:
+      typeof params.displayName === "string" ? params.displayName : undefined,
+    metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
+  };
+
+  if (!update.displayName && !update.metadata) {
+    throw new Error("Profile update requires a display name or metadata.");
+  }
+
+  return update;
 }
 
 // ---------------------------------------------------------------------------

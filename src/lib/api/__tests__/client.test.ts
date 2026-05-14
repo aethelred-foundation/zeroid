@@ -265,8 +265,10 @@ describe("request internals (tested via apiClient methods)", () => {
       jsonResponse({ didHash: "0xabc", txHash: "0xdef" }),
     );
     const payload = {
-      didUri: "did:aethelred:mainnet:0x1",
-      recoveryHash: "0xrecov",
+      did: "did:aethelred:mainnet:0x1",
+      publicKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+      recoveryHash:
+        "1111111111111111111111111111111111111111111111111111111111111111",
     };
     await apiClient.registerIdentity(payload as any, "tok");
     const [, init] = mockFetch.mock.calls[0];
@@ -361,7 +363,12 @@ describe("retry behaviour", () => {
       jsonResponse({ didHash: "0xabc", txHash: "0xdef" }),
     );
     await apiClient.registerIdentity(
-      { didUri: "did:aethelred:mainnet:0x1", recoveryHash: "0xrecov" } as any,
+      {
+        did: "did:aethelred:mainnet:0x1",
+        publicKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        recoveryHash:
+          "1111111111111111111111111111111111111111111111111111111111111111",
+      } as any,
       "tok",
     );
     expect(mockWithRetry).not.toHaveBeenCalled();
@@ -411,17 +418,19 @@ describe("apiClient.health()", () => {
 });
 
 describe("apiClient.getIdentity()", () => {
-  it("calls GET /api/v1/identity/{didHash}", async () => {
-    const profile = { didHash: "0xabc", status: "active" };
+  it("calls GET /api/v1/identity/resolve/{did}", async () => {
+    const profile = { did: "did:aethelred:testnet:0xabc", status: "active" };
     mockFetch.mockResolvedValue(jsonResponse(profile));
-    const result = await apiClient.getIdentity("0xabc" as `0x${string}`);
+    const result = await apiClient.getIdentity("did:aethelred:testnet:0xabc");
     expect(result).toEqual(profile);
-    expect(mockFetch.mock.calls[0][0]).toContain("/api/v1/identity/0xabc");
+    expect(mockFetch.mock.calls[0][0]).toContain(
+      "/api/v1/identity/resolve/did%3Aaethelred%3Atestnet%3A0xabc",
+    );
   });
 
   it("passes authToken when provided", async () => {
     mockFetch.mockResolvedValue(jsonResponse({}));
-    await apiClient.getIdentity("0xabc" as `0x${string}`, "my-token");
+    await apiClient.getIdentity("did:aethelred:testnet:0xabc", "my-token");
     expect(mockFetch.mock.calls[0][1].headers["Authorization"]).toBe(
       "Bearer my-token",
     );
@@ -446,8 +455,10 @@ describe("apiClient.registerIdentity()", () => {
     const responseData = { didHash: "0xnew", txHash: "0xtx" };
     mockFetch.mockResolvedValue(jsonResponse(responseData));
     const payload = {
-      didUri: "did:aethelred:mainnet:0x1",
-      recoveryHash: "0xrecov" as `0x${string}`,
+      did: "did:aethelred:mainnet:0x1",
+      publicKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+      recoveryHash:
+        "1111111111111111111111111111111111111111111111111111111111111111",
     };
     const result = await apiClient.registerIdentity(payload as any, "auth-tok");
     expect(result).toEqual(responseData);

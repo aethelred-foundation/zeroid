@@ -26,11 +26,16 @@ const mockUseAccount = jest.fn();
 const mockUseReadContract = jest.fn();
 const mockWriteContractAsync = jest.fn();
 const mockUseWriteContract = jest.fn();
+const mockSignMessageAsync = jest.fn();
+const validRecoveryHash =
+  "0x1111111111111111111111111111111111111111111111111111111111111111";
+const validPublicKey = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
 
 jest.mock("wagmi", () => ({
   useAccount: () => mockUseAccount(),
   useReadContract: (args: unknown) => mockUseReadContract(args),
   useWriteContract: () => mockUseWriteContract(),
+  useSignMessage: () => ({ signMessageAsync: mockSignMessageAsync }),
 }));
 
 jest.mock("sonner", () => ({
@@ -45,6 +50,8 @@ jest.mock("@/lib/api/client", () => ({
     get: jest.fn(),
     post: jest.fn(),
     put: jest.fn(),
+    patch: jest.fn(),
+    registerIdentity: jest.fn(),
   },
 }));
 
@@ -90,6 +97,8 @@ beforeEach(() => {
     isLoading: false,
   });
   mockWriteContractAsync.mockResolvedValue(mockTxHash);
+  mockSignMessageAsync.mockResolvedValue("0xsignature");
+  window.sessionStorage.clear();
 });
 
 // ---------------------------------------------------------------------------
@@ -222,7 +231,7 @@ describe("useIdentity hooks", () => {
       });
 
       expect(apiClient.get).toHaveBeenCalledWith(
-        `/v1/identity/${mockAddress}/profile`,
+        `/api/v1/identity/address/${mockAddress}`,
       );
     });
 
@@ -246,7 +255,11 @@ describe("useIdentity hooks", () => {
 
   describe("useCreateIdentity", () => {
     it("registers identity on-chain and via API, then shows toast", async () => {
-      (apiClient.post as jest.Mock).mockResolvedValue({ success: true });
+      (apiClient.registerIdentity as jest.Mock).mockResolvedValue({
+        token: "identity-token",
+        sessionId: "session-1",
+        identity: {},
+      });
 
       const { useCreateIdentity } = await import("@/hooks/useIdentity");
       const { result } = renderHook(() => useCreateIdentity(), {
@@ -255,26 +268,29 @@ describe("useIdentity hooks", () => {
 
       await act(async () => {
         await result.current.mutateAsync({
-          didDocumentHash: "0xdochash",
+          didDocumentHash: validRecoveryHash,
           recoveryAddress: "0xrecovery",
           didDocument: { id: "did:aethelred:testnet:0xabc" },
-          publicKeys: ["0xpub1"],
+          publicKeys: [validPublicKey],
         } as any);
       });
 
       expect(mockWriteContractAsync).toHaveBeenCalledWith(
         expect.objectContaining({
           functionName: "registerIdentity",
-          args: ["0xdochash", "0xrecovery"],
+          args: [validRecoveryHash, "0xrecovery"],
         }),
       );
 
-      expect(apiClient.post).toHaveBeenCalledWith(
-        "/v1/identity/register",
+      expect(apiClient.registerIdentity).toHaveBeenCalledWith(
         expect.objectContaining({
-          ownerAddress: mockAddress,
-          txHash: mockTxHash,
+          did: "did:aethelred:testnet:0xabc",
+          publicKey: validPublicKey,
+          recoveryHash: validRecoveryHash.slice(2),
         }),
+      );
+      expect(window.sessionStorage.getItem("zeroid.identity.authToken")).toBe(
+        "identity-token",
       );
 
       expect(toast.success).toHaveBeenCalledWith(
@@ -295,10 +311,10 @@ describe("useIdentity hooks", () => {
       await act(async () => {
         try {
           await result.current.mutateAsync({
-            didDocumentHash: "0xdochash",
+            didDocumentHash: validRecoveryHash,
             recoveryAddress: "0xrecovery",
             didDocument: {},
-            publicKeys: [],
+            publicKeys: [validPublicKey],
           } as any);
         } catch {
           // Expected
@@ -316,8 +332,12 @@ describe("useIdentity hooks", () => {
   // =========================================================================
 
   describe("useUpdateProfile", () => {
-    it("updates profile via API PUT and shows success toast", async () => {
-      (apiClient.put as jest.Mock).mockResolvedValue({ success: true });
+    it("updates profile via API PATCH and shows success toast", async () => {
+      window.sessionStorage.setItem(
+        "zeroid.identity.authToken",
+        "identity-token",
+      );
+      (apiClient.patch as jest.Mock).mockResolvedValue({ success: true });
 
       const { useUpdateProfile } = await import("@/hooks/useIdentity");
       const { result } = renderHook(() => useUpdateProfile(), {
@@ -331,16 +351,22 @@ describe("useIdentity hooks", () => {
         } as any);
       });
 
-      expect(apiClient.put).toHaveBeenCalledWith(
-        `/v1/identity/${mockAddress}/profile`,
-        expect.objectContaining({ displayName: "Bob" }),
+      expect(apiClient.patch).toHaveBeenCalledWith(
+        "/api/v1/identity/me",
+        {
+          displayName: "Bob",
+          metadata: { avatarUri: "https://example.com/avatar.png" },
+        },
+        "identity-token",
       );
 
       expect(toast.success).toHaveBeenCalledWith("Profile updated");
     });
 
     it("shows error toast on update failure", async () => {
-      (apiClient.put as jest.Mock).mockRejectedValue(new Error("Unauthorized"));
+      (apiClient.patch as jest.Mock).mockRejectedValue(
+        new Error("Unauthorized"),
+      );
 
       const { useUpdateProfile } = await import("@/hooks/useIdentity");
       const { result } = renderHook(() => useUpdateProfile(), {

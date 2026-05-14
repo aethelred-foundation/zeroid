@@ -28,6 +28,10 @@ import type {
 } from "@/types";
 import { API_BASE_URL } from "@/config/constants";
 import { withRetry, withTimeout } from "@/lib/utils";
+import type {
+  BackendIdentityRegistrationPayload,
+  BackendIdentityRegistrationResult,
+} from "@/lib/identity/registration";
 
 // ============================================================================
 // Configuration
@@ -258,6 +262,16 @@ async function put<T>(
   return result.data as T;
 }
 
+/** PATCH mutation helper */
+async function patch<T>(
+  path: string,
+  body: unknown,
+  authToken?: string,
+): Promise<T> {
+  const result = await request<T>("PATCH", path, { body, authToken });
+  return result.data as T;
+}
+
 /** DELETE helper */
 async function del<T>(
   path: string,
@@ -406,6 +420,7 @@ export const apiClient = {
   get,
   post,
   put,
+  patch,
   del,
   // --------------------------------------------------------------------------
   // Health
@@ -420,13 +435,10 @@ export const apiClient = {
   // Identity
   // --------------------------------------------------------------------------
 
-  /** Fetch an identity profile by DID hash */
-  async getIdentity(
-    didHash: Bytes32,
-    authToken?: string,
-  ): Promise<IdentityProfile> {
+  /** Resolve an identity profile by DID URI */
+  async getIdentity(did: string, authToken?: string): Promise<IdentityProfile> {
     return get<IdentityProfile>(
-      `/api/v1/identity/${didHash}`,
+      `/api/v1/identity/resolve/${encodeURIComponent(did)}`,
       undefined,
       authToken,
     );
@@ -446,9 +458,9 @@ export const apiClient = {
 
   /** Register a new identity */
   async registerIdentity(
-    payload: { didUri: string; recoveryHash: Bytes32 },
+    payload: BackendIdentityRegistrationPayload,
     authToken?: string,
-  ): Promise<{ didHash: Bytes32; txHash: string }> {
+  ): Promise<BackendIdentityRegistrationResult> {
     return post("/api/v1/identity/register", payload, authToken);
   },
 

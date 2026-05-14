@@ -19,7 +19,7 @@ import React, {
   useState,
 } from "react";
 
-import { useAccount } from "wagmi";
+import { useAccount, useSignMessage } from "wagmi";
 
 import type {
   IdentityState,
@@ -31,6 +31,12 @@ import type {
   Address,
 } from "@/types";
 import { apiClient } from "@/lib/api/client";
+import {
+  buildRegistrationMessage,
+  normalizeRecoveryHash,
+  recoverRegistrationPublicKey,
+  storeIdentityAuthToken,
+} from "@/lib/identity/registration";
 import { createDID } from "@/lib/utils";
 import { CREDENTIAL_POLL_INTERVAL_MS } from "@/config/constants";
 
@@ -96,6 +102,7 @@ const IdentityContext = createContext<IdentityContextValue | undefined>(
 
 export function IdentityProvider({ children }: { children: React.ReactNode }) {
   const { address, isConnected } = useAccount();
+  const { signMessageAsync } = useSignMessage();
 
   const [state, setState] = useState<IdentityState>(DEFAULT_IDENTITY_STATE);
 
@@ -243,14 +250,28 @@ export function IdentityProvider({ children }: { children: React.ReactNode }) {
 
   const registerIdentity = useCallback(
     async (recoveryHash: Bytes32) => {
-      if (!did) {
+      if (!did || !address) {
         throw new Error("Wallet must be connected to register");
       }
 
       setState((prev) => ({ ...prev, isLoading: true, error: null }));
 
       try {
-        await apiClient.registerIdentity({ didUri: did.uri, recoveryHash });
+        const normalizedRecoveryHash = normalizeRecoveryHash(recoveryHash);
+        const message = buildRegistrationMessage({
+          did: did.uri,
+          controller: address as Address,
+          recoveryHash: normalizedRecoveryHash,
+        });
+        const signature = await signMessageAsync({ message });
+        const publicKey = await recoverRegistrationPublicKey(message, signature);
+        const registration = await apiClient.registerIdentity({
+          did: did.uri,
+          publicKey,
+          recoveryHash: normalizedRecoveryHash,
+          metadata: { controller: address.toLowerCase() },
+        });
+        storeIdentityAuthToken(registration.token);
 
         // Re-fetch the profile after registration
         const profile = await fetchProfile(address as Address);
@@ -271,7 +292,7 @@ export function IdentityProvider({ children }: { children: React.ReactNode }) {
         throw error;
       }
     },
-    [did, address, fetchProfile],
+    [did, address, fetchProfile, signMessageAsync],
   );
 
   const refreshProfile = useCallback(async () => {

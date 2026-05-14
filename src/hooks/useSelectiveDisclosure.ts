@@ -8,7 +8,7 @@
 import { useAccount } from "wagmi";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { apiClient } from "@/lib/api/client";
+import { ZeroIDApiError } from "@/lib/api/client";
 import type {
   DisclosureRequest,
   DisclosureResponse,
@@ -16,6 +16,10 @@ import type {
   DisclosureAttribute,
   DisclosurePolicy,
 } from "@/types";
+
+function unsupportedDisclosureFlow(message: string, code: string): never {
+  throw new ZeroIDApiError(message, code, 501);
+}
 
 // ---------------------------------------------------------------------------
 // Create a disclosure request (verifier creates this)
@@ -32,19 +36,13 @@ export function useCreateDisclosureRequest() {
       policy: DisclosurePolicy;
       purpose: string;
       expiresIn?: number;
-    }) => {
-      const response = await apiClient.post<{
-        requestId: string;
-        challenge: string;
-      }>("/v1/disclosure/request", {
-        verifierAddress: address,
-        subjectDid: params.subjectDid,
-        requestedAttributes: params.requestedAttributes,
-        policy: params.policy,
-        purpose: params.purpose,
-        expiresIn: params.expiresIn ?? 3600,
-      });
-      return response;
+    }): Promise<{ requestId: string; challenge: string }> => {
+      void params;
+      void address;
+      unsupportedDisclosureFlow(
+        "Selective disclosure request creation is not exposed by the backend API. Use context-bound ZK proof generation and verification endpoints.",
+        "DISCLOSURE_REQUEST_CREATE_UNAVAILABLE",
+      );
     },
     onSuccess: (data) => {
       toast.success("Disclosure request created", {
@@ -74,18 +72,13 @@ export function useBuildDisclosureResponse() {
       selectedAttributes: DisclosureAttribute[];
       credentialIds: string[];
       zkProof: string;
-    }) => {
-      const response = await apiClient.post<DisclosureResponse>(
-        `/v1/disclosure/${params.requestId}/respond`,
-        {
-          holderAddress: address,
-          selectedAttributes: params.selectedAttributes,
-          credentialIds: params.credentialIds,
-          zkProof: params.zkProof,
-          timestamp: Date.now(),
-        },
+    }): Promise<DisclosureResponse> => {
+      void params;
+      void address;
+      unsupportedDisclosureFlow(
+        "Selective disclosure responses are not exposed by the backend API. Submit generated ZK proofs through /api/v1/verification/zk-verify.",
+        "DISCLOSURE_RESPONSE_UNAVAILABLE",
       );
-      return response;
     },
     onSuccess: () => {
       toast.success("Disclosure response submitted", {
@@ -107,10 +100,13 @@ export function useBuildDisclosureResponse() {
 export function usePendingDisclosures() {
   const { address } = useAccount();
 
-  return useQuery({
+  return useQuery<DisclosureRequest[]>({
     queryKey: ["pendingDisclosures", address],
     queryFn: () =>
-      apiClient.get<DisclosureRequest[]>(`/v1/disclosure/pending/${address}`),
+      unsupportedDisclosureFlow(
+        "Pending disclosure requests are not exposed by the backend API.",
+        "DISCLOSURE_PENDING_UNAVAILABLE",
+      ),
     enabled: !!address,
     staleTime: 10_000,
     refetchInterval: 15_000,
@@ -122,10 +118,15 @@ export function usePendingDisclosures() {
 // ---------------------------------------------------------------------------
 
 export function useDisclosureRequest(requestId: string | undefined) {
-  return useQuery({
+  return useQuery<DisclosureRequest>({
     queryKey: ["disclosureRequest", requestId],
-    queryFn: () =>
-      apiClient.get<DisclosureRequest>(`/v1/disclosure/${requestId}`),
+    queryFn: () => {
+      void requestId;
+      unsupportedDisclosureFlow(
+        "Disclosure request detail is not exposed by the backend API.",
+        "DISCLOSURE_DETAIL_UNAVAILABLE",
+      );
+    },
     enabled: !!requestId,
     staleTime: 30_000,
   });
@@ -141,12 +142,16 @@ export function useDisclosureHistory(page = 1, pageSize = 20) {
   params.set("page", String(page));
   params.set("pageSize", String(pageSize));
 
-  return useQuery({
+  return useQuery<{ items: DisclosureHistoryEntry[]; total: number }>({
     queryKey: ["disclosureHistory", address, page],
-    queryFn: () =>
-      apiClient.get<{ items: DisclosureHistoryEntry[]; total: number }>(
-        `/v1/disclosure/history/${address}?${params.toString()}`,
-      ),
+    queryFn: () => {
+      void params;
+      void address;
+      unsupportedDisclosureFlow(
+        "Disclosure history is not exposed by the backend API.",
+        "DISCLOSURE_HISTORY_UNAVAILABLE",
+      );
+    },
     enabled: !!address,
     staleTime: 30_000,
   });

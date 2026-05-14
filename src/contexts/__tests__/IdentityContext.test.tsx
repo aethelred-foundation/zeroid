@@ -30,9 +30,14 @@ const mockUseAccount = jest.fn<
   { address: string | undefined; isConnected: boolean },
   []
 >();
+const mockSignMessageAsync = jest.fn();
+const validRecoveryHash =
+  "0x1111111111111111111111111111111111111111111111111111111111111111" as Bytes32;
+const validPublicKey = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
 
 jest.mock("wagmi", () => ({
   useAccount: () => mockUseAccount(),
+  useSignMessage: () => ({ signMessageAsync: mockSignMessageAsync }),
 }));
 
 jest.mock("@/lib/api/client", () => ({
@@ -41,6 +46,13 @@ jest.mock("@/lib/api/client", () => ({
     listCredentials: jest.fn(),
     registerIdentity: jest.fn(),
   },
+}));
+
+jest.mock("@/lib/identity/registration", () => ({
+  ...jest.requireActual("@/lib/identity/registration"),
+  recoverRegistrationPublicKey: jest.fn(() =>
+    Promise.resolve("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="),
+  ),
 }));
 
 jest.mock("@/lib/utils", () => ({
@@ -108,9 +120,11 @@ beforeEach(() => {
   jest.clearAllMocks();
 
   mockUseAccount.mockReturnValue({ address: undefined, isConnected: false });
+  mockSignMessageAsync.mockResolvedValue("0xsignature");
   (createDID as jest.Mock).mockImplementation((id: string, network: string) =>
     makeDID(id),
   );
+  window.sessionStorage.clear();
 });
 
 afterEach(() => {
@@ -473,15 +487,15 @@ describe("IdentityContext", () => {
   describe("registerIdentity", () => {
     it("registers identity and re-fetches profile on success", async () => {
       const profile = makeProfile(mockAddress);
-      const recoveryHash =
-        "0xrecovery000000000000000000000000000000000000000000000000000000" as Bytes32;
+      const recoveryHash = validRecoveryHash;
 
       (apiClient.getIdentityByAddress as jest.Mock)
         .mockResolvedValueOnce(null) // initial fetch
         .mockResolvedValueOnce(profile); // post-registration fetch
       (apiClient.registerIdentity as jest.Mock).mockResolvedValue({
-        didHash: profile.did.hash,
-        txHash: "0xtx",
+        identity: profile,
+        token: "identity-token",
+        sessionId: "session-1",
       });
 
       mockUseAccount.mockReturnValue({
@@ -498,9 +512,14 @@ describe("IdentityContext", () => {
       await act(() => result.current.registerIdentity(recoveryHash));
 
       expect(apiClient.registerIdentity).toHaveBeenCalledWith({
-        didUri: expect.any(String),
-        recoveryHash,
+        did: expect.any(String),
+        publicKey: validPublicKey,
+        recoveryHash: recoveryHash.slice(2),
+        metadata: { controller: mockAddress.toLowerCase() },
       });
+      expect(window.sessionStorage.getItem("zeroid.identity.authToken")).toBe(
+        "identity-token",
+      );
       expect(result.current.identity.isRegistered).toBe(true);
       expect(result.current.identity.profile).toEqual(profile);
       expect(result.current.identity.credentials).toEqual([]);
@@ -515,8 +534,7 @@ describe("IdentityContext", () => {
 
       const { result } = renderHook(() => useIdentity(), { wrapper });
 
-      const recoveryHash =
-        "0xrecovery000000000000000000000000000000000000000000000000000000" as Bytes32;
+      const recoveryHash = validRecoveryHash;
 
       await expect(
         act(() => result.current.registerIdentity(recoveryHash)),
@@ -540,8 +558,7 @@ describe("IdentityContext", () => {
         expect(result.current.identity.isLoading).toBe(false);
       });
 
-      const recoveryHash =
-        "0xrecovery000000000000000000000000000000000000000000000000000000" as Bytes32;
+      const recoveryHash = validRecoveryHash;
 
       let caught: Error | undefined;
       await act(async () => {
@@ -575,8 +592,7 @@ describe("IdentityContext", () => {
         expect(result.current.identity.isLoading).toBe(false);
       });
 
-      const recoveryHash =
-        "0xrecovery000000000000000000000000000000000000000000000000000000" as Bytes32;
+      const recoveryHash = validRecoveryHash;
 
       let caught: unknown;
       await act(async () => {
