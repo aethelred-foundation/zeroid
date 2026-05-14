@@ -50,6 +50,7 @@ const PROD_BASE_ENV: NodeJS.ProcessEnv = {
   SANCTIONS_LIST_MAX_AGE_HOURS: '24',
   WEBHOOK_SECRET_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64'),
   POLICY_RECEIPT_SIGNING_SECRET: 'r'.repeat(64),
+  REGULATORY_REPORT_STORE_DIR: '/var/lib/zeroid/regulatory-reports',
   ENTERPRISE_SECRET_HASH_PEPPER: 'e'.repeat(64),
   IDENTITY_RECOVERY_HASH_PEPPER: 'i'.repeat(64),
   GOVERNMENT_CACHE_HASH_PEPPER: 'g'.repeat(64),
@@ -377,6 +378,16 @@ describe('production safety controls', () => {
       POLICY_RECEIPT_SIGNING_SECRET: 'change-me',
     })).toEqual([
       expect.objectContaining({ control: 'POLICY_RECEIPT_SIGNING_SECRET' }),
+    ]);
+  });
+
+  it('requires durable regulatory report storage in production', () => {
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      METRICS_PUBLIC_DISABLED: 'true',
+      REGULATORY_REPORT_STORE_DIR: '',
+    })).toEqual([
+      expect.objectContaining({ control: 'REGULATORY_REPORT_STORE_DIR' }),
     ]);
   });
 

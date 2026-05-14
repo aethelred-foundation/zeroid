@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import { createLogger, format, transports } from 'winston';
 import crypto from 'crypto';
+import * as fs from 'fs';
+import * as path from 'path';
 import { isProductionRuntime } from '../production-safety';
 
 // ---------------------------------------------------------------------------
@@ -266,15 +268,26 @@ export interface DashboardData {
   jurisdictionCoverage: Array<{ jurisdiction: string; compliant: boolean; lastAudit: string }>;
 }
 
+export interface RegulatoryReportingServiceOptions {
+  storeDir?: string;
+}
+
 // ---------------------------------------------------------------------------
 // RegulatoryReportingService
 // ---------------------------------------------------------------------------
 export class RegulatoryReportingService {
   private reports: Map<string, GeneratedReport> = new Map();
   private filingQueue: Array<{ reportId: string; scheduledAt: string; retryCount: number }> = [];
+  private readonly storeDir?: string;
 
-  constructor() {
-    logger.info('RegulatoryReportingService initialized');
+  constructor(options: RegulatoryReportingServiceOptions = {}) {
+    const configuredStoreDir = options.storeDir ?? process.env.REGULATORY_REPORT_STORE_DIR;
+    this.storeDir = configuredStoreDir?.trim() || undefined;
+    this.initializeReportStore();
+
+    logger.info('RegulatoryReportingService initialized', {
+      durableStoreConfigured: Boolean(this.storeDir),
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -316,7 +329,7 @@ export class RegulatoryReportingService {
       authorityManifest: this.buildAuthorityManifest('SAR', parsed.filingInstitution.jurisdiction, reportId, 1, ['json', 'xml', 'pdf']),
     };
 
-    this.reports.set(reportId, report);
+    this.saveReport(report);
     this.scheduleForFiling(reportId);
 
     logger.info('sar_generated', { reportId, entityId: parsed.subject.entityId, priority: parsed.priority });
@@ -357,7 +370,7 @@ export class RegulatoryReportingService {
       authorityManifest: this.buildAuthorityManifest('CTR', parsed.filingInstitution.jurisdiction, reportId, 1, ['json', 'xml', 'pdf']),
     };
 
-    this.reports.set(reportId, report);
+    this.saveReport(report);
     this.scheduleForFiling(reportId);
 
     logger.info('ctr_generated', { reportId, amount: parsed.transaction.amount, currency: parsed.transaction.currency });
@@ -401,7 +414,7 @@ export class RegulatoryReportingService {
       authorityManifest: this.buildAuthorityManifest('STR', `AE-${parsed.filingInstitution.emirate}`, reportId, 1, ['json', 'xml', 'pdf']),
     };
 
-    this.reports.set(reportId, report);
+    this.saveReport(report);
     this.scheduleForFiling(reportId);
 
     logger.info('str_generated', { reportId, emirate: parsed.filingInstitution.emirate });
@@ -456,7 +469,7 @@ export class RegulatoryReportingService {
       authorityManifest: this.buildAuthorityManifest('DSAR', parsed.jurisdiction, reportId, 1, ['json', 'csv', 'pdf']),
     };
 
-    this.reports.set(reportId, report);
+    this.saveReport(report);
 
     logger.info('dsar_fulfilled', { reportId, requestorId: parsed.requestorId, categories: parsed.dataCategories });
     return report;
@@ -521,7 +534,7 @@ export class RegulatoryReportingService {
       authorityManifest: this.buildAuthorityManifest('ERASURE', parsed.jurisdiction, reportId, 1, ['json', 'pdf']),
     };
 
-    this.reports.set(reportId, report);
+    this.saveReport(report);
 
     logger.info('erasure_processed', { reportId, requestorId: parsed.requestorId, categoriesErased: Object.keys(erasureResults).filter((k) => erasureResults[k].erased).length });
     return report;
@@ -574,7 +587,7 @@ export class RegulatoryReportingService {
       authorityManifest: this.buildAuthorityManifest('AUDIT', jurisdiction, reportId, 1, ['json', 'xml', 'pdf', 'csv']),
     };
 
-    this.reports.set(reportId, report);
+    this.saveReport(report);
 
     logger.info('audit_package_generated', { reportId, jurisdiction, reportsIncluded: reportsInRange.length });
     return report;
@@ -657,7 +670,7 @@ export class RegulatoryReportingService {
     report.content = { ...report.content, ...changes };
     report.status = 'amended';
 
-    this.reports.set(reportId, report);
+    this.saveReport(report);
     logger.info('report_amended', { reportId, version: report.version, reason });
     return report;
   }
@@ -692,7 +705,7 @@ export class RegulatoryReportingService {
     report.submittedAt = new Date().toISOString();
     report.status = 'submitted';
 
-    this.reports.set(reportId, report);
+    this.saveReport(report);
     logger.info('report_submitted', { reportId, filingReference, reportType: report.reportType });
 
     return { filingReference, submittedAt: report.submittedAt };
@@ -770,7 +783,7 @@ export class RegulatoryReportingService {
 
     report.evidenceTrail = [...(report.evidenceTrail ?? []), entry]
       .sort((left, right) => new Date(left.recordedAt).getTime() - new Date(right.recordedAt).getTime());
-    this.reports.set(reportId, report);
+    this.saveReport(report);
     logger.info('report_evidence_recorded', {
       reportId,
       action: event.action,
@@ -877,7 +890,7 @@ export class RegulatoryReportingService {
     manifest.lastUpdatedAt = recordedAt;
 
     report.authorityManifest = manifest;
-    this.reports.set(reportId, report);
+    this.saveReport(report);
     logger.info('report_authority_manifest_recorded', {
       reportId,
       stage: event.stage,
@@ -897,6 +910,7 @@ export class RegulatoryReportingService {
   // Private helpers
   // -------------------------------------------------------------------------
   private getReportsForOrganization(organizationId?: string): GeneratedReport[] {
+    this.refreshReportsFromStore();
     const reports = [...this.reports.values()];
     if (!organizationId) return reports;
     return reports.filter((report) => report.organizationId === organizationId);
@@ -906,10 +920,107 @@ export class RegulatoryReportingService {
     reportId: string,
     organizationId?: string,
   ): GeneratedReport | null {
+    this.refreshReportsFromStore();
     const report = this.reports.get(reportId) ?? null;
     if (!report) return null;
     if (organizationId && report.organizationId !== organizationId) return null;
     return report;
+  }
+
+  private saveReport(report: GeneratedReport): void {
+    this.assertReportStoreAvailable();
+    this.reports.set(report.reportId, report);
+    this.persistReport(report);
+  }
+
+  private assertReportStoreAvailable(): void {
+    if (!isProductionRuntime() || this.storeDir) return;
+
+    throw new ReportingError(
+      'Durable regulatory report store is required in production',
+      'REGULATORY_REPORT_STORE_REQUIRED',
+      503,
+    );
+  }
+
+  private initializeReportStore(): void {
+    if (!this.storeDir) return;
+
+    fs.mkdirSync(this.storeDir, { recursive: true, mode: 0o700 });
+    this.refreshReportsFromStore();
+  }
+
+  private refreshReportsFromStore(): void {
+    if (!this.storeDir) return;
+
+    let filenames: string[];
+    try {
+      filenames = fs.readdirSync(this.storeDir);
+    } catch (error) {
+      logger.error('regulatory_report_store_read_failed', {
+        error: (error as Error).message,
+      });
+      return;
+    }
+
+    for (const filename of filenames) {
+      if (!filename.endsWith('.json')) continue;
+
+      try {
+        const filePath = path.join(this.storeDir, filename);
+        const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8')) as unknown;
+        if (this.isGeneratedReport(parsed)) {
+          this.reports.set(parsed.reportId, parsed);
+        }
+      } catch (error) {
+        logger.warn('regulatory_report_store_record_skipped', {
+          filename,
+          error: (error as Error).message,
+        });
+      }
+    }
+  }
+
+  private persistReport(report: GeneratedReport): void {
+    if (!this.storeDir) return;
+
+    const filename = `${this.safeReportFilename(report.reportId)}.json`;
+    const finalPath = path.join(this.storeDir, filename);
+    const tempPath = path.join(
+      this.storeDir,
+      `${filename}.${process.pid}.${Date.now()}.tmp`,
+    );
+
+    fs.writeFileSync(tempPath, JSON.stringify(report, null, 2), {
+      encoding: 'utf8',
+      mode: 0o600,
+    });
+    fs.renameSync(tempPath, finalPath);
+  }
+
+  private safeReportFilename(reportId: string): string {
+    return reportId.replace(/[^a-zA-Z0-9._-]/g, '_');
+  }
+
+  private isGeneratedReport(value: unknown): value is GeneratedReport {
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+      return false;
+    }
+
+    const report = value as Partial<GeneratedReport>;
+    return (
+      typeof report.reportId === 'string' &&
+      ReportTypeSchema.safeParse(report.reportType).success &&
+      typeof report.version === 'number' &&
+      typeof report.status === 'string' &&
+      typeof report.filingJurisdiction === 'string' &&
+      typeof report.generatedAt === 'string' &&
+      report.content !== null &&
+      typeof report.content === 'object' &&
+      !Array.isArray(report.content) &&
+      Array.isArray(report.amendments) &&
+      Array.isArray(report.exportFormats)
+    );
   }
 
   private assertDataSubjectRightsConnectorAvailable(): void {

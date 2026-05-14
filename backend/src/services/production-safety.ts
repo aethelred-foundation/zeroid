@@ -145,6 +145,7 @@ export function checkedProductionSafetyControls(): string[] {
     'SANCTIONS_LIST_MAX_AGE_HOURS',
     'WEBHOOK_SECRET_ENCRYPTION_KEY',
     'POLICY_RECEIPT_SIGNING_SECRET',
+    'REGULATORY_REPORT_STORE_DIR',
     'ENTERPRISE_SECRET_HASH_PEPPER',
     'IDENTITY_RECOVERY_HASH_PEPPER',
     'GOVERNMENT_CACHE_HASH_PEPPER',
@@ -339,6 +340,14 @@ export function collectProductionSafetyViolations(
     violations.push({
       control: 'POLICY_RECEIPT_SIGNING_SECRET',
       risk: 'Policy receipt signing secret must not use a known development or test placeholder',
+    });
+  }
+
+  const regulatoryReportStoreDir = env.REGULATORY_REPORT_STORE_DIR?.trim();
+  if (!regulatoryReportStoreDir) {
+    violations.push({
+      control: 'REGULATORY_REPORT_STORE_DIR',
+      risk: 'Production regulatory reports require a durable store for restart recovery and multi-step filing evidence',
     });
   }
 

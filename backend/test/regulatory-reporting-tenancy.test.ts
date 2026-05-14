@@ -4,6 +4,9 @@ import {
   RegulatoryReportingService,
   SARRequest,
 } from '../src/services/compliance/regulatory-reporting';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 
 function sarRequest(entityId: string): SARRequest {
   return {
@@ -64,9 +67,19 @@ function erasureRequest(requestorId: string): ErasureRequest {
 
 describe('RegulatoryReportingService tenant scoping', () => {
   const originalEnv = { ...process.env };
+  const tempDirs: string[] = [];
+
+  const createTempReportStore = () => {
+    const storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'zeroid-regulatory-reports-'));
+    tempDirs.push(storeDir);
+    return storeDir;
+  };
 
   afterEach(() => {
     process.env = { ...originalEnv };
+    for (const dir of tempDirs.splice(0)) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('isolates report reads, dashboards, and mutations by organization', async () => {
@@ -95,7 +108,11 @@ describe('RegulatoryReportingService tenant scoping', () => {
   });
 
   it('fails closed for production submissions without an authority connector', async () => {
-    process.env = { ...originalEnv, NODE_ENV: 'production' };
+    process.env = {
+      ...originalEnv,
+      NODE_ENV: 'production',
+      REGULATORY_REPORT_STORE_DIR: createTempReportStore(),
+    };
     const service = new RegulatoryReportingService();
     const report = await service.generateSAR(sarRequest('entity-prod'), 'org-a');
 
@@ -110,7 +127,11 @@ describe('RegulatoryReportingService tenant scoping', () => {
   });
 
   it('fails closed for production data subject rights workflows without a connector', async () => {
-    process.env = { ...originalEnv, NODE_ENV: 'production' };
+    process.env = {
+      ...originalEnv,
+      NODE_ENV: 'production',
+      REGULATORY_REPORT_STORE_DIR: createTempReportStore(),
+    };
     const service = new RegulatoryReportingService();
 
     await expect(
@@ -128,5 +149,38 @@ describe('RegulatoryReportingService tenant scoping', () => {
     });
 
     expect(service.listReports({ organizationId: 'org-a' })).toHaveLength(0);
+  });
+
+  it('recovers reports, amendments, and submissions from durable storage after restart', async () => {
+    const storeDir = createTempReportStore();
+    const firstService = new RegulatoryReportingService({ storeDir });
+    const generated = await firstService.generateSAR(sarRequest('entity-persist'), 'org-a');
+
+    const restartedService = new RegulatoryReportingService({ storeDir });
+    expect(restartedService.getReport(generated.reportId, 'org-a')).toMatchObject({
+      reportId: generated.reportId,
+      organizationId: 'org-a',
+      status: 'draft',
+    });
+
+    await restartedService.amendReport(
+      generated.reportId,
+      'Add reviewed transaction IDs',
+      { reviewer: 'compliance-officer' },
+      'org-a',
+    );
+    await restartedService.submitReport(generated.reportId, 'org-a');
+
+    const secondRestart = new RegulatoryReportingService({ storeDir });
+    expect(secondRestart.getReport(generated.reportId, 'org-a')).toMatchObject({
+      reportId: generated.reportId,
+      organizationId: 'org-a',
+      version: 2,
+      status: 'submitted',
+      filingReference: expect.stringMatching(/^SAR-/),
+      content: expect.objectContaining({
+        reviewer: 'compliance-officer',
+      }),
+    });
   });
 });
