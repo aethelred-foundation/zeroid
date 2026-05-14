@@ -109,20 +109,59 @@ const SubmissionPackageVerificationSchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
-// Middleware: validate request body with Zod schema
+// Middleware: validate request targets with Zod schemas
 // ---------------------------------------------------------------------------
-function validate<T>(schema: z.ZodSchema<T>) {
+type ValidationSchemas = {
+  body?: z.ZodSchema;
+  query?: z.ZodSchema;
+  params?: z.ZodSchema;
+};
+
+function isZodSchema(value: unknown): value is z.ZodSchema {
+  return Boolean(
+    value &&
+      typeof value === 'object' &&
+      typeof (value as { safeParse?: unknown }).safeParse === 'function',
+  );
+}
+
+function validate(schemaOrSchemas: z.ZodSchema | ValidationSchemas) {
   return (req: Request, res: Response, next: () => void) => {
-    const result = schema.safeParse(req.body);
-    if (!result.success) {
+    const schemas = isZodSchema(schemaOrSchemas)
+      ? { body: schemaOrSchemas }
+      : schemaOrSchemas;
+    const errors: Array<{ target: string; error: z.ZodError }> = [];
+
+    if (schemas.body) {
+      const result = schemas.body.safeParse(req.body);
+      if (result.success) req.body = result.data;
+      else errors.push({ target: 'body', error: result.error });
+    }
+
+    if (schemas.query) {
+      const result = schemas.query.safeParse(req.query);
+      if (result.success) (req as Request).query = result.data;
+      else errors.push({ target: 'query', error: result.error });
+    }
+
+    if (schemas.params) {
+      const result = schemas.params.safeParse(req.params);
+      if (result.success) req.params = result.data;
+      else errors.push({ target: 'params', error: result.error });
+    }
+
+    if (errors.length > 0) {
       res.status(400).json({
         error: 'Validation failed',
         code: 'VALIDATION_ERROR',
-        details: result.error.flatten(),
+        details: errors.map(({ target, error }) => ({
+          target,
+          issues: error.flatten(),
+        })),
       });
       return;
     }
-    req.body = result.data;
+
     next();
   };
 }
@@ -2819,7 +2858,7 @@ router.get(
 router.post(
   '/screen',
   requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_ROLES),
-  validate(ScreeningRequestSchema),
+  validate({ body: ScreeningRequestSchema }),
   async (req: Request, res: Response): Promise<void> => {
     try {
       const context = await requireReceiptContext(req, res);
@@ -2893,7 +2932,7 @@ router.post(
 router.post(
   '/screen/batch',
   requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_ROLES),
-  validate(BatchScreeningRequestSchema),
+  validate({ body: BatchScreeningRequestSchema }),
   async (req: Request, res: Response): Promise<void> => {
     try {
       const context = await requireReceiptContext(req, res);
@@ -2959,7 +2998,7 @@ router.post(
 router.post(
   '/screen/resolve',
   requireEnterpriseContext(ENTERPRISE_COMPLIANCE_REVIEW_ROLES),
-  validate(FalsePositiveDecisionSchema),
+  validate({ body: FalsePositiveDecisionSchema }),
   async (req: Request, res: Response): Promise<void> => {
     try {
       const context = await requireReceiptContext(req, res);
@@ -3041,7 +3080,7 @@ router.get(
 router.post(
   '/evaluate',
   requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_ROLES),
-  validate(ComplianceEvaluationRequestSchema),
+  validate({ body: ComplianceEvaluationRequestSchema }),
   async (req: Request, res: Response): Promise<void> => {
     try {
       const context = await requireReceiptContext(req, res);
@@ -3490,7 +3529,7 @@ router.post(
 router.post(
   '/report/:reportId/amend',
   requireEnterpriseContext(ENTERPRISE_COMPLIANCE_REVIEW_ROLES),
-  validate(ReportAmendmentRequestSchema),
+  validate({ body: ReportAmendmentRequestSchema }),
   async (req: Request, res: Response): Promise<void> => {
     try {
       const context = await requireReceiptContext(req, res);
@@ -3927,7 +3966,7 @@ router.get(
 router.post(
   '/report/submission-package/verify',
   requireEnterpriseContext(ENTERPRISE_COMPLIANCE_READ_ROLES),
-  validate(SubmissionPackageVerificationSchema),
+  validate({ body: SubmissionPackageVerificationSchema }),
   async (req: Request, res: Response): Promise<void> => {
     try {
       const context = await requireReceiptContext(req, res);
@@ -3959,7 +3998,7 @@ router.post(
 router.post(
   '/report/:reportId/acknowledge',
   requireEnterpriseContext(ENTERPRISE_COMPLIANCE_REVIEW_ROLES),
-  validate(ReportAcknowledgementRequestSchema),
+  validate({ body: ReportAcknowledgementRequestSchema }),
   async (req: Request, res: Response): Promise<void> => {
     try {
       const context = await requireReceiptContext(req, res);
@@ -4491,7 +4530,7 @@ router.post(
 router.post(
   '/consent',
   requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_ROLES),
-  validate(ConsentRecordSchema),
+  validate({ body: ConsentRecordSchema }),
   async (req: Request, res: Response): Promise<void> => {
     try {
       const result = dataSovereigntyService.recordConsent(req.body);
@@ -4512,7 +4551,7 @@ router.post(
 router.post(
   '/pia',
   requireEnterpriseContext(ENTERPRISE_COMPLIANCE_WRITE_ROLES),
-  validate(PIASchema),
+  validate({ body: PIASchema }),
   async (req: Request, res: Response): Promise<void> => {
     try {
       const context = await requireReceiptContext(req, res);
@@ -4589,7 +4628,7 @@ router.post(
 router.post(
   '/breach',
   requireEnterpriseContext(ENTERPRISE_COMPLIANCE_REVIEW_ROLES),
-  validate(BreachNotificationSchema),
+  validate({ body: BreachNotificationSchema }),
   async (req: Request, res: Response): Promise<void> => {
     try {
       const context = await requireReceiptContext(req, res);

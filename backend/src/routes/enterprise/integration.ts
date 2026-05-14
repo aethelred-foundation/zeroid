@@ -269,20 +269,59 @@ router.use((req: Request, _res: Response, next: () => void) => {
 });
 
 // ---------------------------------------------------------------------------
-// Middleware: validate request body with Zod schema
+// Middleware: validate request targets with Zod schemas
 // ---------------------------------------------------------------------------
-function validate<T>(schema: z.ZodSchema<T>) {
+type ValidationSchemas = {
+  body?: z.ZodSchema;
+  query?: z.ZodSchema;
+  params?: z.ZodSchema;
+};
+
+function isZodSchema(value: unknown): value is z.ZodSchema {
+  return Boolean(
+    value &&
+      typeof value === 'object' &&
+      typeof (value as { safeParse?: unknown }).safeParse === 'function',
+  );
+}
+
+function validate(schemaOrSchemas: z.ZodSchema | ValidationSchemas) {
   return (req: Request, res: Response, next: () => void) => {
-    const result = schema.safeParse(req.body);
-    if (!result.success) {
+    const schemas = isZodSchema(schemaOrSchemas)
+      ? { body: schemaOrSchemas }
+      : schemaOrSchemas;
+    const errors: Array<{ target: string; error: z.ZodError }> = [];
+
+    if (schemas.body) {
+      const result = schemas.body.safeParse(req.body);
+      if (result.success) req.body = result.data;
+      else errors.push({ target: 'body', error: result.error });
+    }
+
+    if (schemas.query) {
+      const result = schemas.query.safeParse(req.query);
+      if (result.success) (req as Request).query = result.data;
+      else errors.push({ target: 'query', error: result.error });
+    }
+
+    if (schemas.params) {
+      const result = schemas.params.safeParse(req.params);
+      if (result.success) req.params = result.data;
+      else errors.push({ target: 'params', error: result.error });
+    }
+
+    if (errors.length > 0) {
       res.status(400).json({
         error: 'Validation failed',
         code: 'VALIDATION_ERROR',
-        details: result.error.flatten(),
+        details: errors.map(({ target, error }) => ({
+          target,
+          issues: error.flatten(),
+        })),
       });
       return;
     }
-    req.body = result.data;
+
     next();
   };
 }
@@ -866,7 +905,7 @@ function buildPolicyExceptionGovernanceEvidence(record: {
 
 router.post(
   '/organizations',
-  validate(CreateOrganizationSchema),
+  validate({ body: CreateOrganizationSchema }),
   async (req: Request, res: Response): Promise<void> => {
     try {
       const authReq = req as AuthenticatedRequest;
@@ -941,7 +980,7 @@ router.post(
     ENTERPRISE_ADMIN_ROLES,
     (req) => req.params.id as string,
   ),
-  validate(AddOrganizationMemberSchema),
+  validate({ body: AddOrganizationMemberSchema }),
   async (req: Request, res: Response): Promise<void> => {
     try {
       const member = await enterpriseOrganizationService.addMember(
@@ -1024,7 +1063,7 @@ router.patch(
     ENTERPRISE_ADMIN_ROLES,
     (req) => req.params.id as string,
   ),
-  validate(UpdateOrganizationGovernanceSchema),
+  validate({ body: UpdateOrganizationGovernanceSchema }),
   async (req: Request, res: Response): Promise<void> => {
     try {
       const authReq = req as EnterpriseAuthenticatedRequest;
@@ -1083,7 +1122,7 @@ router.get(
 router.post(
   '/webhooks',
   requireEnterpriseContext(ENTERPRISE_OPERATOR_ROLES),
-  validate(WebhookRegistrationSchema),
+  validate({ body: WebhookRegistrationSchema }),
   async (req: Request, res: Response): Promise<void> => {
     try {
       const clientId = getClientId(req);
@@ -1146,7 +1185,7 @@ router.get(
 router.patch(
   '/webhooks/:id',
   requireEnterpriseContext(ENTERPRISE_OPERATOR_ROLES),
-  validate(WebhookUpdateSchema),
+  validate({ body: WebhookUpdateSchema }),
   async (req: Request, res: Response): Promise<void> => {
     try {
       const clientId = getClientId(req);
@@ -1270,7 +1309,7 @@ router.post(
 router.post(
   '/api-keys',
   requireEnterpriseContext(ENTERPRISE_OPERATOR_ROLES),
-  validate(CreateAPIKeySchema),
+  validate({ body: CreateAPIKeySchema }),
   async (req: Request, res: Response): Promise<void> => {
     try {
       const clientId = getClientId(req);
@@ -1405,7 +1444,7 @@ router.post(
 router.post(
   '/policies',
   requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES),
-  validate(CreatePolicyDefinitionSchema),
+  validate({ body: CreatePolicyDefinitionSchema }),
   async (req: Request, res: Response): Promise<void> => {
     try {
       const enterpriseReq = req as EnterpriseAuthenticatedRequest;
@@ -1599,7 +1638,7 @@ router.post(
 router.post(
   '/policies/:policyId/deprecate',
   requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES),
-  validate(DeprecatePolicyDefinitionSchema),
+  validate({ body: DeprecatePolicyDefinitionSchema }),
   async (req: Request, res: Response): Promise<void> => {
     try {
       const enterpriseReq = req as EnterpriseAuthenticatedRequest;
@@ -1640,7 +1679,7 @@ router.post(
 router.post(
   '/policies/:policyId/revoke',
   requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES),
-  validate(RevokePolicyDefinitionSchema),
+  validate({ body: RevokePolicyDefinitionSchema }),
   async (req: Request, res: Response): Promise<void> => {
     try {
       const enterpriseReq = req as EnterpriseAuthenticatedRequest;
@@ -1723,7 +1762,7 @@ router.get(
 router.post(
   '/policies/exceptions',
   requireEnterpriseContext(['admin', 'compliance_officer']),
-  validate(CreatePolicyExceptionSchema),
+  validate({ body: CreatePolicyExceptionSchema }),
   async (req: Request, res: Response): Promise<void> => {
     try {
       const enterpriseReq = req as EnterpriseAuthenticatedRequest;
@@ -1929,7 +1968,7 @@ router.post(
 router.post(
   '/policies/exceptions/:exceptionId/revoke',
   requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES),
-  validate(RevokePolicyExceptionSchema),
+  validate({ body: RevokePolicyExceptionSchema }),
   async (req: Request, res: Response): Promise<void> => {
     try {
       const enterpriseReq = req as EnterpriseAuthenticatedRequest;
@@ -1970,7 +2009,7 @@ router.post(
 router.post(
   '/trust/issuers',
   requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES),
-  validate(RegisterIssuerTrustSchema),
+  validate({ body: RegisterIssuerTrustSchema }),
   async (req: Request, res: Response): Promise<void> => {
     try {
       const enterpriseReq = req as EnterpriseAuthenticatedRequest;
@@ -2159,7 +2198,7 @@ router.post(
 router.post(
   '/trust/issuers/:issuerIdentityId/keys',
   requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES),
-  validate(RecordIssuerKeySchema),
+  validate({ body: RecordIssuerKeySchema }),
   async (req: Request, res: Response): Promise<void> => {
     try {
       const enterpriseReq = req as EnterpriseAuthenticatedRequest;
@@ -2312,7 +2351,7 @@ oidcPublicRouter.get(
 router.post(
   '/oidc/register',
   requireEnterpriseContext(ENTERPRISE_OPERATOR_ROLES),
-  validate(OIDCClientRegistrationSchema),
+  validate({ body: OIDCClientRegistrationSchema }),
   async (req: Request, res: Response): Promise<void> => {
     try {
       const enterpriseReq = req as EnterpriseAuthenticatedRequest;
@@ -2682,7 +2721,7 @@ router.post('/oidc/saml', (_req: Request, res: Response): void => {
 router.post(
   '/sla/register',
   requireEnterpriseContext(['admin', 'compliance_officer']),
-  validate(SLADefinitionSchema),
+  validate({ body: SLADefinitionSchema }),
   async (req: Request, res: Response): Promise<void> => {
     try {
       const clientId = getClientId(req);
