@@ -4,6 +4,7 @@ import * as https from 'https';
 import * as net from 'net';
 import { promises as dns } from 'dns';
 import { Counter, Histogram } from 'prom-client';
+import type { Prisma } from '@prisma/client';
 import { isProductionRuntime } from './production-safety';
 
 // ---------------------------------------------------------------------------
@@ -143,6 +144,14 @@ interface CachedCollateral {
   issueDate: number; // epoch ms from tcbInfo
   nextUpdate: number; // epoch ms from tcbInfo
   refreshStatus: 'fresh' | 'refreshing' | 'stale';
+}
+
+interface DurableAttestationRecord extends TEEAttestationResult {
+  identityId: string;
+  did: string;
+  fmspc: string;
+  pckLeafSerial: string;
+  pckIntermediateSerial: string;
 }
 
 interface AttestationChallengeRecord {
@@ -461,6 +470,11 @@ export class TEEAttestationService {
         timestamp: now,
         expiresAt,
       };
+      const durableRecord = this.buildDurableAttestationRecord({
+        request,
+        result,
+        certResult,
+      });
 
       // 10. Update identity record
       await prisma.identity.update({
@@ -472,14 +486,9 @@ export class TEEAttestationService {
       });
 
       // 11. Cache attestation result
-      await redis.set(
-        `tee:attestation:${attestationId}`,
-        JSON.stringify(result),
-        'EX',
-        cacheTtlSeconds,
-      );
+      await this.cacheAttestationResult(result, cacheTtlSeconds);
 
-      // 12. Audit log
+      // 12. Durable audit ledger
       await prisma.auditLog.create({
         data: {
           identityId: request.identityId,
@@ -491,6 +500,8 @@ export class TEEAttestationService {
             mrenclave: reportBody.mrenclave,
             mrsigner: reportBody.mrsigner,
             tcbStatus,
+            verified: true,
+            attestationRecord: this.serializeDurableAttestationRecord(durableRecord),
           },
         },
       });
@@ -542,20 +553,8 @@ export class TEEAttestationService {
   // Check if an attestation is still valid
   // -------------------------------------------------------------------------
   async isAttestationValid(attestationId: string): Promise<boolean> {
-    const cached = await redis.get(`tee:attestation:${attestationId}`);
-    if (!cached) {
-      return false;
-    }
-
-    try {
-      const result = JSON.parse(cached) as TEEAttestationResult;
-      const expiresAt = new Date(result.expiresAt).getTime();
-      return result.verified === true && Number.isFinite(expiresAt) && expiresAt > Date.now();
-    } catch {
-      logger.warn('tee_attestation_cache_invalid', { attestationId });
-      await redis.del(`tee:attestation:${attestationId}`).catch(() => undefined);
-      return false;
-    }
+    const result = await this.getAttestation(attestationId);
+    return result !== null && this.isCurrentVerifiedAttestation(result);
   }
 
   // -------------------------------------------------------------------------
@@ -564,11 +563,210 @@ export class TEEAttestationService {
   async getAttestation(
     attestationId: string,
   ): Promise<TEEAttestationResult | null> {
-    const cached = await redis.get(`tee:attestation:${attestationId}`);
+    const cached = await this.readCachedAttestation(attestationId);
     if (cached) {
-      return JSON.parse(cached) as TEEAttestationResult;
+      return cached;
     }
+
+    const durable = await this.loadDurableAttestation(attestationId);
+    if (!durable || !this.isCurrentVerifiedAttestation(durable)) {
+      return null;
+    }
+
+    await this.cacheAttestationResult(durable).catch((error) => {
+      logger.warn('tee_attestation_cache_refresh_failed', {
+        attestationId,
+        error: (error as Error).message,
+      });
+    });
+
+    return durable;
+  }
+
+  private async readCachedAttestation(
+    attestationId: string,
+  ): Promise<TEEAttestationResult | null> {
+    const cached = await redis.get(this.attestationCacheKey(attestationId));
+    if (!cached) {
+      return null;
+    }
+
+    try {
+      const result = this.parseAttestationResult(JSON.parse(cached), attestationId);
+      if (result && this.isCurrentVerifiedAttestation(result)) {
+        return result;
+      }
+    } catch {
+      // Continue to durable storage after removing the invalid cache value.
+    }
+
+    logger.warn('tee_attestation_cache_invalid', { attestationId });
+    await redis.del(this.attestationCacheKey(attestationId)).catch(() => undefined);
     return null;
+  }
+
+  private async loadDurableAttestation(
+    attestationId: string,
+  ): Promise<TEEAttestationResult | null> {
+    const auditLog = await prisma.auditLog.findFirst({
+      where: {
+        action: 'TEE_ATTESTATION_VERIFIED',
+        resourceType: 'attestation',
+        resourceId: attestationId,
+      },
+      orderBy: { timestamp: 'desc' },
+    });
+
+    const details = this.asRecord(auditLog?.details);
+    const durable = this.asRecord(details?.attestationRecord);
+    if (!durable) {
+      return null;
+    }
+
+    return this.parseAttestationResult(durable, attestationId);
+  }
+
+  private async cacheAttestationResult(
+    result: TEEAttestationResult,
+    ttlSeconds = this.computeResultTtlSeconds(result),
+  ): Promise<void> {
+    if (ttlSeconds <= 0) {
+      return;
+    }
+
+    await redis.set(
+      this.attestationCacheKey(result.attestationId),
+      JSON.stringify(this.serializeAttestationResult(result)),
+      'EX',
+      ttlSeconds,
+    );
+  }
+
+  private buildDurableAttestationRecord({
+    request,
+    result,
+    certResult,
+  }: {
+    request: TEEAttestationRequest;
+    result: TEEAttestationResult;
+    certResult: QuoteCertificationResult;
+  }): DurableAttestationRecord {
+    return {
+      ...result,
+      identityId: request.identityId,
+      did: request.did,
+      fmspc: certResult.fmspc,
+      pckLeafSerial: certResult.pckLeafSerial,
+      pckIntermediateSerial: certResult.pckIntermediateSerial,
+    };
+  }
+
+  private serializeDurableAttestationRecord(
+    record: DurableAttestationRecord,
+  ): Prisma.InputJsonObject {
+    return {
+      ...this.serializeAttestationResult(record),
+      identityId: record.identityId,
+      did: record.did,
+      fmspc: record.fmspc,
+      pckLeafSerial: record.pckLeafSerial,
+      pckIntermediateSerial: record.pckIntermediateSerial,
+    };
+  }
+
+  private serializeAttestationResult(
+    result: TEEAttestationResult,
+  ): Prisma.InputJsonObject {
+    return {
+      attestationId: result.attestationId,
+      verified: result.verified,
+      enclaveType: result.enclaveType,
+      mrsigner: result.mrsigner,
+      mrenclave: result.mrenclave,
+      isvProdId: result.isvProdId,
+      isvSvn: result.isvSvn,
+      tcbStatus: result.tcbStatus,
+      advisoryIds: result.advisoryIds,
+      timestamp: result.timestamp.toISOString(),
+      expiresAt: result.expiresAt.toISOString(),
+    };
+  }
+
+  private parseAttestationResult(
+    value: unknown,
+    attestationId: string,
+  ): TEEAttestationResult | null {
+    const record = this.asRecord(value);
+    if (!record || record.attestationId !== attestationId) {
+      return null;
+    }
+
+    const timestamp = this.parseDate(record.timestamp);
+    const expiresAt = this.parseDate(record.expiresAt);
+    if (!timestamp || !expiresAt) {
+      return null;
+    }
+
+    if (
+      record.verified !== true ||
+      typeof record.enclaveType !== 'string' ||
+      typeof record.mrsigner !== 'string' ||
+      typeof record.mrenclave !== 'string' ||
+      typeof record.isvProdId !== 'number' ||
+      typeof record.isvSvn !== 'number' ||
+      !this.isTCBStatus(record.tcbStatus)
+    ) {
+      return null;
+    }
+
+    const advisoryIds = Array.isArray(record.advisoryIds)
+      ? record.advisoryIds.filter((value): value is string => typeof value === 'string')
+      : [];
+
+    return {
+      attestationId,
+      verified: true,
+      enclaveType: record.enclaveType,
+      mrsigner: record.mrsigner,
+      mrenclave: record.mrenclave,
+      isvProdId: record.isvProdId,
+      isvSvn: record.isvSvn,
+      tcbStatus: record.tcbStatus,
+      advisoryIds,
+      timestamp,
+      expiresAt,
+    };
+  }
+
+  private isCurrentVerifiedAttestation(result: TEEAttestationResult): boolean {
+    const expiresAt = result.expiresAt.getTime();
+    return result.verified === true && Number.isFinite(expiresAt) && expiresAt > Date.now();
+  }
+
+  private computeResultTtlSeconds(result: TEEAttestationResult): number {
+    return Math.max(
+      0,
+      Math.floor((result.expiresAt.getTime() - Date.now()) / 1000),
+    );
+  }
+
+  private attestationCacheKey(attestationId: string): string {
+    return `tee:attestation:${attestationId}`;
+  }
+
+  private parseDate(value: unknown): Date | null {
+    const date = value instanceof Date ? value : typeof value === 'string' ? new Date(value) : null;
+    return date && Number.isFinite(date.getTime()) ? date : null;
+  }
+
+  private asRecord(value: unknown): Record<string, unknown> | null {
+    return value !== null && typeof value === 'object' && !Array.isArray(value)
+      ? value as Record<string, unknown>
+      : null;
+  }
+
+  private isTCBStatus(value: unknown): value is TCBStatus {
+    return typeof value === 'string' && Object.values(TCBStatus).includes(value as TCBStatus);
   }
 
   private computeAttestationExpiresAt(

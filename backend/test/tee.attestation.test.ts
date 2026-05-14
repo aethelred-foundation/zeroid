@@ -71,7 +71,10 @@ jest.mock('../src/index', () => {
         update: jest.fn().mockResolvedValue({}),
         findFirst: jest.fn().mockResolvedValue(null),
       },
-      auditLog: { create: jest.fn().mockResolvedValue({}) },
+      auditLog: {
+        create: jest.fn().mockResolvedValue({}),
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
     },
     metricsRegistry: new Registry(),
   };
@@ -102,6 +105,30 @@ const mockedRedis = redis as unknown as {
 const mockedIdentity = prisma.identity as unknown as {
   findFirst: jest.Mock;
 };
+const mockedAuditLog = prisma.auditLog as unknown as {
+  create: jest.Mock;
+  findFirst: jest.Mock;
+};
+
+const durableAttestationRecord = (overrides: Record<string, unknown> = {}) => ({
+  attestationId: 'attestation-durable',
+  verified: true,
+  enclaveType: 'SGX',
+  mrsigner: 'a'.repeat(64),
+  mrenclave: 'b'.repeat(64),
+  isvProdId: 1,
+  isvSvn: 1,
+  tcbStatus: TCBStatus.UP_TO_DATE,
+  advisoryIds: [],
+  timestamp: new Date().toISOString(),
+  expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  identityId: 'identity-1',
+  did: 'did:zero:identity-1',
+  fmspc: '00906ea10000',
+  pckLeafSerial: 'leaf-serial',
+  pckIntermediateSerial: 'intermediate-serial',
+  ...overrides,
+});
 
 describe('isAttestationValid', () => {
   beforeEach(() => {
@@ -111,6 +138,7 @@ describe('isAttestationValid', () => {
     mockedRedis.del.mockResolvedValue(1);
     mockedRedis.eval.mockResolvedValue(null);
     mockedIdentity.findFirst.mockResolvedValue(null);
+    mockedAuditLog.findFirst.mockResolvedValue(null);
   });
 
   it('fails closed instead of trusting identity flags after the attestation cache expires', async () => {
@@ -162,6 +190,50 @@ describe('isAttestationValid', () => {
     mockedRedis.get.mockResolvedValueOnce('{not-json');
     await expect(service.isAttestationValid('attestation-bad')).resolves.toBe(false);
     expect(mockedRedis.del).toHaveBeenCalledWith('tee:attestation:attestation-bad');
+  });
+
+  it('falls back to the durable attestation ledger when Redis loses the cache entry', async () => {
+    mockedAuditLog.findFirst.mockResolvedValue({
+      details: {
+        attestationRecord: durableAttestationRecord(),
+      },
+    });
+
+    await expect(service.isAttestationValid('attestation-durable')).resolves.toBe(true);
+    expect(mockedAuditLog.findFirst).toHaveBeenCalledWith({
+      where: {
+        action: 'TEE_ATTESTATION_VERIFIED',
+        resourceType: 'attestation',
+        resourceId: 'attestation-durable',
+      },
+      orderBy: { timestamp: 'desc' },
+    });
+    expect(mockedRedis.set).toHaveBeenCalledWith(
+      'tee:attestation:attestation-durable',
+      expect.stringContaining('"attestationId":"attestation-durable"'),
+      'EX',
+      expect.any(Number),
+    );
+  });
+
+  it('rejects durable records that are expired or do not match the requested attestation id', async () => {
+    mockedAuditLog.findFirst.mockResolvedValueOnce({
+      details: {
+        attestationRecord: durableAttestationRecord({
+          attestationId: 'attestation-other',
+        }),
+      },
+    });
+    await expect(service.isAttestationValid('attestation-durable')).resolves.toBe(false);
+
+    mockedAuditLog.findFirst.mockResolvedValueOnce({
+      details: {
+        attestationRecord: durableAttestationRecord({
+          expiresAt: new Date(Date.now() - 60_000).toISOString(),
+        }),
+      },
+    });
+    await expect(service.isAttestationValid('attestation-durable')).resolves.toBe(false);
   });
 });
 
