@@ -264,7 +264,10 @@ export function IdentityProvider({ children }: { children: React.ReactNode }) {
           recoveryHash: normalizedRecoveryHash,
         });
         const signature = await signMessageAsync({ message });
-        const publicKey = await recoverRegistrationPublicKey(message, signature);
+        const publicKey = await recoverRegistrationPublicKey(
+          message,
+          signature,
+        );
         const registration = await apiClient.registerIdentity({
           did: did.uri,
           publicKey,

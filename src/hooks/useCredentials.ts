@@ -170,9 +170,7 @@ export function useCredentialDetails(credentialId: string | undefined) {
   const apiQuery = useQuery({
     queryKey: ["credential", credentialId],
     queryFn: () =>
-      apiClient.get<CredentialDetails>(
-        `/api/v1/credentials/${credentialId}`,
-      ),
+      apiClient.get<CredentialDetails>(`/api/v1/credentials/${credentialId}`),
     enabled: !!credentialId,
     staleTime: 20_000,
   });
@@ -208,7 +206,9 @@ export function useRequestCredential() {
       const subjectDid =
         legacyRequest.subjectDid ?? (address ? toSubjectDid(address) : null);
       if (!subjectDid) {
-        throw new Error("Wallet must be connected before requesting credentials");
+        throw new Error(
+          "Wallet must be connected before requesting credentials",
+        );
       }
 
       const schemaId =

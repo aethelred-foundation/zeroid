@@ -30,11 +30,14 @@ export async function POST(request: NextRequest) {
 
     const apiUrl = getBackendApiBaseUrl();
     const encodedCredentialId = encodeURIComponent(String(credentialId));
-    const response = await fetch(`${apiUrl}/api/v1/credentials/${encodedCredentialId}/verify`, {
-      method: "POST",
-      headers: buildBackendHeaders(request, authorization),
-      body: JSON.stringify({ proof, attributeName }),
-    });
+    const response = await fetch(
+      `${apiUrl}/api/v1/credentials/${encodedCredentialId}/verify`,
+      {
+        method: "POST",
+        headers: buildBackendHeaders(request, authorization),
+        body: JSON.stringify({ proof, attributeName }),
+      },
+    );
 
     if (!response.ok) {
       return NextResponse.json(
@@ -47,10 +50,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(result);
   } catch (error) {
     if (error instanceof BackendProxyConfigError) {
-      return NextResponse.json(
-        { error: error.message },
-        { status: 503 },
-      );
+      return NextResponse.json({ error: error.message }, { status: 503 });
     }
 
     return NextResponse.json(

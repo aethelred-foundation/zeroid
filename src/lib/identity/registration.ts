@@ -135,9 +135,7 @@ function normalizePublicKeyString(value: string): string | undefined {
 
 function isBackendPublicKey(value: string): boolean {
   return (
-    value.length >= 32 &&
-    value.length <= 512 &&
-    BASE64_PATTERN.test(value)
+    value.length >= 32 && value.length <= 512 && BASE64_PATTERN.test(value)
   );
 }
 

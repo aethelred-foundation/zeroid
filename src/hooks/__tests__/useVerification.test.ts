@@ -385,7 +385,8 @@ describe("useVerification hooks", () => {
       const pendingResponse = [{ id: "vreq-2", status: "pending" }];
 
       (apiClient.get as jest.Mock).mockImplementation((url: string) => {
-        if (url.includes("result=PENDING")) return Promise.resolve(pendingResponse);
+        if (url.includes("result=PENDING"))
+          return Promise.resolve(pendingResponse);
         if (url.includes("/api/v1/verification/history"))
           return Promise.resolve(historyResponse.items);
         return Promise.resolve({});

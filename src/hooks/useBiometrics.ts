@@ -265,8 +265,7 @@ export function useBiometricStatus() {
 
   return useQuery({
     queryKey: biometricKeys.status(),
-    queryFn: async () =>
-      unsupportedBiometricAPI("Biometric enrollment status"),
+    queryFn: async () => unsupportedBiometricAPI("Biometric enrollment status"),
     enabled: !!address,
     staleTime: 60_000,
   });

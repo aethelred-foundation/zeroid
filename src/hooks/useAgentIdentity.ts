@@ -197,8 +197,11 @@ function normalizeCapabilities(capabilities: unknown): AgentCapability[] {
   if (!Array.isArray(capabilities)) return [];
 
   return capabilities.map((capability) => {
-    const record = capability as Partial<AgentCapability> & Partial<BackendAgentCapability>;
-    const type = (record.type ?? record.name ?? "data_access") as CapabilityType;
+    const record = capability as Partial<AgentCapability> &
+      Partial<BackendAgentCapability>;
+    const type = (record.type ??
+      record.name ??
+      "data_access") as CapabilityType;
     const scope = record.scope ?? record.resourceTypes?.[0] ?? "*";
     return {
       type,
@@ -238,8 +241,14 @@ function normalizeAgent(raw: BackendAgent): Agent {
   };
 }
 
-function inferRiskLevel(type: CapabilityType): BackendAgentCapability["riskLevel"] {
-  if (type === "payment_initiate" || type === "identity_update" || type === "delegation_grant") {
+function inferRiskLevel(
+  type: CapabilityType,
+): BackendAgentCapability["riskLevel"] {
+  if (
+    type === "payment_initiate" ||
+    type === "identity_update" ||
+    type === "delegation_grant"
+  ) {
     return "high";
   }
   if (type === "compliance_check" || type === "data_access") {
@@ -252,12 +261,15 @@ function toBackendCapability(
   capability: AgentCapability,
   requireHumanApproval: boolean,
 ): BackendAgentCapability {
-  const existing = capability as AgentCapability & Partial<BackendAgentCapability>;
+  const existing = capability as AgentCapability &
+    Partial<BackendAgentCapability>;
   const scope = capability.scope === "*" ? "global" : capability.scope;
 
   return {
     name: existing.name ?? capability.type,
-    description: existing.description ?? `Grants ${capability.type} on ${capability.scope}.`,
+    description:
+      existing.description ??
+      `Grants ${capability.type} on ${capability.scope}.`,
     resourceTypes: existing.resourceTypes ?? [scope],
     actions: existing.actions ?? [capability.type],
     riskLevel: existing.riskLevel ?? inferRiskLevel(capability.type),
@@ -319,10 +331,14 @@ function toRegisterPayload(config: AgentConfig) {
     agentDescription: config.description,
     agentProtocol: config.agentProtocol ?? "aethelred_native",
     capabilities: config.capabilities.map((capability) =>
-      toBackendCapability(capability, config.delegationPolicy.requireHumanApproval),
+      toBackendCapability(
+        capability,
+        config.delegationPolicy.requireHumanApproval,
+      ),
     ),
     publicKey: config.publicKey,
-    maxDelegationDepth: config.maxDelegationDepth ?? config.delegationPolicy.maxDepth,
+    maxDelegationDepth:
+      config.maxDelegationDepth ?? config.delegationPolicy.maxDepth,
     teeRequired: config.teeRequired ?? false,
     metadata: {
       ...config.metadata,
@@ -359,7 +375,9 @@ export function useAgent(agentId: string | undefined) {
   return useQuery({
     queryKey: agentKeys.detail(agentId ?? ""),
     queryFn: async () => {
-      const agent = await apiClient.get<BackendAgent>(`${AGENT_API_BASE}/${agentId}`);
+      const agent = await apiClient.get<BackendAgent>(
+        `${AGENT_API_BASE}/${agentId}`,
+      );
       return normalizeAgent(agent);
     },
     enabled: !!agentId,
@@ -408,7 +426,11 @@ export function useUpdateCapabilities() {
     }): Promise<Agent> => {
       const agent = await apiClient.post<BackendAgent>(
         `${AGENT_API_BASE}/${params.agentId}/capabilities`,
-        { capabilities: params.capabilities.map((capability) => toBackendCapability(capability, true)) },
+        {
+          capabilities: params.capabilities.map((capability) =>
+            toBackendCapability(capability, true),
+          ),
+        },
       );
       return normalizeAgent(agent);
     },
@@ -551,7 +573,9 @@ export function useApprovalQueue() {
   return useQuery({
     queryKey: agentKeys.approvals(),
     queryFn: () =>
-      apiClient.get<ApprovalQueueItem[]>(`${AGENT_API_BASE}/approvals`) as unknown as ApprovalQueueItem[],
+      apiClient.get<ApprovalQueueItem[]>(
+        `${AGENT_API_BASE}/approvals`,
+      ) as unknown as ApprovalQueueItem[],
     enabled: !!address,
     staleTime: 10_000,
     refetchInterval: 15_000,

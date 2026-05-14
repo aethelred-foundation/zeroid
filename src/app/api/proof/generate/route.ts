@@ -12,12 +12,7 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const circuitName = body.circuitName ?? body.circuitType;
     const inputs = body.inputs ?? body.publicInputs;
-    const {
-      credentialId,
-      selectiveDisclosure,
-      audience,
-      nonce,
-    } = body;
+    const { credentialId, selectiveDisclosure, audience, nonce } = body;
 
     if (!credentialId || !circuitName || !inputs || !audience) {
       return NextResponse.json(
@@ -28,7 +23,9 @@ export async function POST(request: NextRequest) {
 
     if (typeof inputs !== "object" || Array.isArray(inputs)) {
       return NextResponse.json(
-        { error: "Proof inputs must be an object keyed by circuit signal name" },
+        {
+          error: "Proof inputs must be an object keyed by circuit signal name",
+        },
         { status: 400 },
       );
     }
@@ -66,10 +63,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(proof);
   } catch (error) {
     if (error instanceof BackendProxyConfigError) {
-      return NextResponse.json(
-        { error: error.message },
-        { status: 503 },
-      );
+      return NextResponse.json({ error: error.message }, { status: 503 });
     }
 
     return NextResponse.json(

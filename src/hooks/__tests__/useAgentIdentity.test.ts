@@ -135,7 +135,9 @@ describe("useAgent", () => {
     });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(mockApiClient.get).toHaveBeenCalledWith("/api/v1/ai/agents/agent-001");
+    expect(mockApiClient.get).toHaveBeenCalledWith(
+      "/api/v1/ai/agents/agent-001",
+    );
   });
 
   it("is disabled when agentId is undefined", () => {
@@ -510,7 +512,9 @@ describe("useApprovalQueue", () => {
     });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(mockApiClient.get).toHaveBeenCalledWith("/api/v1/ai/agents/approvals");
+    expect(mockApiClient.get).toHaveBeenCalledWith(
+      "/api/v1/ai/agents/approvals",
+    );
   });
 
   it("is disabled when no address", () => {

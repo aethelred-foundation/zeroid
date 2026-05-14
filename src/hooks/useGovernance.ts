@@ -25,7 +25,9 @@ import type {
 } from "@/types";
 
 function unsupportedGovernanceMetadata(): never {
-  throw new Error("Governance proposal metadata is not exposed by the backend API.");
+  throw new Error(
+    "Governance proposal metadata is not exposed by the backend API.",
+  );
 }
 
 // ---------------------------------------------------------------------------

@@ -18,7 +18,9 @@ import type {
   CreateVerificationParams,
 } from "@/types";
 
-function toBackendVerificationResult(status?: VerificationStatus): string | undefined {
+function toBackendVerificationResult(
+  status?: VerificationStatus,
+): string | undefined {
   if (!status) return undefined;
 
   const mapped: Record<string, string> = {
@@ -32,7 +34,10 @@ function toBackendVerificationResult(status?: VerificationStatus): string | unde
   return mapped[String(status).toLowerCase()] ?? String(status).toUpperCase();
 }
 
-function unsupportedVerificationRequestFlow(message: string, code: string): never {
+function unsupportedVerificationRequestFlow(
+  message: string,
+  code: string,
+): never {
   throw new ZeroIDApiError(message, code, 501);
 }
 

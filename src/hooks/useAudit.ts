@@ -34,7 +34,10 @@ type BackendAuditSummary = {
   } | null;
 };
 
-function appendAuditFilters(params: URLSearchParams, filters: AuditFilter): void {
+function appendAuditFilters(
+  params: URLSearchParams,
+  filters: AuditFilter,
+): void {
   if (filters.action) params.set("action", filters.action);
   if (filters.entityType) params.set("resourceType", filters.entityType);
   if (filters.entityId) params.set("resourceId", filters.entityId);
@@ -54,10 +57,7 @@ function toAuditLogEntry(entry: BackendAuditLogEntry): AuditLogEntry {
   };
 }
 
-function countActions(
-  summary: BackendAuditSummary,
-  actions: string[],
-): number {
+function countActions(summary: BackendAuditSummary, actions: string[]): number {
   const actionSet = new Set(actions.map((action) => action.toUpperCase()));
   return (
     summary.actionBreakdown
@@ -222,10 +222,9 @@ export async function exportAuditLog(
       `/api/v1/audit/export/download?${params.toString()}`,
     );
 
-    const blob = new Blob(
-      [JSON.stringify(data, null, 2)],
-      { type: "application/json" },
-    );
+    const blob = new Blob([JSON.stringify(data, null, 2)], {
+      type: "application/json",
+    });
 
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");

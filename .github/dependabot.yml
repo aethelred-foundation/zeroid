@@ -34,3 +34,29 @@ updates:
       time: "05:00"
       timezone: "Etc/UTC"
     open-pull-requests-limit: 5
+
+  - package-ecosystem: "cargo"
+    directory: "/crates/zeroid-tee"
+    schedule:
+      interval: "daily"
+      time: "05:30"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 5
+    groups:
+      rust-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
+
+  - package-ecosystem: "gomod"
+    directory: "/sdk/go"
+    schedule:
+      interval: "daily"
+      time: "06:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 5
+    groups:
+      go-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
