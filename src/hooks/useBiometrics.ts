@@ -10,8 +10,6 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAccount } from "wagmi";
 import { toast } from "sonner";
-import { apiClient } from "@/lib/api/client";
-import { TEE_SERVICE_URL } from "@/config/constants";
 import type { Bytes32, ISODateString } from "@/types";
 
 // ---------------------------------------------------------------------------
@@ -88,6 +86,10 @@ const biometricKeys = {
   all: ["biometrics"] as const,
   status: () => [...biometricKeys.all, "status"] as const,
 };
+
+function unsupportedBiometricAPI(operation: string): never {
+  throw new Error(`${operation} is not exposed by the backend API.`);
+}
 
 // ---------------------------------------------------------------------------
 // Camera State Management
@@ -178,11 +180,8 @@ export function useStartLivenessCheck() {
       frameData: string; // base64-encoded, encrypted for enclave
       enclaveHash: Bytes32;
     }): Promise<LivenessResult> => {
-      return apiClient.post<LivenessResult>("/api/v1/tee/biometric/liveness", {
-        frameData: params.frameData,
-        enclaveHash: params.enclaveHash,
-        sessionId: params.sessionId,
-      }) as unknown as LivenessResult;
+      void params;
+      unsupportedBiometricAPI("Biometric liveness");
     },
     onSuccess: (data) => {
       if (data.passed) {
@@ -211,10 +210,8 @@ export function useCaptureBiometric() {
       enclaveHash: Bytes32;
       livenessSessionId: string;
     }): Promise<BiometricCapture> => {
-      return apiClient.post<BiometricCapture>(
-        "/api/v1/tee/biometric/capture",
-        params,
-      ) as unknown as BiometricCapture;
+      void params;
+      unsupportedBiometricAPI("Biometric capture");
     },
     onSuccess: (data) => {
       toast.success(`${data.modality} captured`, {
@@ -239,10 +236,8 @@ export function useVerifyBiometric() {
       enclaveHash: Bytes32;
       livenessSessionId: string;
     }): Promise<BiometricVerificationResult> => {
-      return apiClient.post<BiometricVerificationResult>(
-        "/api/v1/tee/biometric/verify",
-        params,
-      ) as unknown as BiometricVerificationResult;
+      void params;
+      unsupportedBiometricAPI("Biometric verification");
     },
     onSuccess: (data) => {
       if (data.verified) {
@@ -270,10 +265,8 @@ export function useBiometricStatus() {
 
   return useQuery({
     queryKey: biometricKeys.status(),
-    queryFn: () =>
-      apiClient.get<BiometricEnrollmentStatus>("/api/v1/tee/biometric/status", {
-        owner: address as string,
-      }) as unknown as BiometricEnrollmentStatus,
+    queryFn: async () =>
+      unsupportedBiometricAPI("Biometric enrollment status"),
     enabled: !!address,
     staleTime: 60_000,
   });
@@ -294,10 +287,8 @@ export function useEnrollBiometric() {
       enclaveHash: Bytes32;
       livenessSessionId: string;
     }): Promise<EnrolledModality> => {
-      return apiClient.post<EnrolledModality>(
-        "/api/v1/tee/biometric/enroll",
-        params,
-      ) as unknown as EnrolledModality;
+      void params;
+      unsupportedBiometricAPI("Biometric enrollment");
     },
     onSuccess: (data) => {
       toast.success(`${data.type} enrolled successfully`, {

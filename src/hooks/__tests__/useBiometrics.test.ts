@@ -264,53 +264,44 @@ describe("useCameraState", () => {
 // ===========================================================================
 
 describe("useStartLivenessCheck", () => {
-  const passedResult = {
-    passed: true,
-    confidence: 0.98,
-    challenges: [{ type: "blink", completed: true, confidenceScore: 0.99 }],
-    sessionId: "session-1",
-    attestationHash: "0xabc",
-    processedInTEE: true,
-  };
-
-  it("shows success toast when liveness passes", async () => {
-    mockApiClient.post.mockResolvedValue(passedResult);
+  it("fails closed because liveness is not exposed by the backend API", async () => {
     const { result } = renderHook(() => useStartLivenessCheck(), {
       wrapper: createWrapper(),
     });
 
     await act(async () => {
-      await result.current.mutateAsync({
-        frameData: "base64data",
-        enclaveHash: "0xenc" as any,
-      });
+      try {
+        await result.current.mutateAsync({
+          frameData: "base64data",
+          enclaveHash: "0xenc" as any,
+        });
+      } catch {}
     });
 
-    expect(mockToast.success).toHaveBeenCalledWith("Liveness check passed", {
-      description: "Confidence: 98.0%",
+    expect(mockToast.error).toHaveBeenCalledWith("Liveness check error", {
+      description: "Biometric liveness is not exposed by the backend API.",
     });
+    expect(mockApiClient.post).not.toHaveBeenCalled();
   });
 
-  it("shows warning toast when liveness fails", async () => {
-    mockApiClient.post.mockResolvedValue({ ...passedResult, passed: false });
+  it("does not call the stale liveness endpoint", async () => {
     const { result } = renderHook(() => useStartLivenessCheck(), {
       wrapper: createWrapper(),
     });
 
     await act(async () => {
-      await result.current.mutateAsync({
-        frameData: "base64data",
-        enclaveHash: "0xenc" as any,
-      });
+      try {
+        await result.current.mutateAsync({
+          frameData: "base64data",
+          enclaveHash: "0xenc" as any,
+        });
+      } catch {}
     });
 
-    expect(mockToast.warning).toHaveBeenCalledWith(
-      "Liveness check failed — please try again",
-    );
+    expect(mockApiClient.post).not.toHaveBeenCalled();
   });
 
-  it("shows error toast on API error", async () => {
-    mockApiClient.post.mockRejectedValue(new Error("TEE unavailable"));
+  it("uses the mutation error channel for unavailable liveness support", async () => {
     const { result } = renderHook(() => useStartLivenessCheck(), {
       wrapper: createWrapper(),
     });
@@ -325,7 +316,7 @@ describe("useStartLivenessCheck", () => {
     });
 
     expect(mockToast.error).toHaveBeenCalledWith("Liveness check error", {
-      description: "TEE unavailable",
+      description: "Biometric liveness is not exposed by the backend API.",
     });
   });
 });
@@ -335,37 +326,29 @@ describe("useStartLivenessCheck", () => {
 // ===========================================================================
 
 describe("useCaptureBiometric", () => {
-  const mockCapture = {
-    sessionId: "session-1",
-    modality: "face",
-    templateHash: "0xhash",
-    qualityScore: 0.95,
-    capturedAt: "2026-01-01T00:00:00Z",
-    enclaveHash: "0xenc",
-  };
-
-  it("captures biometric and shows success toast", async () => {
-    mockApiClient.post.mockResolvedValue(mockCapture);
+  it("fails closed because capture is not exposed by the backend API", async () => {
     const { result } = renderHook(() => useCaptureBiometric(), {
       wrapper: createWrapper(),
     });
 
     await act(async () => {
-      await result.current.mutateAsync({
-        modality: "face",
-        captureData: "base64",
-        enclaveHash: "0xenc" as any,
-        livenessSessionId: "session-1",
-      });
+      try {
+        await result.current.mutateAsync({
+          modality: "face",
+          captureData: "base64",
+          enclaveHash: "0xenc" as any,
+          livenessSessionId: "session-1",
+        });
+      } catch {}
     });
 
-    expect(mockToast.success).toHaveBeenCalledWith("face captured", {
-      description: "Quality score: 95%",
+    expect(mockToast.error).toHaveBeenCalledWith("Biometric capture failed", {
+      description: "Biometric capture is not exposed by the backend API.",
     });
+    expect(mockApiClient.post).not.toHaveBeenCalled();
   });
 
-  it("shows error toast on failure", async () => {
-    mockApiClient.post.mockRejectedValue(new Error("Capture failed"));
+  it("does not call the stale capture endpoint", async () => {
     const { result } = renderHook(() => useCaptureBiometric(), {
       wrapper: createWrapper(),
     });
@@ -382,8 +365,9 @@ describe("useCaptureBiometric", () => {
     });
 
     expect(mockToast.error).toHaveBeenCalledWith("Biometric capture failed", {
-      description: "Capture failed",
+      description: "Biometric capture is not exposed by the backend API.",
     });
+    expect(mockApiClient.post).not.toHaveBeenCalled();
   });
 });
 
@@ -392,69 +376,48 @@ describe("useCaptureBiometric", () => {
 // ===========================================================================
 
 describe("useVerifyBiometric", () => {
-  it("shows success toast when verified", async () => {
-    mockApiClient.post.mockResolvedValue({
-      verified: true,
-      matchScore: 0.95,
-      threshold: 0.8,
-      modality: "face",
-      verifiedAt: "2026-01-01T00:00:00Z",
-      attestationHash: "0x",
-      processedInTEE: true,
-      livenessConfirmed: true,
-    });
+  it("fails closed because verification is not exposed by the backend API", async () => {
     const { result } = renderHook(() => useVerifyBiometric(), {
       wrapper: createWrapper(),
     });
 
     await act(async () => {
-      await result.current.mutateAsync({
-        templateHash: "0xhash" as any,
-        captureData: "data",
-        enclaveHash: "0xenc" as any,
-        livenessSessionId: "s",
-      });
+      try {
+        await result.current.mutateAsync({
+          templateHash: "0xhash" as any,
+          captureData: "data",
+          enclaveHash: "0xenc" as any,
+          livenessSessionId: "s",
+        });
+      } catch {}
     });
 
-    expect(mockToast.success).toHaveBeenCalledWith("Biometric verified", {
-      description: expect.stringContaining("95.0%"),
+    expect(mockToast.error).toHaveBeenCalledWith("Verification error", {
+      description: "Biometric verification is not exposed by the backend API.",
     });
+    expect(mockApiClient.post).not.toHaveBeenCalled();
   });
 
-  it("shows error toast when not verified", async () => {
-    mockApiClient.post.mockResolvedValue({
-      verified: false,
-      matchScore: 0.5,
-      threshold: 0.8,
-      modality: "face",
-      verifiedAt: "2026-01-01T00:00:00Z",
-      attestationHash: "0x",
-      processedInTEE: true,
-      livenessConfirmed: true,
-    });
+  it("does not call the stale verification endpoint", async () => {
     const { result } = renderHook(() => useVerifyBiometric(), {
       wrapper: createWrapper(),
     });
 
     await act(async () => {
-      await result.current.mutateAsync({
-        templateHash: "0x" as any,
-        captureData: "d",
-        enclaveHash: "0x" as any,
-        livenessSessionId: "s",
-      });
+      try {
+        await result.current.mutateAsync({
+          templateHash: "0x" as any,
+          captureData: "d",
+          enclaveHash: "0x" as any,
+          livenessSessionId: "s",
+        });
+      } catch {}
     });
 
-    expect(mockToast.error).toHaveBeenCalledWith(
-      "Biometric verification failed",
-      {
-        description: expect.stringContaining("50.0%"),
-      },
-    );
+    expect(mockApiClient.post).not.toHaveBeenCalled();
   });
 
-  it("shows error toast on API error", async () => {
-    mockApiClient.post.mockRejectedValue(new Error("Verify error"));
+  it("uses the mutation error channel for unavailable verification support", async () => {
     const { result } = renderHook(() => useVerifyBiometric(), {
       wrapper: createWrapper(),
     });
@@ -471,7 +434,7 @@ describe("useVerifyBiometric", () => {
     });
 
     expect(mockToast.error).toHaveBeenCalledWith("Verification error", {
-      description: "Verify error",
+      description: "Biometric verification is not exposed by the backend API.",
     });
   });
 });
@@ -481,33 +444,14 @@ describe("useVerifyBiometric", () => {
 // ===========================================================================
 
 describe("useBiometricStatus", () => {
-  const mockStatus = {
-    enrolled: true,
-    modalities: [
-      {
-        type: "face",
-        enrolledAt: "2026-01-01T00:00:00Z",
-        qualityScore: 0.95,
-        templateVersion: 1,
-        enclaveHash: "0x",
-      },
-    ],
-    lastVerifiedAt: "2026-01-01T00:00:00Z",
-    enrolledAt: "2026-01-01T00:00:00Z",
-    requiresRenewal: false,
-  };
-
-  it("fetches biometric status for connected address", async () => {
-    mockApiClient.get.mockResolvedValue(mockStatus);
+  it("fails closed because enrollment status is not exposed by the backend API", async () => {
     const { result } = renderHook(() => useBiometricStatus(), {
       wrapper: createWrapper(),
     });
 
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(mockApiClient.get).toHaveBeenCalledWith(
-      "/api/v1/tee/biometric/status",
-      { owner: mockAddress },
-    );
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(String(result.current.error)).toContain("enrollment status");
+    expect(mockApiClient.get).not.toHaveBeenCalled();
   });
 
   it("is disabled when no address", () => {
@@ -527,40 +471,30 @@ describe("useBiometricStatus", () => {
 // ===========================================================================
 
 describe("useEnrollBiometric", () => {
-  const mockEnrolled = {
-    type: "face",
-    enrolledAt: "2026-01-01T00:00:00Z",
-    qualityScore: 0.92,
-    templateVersion: 2,
-    enclaveHash: "0xenc",
-  };
-
-  it("enrolls biometric and shows success toast", async () => {
-    mockApiClient.post.mockResolvedValue(mockEnrolled);
+  it("fails closed because enrollment is not exposed by the backend API", async () => {
     const { result } = renderHook(() => useEnrollBiometric(), {
       wrapper: createWrapper(),
     });
 
     await act(async () => {
-      await result.current.mutateAsync({
-        modality: "face",
-        templateHash: "0xhash" as any,
-        captureData: "data",
-        enclaveHash: "0xenc" as any,
-        livenessSessionId: "s",
-      });
+      try {
+        await result.current.mutateAsync({
+          modality: "face",
+          templateHash: "0xhash" as any,
+          captureData: "data",
+          enclaveHash: "0xenc" as any,
+          livenessSessionId: "s",
+        });
+      } catch {}
     });
 
-    expect(mockToast.success).toHaveBeenCalledWith(
-      "face enrolled successfully",
-      {
-        description: expect.stringContaining("Template v2"),
-      },
-    );
+    expect(mockToast.error).toHaveBeenCalledWith("Enrollment failed", {
+      description: "Biometric enrollment is not exposed by the backend API.",
+    });
+    expect(mockApiClient.post).not.toHaveBeenCalled();
   });
 
-  it("shows error toast on failure", async () => {
-    mockApiClient.post.mockRejectedValue(new Error("Already enrolled"));
+  it("does not call the stale enrollment endpoint", async () => {
     const { result } = renderHook(() => useEnrollBiometric(), {
       wrapper: createWrapper(),
     });
@@ -578,7 +512,8 @@ describe("useEnrollBiometric", () => {
     });
 
     expect(mockToast.error).toHaveBeenCalledWith("Enrollment failed", {
-      description: "Already enrolled",
+      description: "Biometric enrollment is not exposed by the backend API.",
     });
+    expect(mockApiClient.post).not.toHaveBeenCalled();
   });
 });

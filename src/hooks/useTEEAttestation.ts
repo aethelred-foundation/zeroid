@@ -14,10 +14,27 @@ import { TEE_REGISTRY_ADDRESS, TEE_REGISTRY_ABI } from "@/config/constants";
 import type {
   AttestationStatus,
   AttestationReport,
-  TEENode,
-  TEENodeHealth,
   VerifyAttestationParams,
 } from "@/types";
+
+type BackendAttestationResult = {
+  verified?: boolean;
+  valid?: boolean;
+  attestationId?: string;
+  enclaveId?: string;
+  enclaveType?: string;
+  tcbStatus?: string;
+  advisoryIds?: string[];
+  timestamp?: string | number;
+  expiresAt?: string | number;
+  mrEnclave?: string;
+  mrSigner?: string;
+  reportData?: string;
+};
+
+function unsupportedTEEQuery(message: string): never {
+  throw new Error(message);
+}
 
 // ---------------------------------------------------------------------------
 // Attestation status (on-chain registry + API enrichment)
@@ -34,9 +51,8 @@ export function useAttestationStatus(enclaveId: string | undefined) {
 
   const apiQuery = useQuery({
     queryKey: ["attestation", enclaveId],
-    queryFn: () =>
-      apiClient.get<AttestationReport>(`/v1/tee/attestation/${enclaveId}`),
-    enabled: !!enclaveId,
+    queryFn: async () => null as AttestationReport | null,
+    enabled: false,
     staleTime: 30_000,
   });
 
@@ -60,21 +76,31 @@ export function useVerifyAttestation() {
 
   return useMutation({
     mutationFn: async (params: VerifyAttestationParams) => {
-      // Server-side verification of the quote against Intel/AMD root of trust
-      const result = await apiClient.post<{
-        valid: boolean;
-        enclaveId: string;
-        mrEnclave: string;
-        mrSigner: string;
-        reportData: string;
-      }>("/v1/tee/verify", {
-        quote: params.quote,
-        expectedMrEnclave: params.expectedMrEnclave,
-        expectedMrSigner: params.expectedMrSigner,
-        nonce: params.nonce,
-      });
+      if (!params.nonce) {
+        throw new Error("TEE attestation requires a server-issued challenge.");
+      }
 
-      return result;
+      const result = await apiClient.post<BackendAttestationResult>(
+        "/api/v1/verification/tee-attest",
+        {
+          enclaveType: "SGX",
+          quote: params.quote,
+          challenge: params.nonce,
+          userData: JSON.stringify({
+            expectedMrEnclave: params.expectedMrEnclave,
+            expectedMrSigner: params.expectedMrSigner,
+          }),
+        },
+      );
+
+      return {
+        valid: result.verified ?? result.valid ?? false,
+        enclaveId: result.attestationId ?? result.enclaveId ?? "",
+        mrEnclave: result.mrEnclave ?? "",
+        mrSigner: result.mrSigner ?? "",
+        reportData: result.reportData ?? "",
+        raw: result,
+      };
     },
     onSuccess: (data) => {
       if (data.valid) {
@@ -104,11 +130,8 @@ export function useVerifyAttestation() {
 export function useTEENodes(activeOnly = true) {
   return useQuery({
     queryKey: ["teeNodes", activeOnly],
-    queryFn: () => {
-      const params = new URLSearchParams();
-      if (activeOnly) params.set("active", "true");
-      return apiClient.get<TEENode[]>(`/v1/tee/nodes?${params.toString()}`);
-    },
+    queryFn: async () =>
+      unsupportedTEEQuery("TEE node discovery is not exposed by the backend API."),
     staleTime: 60_000,
     refetchInterval: 120_000,
   });
@@ -121,8 +144,8 @@ export function useTEENodes(activeOnly = true) {
 export function useNodeHealth(nodeId: string | undefined) {
   return useQuery({
     queryKey: ["teeNodeHealth", nodeId],
-    queryFn: () =>
-      apiClient.get<TEENodeHealth>(`/v1/tee/nodes/${nodeId}/health`),
+    queryFn: async () =>
+      unsupportedTEEQuery("TEE node health is not exposed by the backend API."),
     enabled: !!nodeId,
     staleTime: 15_000,
     refetchInterval: 30_000,
@@ -136,14 +159,8 @@ export function useNodeHealth(nodeId: string | undefined) {
 export function useTEENetworkStatus() {
   return useQuery({
     queryKey: ["teeNetworkStatus"],
-    queryFn: () =>
-      apiClient.get<{
-        totalNodes: number;
-        activeNodes: number;
-        attestedNodes: number;
-        avgUptime: number;
-        lastRefresh: number;
-      }>("/v1/tee/network/status"),
+    queryFn: async () =>
+      unsupportedTEEQuery("TEE network status is not exposed by the backend API."),
     staleTime: 30_000,
     refetchInterval: 60_000,
   });

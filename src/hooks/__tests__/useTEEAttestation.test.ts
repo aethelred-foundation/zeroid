@@ -75,14 +75,13 @@ beforeEach(() => {
 // ===========================================================================
 
 describe("useAttestationStatus", () => {
-  it("fetches attestation data from API when enclaveId is provided", async () => {
-    mockApiClient.get.mockResolvedValue({ enclaveId: "enc-1", valid: true });
+  it("does not call an unsupported attestation lookup API", () => {
     const { result } = renderHook(() => useAttestationStatus("enc-1"), {
       wrapper: createWrapper(),
     });
 
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(mockApiClient.get).toHaveBeenCalledWith("/v1/tee/attestation/enc-1");
+    expect(result.current.fetchStatus).toBe("idle");
+    expect(mockApiClient.get).not.toHaveBeenCalled();
   });
 
   it("returns isAttested=true when on-chain status is verified", () => {
@@ -138,11 +137,8 @@ describe("useAttestationStatus", () => {
 describe("useVerifyAttestation", () => {
   it("shows success toast when attestation is valid", async () => {
     mockApiClient.post.mockResolvedValue({
-      valid: true,
-      enclaveId: "enc-001-abcdefgh12345678",
-      mrEnclave: "0xmrenc",
-      mrSigner: "0xmrsig",
-      reportData: "0xdata",
+      verified: true,
+      attestationId: "enc-001-abcdefgh12345678",
     });
     const { result } = renderHook(() => useVerifyAttestation(), {
       wrapper: createWrapper(),
@@ -157,6 +153,14 @@ describe("useVerifyAttestation", () => {
       } as any);
     });
 
+    expect(mockApiClient.post).toHaveBeenCalledWith(
+      "/api/v1/verification/tee-attest",
+      expect.objectContaining({
+        enclaveType: "SGX",
+        quote: "0xquote",
+        challenge: "0xnonce",
+      }),
+    );
     expect(mockToast.success).toHaveBeenCalledWith("Attestation verified", {
       description: expect.stringContaining("enc-001-abcdefgh"),
     });
@@ -164,11 +168,8 @@ describe("useVerifyAttestation", () => {
 
   it("shows error toast when attestation is invalid", async () => {
     mockApiClient.post.mockResolvedValue({
-      valid: false,
-      enclaveId: "enc-1",
-      mrEnclave: "0x",
-      mrSigner: "0x",
-      reportData: "0x",
+      verified: false,
+      attestationId: "enc-1",
     });
     const { result } = renderHook(() => useVerifyAttestation(), {
       wrapper: createWrapper(),
@@ -220,26 +221,23 @@ describe("useVerifyAttestation", () => {
 // ===========================================================================
 
 describe("useTEENodes", () => {
-  it("fetches active TEE nodes by default", async () => {
-    mockApiClient.get.mockResolvedValue([{ id: "node-1", status: "active" }]);
+  it("fails closed because node discovery is not exposed", async () => {
     const { result } = renderHook(() => useTEENodes(), {
       wrapper: createWrapper(),
     });
 
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    const url = mockApiClient.get.mock.calls[0][0] as string;
-    expect(url).toContain("active=true");
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(String(result.current.error)).toContain("node discovery");
+    expect(mockApiClient.get).not.toHaveBeenCalled();
   });
 
-  it("fetches all nodes when activeOnly=false", async () => {
-    mockApiClient.get.mockResolvedValue([]);
+  it("uses a distinct query key when activeOnly=false", async () => {
     const { result } = renderHook(() => useTEENodes(false), {
       wrapper: createWrapper(),
     });
 
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    const url = mockApiClient.get.mock.calls[0][0] as string;
-    expect(url).not.toContain("active=true");
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(mockApiClient.get).not.toHaveBeenCalled();
   });
 });
 
@@ -248,18 +246,14 @@ describe("useTEENodes", () => {
 // ===========================================================================
 
 describe("useNodeHealth", () => {
-  it("fetches node health by nodeId", async () => {
-    mockApiClient.get.mockResolvedValue({
-      nodeId: "n-1",
-      status: "healthy",
-      uptime: 99.99,
-    });
+  it("fails closed because node health is not exposed", async () => {
     const { result } = renderHook(() => useNodeHealth("n-1"), {
       wrapper: createWrapper(),
     });
 
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(mockApiClient.get).toHaveBeenCalledWith("/v1/tee/nodes/n-1/health");
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(String(result.current.error)).toContain("node health");
+    expect(mockApiClient.get).not.toHaveBeenCalled();
   });
 
   it("is disabled when nodeId is undefined", () => {
@@ -275,19 +269,13 @@ describe("useNodeHealth", () => {
 // ===========================================================================
 
 describe("useTEENetworkStatus", () => {
-  it("fetches TEE network status", async () => {
-    mockApiClient.get.mockResolvedValue({
-      totalNodes: 10,
-      activeNodes: 9,
-      attestedNodes: 9,
-      avgUptime: 99.95,
-      lastRefresh: Date.now(),
-    });
+  it("fails closed because network status is not exposed", async () => {
     const { result } = renderHook(() => useTEENetworkStatus(), {
       wrapper: createWrapper(),
     });
 
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(mockApiClient.get).toHaveBeenCalledWith("/v1/tee/network/status");
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(String(result.current.error)).toContain("network status");
+    expect(mockApiClient.get).not.toHaveBeenCalled();
   });
 });
