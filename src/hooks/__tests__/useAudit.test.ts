@@ -29,6 +29,17 @@ jest.mock("sonner", () => ({
 const mockToast = jest.requireMock("sonner").toast;
 
 jest.mock("@/lib/api/client", () => ({
+  ZeroIDApiError: class ZeroIDApiError extends Error {
+    code: string;
+    statusCode: number;
+
+    constructor(message: string, code: string, statusCode: number) {
+      super(message);
+      this.name = "ZeroIDApiError";
+      this.code = code;
+      this.statusCode = statusCode;
+    }
+  },
   apiClient: {
     get: jest.fn(),
     post: jest.fn(),
@@ -74,16 +85,15 @@ beforeEach(() => {
 
 describe("useAudit", () => {
   it("returns auditLog array and total from useAuditLog data", async () => {
-    mockApiClient.get.mockResolvedValue({
-      entries: [{ id: "1", action: "create" }],
-      total: 1,
-    });
+    mockApiClient.get.mockResolvedValue([{ id: "1", action: "create" }]);
     const { result } = renderHook(() => useAudit(), {
       wrapper: createWrapper(),
     });
 
     await waitFor(() => expect(result.current.isLoading).toBe(false));
-    expect(result.current.auditLog).toEqual([{ id: "1", action: "create" }]);
+    expect(result.current.auditLog).toEqual([
+      expect.objectContaining({ id: "1", action: "create", type: "create" }),
+    ]);
     expect(result.current.total).toBe(1);
   });
 
@@ -103,19 +113,19 @@ describe("useAudit", () => {
 
 describe("useAuditLog", () => {
   it("fetches audit log for connected address", async () => {
-    mockApiClient.get.mockResolvedValue({ entries: [], total: 0 });
+    mockApiClient.get.mockResolvedValue([]);
     const { result } = renderHook(() => useAuditLog(), {
       wrapper: createWrapper(),
     });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(mockApiClient.get).toHaveBeenCalledWith(
-      expect.stringContaining(`/v1/audit/${mockAddress}/log`),
+      expect.stringContaining("/api/v1/audit?"),
     );
   });
 
   it("applies filter parameters to URL", async () => {
-    mockApiClient.get.mockResolvedValue({ entries: [], total: 0 });
+    mockApiClient.get.mockResolvedValue([]);
     const filters = {
       action: "create",
       entityType: "credential",
@@ -129,13 +139,13 @@ describe("useAuditLog", () => {
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     const url = mockApiClient.get.mock.calls[0][0] as string;
     expect(url).toContain("action=create");
-    expect(url).toContain("entityType=credential");
+    expect(url).toContain("resourceType=credential");
     expect(url).toContain("page=2");
-    expect(url).toContain("pageSize=25");
+    expect(url).toContain("limit=25");
   });
 
   it("uses default page=1 and pageSize=50", async () => {
-    mockApiClient.get.mockResolvedValue({ entries: [], total: 0 });
+    mockApiClient.get.mockResolvedValue([]);
     const { result } = renderHook(() => useAuditLog(), {
       wrapper: createWrapper(),
     });
@@ -143,7 +153,7 @@ describe("useAuditLog", () => {
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     const url = mockApiClient.get.mock.calls[0][0] as string;
     expect(url).toContain("page=1");
-    expect(url).toContain("pageSize=50");
+    expect(url).toContain("limit=50");
   });
 
   it("is disabled when no address", () => {
@@ -158,7 +168,7 @@ describe("useAuditLog", () => {
   });
 
   it("applies entityId and date filters to URL", async () => {
-    mockApiClient.get.mockResolvedValue({ entries: [], total: 0 });
+    mockApiClient.get.mockResolvedValue([]);
     const filters = {
       entityId: "ent-1",
       startDate: "2026-01-01",
@@ -170,9 +180,9 @@ describe("useAuditLog", () => {
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     const url = mockApiClient.get.mock.calls[0][0] as string;
-    expect(url).toContain("entityId=ent-1");
-    expect(url).toContain("startDate=2026-01-01");
-    expect(url).toContain("endDate=2026-03-01");
+    expect(url).toContain("resourceId=ent-1");
+    expect(url).toContain("from=2026-01-01");
+    expect(url).toContain("to=2026-03-01");
   });
 });
 
@@ -189,7 +199,7 @@ describe("useCredentialAudit", () => {
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(mockApiClient.get).toHaveBeenCalledWith(
-      "/v1/audit/credential/cred-123",
+      "/api/v1/audit/resource/credential/cred-123?page=1&limit=100",
     );
   });
 
@@ -214,7 +224,7 @@ describe("useVerificationAudit", () => {
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(mockApiClient.get).toHaveBeenCalledWith(
-      "/v1/audit/verification/ver-456",
+      "/api/v1/audit/resource/verification/ver-456?page=1&limit=100",
     );
   });
 
@@ -231,27 +241,38 @@ describe("useVerificationAudit", () => {
 // ===========================================================================
 
 describe("useIdentityActivitySummary", () => {
-  const mockSummary = {
-    totalActions: 100,
-    credentialsIssued: 10,
-    credentialsRevoked: 1,
-    verificationsCompleted: 50,
-    verificationsReceived: 30,
-    disclosuresMade: 9,
-    lastActivity: "2026-01-01T00:00:00Z",
+  const mockBackendSummary = {
+    totalEvents: 100,
+    eventsLast30Days: 20,
+    actionBreakdown: [
+      { action: "CREDENTIAL_ISSUED", count: 10 },
+      { action: "CREDENTIAL_REVOKED", count: 1 },
+      { action: "VERIFICATION_COMPLETED", count: 50 },
+      { action: "VERIFICATION_REQUESTED", count: 30 },
+      { action: "DISCLOSURE_COMPLETED", count: 9 },
+    ],
+    lastActivity: { timestamp: "2026-01-01T00:00:00Z" },
   };
 
   it("fetches activity summary for connected address", async () => {
-    mockApiClient.get.mockResolvedValue(mockSummary);
+    mockApiClient.get.mockResolvedValue(mockBackendSummary);
     const { result } = renderHook(() => useIdentityActivitySummary(), {
       wrapper: createWrapper(),
     });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(mockApiClient.get).toHaveBeenCalledWith(
-      `/v1/audit/${mockAddress}/summary`,
+      "/api/v1/audit/summary/stats",
     );
-    expect(result.current.data).toEqual(mockSummary);
+    expect(result.current.data).toEqual({
+      totalActions: 100,
+      credentialsIssued: 10,
+      credentialsRevoked: 1,
+      verificationsCompleted: 50,
+      verificationsReceived: 30,
+      disclosuresMade: 9,
+      lastActivity: "2026-01-01T00:00:00Z",
+    });
   });
 
   it("is disabled when no address", () => {
@@ -294,20 +315,24 @@ describe("exportAuditLog", () => {
     await exportAuditLog(mockAddress, {}, "json");
 
     expect(mockApiClient.get).toHaveBeenCalledWith(
-      expect.stringContaining(`/v1/audit/${mockAddress}/export`),
+      expect.stringContaining("/api/v1/audit/export/download"),
     );
+    const url = mockApiClient.get.mock.calls[0][0] as string;
+    expect(url).toContain("format=json");
+    expect(url).toContain("from=");
+    expect(url).toContain("to=");
     expect(mockClick).toHaveBeenCalled();
     expect(mockRevokeObjectURL).toHaveBeenCalledWith("blob:url");
     expect(mockToast.success).toHaveBeenCalledWith("Audit log exported");
   });
 
-  it("exports CSV audit log", async () => {
-    mockApiClient.get.mockResolvedValue("col1,col2\nval1,val2");
+  it("fails closed for CSV audit export", async () => {
     await exportAuditLog(mockAddress, { action: "create" }, "csv");
 
-    const url = mockApiClient.get.mock.calls[0][0] as string;
-    expect(url).toContain("format=csv");
-    expect(url).toContain("action=create");
+    expect(mockApiClient.get).not.toHaveBeenCalled();
+    expect(mockToast.error).toHaveBeenCalledWith("Export failed", {
+      description: "Audit CSV export is not exposed by the backend API.",
+    });
   });
 
   it("shows error toast on failure", async () => {
@@ -319,12 +344,11 @@ describe("exportAuditLog", () => {
     });
   });
 
-  it("applies entityType and date range filters to URL", async () => {
+  it("applies date range filters to URL", async () => {
     mockApiClient.get.mockResolvedValue({ entries: [] });
     await exportAuditLog(
       mockAddress,
       {
-        entityType: "identity",
         startDate: "2026-01-01",
         endDate: "2026-03-01",
       },
@@ -332,8 +356,17 @@ describe("exportAuditLog", () => {
     );
 
     const url = mockApiClient.get.mock.calls[0][0] as string;
-    expect(url).toContain("entityType=identity");
-    expect(url).toContain("startDate=2026-01-01");
-    expect(url).toContain("endDate=2026-03-01");
+    expect(url).toContain("from=2026-01-01");
+    expect(url).toContain("to=2026-03-01");
+  });
+
+  it("fails closed for unsupported filtered export", async () => {
+    await exportAuditLog(mockAddress, { entityType: "identity" }, "json");
+
+    expect(mockApiClient.get).not.toHaveBeenCalled();
+    expect(mockToast.error).toHaveBeenCalledWith("Export failed", {
+      description:
+        "Filtered audit export by action or resource is not exposed by the backend API.",
+    });
   });
 });

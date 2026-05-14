@@ -8,7 +8,7 @@
 import { useAccount } from "wagmi";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { apiClient } from "@/lib/api/client";
+import { apiClient, ZeroIDApiError } from "@/lib/api/client";
 import type {
   AuditLogEntry,
   AuditFilter,
@@ -16,6 +16,61 @@ import type {
   VerificationAuditEntry,
   AuditExport,
 } from "@/types";
+
+type BackendAuditLogEntry = AuditLogEntry & {
+  resourceType?: string;
+  resourceId?: string;
+  identityId?: string;
+};
+
+type BackendAuditSummary = {
+  totalEvents?: number;
+  eventsLast30Days?: number;
+  actionBreakdown?: Array<{ action: string; count: number }>;
+  lastActivity?: {
+    action?: string;
+    resourceType?: string;
+    timestamp?: string;
+  } | null;
+};
+
+function appendAuditFilters(params: URLSearchParams, filters: AuditFilter): void {
+  if (filters.action) params.set("action", filters.action);
+  if (filters.entityType) params.set("resourceType", filters.entityType);
+  if (filters.entityId) params.set("resourceId", filters.entityId);
+  if (filters.startDate) params.set("from", filters.startDate);
+  if (filters.endDate) params.set("to", filters.endDate);
+  params.set("page", String(filters.page ?? 1));
+  params.set("limit", String(filters.pageSize ?? 50));
+}
+
+function toAuditLogEntry(entry: BackendAuditLogEntry): AuditLogEntry {
+  return {
+    ...entry,
+    type: entry.type ?? entry.action ?? "audit",
+    actor: entry.actor ?? entry.identityId,
+    entityType: entry.entityType ?? entry.resourceType,
+    entityId: entry.entityId ?? entry.resourceId,
+  };
+}
+
+function countActions(
+  summary: BackendAuditSummary,
+  actions: string[],
+): number {
+  const actionSet = new Set(actions.map((action) => action.toUpperCase()));
+  return (
+    summary.actionBreakdown
+      ?.filter((entry) => actionSet.has(entry.action.toUpperCase()))
+      .reduce((total, entry) => total + entry.count, 0) ?? 0
+  );
+}
+
+function defaultExportWindow(): { from: string; to: string } {
+  const to = new Date();
+  const from = new Date(to.getTime() - 30 * 24 * 3600_000);
+  return { from: from.toISOString(), to: to.toISOString() };
+}
 
 // ---------------------------------------------------------------------------
 // Convenience wrapper — used by pages that need { auditLog }
@@ -43,20 +98,19 @@ export function useAuditLog(filters: AuditFilter = {}) {
   const { address } = useAccount();
 
   const params = new URLSearchParams();
-  if (filters.action) params.set("action", filters.action);
-  if (filters.entityType) params.set("entityType", filters.entityType);
-  if (filters.entityId) params.set("entityId", filters.entityId);
-  if (filters.startDate) params.set("startDate", filters.startDate);
-  if (filters.endDate) params.set("endDate", filters.endDate);
-  params.set("page", String(filters.page ?? 1));
-  params.set("pageSize", String(filters.pageSize ?? 50));
+  appendAuditFilters(params, filters);
 
   return useQuery({
     queryKey: ["auditLog", address, filters],
-    queryFn: () =>
-      apiClient.get<{ entries: AuditLogEntry[]; total: number }>(
-        `/v1/audit/${address}/log?${params.toString()}`,
-      ),
+    queryFn: async () => {
+      const entries = await apiClient.get<BackendAuditLogEntry[]>(
+        `/api/v1/audit?${params.toString()}`,
+      );
+      return {
+        entries: entries.map(toAuditLogEntry),
+        total: entries.length,
+      };
+    },
     enabled: !!address,
     staleTime: 20_000,
   });
@@ -69,10 +123,12 @@ export function useAuditLog(filters: AuditFilter = {}) {
 export function useCredentialAudit(credentialId: string | undefined) {
   return useQuery({
     queryKey: ["credentialAudit", credentialId],
-    queryFn: () =>
-      apiClient.get<CredentialAuditEntry[]>(
-        `/v1/audit/credential/${credentialId}`,
-      ),
+    queryFn: async () => {
+      const entries = await apiClient.get<BackendAuditLogEntry[]>(
+        `/api/v1/audit/resource/credential/${credentialId}?page=1&limit=100`,
+      );
+      return entries.map(toAuditLogEntry) as CredentialAuditEntry[];
+    },
     enabled: !!credentialId,
     staleTime: 30_000,
   });
@@ -85,10 +141,12 @@ export function useCredentialAudit(credentialId: string | undefined) {
 export function useVerificationAudit(verificationId: string | undefined) {
   return useQuery({
     queryKey: ["verificationAudit", verificationId],
-    queryFn: () =>
-      apiClient.get<VerificationAuditEntry[]>(
-        `/v1/audit/verification/${verificationId}`,
-      ),
+    queryFn: async () => {
+      const entries = await apiClient.get<BackendAuditLogEntry[]>(
+        `/api/v1/audit/resource/verification/${verificationId}?page=1&limit=100`,
+      );
+      return entries.map(toAuditLogEntry) as VerificationAuditEntry[];
+    },
     enabled: !!verificationId,
     staleTime: 30_000,
   });
@@ -103,16 +161,26 @@ export function useIdentityActivitySummary() {
 
   return useQuery({
     queryKey: ["identityActivity", address],
-    queryFn: () =>
-      apiClient.get<{
-        totalActions: number;
-        credentialsIssued: number;
-        credentialsRevoked: number;
-        verificationsCompleted: number;
-        verificationsReceived: number;
-        disclosuresMade: number;
-        lastActivity: string;
-      }>(`/v1/audit/${address}/summary`),
+    queryFn: async () => {
+      const summary = await apiClient.get<BackendAuditSummary>(
+        "/api/v1/audit/summary/stats",
+      );
+      return {
+        totalActions: summary.totalEvents ?? 0,
+        credentialsIssued: countActions(summary, ["CREDENTIAL_ISSUED"]),
+        credentialsRevoked: countActions(summary, ["CREDENTIAL_REVOKED"]),
+        verificationsCompleted: countActions(summary, [
+          "ZK_PROOF_VERIFIED",
+          "TEE_ATTESTATION_VERIFIED",
+          "VERIFICATION_COMPLETED",
+        ]),
+        verificationsReceived: countActions(summary, [
+          "VERIFICATION_REQUESTED",
+        ]),
+        disclosuresMade: countActions(summary, ["DISCLOSURE_COMPLETED"]),
+        lastActivity: summary.lastActivity?.timestamp ?? "",
+      };
+    },
     enabled: !!address,
     staleTime: 60_000,
     refetchInterval: 120_000,
@@ -129,24 +197,34 @@ export async function exportAuditLog(
   format: "json" | "csv" = "json",
 ): Promise<void> {
   try {
+    if (format !== "json") {
+      throw new ZeroIDApiError(
+        "Audit CSV export is not exposed by the backend API.",
+        "AUDIT_CSV_EXPORT_UNAVAILABLE",
+        501,
+      );
+    }
+    if (filters.action || filters.entityType || filters.entityId) {
+      throw new ZeroIDApiError(
+        "Filtered audit export by action or resource is not exposed by the backend API.",
+        "AUDIT_FILTERED_EXPORT_UNAVAILABLE",
+        501,
+      );
+    }
+
     const params = new URLSearchParams();
-    if (filters.action) params.set("action", filters.action);
-    if (filters.entityType) params.set("entityType", filters.entityType);
-    if (filters.startDate) params.set("startDate", filters.startDate);
-    if (filters.endDate) params.set("endDate", filters.endDate);
-    params.set("format", format);
+    const exportWindow = defaultExportWindow();
+    params.set("from", filters.startDate ?? exportWindow.from);
+    params.set("to", filters.endDate ?? exportWindow.to);
+    params.set("format", "json");
 
     const data = await apiClient.get<AuditExport>(
-      `/v1/audit/${address}/export?${params.toString()}`,
+      `/api/v1/audit/export/download?${params.toString()}`,
     );
 
     const blob = new Blob(
-      [
-        format === "json"
-          ? JSON.stringify(data, null, 2)
-          : (data as unknown as string),
-      ],
-      { type: format === "json" ? "application/json" : "text/csv" },
+      [JSON.stringify(data, null, 2)],
+      { type: "application/json" },
     );
 
     const url = URL.createObjectURL(blob);
