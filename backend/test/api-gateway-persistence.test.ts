@@ -239,6 +239,36 @@ describe('APIGateway persistence', () => {
     });
   });
 
+  it('uses ZeroID production runtime for API key secret hashing gates', async () => {
+    process.env.NODE_ENV = 'test';
+    process.env.ZEROID_ENV = 'production';
+    delete process.env.ENTERPRISE_SECRET_HASH_PEPPER;
+
+    await expect(apiGateway.createAPIKey('org-zeroid-prod', {
+      name: 'Missing pepper key',
+      scopes: ['credentials:read'],
+      environment: 'production',
+      expiresInDays: 30,
+      ipAllowlist: [],
+      dailyQuota: 1000,
+      monthlyQuota: 50000,
+      rateLimit: { requestsPerSecond: 100, burstSize: 100 },
+      metadata: {},
+    })).rejects.toMatchObject({
+      code: 'SECRET_HASH_PEPPER_MISSING',
+      statusCode: 500,
+    });
+
+    await expect(apiGateway.registerOAuth2Client(
+      'oauth-client-zeroid-prod',
+      ['credentials:read'],
+      'production',
+    )).rejects.toMatchObject({
+      code: 'SECRET_HASH_PEPPER_MISSING',
+      statusCode: 500,
+    });
+  });
+
   it('lists persisted API keys for one organization only', async () => {
     const createdAt = new Date('2026-04-21T00:00:00.000Z');
     const expiresAt = new Date('2026-05-21T00:00:00.000Z');

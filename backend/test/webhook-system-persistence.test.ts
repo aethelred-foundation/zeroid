@@ -19,6 +19,7 @@ const redisSortedSets: Record<
 const redisLists: Record<string, string[]> = {};
 const originalWebhookSecretEncryptionKey = process.env.WEBHOOK_SECRET_ENCRYPTION_KEY;
 const originalNodeEnv = process.env.NODE_ENV;
+const originalZeroidEnv = process.env.ZEROID_ENV;
 
 function encryptWebhookSecretForTest(secret: string, key = Buffer.alloc(32, 9)): string {
   const iv = Buffer.alloc(12, 1);
@@ -122,6 +123,7 @@ describe('WebhookSystem persistence', () => {
     for (const key of Object.keys(redisLists)) delete redisLists[key];
     delete process.env.WEBHOOK_SECRET_ENCRYPTION_KEY;
     process.env.NODE_ENV = 'test';
+    delete process.env.ZEROID_ENV;
   });
 
   afterAll(() => {
@@ -134,6 +136,11 @@ describe('WebhookSystem persistence', () => {
       delete process.env.NODE_ENV;
     } else {
       process.env.NODE_ENV = originalNodeEnv;
+    }
+    if (originalZeroidEnv === undefined) {
+      delete process.env.ZEROID_ENV;
+    } else {
+      process.env.ZEROID_ENV = originalZeroidEnv;
     }
   });
 
@@ -216,6 +223,18 @@ describe('WebhookSystem persistence', () => {
 
     await expect(webhookSystem.register('org-1', {
       url: 'https://user:pass@hooks.zeroid.com/ingest',
+      events: ['verification.completed'],
+    })).rejects.toThrow(/Webhook URL/);
+
+    expect(mockWebhookCreate).not.toHaveBeenCalled();
+  });
+
+  it('uses ZeroID production runtime for webhook endpoint validation', async () => {
+    process.env.NODE_ENV = 'test';
+    process.env.ZEROID_ENV = 'production';
+
+    await expect(webhookSystem.register('org-1', {
+      url: 'http://hooks.zeroid.example/ingest',
       events: ['verification.completed'],
     })).rejects.toThrow(/Webhook URL/);
 

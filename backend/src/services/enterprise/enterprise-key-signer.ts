@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import * as https from 'https';
 import * as net from 'net';
 import { promises as dns } from 'dns';
+import { isProductionRuntime } from '../production-safety';
 
 export type EnterpriseKmsProvider = 'aws-kms' | 'gcp-kms' | 'azure-kms' | 'local';
 export type EnterpriseSigningAlgorithm = 'RS256' | 'PS256' | 'ES256' | 'EdDSA';
@@ -141,7 +142,7 @@ async function fetchWithKmsTimeout(input: string, init: RequestInit = {}): Promi
 }
 
 function shouldPinKmsEndpoint(endpoint: URL): boolean {
-  return process.env.NODE_ENV === 'production' && endpoint.protocol === 'https:';
+  return isProductionRuntime() && endpoint.protocol === 'https:';
 }
 
 export function assertAllowedEnterpriseKmsEndpoint(input: string): void {
@@ -739,7 +740,11 @@ export class EnterpriseKeySigner {
       kmsAuthFailedCode: options.kmsAuthFailedCode ?? DEFAULT_ERROR_CODES.kmsAuthFailed,
     };
 
-    if (process.env.NODE_ENV === 'production' && this.provider === 'local' && options.allowLocalSigning !== true) {
+    if (
+      isProductionRuntime() &&
+      this.provider === 'local' &&
+      options.allowLocalSigning !== true
+    ) {
       throw new EnterpriseSigningError(
         this.options.localSigningBlockedMessage,
         this.options.localSigningBlockedCode,

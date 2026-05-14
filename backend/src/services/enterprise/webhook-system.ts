@@ -5,6 +5,7 @@ import * as https from 'https';
 import * as net from 'net';
 import { promises as dns } from 'dns';
 import { prisma, redis } from '../../index';
+import { isProductionRuntime as isSharedProductionRuntime } from '../production-safety';
 
 // ---------------------------------------------------------------------------
 // Logger
@@ -46,7 +47,7 @@ const PRIVATE_WEBHOOK_HOSTNAME_SUFFIXES = [
   '.localhost',
 ];
 
-const isProductionRuntime = (): boolean => process.env.NODE_ENV === 'production';
+const isProductionRuntime = (): boolean => isSharedProductionRuntime();
 
 function isSafeWebhookEndpoint(value: string): boolean {
   try {
@@ -1404,7 +1405,7 @@ export class WebhookSystem {
   }
 
   private isProductionRuntime(): boolean {
-    return process.env.NODE_ENV === 'production';
+    return isSharedProductionRuntime();
   }
 }
 

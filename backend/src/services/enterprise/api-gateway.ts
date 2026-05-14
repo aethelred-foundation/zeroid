@@ -3,6 +3,7 @@ import { createLogger, format, transports } from 'winston';
 import crypto from 'crypto';
 import * as net from 'net';
 import { prisma, redis } from '../../index';
+import { isProductionRuntime } from '../production-safety';
 
 // ---------------------------------------------------------------------------
 // Logger
@@ -795,7 +796,7 @@ export class APIGateway {
       return pepper;
     }
 
-    if (process.env.NODE_ENV === 'production') {
+    if (isProductionRuntime()) {
       throw new GatewayError(
         `${ENTERPRISE_SECRET_HASH_PEPPER_ENV} must be configured in production and contain at least ${MIN_ENTERPRISE_SECRET_HASH_PEPPER_LENGTH} characters`,
         'SECRET_HASH_PEPPER_MISSING',
@@ -807,7 +808,7 @@ export class APIGateway {
   }
 
   private allowLegacySecretHashFallback(): boolean {
-    return process.env.NODE_ENV !== 'production';
+    return !isProductionRuntime();
   }
 
   private timingSafeStringEqual(left: string, right: string): boolean {

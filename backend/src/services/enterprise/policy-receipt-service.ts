@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import { prisma, redis } from '../../index';
 import { credentialService } from '../credential';
+import { isProductionRuntime } from '../production-safety';
 
 const RECEIPT_TTL_SECONDS = 90 * 24 * 60 * 60;
 const RECEIPT_INDEX_LIMIT = 200;
@@ -924,7 +925,7 @@ export class PolicyDecisionReceiptService {
 
   private getSigningSecret(): string {
     const configured = process.env.POLICY_RECEIPT_SIGNING_SECRET?.trim();
-    if (process.env.NODE_ENV === 'production') {
+    if (isProductionRuntime()) {
       if (
         configured &&
         configured.length >= MIN_PRODUCTION_RECEIPT_SIGNING_SECRET_LENGTH

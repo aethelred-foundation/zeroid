@@ -266,6 +266,7 @@ describe('PolicyDecisionReceiptService', () => {
 
   it('requires a dedicated strong signing secret for production receipts', async () => {
     const previousNodeEnv = process.env.NODE_ENV;
+    const previousZeroidEnv = process.env.ZEROID_ENV;
     const previousReceiptSecret = process.env.POLICY_RECEIPT_SIGNING_SECRET;
     const previousJwtSecret = process.env.JWT_SECRET;
 
@@ -298,11 +299,24 @@ describe('PolicyDecisionReceiptService', () => {
       await expect(createMinimalReceipt()).resolves.toMatchObject({
         receiptType: 'sanctions_screening',
       });
+
+      process.env.NODE_ENV = 'test';
+      process.env.ZEROID_ENV = 'production';
+      delete process.env.POLICY_RECEIPT_SIGNING_SECRET;
+
+      await expect(createMinimalReceipt()).rejects.toMatchObject({
+        code: 'POLICY_RECEIPT_SECRET_MISSING',
+      });
     } finally {
       if (previousNodeEnv === undefined) {
         delete process.env.NODE_ENV;
       } else {
         process.env.NODE_ENV = previousNodeEnv;
+      }
+      if (previousZeroidEnv === undefined) {
+        delete process.env.ZEROID_ENV;
+      } else {
+        process.env.ZEROID_ENV = previousZeroidEnv;
       }
       if (previousReceiptSecret === undefined) {
         delete process.env.POLICY_RECEIPT_SIGNING_SECRET;

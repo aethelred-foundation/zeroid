@@ -81,6 +81,46 @@ describe('EnterpriseKeySigner', () => {
     expect(requestOptions.servername).toBe('cloudkms.googleapis.com');
   });
 
+  it('uses ZeroID production runtime for KMS DNS pinning', async () => {
+    process.env.NODE_ENV = 'test';
+    process.env.ZEROID_ENV = 'production';
+    process.env.GCP_ACCESS_TOKEN = 'gcp-access-token';
+    global.fetch = jest.fn() as unknown as typeof fetch;
+    jest.spyOn(dns, 'lookup').mockResolvedValue([{ address: '8.8.4.4', family: 4 }] as any);
+
+    const signature = Buffer.from('kms-signature');
+    mockHttpsJsonResponse({
+      signature: signature.toString('base64'),
+    });
+
+    const signer = new EnterpriseKeySigner({
+      provider: 'gcp-kms',
+      keyId: 'projects/p/locations/global/keyRings/r/cryptoKeys/k',
+      keyVersion: '1',
+      defaultVerificationMethod: 'did:aethelred:test#key-1',
+    });
+
+    await expect(signer.sign(Buffer.from('message'))).resolves.toEqual(signature);
+    expect(global.fetch).not.toHaveBeenCalled();
+    expect(dns.lookup).toHaveBeenCalledWith('cloudkms.googleapis.com', {
+      all: true,
+      verbatim: true,
+    });
+  });
+
+  it('blocks local signing under ZeroID production runtime', () => {
+    process.env.NODE_ENV = 'test';
+    process.env.ZEROID_ENV = 'production';
+
+    expect(() =>
+      new EnterpriseKeySigner({
+        provider: 'local',
+        keyId: 'local-key',
+        defaultVerificationMethod: 'did:aethelred:test#key-1',
+      }),
+    ).toThrow(expect.objectContaining({ code: 'SIGNING_LOCAL_BLOCKED' }));
+  });
+
   it('rejects production KMS endpoints that resolve to private addresses', async () => {
     process.env.NODE_ENV = 'production';
     process.env.GCP_ACCESS_TOKEN = 'gcp-access-token';
