@@ -23,6 +23,10 @@ export interface AgentConfig {
   capabilities: AgentCapability[];
   delegationPolicy: DelegationPolicy;
   maxAutonomyLevel: AutonomyLevel;
+  publicKey?: string;
+  agentProtocol?: string;
+  maxDelegationDepth?: number;
+  teeRequired?: boolean;
   webhookUrl?: string;
   metadata?: Record<string, string>;
 }
@@ -135,6 +139,200 @@ const agentKeys = {
   delegations: (id: string) => [...agentKeys.all, "delegations", id] as const,
 };
 
+const AGENT_API_BASE = "/api/v1/ai/agents";
+const EMPTY_ADDRESS = "0x0000000000000000000000000000000000000000" as Address;
+
+type BackendAgentCapability = {
+  name: string;
+  description: string;
+  resourceTypes: string[];
+  actions: string[];
+  riskLevel: "low" | "medium" | "high" | "critical";
+  requiresApproval: boolean;
+  rateLimit?: { maxPerHour: number; maxPerDay: number };
+};
+
+type BackendAgent = Partial<Agent> & {
+  agentId?: string;
+  agentName?: string;
+  agentDescription?: string;
+  agentProtocol?: string;
+  operatorId?: string;
+  maxDelegationDepth?: number;
+  stats?: {
+    totalActions?: number;
+  };
+  suspension?: {
+    reason?: string;
+    suspendedAt?: string;
+  };
+};
+
+type BackendDelegationConstraint = {
+  type:
+    | "time_bounded"
+    | "action_scoped"
+    | "resource_scoped"
+    | "rate_limited"
+    | "approval_required";
+  parameters: Record<string, unknown>;
+};
+
+function toIsoDate(value: unknown): ISODateString {
+  if (typeof value === "string") return value as ISODateString;
+  if (value instanceof Date) return value.toISOString() as ISODateString;
+  return new Date().toISOString() as ISODateString;
+}
+
+function normalizeStatus(status: unknown): AgentStatus {
+  if (status === "pending") return "pending_approval";
+  if (status === "active" || status === "suspended" || status === "revoked") {
+    return status;
+  }
+  if (status === "pending_approval") return "pending_approval";
+  return "active";
+}
+
+function normalizeCapabilities(capabilities: unknown): AgentCapability[] {
+  if (!Array.isArray(capabilities)) return [];
+
+  return capabilities.map((capability) => {
+    const record = capability as Partial<AgentCapability> & Partial<BackendAgentCapability>;
+    const type = (record.type ?? record.name ?? "data_access") as CapabilityType;
+    const scope = record.scope ?? record.resourceTypes?.[0] ?? "*";
+    return {
+      type,
+      scope,
+      constraints: record.constraints,
+      grantedAt: toIsoDate(record.grantedAt),
+      expiresAt: record.expiresAt ? toIsoDate(record.expiresAt) : undefined,
+    };
+  });
+}
+
+function normalizeAgent(raw: BackendAgent): Agent {
+  const id = raw.id ?? raw.agentId ?? "";
+  return {
+    id,
+    name: raw.name ?? raw.agentName ?? id,
+    description: raw.description ?? raw.agentDescription ?? "",
+    ownerAddress: raw.ownerAddress ?? EMPTY_ADDRESS,
+    status: normalizeStatus(raw.status),
+    capabilities: normalizeCapabilities(raw.capabilities),
+    delegationPolicy: raw.delegationPolicy ?? {
+      allowSubDelegation: (raw.maxDelegationDepth ?? 0) > 1,
+      maxDepth: raw.maxDelegationDepth ?? 0,
+      requireHumanApproval: true,
+      approvalThreshold: 1,
+      expirySeconds: 3600,
+    },
+    autonomyLevel: raw.autonomyLevel ?? "supervised",
+    createdAt: toIsoDate(raw.createdAt),
+    updatedAt: toIsoDate(raw.updatedAt),
+    lastActiveAt: raw.lastActiveAt ? toIsoDate(raw.lastActiveAt) : undefined,
+    suspendedAt: raw.suspendedAt ?? raw.suspension?.suspendedAt,
+    suspensionReason: raw.suspensionReason ?? raw.suspension?.reason,
+    verificationCount: raw.verificationCount ?? raw.stats?.totalActions ?? 0,
+    webhookUrl: raw.webhookUrl,
+    metadata: raw.metadata,
+  };
+}
+
+function inferRiskLevel(type: CapabilityType): BackendAgentCapability["riskLevel"] {
+  if (type === "payment_initiate" || type === "identity_update" || type === "delegation_grant") {
+    return "high";
+  }
+  if (type === "compliance_check" || type === "data_access") {
+    return "medium";
+  }
+  return "low";
+}
+
+function toBackendCapability(
+  capability: AgentCapability,
+  requireHumanApproval: boolean,
+): BackendAgentCapability {
+  const existing = capability as AgentCapability & Partial<BackendAgentCapability>;
+  const scope = capability.scope === "*" ? "global" : capability.scope;
+
+  return {
+    name: existing.name ?? capability.type,
+    description: existing.description ?? `Grants ${capability.type} on ${capability.scope}.`,
+    resourceTypes: existing.resourceTypes ?? [scope],
+    actions: existing.actions ?? [capability.type],
+    riskLevel: existing.riskLevel ?? inferRiskLevel(capability.type),
+    requiresApproval: existing.requiresApproval ?? requireHumanApproval,
+    rateLimit: existing.rateLimit,
+  };
+}
+
+function toDelegationConstraints(
+  constraints: DelegationConstraints | BackendDelegationConstraint[],
+): BackendDelegationConstraint[] {
+  if (Array.isArray(constraints)) return constraints;
+
+  const normalized: BackendDelegationConstraint[] = [];
+  if (constraints.timeWindowStart || constraints.timeWindowEnd) {
+    normalized.push({
+      type: "time_bounded",
+      parameters: {
+        start: constraints.timeWindowStart,
+        end: constraints.timeWindowEnd,
+      },
+    });
+  }
+  if (constraints.rateLimit || constraints.rateLimitWindow) {
+    normalized.push({
+      type: "rate_limited",
+      parameters: {
+        limit: constraints.rateLimit,
+        window: constraints.rateLimitWindow,
+      },
+    });
+  }
+  if (constraints.allowedJurisdictions?.length) {
+    normalized.push({
+      type: "resource_scoped",
+      parameters: {
+        jurisdictions: constraints.allowedJurisdictions,
+      },
+    });
+  }
+  if (constraints.requireApprovalAbove !== undefined) {
+    normalized.push({
+      type: "approval_required",
+      parameters: {
+        above: constraints.requireApprovalAbove,
+      },
+    });
+  }
+  return normalized;
+}
+
+function toRegisterPayload(config: AgentConfig) {
+  if (!config.publicKey) {
+    throw new Error("Agent registration requires a cryptographic public key.");
+  }
+
+  return {
+    agentName: config.name,
+    agentDescription: config.description,
+    agentProtocol: config.agentProtocol ?? "aethelred_native",
+    capabilities: config.capabilities.map((capability) =>
+      toBackendCapability(capability, config.delegationPolicy.requireHumanApproval),
+    ),
+    publicKey: config.publicKey,
+    maxDelegationDepth: config.maxDelegationDepth ?? config.delegationPolicy.maxDepth,
+    teeRequired: config.teeRequired ?? false,
+    metadata: {
+      ...config.metadata,
+      ownerAddress: config.ownerAddress,
+      webhookUrl: config.webhookUrl,
+      maxAutonomyLevel: config.maxAutonomyLevel,
+    },
+  };
+}
+
 // ---------------------------------------------------------------------------
 // List Agents
 // ---------------------------------------------------------------------------
@@ -144,10 +342,10 @@ export function useAgents() {
 
   return useQuery({
     queryKey: agentKeys.list(),
-    queryFn: () =>
-      apiClient.get<Agent[]>("/api/v1/agents", {
-        owner: address as string,
-      }) as unknown as Agent[],
+    queryFn: async () => {
+      const agents = await apiClient.get<BackendAgent[]>(AGENT_API_BASE);
+      return agents.map(normalizeAgent);
+    },
     enabled: !!address,
     staleTime: 30_000,
   });
@@ -160,8 +358,10 @@ export function useAgents() {
 export function useAgent(agentId: string | undefined) {
   return useQuery({
     queryKey: agentKeys.detail(agentId ?? ""),
-    queryFn: () =>
-      apiClient.get<Agent>(`/api/v1/agents/${agentId}`) as unknown as Agent,
+    queryFn: async () => {
+      const agent = await apiClient.get<BackendAgent>(`${AGENT_API_BASE}/${agentId}`);
+      return normalizeAgent(agent);
+    },
     enabled: !!agentId,
     staleTime: 15_000,
   });
@@ -176,10 +376,11 @@ export function useRegisterAgent() {
 
   return useMutation({
     mutationFn: async (config: AgentConfig): Promise<Agent> => {
-      return apiClient.post<Agent>(
-        "/api/v1/agents/register",
-        config,
-      ) as unknown as Agent;
+      const agent = await apiClient.post<BackendAgent>(
+        AGENT_API_BASE,
+        toRegisterPayload(config),
+      );
+      return normalizeAgent(agent);
     },
     onSuccess: (data) => {
       toast.success("Agent registered", {
@@ -205,10 +406,11 @@ export function useUpdateCapabilities() {
       agentId: string;
       capabilities: AgentCapability[];
     }): Promise<Agent> => {
-      return apiClient.put<Agent>(
-        `/api/v1/agents/${params.agentId}/capabilities`,
-        { capabilities: params.capabilities },
-      ) as unknown as Agent;
+      const agent = await apiClient.post<BackendAgent>(
+        `${AGENT_API_BASE}/${params.agentId}/capabilities`,
+        { capabilities: params.capabilities.map((capability) => toBackendCapability(capability, true)) },
+      );
+      return normalizeAgent(agent);
     },
     onSuccess: (data) => {
       toast.success("Capabilities updated", {
@@ -235,11 +437,17 @@ export function useCreateDelegation() {
       fromAgentId: string;
       toAgentId: string;
       capabilities: CapabilityType[];
-      constraints: DelegationConstraints;
+      constraints: DelegationConstraints | BackendDelegationConstraint[];
+      durationHours?: number;
     }): Promise<DelegationChain> => {
       return apiClient.post<DelegationChain>(
-        "/api/v1/agents/delegations",
-        params,
+        `${AGENT_API_BASE}/${params.fromAgentId}/delegate`,
+        {
+          toAgentId: params.toAgentId,
+          capabilities: params.capabilities,
+          constraints: toDelegationConstraints(params.constraints),
+          durationHours: params.durationHours ?? 1,
+        },
       ) as unknown as DelegationChain;
     },
     onSuccess: (data) => {
@@ -265,10 +473,26 @@ export function useVerifyAgent() {
     mutationFn: async (params: {
       agentId: string;
       challenge: string;
+      signature: string;
+      requestedCapabilities: CapabilityType[];
+      purpose: string;
+      resourceId?: string;
+      callerAgentId?: string;
+      callerProtocol?: string;
     }): Promise<AgentVerification> => {
       return apiClient.post<AgentVerification>(
-        `/api/v1/agents/${params.agentId}/verify`,
-        { challenge: params.challenge },
+        `${AGENT_API_BASE}/${params.agentId}/verify`,
+        {
+          challenge: params.challenge,
+          signature: params.signature,
+          requestedCapabilities: params.requestedCapabilities,
+          context: {
+            callerAgentId: params.callerAgentId,
+            callerProtocol: params.callerProtocol,
+            purpose: params.purpose,
+            resourceId: params.resourceId,
+          },
+        },
       ) as unknown as AgentVerification;
     },
     onSuccess: (data) => {
@@ -296,9 +520,13 @@ export function useSuspendAgent() {
       agentId: string;
       reason: string;
     }): Promise<Agent> => {
-      return apiClient.post<Agent>(`/api/v1/agents/${params.agentId}/suspend`, {
-        reason: params.reason,
-      }) as unknown as Agent;
+      const agent = await apiClient.post<BackendAgent>(
+        `${AGENT_API_BASE}/${params.agentId}/suspend`,
+        {
+          reason: params.reason,
+        },
+      );
+      return normalizeAgent(agent);
     },
     onSuccess: (data) => {
       toast.warning("Agent suspended", {
@@ -323,9 +551,7 @@ export function useApprovalQueue() {
   return useQuery({
     queryKey: agentKeys.approvals(),
     queryFn: () =>
-      apiClient.get<ApprovalQueueItem[]>("/api/v1/agents/approvals", {
-        owner: address as string,
-      }) as unknown as ApprovalQueueItem[],
+      apiClient.get<ApprovalQueueItem[]>(`${AGENT_API_BASE}/approvals`) as unknown as ApprovalQueueItem[],
     enabled: !!address,
     staleTime: 10_000,
     refetchInterval: 15_000,
@@ -341,9 +567,9 @@ export function useApproveAction() {
       approved: boolean;
       reason?: string;
     }): Promise<void> => {
-      await apiClient.post(`/api/v1/agents/approvals/${params.actionId}`, {
+      await apiClient.post(`${AGENT_API_BASE}/approvals/${params.actionId}`, {
         approved: params.approved,
-        reason: params.reason,
+        note: params.reason ?? (params.approved ? "Approved" : "Rejected"),
       });
     },
     onSuccess: (_, params) => {

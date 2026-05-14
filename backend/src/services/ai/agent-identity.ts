@@ -2,6 +2,10 @@ import crypto from 'crypto';
 import { prisma, logger, redis } from '../../index';
 // tee import removed — not used in this module
 
+const AGENT_RECORD_TTL_SECONDS = 30 * 86400;
+const APPROVAL_RECORD_TTL_SECONDS = 30 * 86400;
+const DELEGATION_RECORD_GRACE_SECONDS = 60;
+
 // ---------------------------------------------------------------------------
 // Types & Enums
 // ---------------------------------------------------------------------------
@@ -249,9 +253,10 @@ export class AgentIdentityService {
       },
     });
 
-    // Cache agent identity
-    await redis.set(`agent:${agentId}`, JSON.stringify(agent), 'EX', 30 * 86400);
-    await redis.set(`agent:did:${did}`, agentId, 'EX', 30 * 86400);
+    await this.persistAgent(agent);
+    await redis.set(`agent:did:${did}`, agentId, 'EX', AGENT_RECORD_TTL_SECONDS);
+    await redis.sadd(this.operatorAgentSetKey(registration.operatorId), agentId);
+    await redis.expire(this.operatorAgentSetKey(registration.operatorId), AGENT_RECORD_TTL_SECONDS);
 
     logger.info('agent_registered', {
       agentId,
@@ -267,18 +272,51 @@ export class AgentIdentityService {
   // Get agent profile
   // -------------------------------------------------------------------------
   async getAgent(agentId: string): Promise<AgentIdentity> {
-    const agent = this.agents.get(agentId);
-    if (!agent) {
-      // Try cache
-      const cached = await redis.get(`agent:${agentId}`);
-      if (cached) {
-        const parsed = JSON.parse(cached) as AgentIdentity;
-        this.agents.set(agentId, parsed);
-        return parsed;
-      }
-      throw new AgentIdentityError('Agent not found', 'AGENT_NOT_FOUND', 404);
+    const cached = await redis.get(`agent:${agentId}`);
+    if (cached) {
+      const parsed = this.parseStoredAgent(cached);
+      this.agents.set(agentId, parsed);
+      return parsed;
     }
-    return agent;
+
+    const agent = this.agents.get(agentId);
+    if (agent) return agent;
+
+    throw new AgentIdentityError('Agent not found', 'AGENT_NOT_FOUND', 404);
+  }
+
+  // -------------------------------------------------------------------------
+  // List agents owned by an operator
+  // -------------------------------------------------------------------------
+  async listAgentsForOperator(operatorId: string): Promise<AgentIdentity[]> {
+    const indexedIds = await redis.smembers(this.operatorAgentSetKey(operatorId));
+    const candidateIds = new Set(indexedIds);
+
+    for (const [agentId, agent] of this.agents.entries()) {
+      if (agent.operatorId === operatorId) {
+        candidateIds.add(agentId);
+      }
+    }
+
+    const agents: AgentIdentity[] = [];
+    for (const agentId of candidateIds) {
+      try {
+        const agent = await this.getAgent(agentId);
+        if (agent.operatorId === operatorId) {
+          agents.push(agent);
+        } else {
+          await redis.srem(this.operatorAgentSetKey(operatorId), agentId);
+        }
+      } catch (error) {
+        if (error instanceof AgentIdentityError && error.code === 'AGENT_NOT_FOUND') {
+          await redis.srem(this.operatorAgentSetKey(operatorId), agentId);
+          continue;
+        }
+        throw error;
+      }
+    }
+
+    return agents.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
   }
 
   // -------------------------------------------------------------------------
@@ -316,7 +354,7 @@ export class AgentIdentityService {
     agent.updatedAt = new Date();
     this.agents.set(agentId, agent);
 
-    await redis.set(`agent:${agentId}`, JSON.stringify(agent), 'EX', 30 * 86400);
+    await this.persistAgent(agent);
 
     await prisma.auditLog.create({
       data: {
@@ -404,12 +442,7 @@ export class AgentIdentityService {
 
     this.delegations.set(delegationId, delegation);
 
-    await redis.set(
-      `delegation:${delegationId}`,
-      JSON.stringify(delegation),
-      'EX',
-      durationHours * 3600,
-    );
+    await this.persistDelegation(delegation);
 
     // Index delegations by agent
     await redis.sadd(`delegations:from:${fromAgentId}`, delegationId);
@@ -568,6 +601,7 @@ export class AgentIdentityService {
       agent.stats.averageLatencyMs * (agent.stats.totalActions - 1) + latencyMs
     ) / agent.stats.totalActions;
     this.agents.set(agent.agentId, agent);
+    await this.persistAgent(agent);
 
     details.push(`Authorized: ${authorized.length}/${request.requestedCapabilities.length} capabilities`);
 
@@ -631,16 +665,21 @@ export class AgentIdentityService {
     // Revoke all active delegations from this agent
     const delegationIds = await redis.smembers(`delegations:from:${agentId}`);
     for (const delId of delegationIds) {
-      const delegation = this.delegations.get(delId);
+      const delegation = await this.getDelegation(delId);
+      if (!delegation) {
+        await redis.srem(`delegations:from:${agentId}`, delId);
+        continue;
+      }
       if (delegation && delegation.status === 'active') {
         delegation.status = 'revoked';
         delegation.revokedAt = new Date();
         delegation.revokedBy = suspendedBy;
         this.delegations.set(delId, delegation);
+        await this.persistDelegation(delegation);
       }
     }
 
-    await redis.set(`agent:${agentId}`, JSON.stringify(agent), 'EX', 30 * 86400);
+    await this.persistAgent(agent);
 
     await prisma.auditLog.create({
       data: {
@@ -731,6 +770,7 @@ export class AgentIdentityService {
     agent.stats.anomalyCount++;
     agent.stats.lastAnomalyAt = new Date();
     this.agents.set(agent.agentId, agent);
+    await this.persistAgent(agent);
 
     const entry: AgentAuditEntry = {
       entryId: `aae-${crypto.randomUUID()}`,
@@ -789,6 +829,9 @@ export class AgentIdentityService {
     };
 
     this.approvalRequests.set(request.requestId, request);
+    await this.persistApprovalRequest(request);
+    await redis.sadd(this.operatorApprovalSetKey(agent.operatorId), request.requestId);
+    await redis.expire(this.operatorApprovalSetKey(agent.operatorId), APPROVAL_RECORD_TTL_SECONDS);
 
     // Notify operator via Redis pub/sub
     await redis.publish(
@@ -813,7 +856,7 @@ export class AgentIdentityService {
     approved: boolean,
     note: string,
   ): Promise<HumanApprovalRequest> {
-    const request = this.approvalRequests.get(requestId);
+    const request = await this.getApprovalRequest(requestId);
     if (!request) {
       throw new AgentIdentityError('Approval request not found', 'APPROVAL_NOT_FOUND', 404);
     }
@@ -826,11 +869,21 @@ export class AgentIdentityService {
       );
     }
 
+    if (request.status !== 'pending') {
+      throw new AgentIdentityError(
+        'Approval request has already been resolved',
+        'APPROVAL_ALREADY_RESOLVED',
+        409,
+      );
+    }
+
     request.status = approved ? 'approved' : 'rejected';
     request.respondedAt = new Date();
     request.respondedBy = respondedBy;
     request.responseNote = note;
     this.approvalRequests.set(requestId, request);
+    await this.persistApprovalRequest(request);
+    await redis.srem(this.operatorApprovalSetKey(request.operatorId), requestId);
 
     await prisma.auditLog.create({
       data: {
@@ -855,6 +908,35 @@ export class AgentIdentityService {
     });
 
     return request;
+  }
+
+  async listPendingApprovals(operatorId: string): Promise<HumanApprovalRequest[]> {
+    const indexedIds = await redis.smembers(this.operatorApprovalSetKey(operatorId));
+    const candidateIds = new Set(indexedIds);
+
+    for (const [requestId, request] of this.approvalRequests.entries()) {
+      if (request.operatorId === operatorId && request.status === 'pending') {
+        candidateIds.add(requestId);
+      }
+    }
+
+    const approvals: HumanApprovalRequest[] = [];
+    for (const requestId of candidateIds) {
+      const request = await this.getApprovalRequest(requestId);
+      if (!request) {
+        await redis.srem(this.operatorApprovalSetKey(operatorId), requestId);
+        continue;
+      }
+
+      if (request.operatorId !== operatorId || request.status !== 'pending') {
+        await redis.srem(this.operatorApprovalSetKey(operatorId), requestId);
+        continue;
+      }
+
+      approvals.push(request);
+    }
+
+    return approvals.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
   }
 
   // -------------------------------------------------------------------------
@@ -932,7 +1014,11 @@ export class AgentIdentityService {
     let maxDepth = 0;
 
     for (const delId of delegationIds) {
-      const delegation = this.delegations.get(delId);
+      const delegation = await this.getDelegation(delId);
+      if (!delegation) {
+        await redis.srem(`delegations:to:${agentId}`, delId);
+        continue;
+      }
       if (delegation && delegation.status === 'active') {
         maxDepth = Math.max(maxDepth, delegation.depth);
       }
@@ -946,7 +1032,11 @@ export class AgentIdentityService {
     const caps = new Set<string>();
 
     for (const delId of delegationIds) {
-      const delegation = this.delegations.get(delId);
+      const delegation = await this.getDelegation(delId);
+      if (!delegation) {
+        await redis.srem(`delegations:to:${agentId}`, delId);
+        continue;
+      }
       if (delegation && delegation.status === 'active' && new Date() < delegation.expiresAt) {
         for (const cap of delegation.capabilities) {
           caps.add(cap);
@@ -968,7 +1058,11 @@ export class AgentIdentityService {
       let found = false;
 
       for (const delId of delegationIds) {
-        const delegation = this.delegations.get(delId);
+        const delegation = await this.getDelegation(delId);
+        if (!delegation) {
+          await redis.srem(`delegations:from:${currentId}`, delId);
+          continue;
+        }
         if (delegation && delegation.status === 'active' && !visited.has(delegation.toAgentId)) {
           chain.push(delegation.toAgentId);
           visited.add(delegation.toAgentId);
@@ -987,6 +1081,105 @@ export class AgentIdentityService {
     }
 
     return chain.length > 1 ? chain : [];
+  }
+
+  private async getDelegation(delegationId: string): Promise<DelegationChain | null> {
+    const raw = await redis.get(`delegation:${delegationId}`);
+    if (raw) {
+      const delegation = this.parseStoredDelegation(raw);
+      this.delegations.set(delegationId, delegation);
+      return delegation;
+    }
+
+    return this.delegations.get(delegationId) ?? null;
+  }
+
+  private async getApprovalRequest(requestId: string): Promise<HumanApprovalRequest | null> {
+    const raw = await redis.get(this.approvalRequestKey(requestId));
+    if (raw) {
+      const request = this.parseStoredApprovalRequest(raw);
+      this.approvalRequests.set(requestId, request);
+      return request;
+    }
+
+    return this.approvalRequests.get(requestId) ?? null;
+  }
+
+  private async persistAgent(agent: AgentIdentity): Promise<void> {
+    await redis.set(
+      `agent:${agent.agentId}`,
+      JSON.stringify(agent),
+      'EX',
+      AGENT_RECORD_TTL_SECONDS,
+    );
+  }
+
+  private async persistDelegation(delegation: DelegationChain): Promise<void> {
+    const secondsUntilExpiry = Math.ceil((delegation.expiresAt.getTime() - Date.now()) / 1000);
+    const ttl = Math.max(1, secondsUntilExpiry + DELEGATION_RECORD_GRACE_SECONDS);
+    await redis.set(
+      `delegation:${delegation.delegationId}`,
+      JSON.stringify(delegation),
+      'EX',
+      ttl,
+    );
+  }
+
+  private async persistApprovalRequest(request: HumanApprovalRequest): Promise<void> {
+    await redis.set(
+      this.approvalRequestKey(request.requestId),
+      JSON.stringify(request),
+      'EX',
+      APPROVAL_RECORD_TTL_SECONDS,
+    );
+  }
+
+  private parseStoredAgent(raw: string): AgentIdentity {
+    const parsed = JSON.parse(raw) as AgentIdentity;
+    return {
+      ...parsed,
+      createdAt: new Date(parsed.createdAt),
+      updatedAt: new Date(parsed.updatedAt),
+      lastActiveAt: parsed.lastActiveAt ? new Date(parsed.lastActiveAt) : undefined,
+      suspendedAt: parsed.suspendedAt ? new Date(parsed.suspendedAt) : undefined,
+      stats: {
+        ...parsed.stats,
+        lastAnomalyAt: parsed.stats.lastAnomalyAt
+          ? new Date(parsed.stats.lastAnomalyAt)
+          : undefined,
+      },
+    };
+  }
+
+  private parseStoredDelegation(raw: string): DelegationChain {
+    const parsed = JSON.parse(raw) as DelegationChain;
+    return {
+      ...parsed,
+      createdAt: new Date(parsed.createdAt),
+      expiresAt: new Date(parsed.expiresAt),
+      revokedAt: parsed.revokedAt ? new Date(parsed.revokedAt) : undefined,
+    };
+  }
+
+  private parseStoredApprovalRequest(raw: string): HumanApprovalRequest {
+    const parsed = JSON.parse(raw) as HumanApprovalRequest;
+    return {
+      ...parsed,
+      createdAt: new Date(parsed.createdAt),
+      respondedAt: parsed.respondedAt ? new Date(parsed.respondedAt) : undefined,
+    };
+  }
+
+  private operatorAgentSetKey(operatorId: string): string {
+    return `agents:operator:${operatorId}`;
+  }
+
+  private operatorApprovalSetKey(operatorId: string): string {
+    return `approvals:operator:${operatorId}`;
+  }
+
+  private approvalRequestKey(requestId: string): string {
+    return `approval:request:${requestId}`;
   }
 
   private async checkRateLimit(

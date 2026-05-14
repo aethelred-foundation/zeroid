@@ -92,6 +92,16 @@ const ApprovalResponseSchema = z.object({
   note: z.string().min(1).max(1000),
 });
 
+const ApprovalIdParamsSchema = z.object({
+  requestId: z.string().min(1),
+});
+
+const ApprovalPathResponseSchema = z.object({
+  approved: z.boolean(),
+  note: z.string().min(1).max(1000).optional(),
+  reason: z.string().min(1).max(1000).optional(),
+});
+
 // ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
@@ -103,7 +113,121 @@ router.use(authMiddleware);
 router.use(apiRateLimiter);
 
 // ---------------------------------------------------------------------------
-// POST /ai/agents — Register a new AI agent identity
+// GET /ai/agents — List operator-owned agents
+// ---------------------------------------------------------------------------
+router.get(
+  '/',
+  async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    try {
+      if (!req.identity) {
+        res.status(401).json({ error: 'AUTH_REQUIRED', message: 'Authentication required' });
+        return;
+      }
+
+      const agents = await agentIdentityService.listAgentsForOperator(req.identity.id);
+
+      res.json({
+        success: true,
+        data: agents.map((agent) => ({
+          agentId: agent.agentId,
+          did: agent.did,
+          operatorId: agent.operatorId,
+          agentName: agent.agentName,
+          agentDescription: agent.agentDescription,
+          agentProtocol: agent.agentProtocol,
+          status: agent.status,
+          capabilities: agent.capabilities,
+          publicKeyHash: agent.publicKeyHash,
+          maxDelegationDepth: agent.maxDelegationDepth,
+          teeAttested: agent.teeAttested,
+          teeAttestationId: agent.teeAttestationId,
+          createdAt: agent.createdAt,
+          updatedAt: agent.updatedAt,
+          lastActiveAt: agent.lastActiveAt,
+          stats: agent.stats,
+          metadata: agent.metadata,
+        })),
+        meta: {
+          total: agents.length,
+        },
+      });
+    } catch (error) {
+      handleError(error, res);
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// GET /ai/agents/approvals — List pending approvals
+// ---------------------------------------------------------------------------
+router.get(
+  '/approvals',
+  async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    try {
+      if (!req.identity) {
+        res.status(401).json({ error: 'AUTH_REQUIRED', message: 'Authentication required' });
+        return;
+      }
+
+      const approvals = await agentIdentityService.listPendingApprovals(req.identity.id);
+
+      res.json({
+        success: true,
+        data: approvals.map(formatApprovalQueueItem),
+        meta: {
+          total: approvals.length,
+        },
+      });
+    } catch (error) {
+      handleError(error, res);
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// POST /ai/agents/approvals/:requestId — Resolve one approval
+// ---------------------------------------------------------------------------
+router.post(
+  '/approvals/:requestId',
+  validate({
+    params: ApprovalIdParamsSchema,
+    body: ApprovalPathResponseSchema,
+  }),
+  async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    try {
+      if (!req.identity) {
+        res.status(401).json({ error: 'AUTH_REQUIRED', message: 'Authentication required' });
+        return;
+      }
+
+      const note = req.body.note ?? req.body.reason ?? 'No note provided';
+      const result = await agentIdentityService.respondToApproval(
+        req.params.requestId as string,
+        req.identity.id,
+        req.body.approved,
+        note,
+      );
+
+      res.json({
+        success: true,
+        data: {
+          requestId: result.requestId,
+          agentId: result.agentId,
+          action: result.action,
+          status: result.status,
+          respondedAt: result.respondedAt,
+          respondedBy: result.respondedBy,
+        },
+        message: `Approval request ${req.body.approved ? 'approved' : 'rejected'}`,
+      });
+    } catch (error) {
+      handleError(error, res);
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// POST /ai/agents — Register a new agent identity
 // ---------------------------------------------------------------------------
 router.post(
   '/',
@@ -437,6 +561,46 @@ function handleError(error: unknown, res: Response): void {
     error: 'INTERNAL_ERROR',
     message: 'An internal error occurred',
   });
+}
+
+function formatApprovalQueueItem(approval: {
+  requestId: string;
+  agentId: string;
+  action: string;
+  resourceType: string;
+  resourceId: string;
+  riskLevel: string;
+  context: Record<string, unknown>;
+  status: string;
+  createdAt: Date;
+  operatorId: string;
+}) {
+  const riskScoreByLevel: Record<string, number> = {
+    low: 25,
+    medium: 50,
+    high: 75,
+    critical: 95,
+  };
+  const expiresAt = new Date(approval.createdAt.getTime() + 24 * 3600_000);
+
+  return {
+    id: approval.requestId,
+    requestId: approval.requestId,
+    agentId: approval.agentId,
+    operatorId: approval.operatorId,
+    action: approval.action,
+    actionType: approval.action,
+    actionDescription: `${approval.action} on ${approval.resourceType}:${approval.resourceId}`,
+    resourceType: approval.resourceType,
+    resourceId: approval.resourceId,
+    riskLevel: approval.riskLevel,
+    riskScore: riskScoreByLevel[approval.riskLevel] ?? 75,
+    context: approval.context,
+    status: approval.status,
+    requestedAt: approval.createdAt,
+    createdAt: approval.createdAt,
+    expiresAt,
+  };
 }
 
 export { router as aiAgentIdentityRoutes };

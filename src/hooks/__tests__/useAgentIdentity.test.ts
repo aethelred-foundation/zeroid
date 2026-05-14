@@ -107,10 +107,8 @@ describe("useAgents", () => {
     });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(mockApiClient.get).toHaveBeenCalledWith("/api/v1/agents", {
-      owner: mockAddress,
-    });
-    expect(result.current.data).toEqual([mockAgent]);
+    expect(mockApiClient.get).toHaveBeenCalledWith("/api/v1/ai/agents");
+    expect(result.current.data?.[0]).toMatchObject(mockAgent);
   });
 
   it("is disabled when no address", () => {
@@ -137,7 +135,7 @@ describe("useAgent", () => {
     });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(mockApiClient.get).toHaveBeenCalledWith("/api/v1/agents/agent-001");
+    expect(mockApiClient.get).toHaveBeenCalledWith("/api/v1/ai/agents/agent-001");
   });
 
   it("is disabled when agentId is undefined", () => {
@@ -172,6 +170,7 @@ describe("useRegisterAgent", () => {
         expirySeconds: 3600,
       },
       maxAutonomyLevel: "supervised" as const,
+      publicKey: "test-public-key-that-is-long-enough-for-registration",
     };
 
     await act(async () => {
@@ -179,8 +178,12 @@ describe("useRegisterAgent", () => {
     });
 
     expect(mockApiClient.post).toHaveBeenCalledWith(
-      "/api/v1/agents/register",
-      config,
+      "/api/v1/ai/agents",
+      expect.objectContaining({
+        agentName: "TestBot",
+        agentDescription: "A test agent",
+        publicKey: "test-public-key-that-is-long-enough-for-registration",
+      }),
     );
     expect(mockToast.success).toHaveBeenCalledWith("Agent registered", {
       description: expect.stringContaining("TestBot"),
@@ -195,7 +198,21 @@ describe("useRegisterAgent", () => {
 
     await act(async () => {
       try {
-        await result.current.mutateAsync({} as any);
+        await result.current.mutateAsync({
+          name: "TestBot",
+          description: "A test agent",
+          ownerAddress: mockAddress,
+          capabilities: [],
+          delegationPolicy: {
+            allowSubDelegation: false,
+            maxDepth: 1,
+            requireHumanApproval: true,
+            approvalThreshold: 1,
+            expirySeconds: 3600,
+          },
+          maxAutonomyLevel: "supervised",
+          publicKey: "test-public-key-that-is-long-enough-for-registration",
+        } as any);
       } catch {}
     });
 
@@ -222,7 +239,7 @@ describe("useUpdateCapabilities", () => {
   };
 
   it("updates capabilities and shows success toast", async () => {
-    mockApiClient.put.mockResolvedValue(updatedAgent);
+    mockApiClient.post.mockResolvedValue(updatedAgent);
     const { result } = renderHook(() => useUpdateCapabilities(), {
       wrapper: createWrapper(),
     });
@@ -234,11 +251,16 @@ describe("useUpdateCapabilities", () => {
       });
     });
 
-    expect(mockApiClient.put).toHaveBeenCalledWith(
-      "/api/v1/agents/agent-001/capabilities",
-      {
-        capabilities: updatedAgent.capabilities,
-      },
+    expect(mockApiClient.post).toHaveBeenCalledWith(
+      "/api/v1/ai/agents/agent-001/capabilities",
+      expect.objectContaining({
+        capabilities: [
+          expect.objectContaining({
+            name: "credential_verify",
+            resourceTypes: ["global"],
+          }),
+        ],
+      }),
     );
     expect(mockToast.success).toHaveBeenCalledWith("Capabilities updated", {
       description: expect.stringContaining("1 capability"),
@@ -246,7 +268,7 @@ describe("useUpdateCapabilities", () => {
   });
 
   it("shows error toast on failure", async () => {
-    mockApiClient.put.mockRejectedValue(new Error("Forbidden"));
+    mockApiClient.post.mockRejectedValue(new Error("Forbidden"));
     const { result } = renderHook(() => useUpdateCapabilities(), {
       wrapper: createWrapper(),
     });
@@ -295,6 +317,15 @@ describe("useCreateDelegation", () => {
       });
     });
 
+    expect(mockApiClient.post).toHaveBeenCalledWith(
+      "/api/v1/ai/agents/agent-001/delegate",
+      expect.objectContaining({
+        toAgentId: "agent-002",
+        capabilities: ["credential_verify"],
+        constraints: [],
+        durationHours: 1,
+      }),
+    );
     expect(mockToast.success).toHaveBeenCalledWith("Delegation created", {
       description: expect.stringContaining("Chain depth: 1"),
     });
@@ -341,8 +372,23 @@ describe("useVerifyAgent", () => {
     });
 
     await act(async () => {
-      await result.current.mutateAsync({ agentId: "a-1", challenge: "c" });
+      await result.current.mutateAsync({
+        agentId: "a-1",
+        challenge: "c",
+        signature: "sig",
+        requestedCapabilities: ["credential_verify"] as any,
+        purpose: "test verification",
+      });
     });
+
+    expect(mockApiClient.post).toHaveBeenCalledWith(
+      "/api/v1/ai/agents/a-1/verify",
+      expect.objectContaining({
+        challenge: "c",
+        signature: "sig",
+        requestedCapabilities: ["credential_verify"],
+      }),
+    );
 
     expect(mockToast.success).toHaveBeenCalledWith(
       "Agent verified successfully",
@@ -356,7 +402,13 @@ describe("useVerifyAgent", () => {
     });
 
     await act(async () => {
-      await result.current.mutateAsync({ agentId: "a-1", challenge: "c" });
+      await result.current.mutateAsync({
+        agentId: "a-1",
+        challenge: "c",
+        signature: "sig",
+        requestedCapabilities: ["credential_verify"] as any,
+        purpose: "test verification",
+      });
     });
 
     expect(mockToast.error).toHaveBeenCalledWith("Agent verification failed");
@@ -370,7 +422,13 @@ describe("useVerifyAgent", () => {
 
     await act(async () => {
       try {
-        await result.current.mutateAsync({ agentId: "a-1", challenge: "c" });
+        await result.current.mutateAsync({
+          agentId: "a-1",
+          challenge: "c",
+          signature: "sig",
+          requestedCapabilities: ["credential_verify"] as any,
+          purpose: "test verification",
+        });
       } catch {}
     });
 
@@ -452,9 +510,7 @@ describe("useApprovalQueue", () => {
     });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(mockApiClient.get).toHaveBeenCalledWith("/api/v1/agents/approvals", {
-      owner: mockAddress,
-    });
+    expect(mockApiClient.get).toHaveBeenCalledWith("/api/v1/ai/agents/approvals");
   });
 
   it("is disabled when no address", () => {
