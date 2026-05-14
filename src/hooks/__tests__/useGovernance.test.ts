@@ -156,31 +156,23 @@ describe("useVotingPower", () => {
 // ===========================================================================
 
 describe("useProposals", () => {
-  it("fetches proposals from API", async () => {
-    mockApiClient.get.mockResolvedValue({
-      proposals: [{ id: "1", title: "Test" }],
-      total: 1,
-    });
+  it("fails closed because proposal metadata is not exposed", async () => {
     const { result } = renderHook(() => useProposals(), {
       wrapper: createWrapper(),
     });
 
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(mockApiClient.get).toHaveBeenCalledWith(
-      expect.stringContaining("/v1/governance/proposals"),
-    );
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(String(result.current.error)).toContain("proposal metadata");
+    expect(mockApiClient.get).not.toHaveBeenCalled();
   });
 
-  it("applies status and page filters", async () => {
-    mockApiClient.get.mockResolvedValue({ proposals: [], total: 0 });
+  it("keeps status and page in the query key without calling a stale API", async () => {
     const { result } = renderHook(() => useProposals("active" as any, 2), {
       wrapper: createWrapper(),
     });
 
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    const url = mockApiClient.get.mock.calls[0][0] as string;
-    expect(url).toContain("status=active");
-    expect(url).toContain("page=2");
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(mockApiClient.get).not.toHaveBeenCalled();
   });
 });
 
@@ -189,23 +181,23 @@ describe("useProposals", () => {
 // ===========================================================================
 
 describe("useProposalDetail", () => {
-  it("returns on-chain votes and API data", async () => {
+  it("returns on-chain votes while proposal metadata fails closed", async () => {
     (useReadContract as jest.Mock).mockReturnValue({
       data: [100n, 200n, 50n],
       isLoading: false,
     });
-    mockApiClient.get.mockResolvedValue({ id: "1", title: "Test Proposal" });
 
     const { result } = renderHook(() => useProposalDetail(1n), {
       wrapper: createWrapper(),
     });
 
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    await waitFor(() => expect(result.current.isError).toBe(true));
     expect(result.current.onChainVotes).toEqual({
       againstVotes: 100n,
       forVotes: 200n,
       abstainVotes: 50n,
     });
+    expect(mockApiClient.get).not.toHaveBeenCalled();
   });
 
   it("returns default votes when no on-chain data", () => {
@@ -231,9 +223,8 @@ describe("useProposalDetail", () => {
 // ===========================================================================
 
 describe("useCreateProposal", () => {
-  it("submits proposal on-chain and stores metadata", async () => {
+  it("submits proposal on-chain without calling stale metadata API", async () => {
     mockWriteContractAsync.mockResolvedValue("0xproposaltx");
-    mockApiClient.post.mockResolvedValue({});
     const { result } = renderHook(() => useCreateProposal(), {
       wrapper: createWrapper(),
     });
@@ -251,13 +242,7 @@ describe("useCreateProposal", () => {
     });
 
     expect(mockWriteContractAsync).toHaveBeenCalled();
-    expect(mockApiClient.post).toHaveBeenCalledWith(
-      "/v1/governance/proposals/metadata",
-      expect.objectContaining({
-        txHash: "0xproposaltx",
-        title: "Upgrade",
-      }),
-    );
+    expect(mockApiClient.post).not.toHaveBeenCalled();
     expect(mockToast.success).toHaveBeenCalledWith("Proposal created");
   });
 

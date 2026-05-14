@@ -680,14 +680,20 @@ export const apiClient = {
     page = 1,
     pageSize = 10,
   ): Promise<PaginatedResponse<Proposal>> {
-    return get<PaginatedResponse<Proposal>>("/api/v1/governance/proposals", {
-      page,
-      pageSize,
-    });
+    void page;
+    void pageSize;
+    unsupportedFeature(
+      "Governance proposal metadata is not exposed by the backend API.",
+      "GOVERNANCE_PROPOSALS_UNAVAILABLE",
+    );
   },
 
   /** Get a single proposal by ID */
   async getProposal(proposalId: number): Promise<Proposal> {
-    return get<Proposal>(`/api/v1/governance/proposals/${proposalId}`);
+    void proposalId;
+    unsupportedFeature(
+      "Governance proposal metadata is not exposed by the backend API.",
+      "GOVERNANCE_PROPOSAL_DETAIL_UNAVAILABLE",
+    );
   },
 } as const;

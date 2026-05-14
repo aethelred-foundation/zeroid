@@ -789,33 +789,29 @@ describe("apiClient.respondToVerification()", () => {
 });
 
 describe("apiClient.listProposals()", () => {
-  it("calls GET /api/v1/governance/proposals with page/pageSize", async () => {
-    mockFetch.mockResolvedValue(jsonResponse({ items: [], total: 0 }));
-    await apiClient.listProposals(1, 10);
-    const [url] = mockFetch.mock.calls[0];
-    expect(url).toContain("/api/v1/governance/proposals");
-    const parsed = new URL(url);
-    expect(parsed.searchParams.get("page")).toBe("1");
-    expect(parsed.searchParams.get("pageSize")).toBe("10");
+  it("fails closed because proposal metadata is not exposed", async () => {
+    await expect(apiClient.listProposals(1, 10)).rejects.toMatchObject({
+      code: "GOVERNANCE_PROPOSALS_UNAVAILABLE",
+      statusCode: 501,
+    });
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 
-  it("uses default page=1, pageSize=10", async () => {
-    mockFetch.mockResolvedValue(jsonResponse({ items: [], total: 0 }));
-    await apiClient.listProposals();
-    const parsed = new URL(mockFetch.mock.calls[0][0]);
-    expect(parsed.searchParams.get("page")).toBe("1");
-    expect(parsed.searchParams.get("pageSize")).toBe("10");
+  it("does not call a stale proposal list route when defaults are used", async () => {
+    await expect(apiClient.listProposals()).rejects.toMatchObject({
+      code: "GOVERNANCE_PROPOSALS_UNAVAILABLE",
+    });
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 });
 
 describe("apiClient.getProposal()", () => {
-  it("calls GET /api/v1/governance/proposals/{id}", async () => {
-    mockFetch.mockResolvedValue(jsonResponse({ id: 42, title: "Upgrade" }));
-    const result = await apiClient.getProposal(42);
-    expect(result).toEqual({ id: 42, title: "Upgrade" });
-    expect(mockFetch.mock.calls[0][0]).toContain(
-      "/api/v1/governance/proposals/42",
-    );
+  it("fails closed because proposal detail metadata is not exposed", async () => {
+    await expect(apiClient.getProposal(42)).rejects.toMatchObject({
+      code: "GOVERNANCE_PROPOSAL_DETAIL_UNAVAILABLE",
+      statusCode: 501,
+    });
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 });
 

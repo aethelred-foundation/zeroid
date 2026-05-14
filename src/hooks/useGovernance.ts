@@ -10,7 +10,6 @@ import { useAccount, useReadContract, useWriteContract } from "wagmi";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { type Address, type Hash, parseEther } from "viem";
 import { toast } from "sonner";
-import { apiClient } from "@/lib/api/client";
 import {
   GOVERNANCE_ADDRESS,
   GOVERNANCE_ABI,
@@ -24,6 +23,10 @@ import type {
   CreateProposalParams,
   VotingPower,
 } from "@/types";
+
+function unsupportedGovernanceMetadata(): never {
+  throw new Error("Governance proposal metadata is not exposed by the backend API.");
+}
 
 // ---------------------------------------------------------------------------
 // Convenience wrapper — used by pages that need { proposals, votingPower }
@@ -92,17 +95,9 @@ export function useVotingPower() {
 // ---------------------------------------------------------------------------
 
 export function useProposals(status?: ProposalStatus, page = 1) {
-  const params = new URLSearchParams();
-  if (status) params.set("status", status);
-  params.set("page", String(page));
-  params.set("pageSize", "20");
-
-  return useQuery({
+  return useQuery<{ proposals: Proposal[]; total: number }, Error>({
     queryKey: ["proposals", status, page],
-    queryFn: () =>
-      apiClient.get<{ proposals: Proposal[]; total: number }>(
-        `/v1/governance/proposals?${params.toString()}`,
-      ),
+    queryFn: async () => unsupportedGovernanceMetadata(),
     staleTime: 15_000,
     refetchInterval: 60_000,
   });
@@ -121,10 +116,9 @@ export function useProposalDetail(proposalId: bigint | undefined) {
     query: { enabled: proposalId !== undefined, refetchInterval: 15_000 },
   });
 
-  const apiQuery = useQuery({
+  const apiQuery = useQuery<Proposal, Error>({
     queryKey: ["proposal", proposalId?.toString()],
-    queryFn: () =>
-      apiClient.get<Proposal>(`/v1/governance/proposals/${proposalId}`),
+    queryFn: async () => unsupportedGovernanceMetadata(),
     enabled: proposalId !== undefined,
     staleTime: 10_000,
   });
@@ -163,14 +157,6 @@ export function useCreateProposal() {
           params.calldatas,
           params.description,
         ],
-      });
-
-      // Store extended metadata via API
-      await apiClient.post("/v1/governance/proposals/metadata", {
-        txHash: hash,
-        title: params.title,
-        summary: params.summary,
-        discussionUrl: params.discussionUrl,
       });
 
       return hash;
