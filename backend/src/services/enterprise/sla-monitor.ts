@@ -1,6 +1,9 @@
 import { z } from 'zod';
 import { createLogger, format, transports } from 'winston';
 import crypto from 'crypto';
+import * as fs from 'fs';
+import * as path from 'path';
+import { isProductionRuntime } from '../production-safety';
 
 // ---------------------------------------------------------------------------
 // Logger
@@ -83,6 +86,14 @@ interface SLAViolation {
   acknowledged: boolean;
 }
 
+interface SLAAlert {
+  id: string;
+  clientId: string;
+  message: string;
+  severity: string;
+  timestamp: string;
+}
+
 export interface SLAReport {
   reportId: string;
   clientId: string;
@@ -111,6 +122,20 @@ export interface SLAReport {
   overallCompliance: boolean;
 }
 
+interface SLAMonitorSnapshot {
+  version: 1;
+  savedAt: string;
+  slaDefinitions: Array<[string, SLADefinition]>;
+  latencyBuckets: LatencyBucket[];
+  uptimeRecords: UptimeRecord[];
+  violations: SLAViolation[];
+  alerts: SLAAlert[];
+}
+
+export interface SLAMonitorOptions {
+  storeFile?: string;
+}
+
 // ---------------------------------------------------------------------------
 // SLAMonitor
 // ---------------------------------------------------------------------------
@@ -119,25 +144,35 @@ export class SLAMonitor {
   private latencyBuckets: LatencyBucket[] = [];
   private uptimeRecords: UptimeRecord[] = [];
   private violations: SLAViolation[] = [];
-  private alerts: Array<{ id: string; clientId: string; message: string; severity: string; timestamp: string }> = [];
+  private alerts: SLAAlert[] = [];
+  private readonly storeFile?: string;
 
   private readonly maxBuckets = 1_000_000;
   private readonly maxUptimeRecords = 100_000;
 
-  constructor() {
-    logger.info('SLAMonitor initialized');
+  constructor(options: SLAMonitorOptions = {}) {
+    const configuredStoreFile = options.storeFile ?? process.env.SLA_MONITOR_STORE_FILE;
+    this.storeFile = configuredStoreFile?.trim() || undefined;
+    this.initializeStore();
+    logger.info('SLAMonitor initialized', {
+      durableStoreConfigured: Boolean(this.storeFile),
+    });
   }
 
   // -------------------------------------------------------------------------
   // Register SLA definition
   // -------------------------------------------------------------------------
   registerSLA(definition: SLADefinition): void {
+    this.refreshStateFromStore();
+    this.assertStoreAvailable();
     const parsed = SLADefinitionSchema.parse(definition);
     this.slaDefinitions.set(parsed.clientId, parsed);
+    this.persistState();
     logger.info('sla_registered', { clientId: parsed.clientId, tier: parsed.tier, components: parsed.components.length });
   }
 
   getSLA(clientId: string): SLADefinition | null {
+    this.refreshStateFromStore();
     return this.slaDefinitions.get(clientId) ?? null;
   }
 
@@ -145,6 +180,8 @@ export class SLAMonitor {
   // Record metrics
   // -------------------------------------------------------------------------
   recordLatency(component: ServiceComponent, latencyMs: number, success: boolean): void {
+    this.refreshStateFromStore();
+    this.assertStoreAvailable();
     this.latencyBuckets.push({
       timestamp: Date.now(),
       component,
@@ -155,9 +192,12 @@ export class SLAMonitor {
     if (this.latencyBuckets.length > this.maxBuckets) {
       this.latencyBuckets = this.latencyBuckets.slice(-Math.floor(this.maxBuckets / 2));
     }
+    this.persistState();
   }
 
   recordUptime(component: ServiceComponent, available: boolean, responseTimeMs: number): void {
+    this.refreshStateFromStore();
+    this.assertStoreAvailable();
     this.uptimeRecords.push({
       component,
       checkTimestamp: Date.now(),
@@ -178,6 +218,7 @@ export class SLAMonitor {
         }
       }
     }
+    this.persistState();
   }
 
   // -------------------------------------------------------------------------
@@ -190,6 +231,7 @@ export class SLAMonitor {
     count: number;
     errorRate: number;
   } {
+    this.refreshStateFromStore();
     const cutoff = Date.now() - windowMs;
     const buckets = this.latencyBuckets.filter(
       (b) => b.component === component && b.timestamp >= cutoff,
@@ -221,6 +263,7 @@ export class SLAMonitor {
   // Calculate uptime
   // -------------------------------------------------------------------------
   getUptime(component: ServiceComponent, windowMs: number): { uptimePercentage: number; totalChecks: number; downChecks: number } {
+    this.refreshStateFromStore();
     const cutoff = Date.now() - windowMs;
     const records = this.uptimeRecords.filter(
       (r) => r.component === component && r.checkTimestamp >= cutoff,
@@ -240,6 +283,8 @@ export class SLAMonitor {
   // Evaluate SLA compliance
   // -------------------------------------------------------------------------
   evaluateSLA(clientId: string, periodMs?: number): SLAViolation[] {
+    this.refreshStateFromStore();
+    this.assertStoreAvailable();
     const sla = this.slaDefinitions.get(clientId);
     if (!sla) return [];
 
@@ -277,6 +322,9 @@ export class SLAMonitor {
     this.violations.push(...newViolations);
     for (const v of newViolations) {
       this.emitAlert(clientId, `SLA violation: ${v.component} ${v.violationType} (target: ${v.target}, actual: ${v.actual})`, 'high');
+    }
+    if (newViolations.length > 0) {
+      this.persistState();
     }
 
     return newViolations;
@@ -317,6 +365,7 @@ export class SLAMonitor {
   // Generate SLA report
   // -------------------------------------------------------------------------
   generateReport(clientId: string, periodDays?: number): SLAReport {
+    this.refreshStateFromStore();
     const sla = this.slaDefinitions.get(clientId);
     if (!sla) {
       throw new Error(`No SLA definition for client: ${clientId}`);
@@ -384,6 +433,7 @@ export class SLAMonitor {
   // Get violations
   // -------------------------------------------------------------------------
   getViolations(clientId: string, since?: string): SLAViolation[] {
+    this.refreshStateFromStore();
     let violations = this.violations.filter((v) => v.clientId === clientId);
     if (since) {
       const sinceDate = new Date(since);
@@ -393,9 +443,12 @@ export class SLAMonitor {
   }
 
   acknowledgeViolation(violationId: string): boolean {
+    this.refreshStateFromStore();
+    this.assertStoreAvailable();
     const violation = this.violations.find((v) => v.id === violationId);
     if (!violation) return false;
     violation.acknowledged = true;
+    this.persistState();
     return true;
   }
 
@@ -416,10 +469,111 @@ export class SLAMonitor {
   }
 
   getAlerts(clientId: string, limit = 50): typeof this.alerts {
+    this.refreshStateFromStore();
     return this.alerts
       .filter((a) => a.clientId === clientId)
       .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
       .slice(0, limit);
+  }
+
+  private initializeStore(): void {
+    if (!this.storeFile) return;
+
+    try {
+      fs.mkdirSync(path.dirname(this.storeFile), { recursive: true, mode: 0o700 });
+      this.refreshStateFromStore();
+    } catch (error) {
+      throw new SLAMonitorError(
+        `Durable SLA monitor store could not be initialized: ${(error as Error).message}`,
+        'SLA_MONITOR_STORE_INITIALIZATION_FAILED',
+        503,
+      );
+    }
+  }
+
+  private assertStoreAvailable(): void {
+    if (!isProductionRuntime() || this.storeFile) return;
+
+    throw new SLAMonitorError(
+      'Durable SLA monitor store is required in production',
+      'SLA_MONITOR_STORE_REQUIRED',
+      503,
+    );
+  }
+
+  private persistState(): void {
+    this.assertStoreAvailable();
+    if (!this.storeFile) return;
+
+    const snapshot: SLAMonitorSnapshot = {
+      version: 1,
+      savedAt: new Date().toISOString(),
+      slaDefinitions: Array.from(this.slaDefinitions.entries()),
+      latencyBuckets: [...this.latencyBuckets],
+      uptimeRecords: [...this.uptimeRecords],
+      violations: [...this.violations],
+      alerts: [...this.alerts],
+    };
+    const tempFile = `${this.storeFile}.${process.pid}.${Date.now()}.tmp`;
+
+    try {
+      fs.writeFileSync(tempFile, JSON.stringify(snapshot, null, 2), {
+        encoding: 'utf8',
+        mode: 0o600,
+      });
+      fs.renameSync(tempFile, this.storeFile);
+    } catch (error) {
+      if (fs.existsSync(tempFile)) {
+        fs.unlinkSync(tempFile);
+      }
+      throw new SLAMonitorError(
+        `Durable SLA monitor store could not be written: ${(error as Error).message}`,
+        'SLA_MONITOR_STORE_WRITE_FAILED',
+        503,
+      );
+    }
+  }
+
+  private refreshStateFromStore(): void {
+    if (!this.storeFile || !fs.existsSync(this.storeFile)) return;
+
+    try {
+      const snapshot = JSON.parse(fs.readFileSync(this.storeFile, 'utf8')) as Partial<SLAMonitorSnapshot>;
+      if (snapshot.version !== 1) {
+        throw new Error(`unsupported snapshot version: ${String(snapshot.version)}`);
+      }
+
+      this.slaDefinitions = new Map(snapshot.slaDefinitions ?? []);
+      this.latencyBuckets = [...(snapshot.latencyBuckets ?? [])];
+      this.uptimeRecords = [...(snapshot.uptimeRecords ?? [])];
+      this.violations = [...(snapshot.violations ?? [])];
+      this.alerts = [...(snapshot.alerts ?? [])];
+    } catch (error) {
+      logger.error('sla_monitor_store_load_failed', {
+        storeFile: this.storeFile,
+        error: (error as Error).message,
+      });
+
+      if (isProductionRuntime()) {
+        throw new SLAMonitorError(
+          `Durable SLA monitor store could not be loaded: ${(error as Error).message}`,
+          'SLA_MONITOR_STORE_READ_FAILED',
+          503,
+        );
+      }
+    }
+  }
+}
+
+export class SLAMonitorError extends Error {
+  readonly code: string;
+  readonly statusCode: number;
+
+  constructor(message: string, code: string, statusCode: number) {
+    super(message);
+    this.name = 'SLAMonitorError';
+    this.code = code;
+    this.statusCode = statusCode;
   }
 }
 

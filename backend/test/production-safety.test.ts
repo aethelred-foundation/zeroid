@@ -53,6 +53,7 @@ const PROD_BASE_ENV: NodeJS.ProcessEnv = {
   POLICY_RECEIPT_SIGNING_SECRET: 'r'.repeat(64),
   REGULATORY_REPORT_STORE_DIR: '/var/lib/zeroid/regulatory-reports',
   DATA_SOVEREIGNTY_STORE_FILE: '/var/lib/zeroid/data-sovereignty/state.json',
+  SLA_MONITOR_STORE_FILE: '/var/lib/zeroid/sla-monitor/state.json',
   ENTERPRISE_SECRET_HASH_PEPPER: 'e'.repeat(64),
   IDENTITY_RECOVERY_HASH_PEPPER: 'i'.repeat(64),
   GOVERNMENT_CACHE_HASH_PEPPER: 'g'.repeat(64),
@@ -410,6 +411,16 @@ describe('production safety controls', () => {
       DATA_SOVEREIGNTY_STORE_FILE: '',
     })).toEqual([
       expect.objectContaining({ control: 'DATA_SOVEREIGNTY_STORE_FILE' }),
+    ]);
+  });
+
+  it('requires durable SLA monitor storage in production', () => {
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      METRICS_PUBLIC_DISABLED: 'true',
+      SLA_MONITOR_STORE_FILE: '',
+    })).toEqual([
+      expect.objectContaining({ control: 'SLA_MONITOR_STORE_FILE' }),
     ]);
   });
 

@@ -148,6 +148,7 @@ export function checkedProductionSafetyControls(): string[] {
     'POLICY_RECEIPT_SIGNING_SECRET',
     'REGULATORY_REPORT_STORE_DIR',
     'DATA_SOVEREIGNTY_STORE_FILE',
+    'SLA_MONITOR_STORE_FILE',
     'ENTERPRISE_SECRET_HASH_PEPPER',
     'IDENTITY_RECOVERY_HASH_PEPPER',
     'GOVERNMENT_CACHE_HASH_PEPPER',
@@ -366,6 +367,14 @@ export function collectProductionSafetyViolations(
     violations.push({
       control: 'DATA_SOVEREIGNTY_STORE_FILE',
       risk: 'Production data-sovereignty workflows require durable consent, transfer, breach, retention, and DPA evidence storage',
+    });
+  }
+
+  const slaMonitorStoreFile = env.SLA_MONITOR_STORE_FILE?.trim();
+  if (!slaMonitorStoreFile) {
+    violations.push({
+      control: 'SLA_MONITOR_STORE_FILE',
+      risk: 'Production SLA monitoring requires durable metric, violation, alert, and credit evidence storage',
     });
   }
 
