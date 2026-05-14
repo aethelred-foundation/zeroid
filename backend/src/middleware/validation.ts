@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { z, ZodSchema, ZodError } from 'zod';
 import { logger } from '../index';
+import { AETHELRED_DID_PATTERN } from '../utils/did';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -80,8 +81,8 @@ export function validate(schemas: ValidationTarget) {
 export const didSchema = z
   .string()
   .regex(
-    /^did:aethelred:[a-zA-Z0-9._-]+$/,
-    'Invalid DID format. Expected: did:aethelred:<identifier>',
+    AETHELRED_DID_PATTERN,
+    'Invalid DID format. Expected: did:aethelred:<segment>[:<segment>...]',
   );
 
 export const uuidSchema = z.string().uuid('Invalid UUID format');

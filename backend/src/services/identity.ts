@@ -1,6 +1,7 @@
 import { prisma, logger, redis } from '../index';
 import { generateToken, revokeToken } from '../middleware/auth';
 import { oidcBridge } from './enterprise/oidc-bridge';
+import { isAethelredDid } from '../utils/did';
 // tee import removed — not used in this module
 import { IdentityStatus } from '@prisma/client';
 import nodeCrypto from 'crypto';
@@ -440,7 +441,7 @@ export class IdentityService {
   // Internal helpers
   // -------------------------------------------------------------------------
   private isValidDID(did: string): boolean {
-    return /^did:aethelred:[a-zA-Z0-9._-]+$/.test(did);
+    return isAethelredDid(did);
   }
 
   private isValidPublicKey(key: string): boolean {

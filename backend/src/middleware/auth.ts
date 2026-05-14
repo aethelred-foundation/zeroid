@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import * as jose from 'jose';
 import { prisma, logger, redis } from '../index';
+import { isAethelredDid } from '../utils/did';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -110,9 +111,8 @@ export async function revokeToken(sessionId: string): Promise<void> {
 // DID verification
 // ---------------------------------------------------------------------------
 async function verifyDID(did: string, publicKey: string): Promise<boolean> {
-  // Verify DID format: did:aethelred:<identifier>
-  const didPattern = /^did:aethelred:[a-zA-Z0-9._-]+$/;
-  if (!didPattern.test(did)) {
+  // Verify DID format before database lookups.
+  if (!isAethelredDid(did)) {
     logger.warn('invalid_did_format', { did });
     return false;
   }
