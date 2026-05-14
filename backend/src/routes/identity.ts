@@ -90,6 +90,83 @@ router.get(
 );
 
 // ---------------------------------------------------------------------------
+// GET /api/v1/identity/address/:address — Resolve deterministic address DID
+// ---------------------------------------------------------------------------
+const addressParamsSchema = z.object({
+  address: z.string().regex(/^0x[a-fA-F0-9]{40}$/, 'Invalid EVM address'),
+});
+
+router.get(
+  '/address/:address',
+  optionalAuthMiddleware,
+  validate({ params: addressParamsSchema }),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const controller = (req.params.address as string).toLowerCase();
+      const candidateDids = ['mainnet', 'testnet', 'devnet'].map(
+        (network) => `did:aethelred:${network}:${controller}`,
+      );
+
+      const identity = await prisma.identity.findFirst({
+        where: { did: { in: candidateDids } },
+        select: {
+          id: true,
+          did: true,
+          publicKey: true,
+          status: true,
+          teeAttestationId: true,
+          createdAt: true,
+          updatedAt: true,
+          displayName: true,
+        },
+      });
+
+      if (!identity) {
+        res.status(404).json({
+          error: 'Identity not found for address',
+          code: 'IDENTITY_ADDRESS_NOT_FOUND',
+        });
+        return;
+      }
+
+      const [teeAttested, govStatus] = await Promise.all([
+        identity.teeAttestationId
+          ? teeService.isAttestationValid(identity.teeAttestationId)
+          : Promise.resolve(false),
+        governmentAPIService.getVerificationStatus(identity.id),
+      ]);
+      const governmentVerified = govStatus?.verified === true;
+
+      res.json({
+        data: {
+          did: identity.did,
+          controller,
+          publicKey: identity.publicKey,
+          status: identity.status,
+          displayName: identity.displayName,
+          teeAttested,
+          governmentVerified,
+          verificationEvidence: {
+            tee: teeAttested ? { verified: true } : null,
+            government: governmentVerified
+              ? {
+                  verified: true,
+                  provider: govStatus.provider,
+                  expiresAt: govStatus.expiresAt,
+                }
+              : null,
+          },
+          createdAt: identity.createdAt,
+          updatedAt: identity.updatedAt,
+        },
+      });
+    } catch (err) {
+      sendRouteError(res, asRouteError(err), 'IDENTITY_ADDRESS_RESOLVE_FAILED');
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
 // GET /api/v1/identity/resolve/:did — Resolve a DID to public info
 // ---------------------------------------------------------------------------
 router.get(

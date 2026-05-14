@@ -2,6 +2,7 @@ import express from 'express';
 import request from 'supertest';
 
 const mockIdentityFindUnique = jest.fn();
+const mockIdentityFindFirst = jest.fn();
 const mockGetVerificationStatus = jest.fn();
 const mockIsAttestationValid = jest.fn();
 
@@ -14,6 +15,7 @@ jest.mock('../src/index', () => ({
   prisma: {
     identity: {
       findUnique: mockIdentityFindUnique,
+      findFirst: mockIdentityFindFirst,
     },
   },
   redis: {
@@ -67,8 +69,66 @@ describe('identity DID resolution freshness', () => {
       teeAttestationId: 'attestation-stale',
       createdAt: new Date('2026-04-28T00:00:00.000Z'),
     });
+    mockIdentityFindFirst.mockResolvedValue(null);
     mockIsAttestationValid.mockResolvedValue(false);
     mockGetVerificationStatus.mockResolvedValue(null);
+  });
+
+  it('resolves deterministic address-backed DIDs for frontend identity lookup', async () => {
+    mockIdentityFindFirst.mockResolvedValueOnce({
+      id: 'identity-2',
+      did: 'did:aethelred:testnet:0x1234567890abcdef1234567890abcdef12345678',
+      publicKey: 'public-key-2',
+      status: 'ACTIVE',
+      teeAttestationId: 'attestation-current',
+      displayName: 'Alice',
+      createdAt: new Date('2026-04-28T00:00:00.000Z'),
+      updatedAt: new Date('2026-04-29T00:00:00.000Z'),
+    });
+    mockIsAttestationValid.mockResolvedValueOnce(true);
+    mockGetVerificationStatus.mockResolvedValueOnce({
+      verified: true,
+      provider: 'EMIRATES_ID',
+      expiresAt: new Date('2027-04-28T00:00:00.000Z'),
+    });
+
+    const response = await request(createApp())
+      .get('/identity/address/0x1234567890abcdef1234567890abcdef12345678')
+      .expect(200);
+
+    expect(mockIdentityFindFirst).toHaveBeenCalledWith({
+      where: {
+        did: {
+          in: [
+            'did:aethelred:mainnet:0x1234567890abcdef1234567890abcdef12345678',
+            'did:aethelred:testnet:0x1234567890abcdef1234567890abcdef12345678',
+            'did:aethelred:devnet:0x1234567890abcdef1234567890abcdef12345678',
+          ],
+        },
+      },
+      select: expect.objectContaining({
+        did: true,
+        publicKey: true,
+        status: true,
+      }),
+    });
+    expect(response.body.data).toMatchObject({
+      did: 'did:aethelred:testnet:0x1234567890abcdef1234567890abcdef12345678',
+      controller: '0x1234567890abcdef1234567890abcdef12345678',
+      displayName: 'Alice',
+      teeAttested: true,
+      governmentVerified: true,
+    });
+  });
+
+  it('returns 404 when no deterministic address DID is registered', async () => {
+    const response = await request(createApp())
+      .get('/identity/address/0x1234567890abcdef1234567890abcdef12345678')
+      .expect(404);
+
+    expect(response.body).toMatchObject({
+      code: 'IDENTITY_ADDRESS_NOT_FOUND',
+    });
   });
 
   it('does not publish stale verification booleans from identity rows', async () => {
