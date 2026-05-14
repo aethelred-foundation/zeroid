@@ -146,6 +146,7 @@ export function checkedProductionSafetyControls(): string[] {
     'WEBHOOK_SECRET_ENCRYPTION_KEY',
     'POLICY_RECEIPT_SIGNING_SECRET',
     'REGULATORY_REPORT_STORE_DIR',
+    'DATA_SOVEREIGNTY_STORE_FILE',
     'ENTERPRISE_SECRET_HASH_PEPPER',
     'IDENTITY_RECOVERY_HASH_PEPPER',
     'GOVERNMENT_CACHE_HASH_PEPPER',
@@ -348,6 +349,14 @@ export function collectProductionSafetyViolations(
     violations.push({
       control: 'REGULATORY_REPORT_STORE_DIR',
       risk: 'Production regulatory reports require a durable store for restart recovery and multi-step filing evidence',
+    });
+  }
+
+  const dataSovereigntyStoreFile = env.DATA_SOVEREIGNTY_STORE_FILE?.trim();
+  if (!dataSovereigntyStoreFile) {
+    violations.push({
+      control: 'DATA_SOVEREIGNTY_STORE_FILE',
+      risk: 'Production data-sovereignty workflows require durable consent, transfer, breach, retention, and DPA evidence storage',
     });
   }
 

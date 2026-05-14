@@ -1,6 +1,9 @@
 import { z } from 'zod';
 import { createLogger, format, transports } from 'winston';
 import crypto from 'crypto';
+import * as fs from 'fs';
+import * as path from 'path';
+import { isProductionRuntime } from '../production-safety';
 
 // ---------------------------------------------------------------------------
 // Logger
@@ -155,6 +158,28 @@ export interface RetentionStatus {
   }>;
 }
 
+interface DPARecord {
+  processor: string;
+  jurisdiction: string;
+  signedAt: string;
+  expiresAt: string;
+}
+
+interface DataSovereigntySnapshot {
+  version: 1;
+  savedAt: string;
+  consentRecords: Array<[string, ConsentRecord[]]>;
+  transferAssessments: Array<[string, TransferAssessmentResult]>;
+  piaResults: Array<[string, PIAResult]>;
+  breachRecords: Array<[string, BreachTimeline]>;
+  retentionTracker: Array<[string, RetentionStatus]>;
+  dpaRegistry: Array<[string, DPARecord]>;
+}
+
+export interface DataSovereigntyServiceOptions {
+  storeFile?: string;
+}
+
 // ---------------------------------------------------------------------------
 // Adequacy decisions map (EU-recognized jurisdictions)
 // ---------------------------------------------------------------------------
@@ -215,10 +240,18 @@ export class DataSovereigntyService {
   private piaResults: Map<string, PIAResult> = new Map();
   private breachRecords: Map<string, BreachTimeline> = new Map();
   private retentionTracker: Map<string, RetentionStatus> = new Map();
-  private dpaRegistry: Map<string, { processor: string; jurisdiction: string; signedAt: string; expiresAt: string }> = new Map();
+  private dpaRegistry: Map<string, DPARecord> = new Map();
+  private readonly storeFile?: string;
 
-  constructor() {
-    logger.info('DataSovereigntyService initialized', { residencyRules: this.residencyRules.length });
+  constructor(options: DataSovereigntyServiceOptions = {}) {
+    const configuredStoreFile = options.storeFile ?? process.env.DATA_SOVEREIGNTY_STORE_FILE;
+    this.storeFile = configuredStoreFile?.trim() || undefined;
+    this.initializeStore();
+
+    logger.info('DataSovereigntyService initialized', {
+      residencyRules: this.residencyRules.length,
+      durableStoreConfigured: Boolean(this.storeFile),
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -277,6 +310,8 @@ export class DataSovereigntyService {
   // Cross-border data transfer assessment
   // -------------------------------------------------------------------------
   assessCrossBorderTransfer(transfer: CrossBorderTransfer): TransferAssessmentResult {
+    this.refreshStateFromStore();
+    this.assertStoreAvailable();
     const parsed = CrossBorderTransferSchema.parse(transfer);
     const transferId = parsed.transferId ?? crypto.randomUUID();
 
@@ -383,6 +418,7 @@ export class DataSovereigntyService {
     };
 
     this.transferAssessments.set(transferId, result);
+    this.persistState();
     logger.info('transfer_assessment_complete', { transferId, allowed, riskLevel, legalBasis });
     return result;
   }
@@ -391,6 +427,8 @@ export class DataSovereigntyService {
   // Consent management
   // -------------------------------------------------------------------------
   recordConsent(consent: ConsentRecord): ConsentRecord & { consentId: string } {
+    this.refreshStateFromStore();
+    this.assertStoreAvailable();
     const parsed = ConsentRecordSchema.parse(consent);
     const consentId = parsed.consentId ?? crypto.randomUUID();
     const record = { ...parsed, consentId };
@@ -398,6 +436,7 @@ export class DataSovereigntyService {
     const existing = this.consentRecords.get(parsed.dataSubjectId) ?? [];
     existing.push(record);
     this.consentRecords.set(parsed.dataSubjectId, existing);
+    this.persistState();
 
     logger.info('consent_recorded', {
       consentId,
@@ -410,6 +449,8 @@ export class DataSovereigntyService {
   }
 
   withdrawConsent(dataSubjectId: string, purposeId: string): { withdrawn: boolean; affectedRecords: number } {
+    this.refreshStateFromStore();
+    this.assertStoreAvailable();
     const records = this.consentRecords.get(dataSubjectId) ?? [];
     let affected = 0;
 
@@ -426,11 +467,16 @@ export class DataSovereigntyService {
       }
     }
 
+    if (affected > 0) {
+      this.persistState();
+    }
+
     logger.info('consent_withdrawn', { dataSubjectId, purposeId, affectedRecords: affected });
     return { withdrawn: affected > 0, affectedRecords: affected };
   }
 
   getConsents(dataSubjectId: string): ConsentRecord[] {
+    this.refreshStateFromStore();
     return this.consentRecords.get(dataSubjectId) ?? [];
   }
 
@@ -480,6 +526,8 @@ export class DataSovereigntyService {
   // Privacy Impact Assessment (PIA) automation
   // -------------------------------------------------------------------------
   conductPIA(pia: PIA): PIAResult {
+    this.refreshStateFromStore();
+    this.assertStoreAvailable();
     const parsed = PIASchema.parse(pia);
     const assessmentId = parsed.assessmentId ?? crypto.randomUUID();
 
@@ -577,6 +625,7 @@ export class DataSovereigntyService {
     };
 
     this.piaResults.set(assessmentId, result);
+    this.persistState();
     logger.info('pia_completed', { assessmentId, riskScore: result.riskScore, riskLevel, dpiaRequired });
     return result;
   }
@@ -585,6 +634,8 @@ export class DataSovereigntyService {
   // DPA tracking
   // -------------------------------------------------------------------------
   registerDPA(processorName: string, jurisdiction: string, expiresInDays: number): { dpaId: string } {
+    this.refreshStateFromStore();
+    this.assertStoreAvailable();
     const dpaId = crypto.randomUUID();
     this.dpaRegistry.set(dpaId, {
       processor: processorName,
@@ -592,6 +643,7 @@ export class DataSovereigntyService {
       signedAt: new Date().toISOString(),
       expiresAt: new Date(Date.now() + expiresInDays * 24 * 60 * 60 * 1000).toISOString(),
     });
+    this.persistState();
     logger.info('dpa_registered', { dpaId, processor: processorName });
     return { dpaId };
   }
@@ -600,6 +652,8 @@ export class DataSovereigntyService {
   // Breach notification workflow
   // -------------------------------------------------------------------------
   initiateBreachNotification(breach: BreachNotification): BreachTimeline {
+    this.refreshStateFromStore();
+    this.assertStoreAvailable();
     const parsed = BreachNotificationSchema.parse(breach);
     const breachId = parsed.breachId ?? crypto.randomUUID();
     const detectedTime = new Date(parsed.detectedAt).getTime();
@@ -637,6 +691,7 @@ export class DataSovereigntyService {
     };
 
     this.breachRecords.set(breachId, timeline);
+    this.persistState();
     logger.warn('breach_notification_initiated', {
       breachId,
       severity: parsed.severity,
@@ -648,6 +703,7 @@ export class DataSovereigntyService {
   }
 
   getBreachTimeline(breachId: string): BreachTimeline | null {
+    this.refreshStateFromStore();
     return this.breachRecords.get(breachId) ?? null;
   }
 
@@ -655,6 +711,8 @@ export class DataSovereigntyService {
   // Data retention policy enforcement
   // -------------------------------------------------------------------------
   trackRetention(dataSubjectId: string, category: string, jurisdiction: string, retentionDays: number): void {
+    this.refreshStateFromStore();
+    this.assertStoreAvailable();
     const now = new Date();
     const expiresAt = new Date(now.getTime() + retentionDays * 24 * 60 * 60 * 1000);
 
@@ -669,11 +727,13 @@ export class DataSovereigntyService {
       autoDeleteScheduled: true,
     });
     this.retentionTracker.set(dataSubjectId, status);
+    this.persistState();
 
     logger.info('retention_tracked', { dataSubjectId, category, jurisdiction, retentionDays, expiresAt: expiresAt.toISOString() });
   }
 
   getRetentionStatus(dataSubjectId: string): RetentionStatus | null {
+    this.refreshStateFromStore();
     const status = this.retentionTracker.get(dataSubjectId);
     if (!status) return null;
 
@@ -685,6 +745,7 @@ export class DataSovereigntyService {
   }
 
   getExpiredRecords(): Array<{ dataSubjectId: string; category: string; expiresAt: string }> {
+    this.refreshStateFromStore();
     const expired: Array<{ dataSubjectId: string; category: string; expiresAt: string }> = [];
     const now = Date.now();
 
@@ -697,6 +758,108 @@ export class DataSovereigntyService {
     }
 
     return expired;
+  }
+
+  private initializeStore(): void {
+    if (!this.storeFile) return;
+
+    try {
+      fs.mkdirSync(path.dirname(this.storeFile), { recursive: true, mode: 0o700 });
+      this.refreshStateFromStore();
+    } catch (error) {
+      throw new DataSovereigntyError(
+        `Durable data-sovereignty store could not be initialized: ${(error as Error).message}`,
+        'DATA_SOVEREIGNTY_STORE_INITIALIZATION_FAILED',
+        503,
+      );
+    }
+  }
+
+  private assertStoreAvailable(): void {
+    if (!isProductionRuntime() || this.storeFile) return;
+
+    throw new DataSovereigntyError(
+      'Durable data-sovereignty store is required in production',
+      'DATA_SOVEREIGNTY_STORE_REQUIRED',
+      503,
+    );
+  }
+
+  private persistState(): void {
+    this.assertStoreAvailable();
+    if (!this.storeFile) return;
+
+    const snapshot: DataSovereigntySnapshot = {
+      version: 1,
+      savedAt: new Date().toISOString(),
+      consentRecords: Array.from(this.consentRecords.entries()),
+      transferAssessments: Array.from(this.transferAssessments.entries()),
+      piaResults: Array.from(this.piaResults.entries()),
+      breachRecords: Array.from(this.breachRecords.entries()),
+      retentionTracker: Array.from(this.retentionTracker.entries()),
+      dpaRegistry: Array.from(this.dpaRegistry.entries()),
+    };
+    const tempFile = `${this.storeFile}.${process.pid}.${Date.now()}.tmp`;
+
+    try {
+      fs.writeFileSync(tempFile, JSON.stringify(snapshot, null, 2), {
+        encoding: 'utf8',
+        mode: 0o600,
+      });
+      fs.renameSync(tempFile, this.storeFile);
+    } catch (error) {
+      if (fs.existsSync(tempFile)) {
+        fs.unlinkSync(tempFile);
+      }
+      throw new DataSovereigntyError(
+        `Durable data-sovereignty store could not be written: ${(error as Error).message}`,
+        'DATA_SOVEREIGNTY_STORE_WRITE_FAILED',
+        503,
+      );
+    }
+  }
+
+  private refreshStateFromStore(): void {
+    if (!this.storeFile || !fs.existsSync(this.storeFile)) return;
+
+    try {
+      const snapshot = JSON.parse(fs.readFileSync(this.storeFile, 'utf8')) as Partial<DataSovereigntySnapshot>;
+      if (snapshot.version !== 1) {
+        throw new Error(`unsupported snapshot version: ${String(snapshot.version)}`);
+      }
+
+      this.consentRecords = new Map(snapshot.consentRecords ?? []);
+      this.transferAssessments = new Map(snapshot.transferAssessments ?? []);
+      this.piaResults = new Map(snapshot.piaResults ?? []);
+      this.breachRecords = new Map(snapshot.breachRecords ?? []);
+      this.retentionTracker = new Map(snapshot.retentionTracker ?? []);
+      this.dpaRegistry = new Map(snapshot.dpaRegistry ?? []);
+    } catch (error) {
+      logger.error('data_sovereignty_store_load_failed', {
+        storeFile: this.storeFile,
+        error: (error as Error).message,
+      });
+
+      if (isProductionRuntime()) {
+        throw new DataSovereigntyError(
+          `Durable data-sovereignty store could not be loaded: ${(error as Error).message}`,
+          'DATA_SOVEREIGNTY_STORE_READ_FAILED',
+          503,
+        );
+      }
+    }
+  }
+}
+
+export class DataSovereigntyError extends Error {
+  readonly code: string;
+  readonly statusCode: number;
+
+  constructor(message: string, code: string, statusCode: number) {
+    super(message);
+    this.name = 'DataSovereigntyError';
+    this.code = code;
+    this.statusCode = statusCode;
   }
 }
 
