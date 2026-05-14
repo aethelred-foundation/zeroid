@@ -9,6 +9,7 @@ const mockWebhookFindFirst = jest.fn();
 const mockWebhookFindUnique = jest.fn();
 const mockWebhookUpdate = jest.fn();
 const mockWebhookDeliveryFindMany = jest.fn();
+const mockWebhookDeliveryFindUnique = jest.fn();
 const mockWebhookDeliveryUpsert = jest.fn();
 
 const redisStore: Record<string, string> = {};
@@ -72,6 +73,7 @@ jest.mock('../src/index', () => ({
     },
     webhookDelivery: {
       findMany: mockWebhookDeliveryFindMany,
+      findUnique: mockWebhookDeliveryFindUnique,
       upsert: mockWebhookDeliveryUpsert,
     },
   },
@@ -933,6 +935,74 @@ describe('WebhookSystem persistence', () => {
       response: { statusCode: 200, body: 'ok', latencyMs: 12 },
     });
     expect(deliveries[0].request.headers).toEqual({});
+  });
+
+  it('retries persisted dead-letter deliveries after process restart', async () => {
+    const restartedSystem = new WebhookSystem();
+    const persistedPayload = {
+      id: 'evt-1',
+      type: 'credential.issued',
+      timestamp: '2026-04-21T00:00:01.000Z',
+      data: { credentialId: 'cred-1' },
+      source: 'zeroid',
+    };
+
+    mockWebhookDeliveryFindUnique.mockResolvedValue({
+      id: 'del-dead',
+      webhookId: 'wh-1',
+      eventType: 'credential.issued',
+      payload: persistedPayload,
+      statusCode: 500,
+      responseBody: 'temporary failure',
+      responseTimeMs: 25,
+      attempt: 5,
+      success: false,
+      deliveredAt: new Date('2026-04-21T00:00:05.000Z'),
+      nextRetryAt: null,
+    });
+    mockWebhookFindUnique.mockResolvedValue({
+      id: 'wh-1',
+      organizationId: 'org-1',
+      url: 'https://hooks.zeroid.example/ingest',
+      secret: 's'.repeat(64),
+      events: ['credential.issued'],
+      status: 'ACTIVE',
+      failureCount: 0,
+      lastDeliveredAt: null,
+      lastStatusCode: 500,
+      createdAt: new Date('2026-04-21T00:00:00.000Z'),
+      updatedAt: new Date('2026-04-21T00:00:00.000Z'),
+    });
+    mockWebhookDeliveryUpsert.mockResolvedValue({});
+    const fetchSpy = jest
+      .spyOn(global, 'fetch')
+      .mockResolvedValue(new Response('ok', { status: 200 }));
+
+    await expect(restartedSystem.retryDeadLetter('del-dead')).resolves.toBe(true);
+
+    expect(mockWebhookDeliveryFindUnique).toHaveBeenCalledWith({
+      where: { id: 'del-dead' },
+    });
+    expect(fetchSpy).toHaveBeenCalledWith(
+      'https://hooks.zeroid.example/ingest',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify(persistedPayload),
+        headers: expect.objectContaining({
+          'X-ZeroID-Delivery': 'del-dead',
+          'X-ZeroID-Event': 'credential.issued',
+        }),
+      }),
+    );
+    expect(mockWebhookDeliveryUpsert).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'del-dead' },
+      update: expect.objectContaining({
+        attempt: 1,
+        success: true,
+        responseBody: 'ok',
+      }),
+    }));
+    fetchSpy.mockRestore();
   });
 
   it('requires organization ownership before replaying webhook events', async () => {

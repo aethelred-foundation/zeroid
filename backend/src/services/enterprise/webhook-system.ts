@@ -920,11 +920,15 @@ export class WebhookSystem {
 
   async retryDeadLetter(deliveryId: string): Promise<boolean> {
     const dlEntry = this.deadLetterQueue.find((e) => e.deliveryId === deliveryId);
-    if (!dlEntry) return false;
+    let delivery = this.deliveries.get(deliveryId) ?? null;
+    let webhook = dlEntry ? await this.getWebhook(dlEntry.webhookId) : null;
 
-    const delivery = this.deliveries.get(deliveryId);
-    const webhook = await this.getWebhook(dlEntry.webhookId);
-    if (!delivery || !webhook) return false;
+    if (!delivery || !webhook) {
+      const persisted = await this.loadPersistedDeadLetterDelivery(deliveryId);
+      if (!persisted) return false;
+      delivery = persisted.delivery;
+      webhook = persisted.webhook;
+    }
 
     delivery.attempts = 0;
     delivery.status = 'pending';
@@ -1201,6 +1205,50 @@ export class WebhookSystem {
     }
   }
 
+  private async loadPersistedDeadLetterDelivery(
+    deliveryId: string,
+  ): Promise<{ delivery: WebhookDelivery; webhook: RegisteredWebhook } | null> {
+    const record = await prisma.webhookDelivery.findUnique({
+      where: { id: deliveryId },
+    });
+    if (!record || record.success || record.nextRetryAt) return null;
+
+    const webhook = await this.getWebhook(record.webhookId);
+    if (!webhook || !webhook.active || webhook.health.disabled) return null;
+
+    const delivery = this.hydrateDeliveryLog(record);
+    const payload = delivery.payload ?? {};
+    const body = JSON.stringify(payload);
+    const signature = this.signPayload(body, webhook.secret);
+    const eventTimestamp = typeof payload.timestamp === 'string'
+      ? payload.timestamp
+      : new Date().toISOString();
+
+    delivery.status = 'dead_letter';
+    delivery.request = {
+      url: webhook.url,
+      headers: {
+        ...safeCustomWebhookHeaders(webhook.headers),
+        'Content-Type': 'application/json',
+        'X-ZeroID-Signature': signature,
+        'X-ZeroID-Event': delivery.eventType,
+        'X-ZeroID-Delivery': delivery.deliveryId,
+        'X-ZeroID-Timestamp': eventTimestamp,
+        'User-Agent': 'ZeroID-Webhook/1.0',
+      },
+      body,
+    };
+    delivery.response = {
+      statusCode: record.statusCode ?? 0,
+      body: record.responseBody ?? '',
+      latencyMs: record.responseTimeMs ?? 0,
+    };
+    delivery.maxAttempts = this.maxRetries;
+    this.deliveries.set(delivery.deliveryId, delivery);
+
+    return { delivery, webhook };
+  }
+
   private hydrateDeliveryLog(record: any): WebhookDelivery {
     const deliveredAt = this.dateToIso(record.deliveredAt);
     const nextRetryAt = record.nextRetryAt
@@ -1217,9 +1265,7 @@ export class WebhookSystem {
       ? 'delivered'
       : nextRetryAt
         ? 'pending'
-        : record.attempt >= this.maxRetries
-          ? 'dead_letter'
-          : 'failed';
+        : 'dead_letter';
 
     return {
       deliveryId: record.id,
