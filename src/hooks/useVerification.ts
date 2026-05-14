@@ -18,6 +18,20 @@ import type {
   CreateVerificationParams,
 } from "@/types";
 
+function toBackendVerificationResult(status?: VerificationStatus): string | undefined {
+  if (!status) return undefined;
+
+  const mapped: Record<string, string> = {
+    pending: "PENDING",
+    completed: "VERIFIED",
+    verified: "VERIFIED",
+    failed: "FAILED",
+    expired: "EXPIRED",
+  };
+
+  return mapped[String(status).toLowerCase()] ?? String(status).toUpperCase();
+}
+
 // ---------------------------------------------------------------------------
 // Create a verification request (as a verifier)
 // ---------------------------------------------------------------------------
@@ -135,7 +149,7 @@ export function usePendingVerifications() {
     queryKey: ["pendingVerifications", address],
     queryFn: () =>
       apiClient.get<VerificationRequest[]>(
-        `/v1/verification/pending/${address}`,
+        "/api/v1/verification/history?result=PENDING&limit=100",
       ),
     enabled: !!address,
     staleTime: 10_000,
@@ -182,16 +196,22 @@ export function useVerificationHistory(
 ) {
   const { address } = useAccount();
   const params = new URLSearchParams();
-  if (status) params.set("status", status);
+  const backendResult = toBackendVerificationResult(status);
+  if (backendResult) params.set("result", backendResult);
   params.set("page", String(page));
-  params.set("pageSize", String(pageSize));
+  params.set("limit", String(pageSize));
 
   return useQuery({
     queryKey: ["verificationHistory", address, status, page],
-    queryFn: () =>
-      apiClient.get<{ items: VerificationHistory[]; total: number }>(
-        `/v1/verification/history/${address}?${params.toString()}`,
-      ),
+    queryFn: async () => {
+      const items = await apiClient.get<VerificationHistory[]>(
+        `/api/v1/verification/history?${params.toString()}`,
+      );
+      return {
+        items,
+        total: items.length,
+      };
+    },
     enabled: !!address,
     staleTime: 15_000,
   });

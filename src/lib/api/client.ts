@@ -348,15 +348,33 @@ export const apiClient = {
     page = 1,
     pageSize = 20,
   ): Promise<PaginatedResponse<CredentialSchema>> {
-    return get<PaginatedResponse<CredentialSchema>>("/api/v1/schemas", {
-      page,
-      pageSize,
-    });
+    const result = await withRetry(
+      () =>
+        request<CredentialSchema[]>("GET", "/api/v1/governance/schemas", {
+          params: { page, limit: pageSize },
+        }),
+      DEFAULT_RETRIES,
+    );
+    const pagination = (result as ApiResponse<CredentialSchema[]> & {
+      pagination?: BackendPagination;
+    }).pagination;
+    const items = result.data ?? [];
+    const resolvedPage = pagination?.page ?? page;
+    const resolvedPageSize = pagination?.limit ?? pageSize;
+    const total = pagination?.total ?? items.length;
+
+    return {
+      items,
+      total,
+      page: resolvedPage,
+      pageSize: resolvedPageSize,
+      hasMore: resolvedPage * resolvedPageSize < total,
+    };
   },
 
-  /** Get a single schema by hash */
-  async getSchema(schemaHash: Bytes32): Promise<CredentialSchema> {
-    return get<CredentialSchema>(`/api/v1/schemas/${schemaHash}`);
+  /** Get a single schema by ID */
+  async getSchema(schemaId: string): Promise<CredentialSchema> {
+    return get<CredentialSchema>(`/api/v1/governance/schemas/${schemaId}`);
   },
 
   // --------------------------------------------------------------------------

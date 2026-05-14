@@ -132,12 +132,6 @@ export function useZKProof() {
         args: [calldata.a, calldata.b, calldata.c, zkProof.publicSignals],
       });
 
-      await apiClient.post("/v1/proofs/record", {
-        txHash: hash,
-        circuitType: zkProof.circuitType,
-        publicSignals: zkProof.publicSignals,
-      });
-
       return hash;
     },
     onSuccess: () => {
@@ -179,7 +173,9 @@ export function useProofHistory(address: string | undefined) {
   return useQuery({
     queryKey: ["proofHistory", address],
     queryFn: () =>
-      apiClient.get<ProofHistoryEntry[]>(`/v1/proofs/history/${address}`),
+      apiClient.get<ProofHistoryEntry[]>(
+        "/api/v1/verification/history?type=ZK_PROOF",
+      ),
     enabled: !!address,
     staleTime: 30_000,
   });

@@ -369,7 +369,7 @@ describe("useVerification hooks", () => {
       });
 
       expect(apiClient.get).toHaveBeenCalledWith(
-        `/v1/verification/pending/${mockAddress}`,
+        "/api/v1/verification/history?result=PENDING&limit=100",
       );
     });
 
@@ -393,13 +393,10 @@ describe("useVerification hooks", () => {
 
   describe("useVerificationHistory", () => {
     it("fetches verification history with default pagination", async () => {
-      const historyResponse = {
-        items: [
-          { requestId: "vreq-1", verified: true, verifiedAt: 1700000000 },
-        ],
-        total: 1,
-      };
-      (apiClient.get as jest.Mock).mockResolvedValue(historyResponse);
+      const historyItems = [
+        { requestId: "vreq-1", verified: true, verifiedAt: 1700000000 },
+      ];
+      (apiClient.get as jest.Mock).mockResolvedValue(historyItems);
 
       const { useVerificationHistory } =
         await import("@/hooks/useVerification");
@@ -408,20 +405,20 @@ describe("useVerification hooks", () => {
       });
 
       await waitFor(() => {
-        expect(result.current.data).toEqual(historyResponse);
+        expect(result.current.data).toEqual({
+          items: historyItems,
+          total: 1,
+        });
       });
 
       const url = (apiClient.get as jest.Mock).mock.calls[0][0] as string;
-      expect(url).toContain(`/v1/verification/history/${mockAddress}`);
+      expect(url).toContain("/api/v1/verification/history");
       expect(url).toContain("page=1");
-      expect(url).toContain("pageSize=20");
+      expect(url).toContain("limit=20");
     });
 
     it("passes status filter to the query", async () => {
-      (apiClient.get as jest.Mock).mockResolvedValue({
-        items: [],
-        total: 0,
-      });
+      (apiClient.get as jest.Mock).mockResolvedValue([]);
 
       const { useVerificationHistory } =
         await import("@/hooks/useVerification");
@@ -434,9 +431,9 @@ describe("useVerification hooks", () => {
       });
 
       const url = (apiClient.get as jest.Mock).mock.calls[0][0] as string;
-      expect(url).toContain("status=completed");
+      expect(url).toContain("result=VERIFIED");
       expect(url).toContain("page=2");
-      expect(url).toContain("pageSize=10");
+      expect(url).toContain("limit=10");
     });
 
     it("does not fetch when address is undefined", async () => {
@@ -468,8 +465,9 @@ describe("useVerification hooks", () => {
       const pendingResponse = [{ id: "vreq-2", status: "pending" }];
 
       (apiClient.get as jest.Mock).mockImplementation((url: string) => {
-        if (url.includes("/history/")) return Promise.resolve(historyResponse);
-        if (url.includes("/pending/")) return Promise.resolve(pendingResponse);
+        if (url.includes("result=PENDING")) return Promise.resolve(pendingResponse);
+        if (url.includes("/api/v1/verification/history"))
+          return Promise.resolve(historyResponse.items);
         return Promise.resolve({});
       });
 
@@ -503,9 +501,8 @@ describe("useVerification hooks", () => {
 
     it("returns isLoading false when history has loaded", async () => {
       (apiClient.get as jest.Mock).mockImplementation((url: string) => {
-        if (url.includes("/history/"))
-          return Promise.resolve({ items: [], total: 0 });
-        if (url.includes("/pending/")) return Promise.resolve([]);
+        if (url.includes("/api/v1/verification/history"))
+          return Promise.resolve([]);
         return Promise.resolve({});
       });
 

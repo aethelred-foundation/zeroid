@@ -299,23 +299,23 @@ describe("URL building", () => {
   });
 
   it("omits empty/null/undefined query parameter values", async () => {
-    // listSchemas only passes page + pageSize (no subject), so verify no extra keys
-    mockFetch.mockResolvedValue(jsonResponse({ items: [], total: 0 }));
+    // listSchemas only passes page + limit, so verify no extra keys
+    mockFetch.mockResolvedValue(jsonResponse([]));
     await apiClient.listSchemas(1, 10);
     const [url] = mockFetch.mock.calls[0];
     const parsed = new URL(url);
     expect(parsed.searchParams.get("page")).toBe("1");
-    expect(parsed.searchParams.get("pageSize")).toBe("10");
+    expect(parsed.searchParams.get("limit")).toBe("10");
     // Only two params should exist
     const keys = Array.from(parsed.searchParams.keys());
-    expect(keys).toEqual(["page", "pageSize"]);
+    expect(keys).toEqual(["page", "limit"]);
   });
 
   it("includes path parameters inline", async () => {
     mockFetch.mockResolvedValue(jsonResponse({}));
-    await apiClient.getSchema("0xschema123" as `0x${string}`);
+    await apiClient.getSchema("schema-123");
     const [url] = mockFetch.mock.calls[0];
-    expect(url).toContain("/api/v1/schemas/0xschema123");
+    expect(url).toContain("/api/v1/governance/schemas/schema-123");
   });
 });
 
@@ -507,31 +507,50 @@ describe("apiClient.getCredential()", () => {
 });
 
 describe("apiClient.listSchemas()", () => {
-  it("calls GET /api/v1/schemas with page and pageSize", async () => {
-    mockFetch.mockResolvedValue(jsonResponse({ items: [], total: 0 }));
-    await apiClient.listSchemas(2, 15);
+  it("calls GET /api/v1/governance/schemas with backend pagination", async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      json: jest.fn().mockResolvedValue({
+        data: [{ id: "schema-1" }],
+        pagination: { page: 2, limit: 15, total: 21, totalPages: 2 },
+      }),
+    });
+
+    const result = await apiClient.listSchemas(2, 15);
+
     const [url] = mockFetch.mock.calls[0];
-    expect(url).toContain("/api/v1/schemas");
+    expect(url).toContain("/api/v1/governance/schemas");
     const parsed = new URL(url);
     expect(parsed.searchParams.get("page")).toBe("2");
-    expect(parsed.searchParams.get("pageSize")).toBe("15");
+    expect(parsed.searchParams.get("limit")).toBe("15");
+    expect(result).toEqual({
+      items: [{ id: "schema-1" }],
+      total: 21,
+      page: 2,
+      pageSize: 15,
+      hasMore: false,
+    });
   });
 
   it("uses default page=1, pageSize=20", async () => {
-    mockFetch.mockResolvedValue(jsonResponse({ items: [], total: 0 }));
+    mockFetch.mockResolvedValue(jsonResponse([]));
     await apiClient.listSchemas();
     const [url] = mockFetch.mock.calls[0];
     const parsed = new URL(url);
     expect(parsed.searchParams.get("page")).toBe("1");
-    expect(parsed.searchParams.get("pageSize")).toBe("20");
+    expect(parsed.searchParams.get("limit")).toBe("20");
   });
 });
 
 describe("apiClient.getSchema()", () => {
-  it("calls GET /api/v1/schemas/{hash}", async () => {
+  it("calls GET /api/v1/governance/schemas/{id}", async () => {
     mockFetch.mockResolvedValue(jsonResponse({ hash: "0xschema" }));
-    await apiClient.getSchema("0xschema" as `0x${string}`);
-    expect(mockFetch.mock.calls[0][0]).toContain("/api/v1/schemas/0xschema");
+    await apiClient.getSchema("schema-123");
+    expect(mockFetch.mock.calls[0][0]).toContain(
+      "/api/v1/governance/schemas/schema-123",
+    );
   });
 });
 

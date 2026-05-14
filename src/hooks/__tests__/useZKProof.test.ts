@@ -234,7 +234,7 @@ describe("useProofHistory", () => {
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(mockApiClient.get).toHaveBeenCalledWith(
-      `/v1/proofs/history/${mockAddress}`,
+      "/api/v1/verification/history?type=ZK_PROOF",
     );
     expect(result.current.data).toEqual(mockHistory);
   });
@@ -277,13 +277,7 @@ describe("verifyProof (on-chain)", () => {
     });
 
     expect(mockWriteContractAsync).toHaveBeenCalled();
-    expect(mockApiClient.post).toHaveBeenCalledWith(
-      "/v1/proofs/record",
-      expect.objectContaining({
-        txHash: "0xverifytx",
-        circuitType: "age_check",
-      }),
-    );
+    expect(mockApiClient.post).not.toHaveBeenCalled();
     expect(mockToast.success).toHaveBeenCalledWith("Proof verified on-chain");
   });
 
