@@ -199,6 +199,25 @@ function loadPretrainedWeights(): NeuralNetworkLayer[] {
   ];
 }
 
+const FRAUD_ALERT_ACTIVE_SET = 'fraud:alerts:active:set';
+const FRAUD_ALERT_TTL_SECONDS = 90 * 86400;
+const fraudAlertRecordKey = (alertId: string) => `fraud:alert:${alertId}`;
+
+function parseStoredFraudAlert(value: string | null): FraudAlert | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value) as FraudAlert;
+    return {
+      ...parsed,
+      createdAt: new Date(parsed.createdAt),
+      updatedAt: new Date(parsed.updatedAt),
+      resolvedAt: parsed.resolvedAt ? new Date(parsed.resolvedAt) : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Fraud Detection Service
 // ---------------------------------------------------------------------------
@@ -207,12 +226,6 @@ export class FraudDetectionService {
   private model: SimpleNeuralNetwork;
   private readonly MODEL_VERSION = '3.2.1';
   private alerts: Map<string, FraudAlert> = new Map();
-
-  // Velocity tracking windows (in-memory, backed by Redis in production)
-  private velocityWindows: Map<string, { timestamps: number[]; windowMs: number }> = new Map();
-
-  // Known device fingerprints per identity
-  private knownDevices: Map<string, string[]> = new Map();
 
   constructor() {
     const weights = loadPretrainedWeights();
@@ -416,14 +429,15 @@ export class FraudDetectionService {
       }))
       .digest('hex');
 
-    // Check if this device is known for this identity
-    const knownDevices = this.knownDevices.get(identityId) ?? [];
-    const isKnownDevice = knownDevices.includes(fpHash);
+    // Check if this device is known for this identity using Redis so all app
+    // instances share the same device history.
+    const knownDevicesKey = `device:known:${identityId}`;
+    const deviceIdentitiesKey = `device:identities:${fpHash}`;
+    const isKnownDevice = (await redis.sismember(knownDevicesKey, fpHash)) === 1;
 
     if (!isKnownDevice) {
       // Check how many identities share this device fingerprint
-      const cachedSharedCount = await redis.get(`device:shared:${fpHash}`);
-      const sharedCount = cachedSharedCount ? parseInt(cachedSharedCount, 10) : 0;
+      const sharedCount = await redis.scard(deviceIdentitiesKey);
 
       let score = 25; // New device has baseline risk
       if (sharedCount > 5) {
@@ -445,10 +459,11 @@ export class FraudDetectionService {
         evidence: { fpHash: fpHash.slice(0, 16), isKnownDevice, sharedCount },
       });
 
-      // Register the device
-      knownDevices.push(fpHash);
-      if (knownDevices.length > 20) knownDevices.shift(); // keep last 20
-      this.knownDevices.set(identityId, knownDevices);
+      // Register the device in durable shared state.
+      await redis.sadd(knownDevicesKey, fpHash);
+      await redis.expire(knownDevicesKey, 90 * 86400);
+      await redis.sadd(deviceIdentitiesKey, identityId);
+      await redis.expire(deviceIdentitiesKey, 30 * 86400);
     }
 
     // Check for fingerprint spoofing indicators
@@ -577,27 +592,18 @@ export class FraudDetectionService {
 
     for (const config of windowConfigs) {
       const key = `velocity:${identityId}:${config.name}`;
-      let window = this.velocityWindows.get(key);
+      const count = await this.recordVelocityEvent(key, now, config.windowMs);
 
-      if (!window) {
-        window = { timestamps: [], windowMs: config.windowMs };
-        this.velocityWindows.set(key, window);
-      }
-
-      // Prune expired timestamps
-      window.timestamps = window.timestamps.filter((t) => now - t < config.windowMs);
-      window.timestamps.push(now);
-
-      if (window.timestamps.length > config.maxCount) {
-        const ratio = window.timestamps.length / config.maxCount;
+      if (count > config.maxCount) {
+        const ratio = count / config.maxCount;
         factors.push({
           name: `velocity_${config.name}`,
           category: 'velocity',
           score: Math.min(95, Math.round(50 + ratio * 20)),
           weight: config.name === '1min' ? 0.20 : config.name === '5min' ? 0.15 : 0.10,
-          description: `${window.timestamps.length} actions in the last ${config.name} (limit: ${config.maxCount}) — possible automated abuse`,
+          description: `${count} actions in the last ${config.name} (limit: ${config.maxCount}) — possible automated abuse`,
           evidence: {
-            count: window.timestamps.length,
+            count,
             window: config.name,
             maxAllowed: config.maxCount,
             ratio,
@@ -608,15 +614,12 @@ export class FraudDetectionService {
 
     // Check for burst pattern (many requests with very short intervals)
     const recentKey = `velocity:${identityId}:recent`;
-    const recentWindow = this.velocityWindows.get(recentKey) ?? { timestamps: [], windowMs: 10_000 };
-    recentWindow.timestamps = recentWindow.timestamps.filter((t) => now - t < 10_000);
-    recentWindow.timestamps.push(now);
-    this.velocityWindows.set(recentKey, recentWindow);
+    const recentTimestamps = await this.getVelocityTimestamps(recentKey, now, 10_000);
 
-    if (recentWindow.timestamps.length >= 3) {
+    if (recentTimestamps.length >= 3) {
       const intervals: number[] = [];
-      for (let i = 1; i < recentWindow.timestamps.length; i++) {
-        intervals.push(recentWindow.timestamps[i] - recentWindow.timestamps[i - 1]);
+      for (let i = 1; i < recentTimestamps.length; i++) {
+        intervals.push(recentTimestamps[i] - recentTimestamps[i - 1]);
       }
 
       const intervalStdDev = this.standardDeviation(intervals);
@@ -629,13 +632,42 @@ export class FraudDetectionService {
           category: 'velocity',
           score: 90,
           weight: 0.22,
-          description: `Burst of ${recentWindow.timestamps.length} requests with ${meanInterval.toFixed(0)}ms mean interval — machine-like regularity`,
-          evidence: { meanIntervalMs: meanInterval, intervalStdDev, requestCount: recentWindow.timestamps.length },
+          description: `Burst of ${recentTimestamps.length} requests with ${meanInterval.toFixed(0)}ms mean interval — machine-like regularity`,
+          evidence: { meanIntervalMs: meanInterval, intervalStdDev, requestCount: recentTimestamps.length },
         });
       }
     }
 
     return factors;
+  }
+
+  private async recordVelocityEvent(
+    key: string,
+    timestampMs: number,
+    windowMs: number,
+  ): Promise<number> {
+    const member = `${timestampMs}:${crypto.randomUUID()}`;
+    await redis.zadd(key, timestampMs, member);
+    await redis.zremrangebyscore(key, '-inf', timestampMs - windowMs);
+    await redis.expire(key, Math.ceil(windowMs / 1000) + 60);
+    return redis.zcard(key);
+  }
+
+  private async getVelocityTimestamps(
+    key: string,
+    timestampMs: number,
+    windowMs: number,
+  ): Promise<number[]> {
+    const member = `${timestampMs}:${crypto.randomUUID()}`;
+    await redis.zadd(key, timestampMs, member);
+    await redis.zremrangebyscore(key, '-inf', timestampMs - windowMs);
+    await redis.expire(key, Math.ceil(windowMs / 1000) + 60);
+
+    const members = await redis.zrangebyscore(key, timestampMs - windowMs, timestampMs);
+    return members
+      .map((memberValue) => Number(memberValue.split(':', 1)[0]))
+      .filter((value) => Number.isFinite(value))
+      .sort((a, b) => a - b);
   }
 
   // -------------------------------------------------------------------------
@@ -1065,6 +1097,7 @@ export class FraudDetectionService {
 
     this.alerts.set(alert.alertId, alert);
 
+    await this.persistFraudAlert(alert);
     await redis.lpush('fraud:alerts:active', JSON.stringify(alert));
     await redis.ltrim('fraud:alerts:active', 0, 999); // keep last 1000
 
@@ -1083,6 +1116,11 @@ export class FraudDetectionService {
   // Alert management
   // -------------------------------------------------------------------------
   async getActiveAlerts(severity?: FraudSeverity): Promise<FraudAlert[]> {
+    const redisAlerts = await this.getActiveAlertsFromRedis(severity);
+    if (redisAlerts.length > 0) {
+      return redisAlerts;
+    }
+
     let alerts = Array.from(this.alerts.values())
       .filter((a) => a.status === 'active' || a.status === 'investigating');
 
@@ -1099,7 +1137,9 @@ export class FraudDetectionService {
     resolution: string,
     isFalsePositive: boolean,
   ): Promise<FraudAlert> {
-    const alert = this.alerts.get(alertId);
+    const alert =
+      this.alerts.get(alertId) ??
+      parseStoredFraudAlert(await redis.get(fraudAlertRecordKey(alertId)));
     if (!alert) {
       throw new FraudDetectionError('Alert not found', 'ALERT_NOT_FOUND', 404);
     }
@@ -1110,6 +1150,8 @@ export class FraudDetectionService {
     alert.resolution = resolution;
     alert.updatedAt = new Date();
     this.alerts.set(alertId, alert);
+    await this.persistFraudAlert(alert);
+    await redis.srem(FRAUD_ALERT_ACTIVE_SET, alertId);
 
     await prisma.auditLog.create({
       data: {
@@ -1135,6 +1177,38 @@ export class FraudDetectionService {
     });
 
     return alert;
+  }
+
+  private async persistFraudAlert(alert: FraudAlert): Promise<void> {
+    await redis.set(
+      fraudAlertRecordKey(alert.alertId),
+      JSON.stringify(alert),
+      'EX',
+      FRAUD_ALERT_TTL_SECONDS,
+    );
+    if (alert.status === 'active' || alert.status === 'investigating') {
+      await redis.sadd(FRAUD_ALERT_ACTIVE_SET, alert.alertId);
+      await redis.expire(FRAUD_ALERT_ACTIVE_SET, FRAUD_ALERT_TTL_SECONDS);
+    }
+  }
+
+  private async getActiveAlertsFromRedis(severity?: FraudSeverity): Promise<FraudAlert[]> {
+    const alertIds = await redis.smembers(FRAUD_ALERT_ACTIVE_SET);
+    if (alertIds.length === 0) return [];
+
+    const records = await Promise.all(
+      alertIds.map((alertId) => redis.get(fraudAlertRecordKey(alertId))),
+    );
+    return records
+      .map(parseStoredFraudAlert)
+      .filter((alert): alert is FraudAlert =>
+        Boolean(
+          alert &&
+          (alert.status === 'active' || alert.status === 'investigating') &&
+          (!severity || alert.severity === severity),
+        ),
+      )
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
   }
 
   // -------------------------------------------------------------------------
