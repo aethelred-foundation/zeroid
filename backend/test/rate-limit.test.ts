@@ -166,4 +166,18 @@ describe('createRateLimiter', () => {
     }));
     expect(res.status).toHaveBeenCalledWith(503);
   });
+
+  it('fails closed when ZeroID production runtime is enabled without NODE_ENV production', async () => {
+    process.env.NODE_ENV = 'test';
+    process.env.ZEROID_ENV = 'production';
+    mockEval.mockResolvedValue(null);
+    const limiter = createRateLimiter({ windowMs: 60_000, maxRequests: 2, keyPrefix: 'rl:test' });
+    const { req, res, next } = createMockHttp();
+
+    await limiter(req, res, next);
+
+    expect(next).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(503);
+    expect(res.body).toMatchObject({ code: 'RATE_LIMIT_STORE_UNAVAILABLE' });
+  });
 });

@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { redis, logger } from '../index';
+import { isProductionRuntime } from '../services/production-safety';
 
 const RATE_LIMIT_WINDOW_SCRIPT = `
   redis.call('ZREMRANGEBYSCORE', KEYS[1], 0, ARGV[1])
@@ -218,7 +219,7 @@ function normalizeProxyAddress(value: string | undefined): string | null {
 
 function shouldFailOpenOnStoreError(failOpenOnStoreError: boolean | undefined): boolean {
   if (typeof failOpenOnStoreError === 'boolean') return failOpenOnStoreError;
-  return process.env.NODE_ENV !== 'production';
+  return !isProductionRuntime();
 }
 
 function handleRateLimitStoreFailure(

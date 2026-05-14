@@ -2,6 +2,7 @@ import { prisma, logger, redis } from '../index';
 import { generateToken, revokeToken } from '../middleware/auth';
 import { oidcBridge } from './enterprise/oidc-bridge';
 import { isAethelredDid } from '../utils/did';
+import { isProductionRuntime } from './production-safety';
 // tee import removed — not used in this module
 import { IdentityStatus } from '@prisma/client';
 import nodeCrypto from 'crypto';
@@ -503,7 +504,7 @@ export class IdentityService {
       return pepper;
     }
 
-    if (process.env.NODE_ENV === 'production') {
+    if (isProductionRuntime()) {
       throw new IdentityError(
         `${IDENTITY_RECOVERY_HASH_PEPPER_ENV} must be configured in production and contain at least ${MIN_IDENTITY_RECOVERY_HASH_PEPPER_LENGTH} characters`,
         'IDENTITY_RECOVERY_HASH_PEPPER_MISSING',
@@ -515,7 +516,7 @@ export class IdentityService {
   }
 
   private allowLegacyRecoveryHashFallback(): boolean {
-    return process.env.NODE_ENV !== 'production';
+    return !isProductionRuntime();
   }
 
   private timingSafeHexEqual(left: string, right: string): boolean {

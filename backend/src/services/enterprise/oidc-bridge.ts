@@ -5,6 +5,7 @@ import * as https from 'https';
 import * as net from 'net';
 import { promises as dns } from 'dns';
 import { prisma, redis } from '../../index';
+import { isProductionRuntime } from '../production-safety';
 
 const PRIVATE_OIDC_HOSTNAME_SUFFIXES = [
   '.corp',
@@ -16,7 +17,6 @@ const PRIVATE_OIDC_HOSTNAME_SUFFIXES = [
   '.test',
 ];
 
-const isProductionRuntime = (): boolean => process.env.NODE_ENV === 'production';
 const ENTERPRISE_SECRET_HASH_PEPPER_ENV = 'ENTERPRISE_SECRET_HASH_PEPPER';
 const MIN_ENTERPRISE_SECRET_HASH_PEPPER_LENGTH = 48;
 
@@ -162,7 +162,7 @@ const PKCE_CODE_VERIFIER_PATTERN = /^[A-Za-z0-9._~-]{43,128}$/;
 const PROMPT_LOGIN_FRESHNESS_SECONDS = 60;
 const ALLOW_PUBLIC_OIDC_CLIENTS =
   process.env.ALLOW_PUBLIC_OIDC_CLIENTS === 'true' &&
-  process.env.NODE_ENV !== 'production';
+  !isProductionRuntime();
 
 type SupportedSigningAlgorithm = (typeof SUPPORTED_SIGNING_ALGORITHMS)[number];
 
@@ -588,7 +588,7 @@ export class OIDCBridge {
     issuer = process.env.OIDC_ISSUER_URL ??
       'https://id.zeroid.aethelred.network/enterprise/oidc',
   ) {
-    if (process.env.NODE_ENV === 'production' && !isTrustedProductionIssuer(issuer)) {
+    if (isProductionRuntime() && !isTrustedProductionIssuer(issuer)) {
       throw new Error(
         'OIDC_ISSUER_URL must be an HTTPS, non-local issuer URL in production.',
       );
@@ -1167,7 +1167,7 @@ export class OIDCBridge {
     let refreshStorageKey = refreshTokenKey;
 
     if (!refreshData && !this.isHashedCredentialStorageKey(refreshToken)) {
-      if (process.env.NODE_ENV !== 'production') {
+      if (!isProductionRuntime()) {
         refreshData = await this.refreshTokenMap.get(refreshToken);
         refreshStorageKey = refreshToken;
       } else {
@@ -2014,7 +2014,7 @@ export class OIDCBridge {
   private assertClientSecretFresh(client: RegisteredClient): void {
     const expiresAt = client.clientSecretExpiresAt;
     if (typeof expiresAt !== 'number') {
-      if (process.env.NODE_ENV === 'production') {
+      if (isProductionRuntime()) {
         logger.error('oidc_client_secret_expiry_missing', {
           clientId: client.clientId,
         });
@@ -2156,7 +2156,7 @@ export class OIDCBridge {
     }
 
     if (client.clientSecret) {
-      if (process.env.NODE_ENV === 'production') {
+      if (isProductionRuntime()) {
         logger.error('oidc_plaintext_client_secret_blocked', {
           clientId: client.clientId,
         });

@@ -44,6 +44,7 @@ jest.mock("@/lib/api/client", () => ({
 }));
 
 jest.mock("@/config/constants", () => ({
+  DID_METHOD_PREFIX: "did:aethelred",
   CREDENTIAL_REGISTRY_ADDRESS: "0xCredRegistryAddress",
   CREDENTIAL_REGISTRY_ABI: [{ type: "function", name: "credentialHash" }],
 }));
@@ -91,13 +92,10 @@ describe("useCredentials hooks", () => {
 
   describe("useCredentials", () => {
     it("fetches credentials for the connected address", async () => {
-      const credsResponse = {
-        credentials: [
-          { hash: "0xcred1", status: "active" },
-          { hash: "0xcred2", status: "active" },
-        ],
-        total: 2,
-      };
+      const credsResponse = [
+        { hash: "0xcred1", status: "active" },
+        { hash: "0xcred2", status: "active" },
+      ];
       (apiClient.get as jest.Mock).mockResolvedValue(credsResponse);
 
       const { useCredentials } = await import("@/hooks/useCredentials");
@@ -106,19 +104,19 @@ describe("useCredentials hooks", () => {
       });
 
       await waitFor(() => {
-        expect(result.current.data).toEqual(credsResponse);
+        expect(result.current.data).toEqual({
+          credentials: credsResponse,
+          total: 2,
+        });
       });
 
       expect(apiClient.get).toHaveBeenCalledWith(
-        expect.stringContaining(`/v1/credentials/${mockAddress}`),
+        expect.stringContaining("/api/v1/credentials"),
       );
     });
 
     it("passes status filter to the query", async () => {
-      (apiClient.get as jest.Mock).mockResolvedValue({
-        credentials: [],
-        total: 0,
-      });
+      (apiClient.get as jest.Mock).mockResolvedValue([]);
 
       const { useCredentials } = await import("@/hooks/useCredentials");
       renderHook(() => useCredentials("active" as any), {
@@ -130,7 +128,8 @@ describe("useCredentials hooks", () => {
       });
 
       const url = (apiClient.get as jest.Mock).mock.calls[0][0] as string;
-      expect(url).toContain("status=active");
+      expect(url).toContain("status=ACTIVE");
+      expect(url).toContain("role=subject");
     });
 
     it("does not fetch when address is undefined", async () => {
@@ -146,10 +145,7 @@ describe("useCredentials hooks", () => {
     });
 
     it("includes correct query key with status", async () => {
-      (apiClient.get as jest.Mock).mockResolvedValue({
-        credentials: [],
-        total: 0,
-      });
+      (apiClient.get as jest.Mock).mockResolvedValue([]);
 
       const { useCredentials } = await import("@/hooks/useCredentials");
       const { result: result1 } = renderHook(() => useCredentials(), {
@@ -268,7 +264,7 @@ describe("useCredentials hooks", () => {
 
   describe("useRequestCredential", () => {
     it("submits a credential request and shows success toast", async () => {
-      const response = { credentialId: "cred-new-0123456789ab" };
+      const response = { id: "cred-new-0123456789ab" };
       (apiClient.post as jest.Mock).mockResolvedValue(response);
 
       const { useRequestCredential } = await import("@/hooks/useCredentials");
@@ -280,17 +276,18 @@ describe("useCredentials hooks", () => {
         await result.current.mutateAsync({
           issuerDid: "did:aethelred:testnet:0xissuer",
           schemaId: "schema-1",
+          credentialType: "NATIONAL_ID",
           claims: { fullName: "Alice" },
           proofOfEligibility: "proof-data",
         } as any);
       });
 
       expect(apiClient.post).toHaveBeenCalledWith(
-        "/v1/credentials/request",
+        "/api/v1/credentials",
         expect.objectContaining({
-          holderAddress: mockAddress,
-          issuerDid: "did:aethelred:testnet:0xissuer",
-          schemaId: "schema-1",
+          credentialType: "NATIONAL_ID",
+          subjectDid: `did:aethelred:testnet:${mockAddress.toLowerCase()}`,
+          claims: { fullName: "Alice" },
         }),
       );
 
@@ -355,10 +352,9 @@ describe("useCredentials hooks", () => {
       );
 
       expect(apiClient.post).toHaveBeenCalledWith(
-        "/v1/credentials/cred-to-revoke/revoke",
+        "/api/v1/credentials/cred-to-revoke/revoke",
         expect.objectContaining({
-          txHash: mockTxHash,
-          revokerAddress: mockAddress,
+          reason: expect.stringContaining(mockTxHash),
         }),
       );
 

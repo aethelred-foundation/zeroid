@@ -10,6 +10,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { type Address, type Hash } from "viem";
 import { toast } from "sonner";
 import { apiClient } from "@/lib/api/client";
+import { createDID } from "@/lib/utils";
 import {
   CREDENTIAL_REGISTRY_ADDRESS,
   CREDENTIAL_REGISTRY_ABI,
@@ -24,7 +25,64 @@ import type {
 type LegacyCredentialRequest = Partial<CredentialRequest> & {
   schemaType?: string;
   documents?: unknown[];
+  subjectDid?: string;
+  credentialType?: string;
+  organizationId?: string;
+  expiresAt?: string | Date;
+  issuerProof?: unknown;
 };
+
+const BACKEND_CREDENTIAL_TYPES = new Set([
+  "NATIONAL_ID",
+  "PASSPORT",
+  "DRIVERS_LICENSE",
+  "PROOF_OF_ADDRESS",
+  "KYC_LEVEL_1",
+  "KYC_LEVEL_2",
+  "KYC_LEVEL_3",
+  "ACCREDITED_INVESTOR",
+  "PROFESSIONAL_LICENSE",
+  "EDUCATION",
+  "EMPLOYMENT",
+  "CUSTOM",
+]);
+
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function toBackendStatus(status?: CredentialStatus): string | undefined {
+  if (status === undefined) return undefined;
+
+  const statusKey = String(status).toLowerCase();
+  const mapped: Record<string, string> = {
+    "1": "ACTIVE",
+    "2": "SUSPENDED",
+    "3": "REVOKED",
+    "4": "EXPIRED",
+    active: "ACTIVE",
+    verified: "ACTIVE",
+    suspended: "SUSPENDED",
+    revoked: "REVOKED",
+    expired: "EXPIRED",
+  };
+
+  return mapped[statusKey] ?? String(status).toUpperCase();
+}
+
+function toSubjectDid(address: string): string {
+  const network = (process.env.NEXT_PUBLIC_CHAIN_ENV || "testnet") as
+    | "mainnet"
+    | "testnet"
+    | "devnet";
+  return createDID(address.toLowerCase(), network).uri;
+}
+
+function toCredentialType(value?: string): string {
+  const normalized = value?.trim().toUpperCase().replace(/[-\s]/g, "_");
+  return normalized && BACKEND_CREDENTIAL_TYPES.has(normalized)
+    ? normalized
+    : "CUSTOM";
+}
 
 // ---------------------------------------------------------------------------
 // List credentials for the connected wallet
@@ -37,14 +95,21 @@ export function useCredentials(status?: CredentialStatus) {
   const revokeMutation = useRevokeCredential();
 
   const params = new URLSearchParams();
-  if (status !== undefined) params.set("status", String(status));
+  const backendStatus = toBackendStatus(status);
+  if (backendStatus) params.set("status", backendStatus);
+  params.set("role", "subject");
 
   const query = useQuery({
     queryKey: ["credentials", address, status],
-    queryFn: () =>
-      apiClient.get<{ credentials: Credential[]; total: number }>(
-        `/v1/credentials/${address}?${params.toString()}`,
-      ),
+    queryFn: async () => {
+      const credentials = await apiClient.get<Credential[]>(
+        `/api/v1/credentials?${params.toString()}`,
+      );
+      return {
+        credentials,
+        total: credentials.length,
+      };
+    },
     enabled: !!address,
     staleTime: 15_000,
     refetchInterval: process.env.NODE_ENV === "test" ? false : 30_000,
@@ -52,10 +117,7 @@ export function useCredentials(status?: CredentialStatus) {
 
   const verifyMutation = useMutation({
     mutationFn: async (credentialId: string) =>
-      apiClient.post("/v1/credentials/verify", {
-        credentialHash: credentialId,
-        proof: "client-side-verification",
-      }),
+      apiClient.post(`/api/v1/credentials/${credentialId}/verify`, {}),
     onSuccess: () => {
       toast.success("Credential verified");
       queryClient.invalidateQueries({ queryKey: ["credentials"] });
@@ -77,7 +139,12 @@ export function useCredentials(status?: CredentialStatus) {
         schemaId: request.schemaId ?? request.schemaType ?? "identity",
         claims: request.claims ?? { documents: request.documents ?? [] },
         proofOfEligibility: request.proofOfEligibility,
-      }),
+        subjectDid: request.subjectDid,
+        credentialType: request.credentialType,
+        organizationId: request.organizationId,
+        expiresAt: request.expiresAt,
+        issuerProof: request.issuerProof,
+      } as CredentialRequest),
     revokeCredential: async (credentialId: string) =>
       revokeMutation.mutateAsync(credentialId),
     verifyCredential: async (credentialId: string) =>
@@ -104,7 +171,7 @@ export function useCredentialDetails(credentialId: string | undefined) {
     queryKey: ["credential", credentialId],
     queryFn: () =>
       apiClient.get<CredentialDetails>(
-        `/v1/credentials/detail/${credentialId}`,
+        `/api/v1/credentials/${credentialId}`,
       ),
     enabled: !!credentialId,
     staleTime: 20_000,
@@ -137,21 +204,42 @@ export function useRequestCredential() {
 
   return useMutation({
     mutationFn: async (request: CredentialRequest) => {
-      const response = await apiClient.post<{ credentialId: string }>(
-        "/v1/credentials/request",
-        {
-          holderAddress: address,
-          issuerDid: request.issuerDid,
-          schemaId: request.schemaId,
-          claims: request.claims,
-          proofOfEligibility: request.proofOfEligibility,
-        },
-      );
+      const legacyRequest = request as LegacyCredentialRequest;
+      const subjectDid =
+        legacyRequest.subjectDid ?? (address ? toSubjectDid(address) : null);
+      if (!subjectDid) {
+        throw new Error("Wallet must be connected before requesting credentials");
+      }
+
+      const schemaId =
+        legacyRequest.schemaId && UUID_PATTERN.test(legacyRequest.schemaId)
+          ? legacyRequest.schemaId
+          : undefined;
+
+      const response = await apiClient.post<
+        Credential & { credentialId?: string }
+      >("/api/v1/credentials", {
+        credentialType: toCredentialType(
+          legacyRequest.credentialType ??
+            legacyRequest.schemaType ??
+            legacyRequest.schemaId,
+        ),
+        organizationId: legacyRequest.organizationId,
+        subjectDid,
+        claims: legacyRequest.claims,
+        expiresAt:
+          legacyRequest.expiresAt instanceof Date
+            ? legacyRequest.expiresAt.toISOString()
+            : legacyRequest.expiresAt,
+        schemaId,
+        issuerProof: legacyRequest.issuerProof,
+      });
       return response;
     },
     onSuccess: (data) => {
+      const credentialId = data.credentialId ?? data.id ?? data.hash;
       toast.success("Credential requested", {
-        description: `Request ${data.credentialId.slice(0, 12)}... submitted to issuer`,
+        description: `Request ${String(credentialId).slice(0, 12)}... submitted to issuer`,
       });
       queryClient.invalidateQueries({ queryKey: ["credentials", address] });
     },
@@ -180,9 +268,8 @@ export function useRevokeCredential() {
       });
 
       // Notify API to update cached status
-      await apiClient.post(`/v1/credentials/${credentialId}/revoke`, {
-        txHash: hash,
-        revokerAddress: address,
+      await apiClient.post(`/api/v1/credentials/${credentialId}/revoke`, {
+        reason: `Revoked by controller ${address ?? "unknown"} after on-chain transaction ${hash}`,
       });
 
       return hash;

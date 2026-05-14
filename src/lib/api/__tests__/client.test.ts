@@ -236,6 +236,22 @@ describe("request internals (tested via apiClient methods)", () => {
     }
   });
 
+  it("accepts backend data envelopes without a success flag", async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      json: jest.fn().mockResolvedValue({
+        data: { status: "healthy", version: "1.0" },
+        requestId: "zid-backend",
+      }),
+    });
+
+    const result = await apiClient.health();
+
+    expect(result).toEqual({ status: "healthy", version: "1.0" });
+  });
+
   it("does not set body on GET requests", async () => {
     mockFetch.mockResolvedValue(jsonResponse({ status: "ok" }));
     await apiClient.health();
@@ -276,9 +292,10 @@ describe("URL building", () => {
     await apiClient.listCredentials("0xsubject" as `0x${string}`, 2, 20);
     const [url] = mockFetch.mock.calls[0];
     const parsed = new URL(url);
-    expect(parsed.searchParams.get("subject")).toBe("0xsubject");
+    expect(parsed.searchParams.get("subject")).toBeNull();
     expect(parsed.searchParams.get("page")).toBe("2");
-    expect(parsed.searchParams.get("pageSize")).toBe("20");
+    expect(parsed.searchParams.get("limit")).toBe("20");
+    expect(parsed.searchParams.get("role")).toBe("subject");
   });
 
   it("omits empty/null/undefined query parameter values", async () => {
@@ -442,23 +459,41 @@ describe("apiClient.registerIdentity()", () => {
 });
 
 describe("apiClient.listCredentials()", () => {
-  it("passes subject, page, and pageSize as query params", async () => {
-    mockFetch.mockResolvedValue(jsonResponse({ items: [], total: 0 }));
-    await apiClient.listCredentials("0xsub" as `0x${string}`, 3, 5);
+  it("passes backend pagination and role query params", async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      json: jest.fn().mockResolvedValue({
+        data: [{ id: "cred-1" }],
+        pagination: { page: 3, limit: 5, total: 11, totalPages: 3 },
+      }),
+    });
+
+    const result = await apiClient.listCredentials("0xsub" as `0x${string}`, 3, 5);
+
     const [url] = mockFetch.mock.calls[0];
     const parsed = new URL(url);
-    expect(parsed.searchParams.get("subject")).toBe("0xsub");
     expect(parsed.searchParams.get("page")).toBe("3");
-    expect(parsed.searchParams.get("pageSize")).toBe("5");
+    expect(parsed.searchParams.get("limit")).toBe("5");
+    expect(parsed.searchParams.get("role")).toBe("subject");
+    expect(parsed.searchParams.get("subject")).toBeNull();
+    expect(result).toEqual({
+      items: [{ id: "cred-1" }],
+      total: 11,
+      page: 3,
+      pageSize: 5,
+      hasMore: false,
+    });
   });
 
   it("uses default page=1, pageSize=12 when not specified", async () => {
-    mockFetch.mockResolvedValue(jsonResponse({ items: [], total: 0 }));
+    mockFetch.mockResolvedValue(jsonResponse([]));
     await apiClient.listCredentials("0xsub" as `0x${string}`);
     const [url] = mockFetch.mock.calls[0];
     const parsed = new URL(url);
     expect(parsed.searchParams.get("page")).toBe("1");
-    expect(parsed.searchParams.get("pageSize")).toBe("12");
+    expect(parsed.searchParams.get("limit")).toBe("12");
   });
 });
 

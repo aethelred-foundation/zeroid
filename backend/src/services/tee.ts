@@ -4,6 +4,7 @@ import * as https from 'https';
 import * as net from 'net';
 import { promises as dns } from 'dns';
 import { Counter, Histogram } from 'prom-client';
+import { isProductionRuntime } from './production-safety';
 
 // ---------------------------------------------------------------------------
 // Prometheus metrics — TEE attestation observability
@@ -198,7 +199,7 @@ const ATTESTATION_VALIDITY_HOURS = parseInt(
   process.env.TEE_ATTESTATION_VALIDITY_HOURS ?? '24',
   10,
 );
-const IS_PRODUCTION = process.env.NODE_ENV === 'production';
+const IS_PRODUCTION = isProductionRuntime();
 const PRIVATE_COLLATERAL_HOSTNAME_SUFFIXES = [
   '.corp',
   '.home',

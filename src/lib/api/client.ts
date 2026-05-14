@@ -36,6 +36,21 @@ import { withRetry, withTimeout } from "@/lib/utils";
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_RETRIES = 2;
 
+type BackendPagination = {
+  page?: number;
+  limit?: number;
+  total?: number;
+  totalPages?: number;
+};
+
+type BackendResponseEnvelope<T> = Partial<ApiResponse<T>> & {
+  data?: T;
+  message?: string;
+  code?: string;
+  details?: Record<string, unknown>;
+  pagination?: BackendPagination;
+};
+
 // ============================================================================
 // Error Class
 // ============================================================================
@@ -131,7 +146,7 @@ async function request<T>(
     `ZeroID API request timed out after ${timeoutMs}ms (${method} ${path})`,
   );
 
-  let json: ApiResponse<T>;
+  let json: BackendResponseEnvelope<T> | T;
   try {
     json = await response.json();
   } catch {
@@ -144,21 +159,43 @@ async function request<T>(
     );
   }
 
-  if (!response.ok || !json.success) {
-    const error = json.error || {
-      code: "UNKNOWN",
-      message: response.statusText,
-    };
+  const payload = json as BackendResponseEnvelope<T>;
+  const explicitFailure = payload.success === false;
+
+  if (!response.ok || explicitFailure) {
+    const errorPayload = payload.error;
+    const error =
+      typeof errorPayload === "object" && errorPayload !== null
+        ? errorPayload
+        : {
+            code: payload.code ?? "UNKNOWN",
+            message:
+              typeof errorPayload === "string"
+                ? errorPayload
+                : payload.message ?? response.statusText,
+            details: payload.details,
+          };
     throw new ZeroIDApiError(
       error.message,
       error.code,
       response.status,
       error.details,
-      json.requestId || requestId,
+      payload.requestId || requestId,
     );
   }
 
-  return json;
+  const hasDataEnvelope =
+    payload &&
+    typeof payload === "object" &&
+    Object.prototype.hasOwnProperty.call(payload, "data");
+
+  return {
+    ...(payload && typeof payload === "object" ? payload : {}),
+    success: true,
+    data: hasDataEnvelope ? payload.data : (json as T),
+    timestamp: payload.timestamp ?? new Date().toISOString(),
+    requestId: payload.requestId ?? requestId,
+  } as ApiResponse<T>;
 }
 
 /** GET with automatic retry */
@@ -264,16 +301,34 @@ export const apiClient = {
 
   /** List credentials for a subject */
   async listCredentials(
-    subjectDidHash: Bytes32,
+    _subjectDidHash: Bytes32,
     page = 1,
     pageSize = 12,
     authToken?: string,
   ): Promise<PaginatedResponse<Credential>> {
-    return get<PaginatedResponse<Credential>>(
-      `/api/v1/credentials`,
-      { subject: subjectDidHash, page, pageSize },
-      authToken,
+    const result = await withRetry(
+      () =>
+        request<Credential[]>("GET", "/api/v1/credentials", {
+          params: { page, limit: pageSize, role: "subject" },
+          authToken,
+        }),
+      DEFAULT_RETRIES,
     );
+    const pagination = (result as ApiResponse<Credential[]> & {
+      pagination?: BackendPagination;
+    }).pagination;
+    const items = result.data ?? [];
+    const resolvedPage = pagination?.page ?? page;
+    const resolvedPageSize = pagination?.limit ?? pageSize;
+    const total = pagination?.total ?? items.length;
+
+    return {
+      items,
+      total,
+      page: resolvedPage,
+      pageSize: resolvedPageSize,
+      hasMore: resolvedPage * resolvedPageSize < total,
+    };
   },
 
   /** Get a single credential by hash */

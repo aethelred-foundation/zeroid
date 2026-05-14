@@ -6,9 +6,7 @@ import {
   EnterpriseSigningError,
   type EnterpriseKmsProvider,
 } from './enterprise/enterprise-key-signer';
-
-const isProductionRuntime = (): boolean =>
-  process.env.NODE_ENV === 'production';
+import { isProductionRuntime } from './production-safety';
 
 const allowLegacyPlatformCredentialVerification = (): boolean =>
   process.env.ALLOW_LEGACY_PLATFORM_CREDENTIAL_SIGNING === 'true' &&
@@ -2057,7 +2055,7 @@ export class CredentialService {
     // IMPORTANT: This flag MUST be removed before external audit.
     if (
       process.env.ALLOW_LEGACY_HMAC_CREDENTIAL_SIGNING === 'true' &&
-      process.env.NODE_ENV !== 'production'
+      !isProductionRuntime()
     ) {
       logger.error(
         'CRITICAL_SECURITY_WARNING: legacy_hmac_credential_signing_enabled — ' +
@@ -2068,7 +2066,7 @@ export class CredentialService {
 
     if (
       process.env.ALLOW_LEGACY_HMAC_CREDENTIAL_SIGNING === 'true' &&
-      process.env.NODE_ENV === 'production'
+      isProductionRuntime()
     ) {
       logger.error(
         'CRITICAL_SECURITY_VIOLATION: legacy HMAC credential signing is blocked in production',

@@ -7,6 +7,7 @@ import {
   type EnterpriseKmsProvider,
   type EnterpriseSigningAlgorithm,
 } from './enterprise-key-signer';
+import { isProductionRuntime } from '../production-safety';
 
 export type RegulatorySubmissionSigningScope = 'organization_authority' | 'authority' | 'jurisdiction' | 'global';
 export type RegulatorySubmissionSigningAlgorithm = 'hmac-sha256' | 'RS256' | 'PS256' | 'ES256' | 'EdDSA';
@@ -277,7 +278,7 @@ async function buildEnterpriseSigningContext(
     publicKey: options?.publicKey,
     defaultVerificationMethod: buildDefaultBundleVerificationMethod(keyId),
     verificationMethod: process.env[candidate.verificationMethodEnvKey]?.trim(),
-    allowLocalSigning: options?.allowLocalSigning ?? process.env.NODE_ENV !== 'production',
+    allowLocalSigning: options?.allowLocalSigning ?? !isProductionRuntime(),
     signingUnavailableMessage: 'Regulatory submission bundle signing private key is not configured.',
     signingUnavailableCode: 'REG_SUBMISSION_SIGNING_UNAVAILABLE',
     kmsConfigMissingCode: 'REG_SUBMISSION_KMS_CONFIG_MISSING',
@@ -320,7 +321,7 @@ async function resolveRegulatorySubmissionSigningContext(
       return buildEnterpriseSigningContext(candidate, keyId, 'local', {
         privateKey: rawPrivateKey,
         publicKey: process.env[candidate.publicKeyEnvKey],
-        allowLocalSigning: process.env.NODE_ENV !== 'production',
+        allowLocalSigning: !isProductionRuntime(),
       });
     }
 
@@ -335,7 +336,7 @@ async function resolveRegulatorySubmissionSigningContext(
 
     const secret = process.env[candidate.secretEnvKey];
     if (secret && secret.length >= 16) {
-      if (process.env.NODE_ENV === 'production') {
+      if (isProductionRuntime()) {
         throw new Error('HMAC regulatory submission bundle signing is blocked in production. Configure asymmetric signing material.');
       }
       return {
@@ -348,7 +349,7 @@ async function resolveRegulatorySubmissionSigningContext(
     }
   }
 
-  if (process.env.NODE_ENV !== 'production') {
+  if (!isProductionRuntime()) {
     const authoritySegment = input.authority ? sanitizeSigningSegment(input.authority) : '';
     const jurisdictionSegment = sanitizeSigningSegment(input.filingJurisdiction);
     const fallbackScope: RegulatorySubmissionSigningScope = authoritySegment.length > 0

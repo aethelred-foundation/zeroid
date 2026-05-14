@@ -218,6 +218,8 @@ const REGULATORY_KB: RegulatoryKBEntry[] = [
 
 export class ComplianceAdvisorService {
   private alerts: Map<string, ComplianceAlert> = new Map();
+  private readonly alertTtlSeconds = 180 * 86400;
+  private readonly activeAlertSetKey = 'compliance:alerts:active';
 
   // -------------------------------------------------------------------------
   // Sanctions & PEP screening
@@ -895,8 +897,11 @@ export class ComplianceAdvisorService {
   // Compliance alerts management
   // -------------------------------------------------------------------------
   async getActiveAlerts(entityId?: string): Promise<ComplianceAlert[]> {
-    let alerts = Array.from(this.alerts.values())
-      .filter((a) => !a.resolvedAt);
+    let alerts = await this.getRedisBackedActiveAlerts();
+    if (alerts.length === 0) {
+      alerts = Array.from(this.alerts.values())
+        .filter((a) => !a.resolvedAt);
+    }
 
     if (entityId) {
       alerts = alerts.filter((a) => a.entityId === entityId);
@@ -906,7 +911,7 @@ export class ComplianceAdvisorService {
   }
 
   async acknowledgeAlert(alertId: string, actorId: string): Promise<ComplianceAlert> {
-    const alert = this.alerts.get(alertId);
+    const alert = await this.loadComplianceAlert(alertId);
     if (!alert || alert.resolvedAt) {
       throw new ComplianceAdvisorError(
         'Compliance alert not found',
@@ -917,7 +922,7 @@ export class ComplianceAdvisorService {
 
     if (!alert.acknowledgedAt) {
       alert.acknowledgedAt = new Date();
-      this.alerts.set(alertId, alert);
+      await this.persistComplianceAlert(alert);
     }
 
     logger.info('compliance_alert_acknowledged', {
@@ -950,7 +955,7 @@ export class ComplianceAdvisorService {
       createdAt: new Date(),
     };
 
-    this.alerts.set(alert.alertId, alert);
+    await this.persistComplianceAlert(alert);
 
     logger.warn('compliance_alert_created', {
       alertId: alert.alertId,
@@ -961,6 +966,131 @@ export class ComplianceAdvisorService {
     });
 
     return alert;
+  }
+
+  private complianceAlertKey(alertId: string): string {
+    return `compliance:alert:${alertId}`;
+  }
+
+  private serializeComplianceAlert(alert: ComplianceAlert): string {
+    return JSON.stringify({
+      ...alert,
+      createdAt: alert.createdAt.toISOString(),
+      acknowledgedAt: alert.acknowledgedAt?.toISOString(),
+      resolvedAt: alert.resolvedAt?.toISOString(),
+    });
+  }
+
+  private parseComplianceAlert(raw: string | null): ComplianceAlert | null {
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw) as Partial<ComplianceAlert>;
+      if (
+        typeof parsed.alertId !== 'string' ||
+        typeof parsed.entityId !== 'string' ||
+        typeof parsed.level !== 'string' ||
+        typeof parsed.category !== 'string' ||
+        typeof parsed.title !== 'string' ||
+        typeof parsed.description !== 'string' ||
+        typeof parsed.regulation !== 'string' ||
+        typeof parsed.actionRequired !== 'string' ||
+        !parsed.createdAt
+      ) {
+        return null;
+      }
+
+      return {
+        alertId: parsed.alertId,
+        entityId: parsed.entityId,
+        level: parsed.level as ComplianceAlertLevel,
+        category: parsed.category,
+        title: parsed.title,
+        description: parsed.description,
+        regulation: parsed.regulation,
+        actionRequired: parsed.actionRequired,
+        createdAt: new Date(parsed.createdAt),
+        acknowledgedAt: parsed.acknowledgedAt
+          ? new Date(parsed.acknowledgedAt)
+          : undefined,
+        resolvedAt: parsed.resolvedAt ? new Date(parsed.resolvedAt) : undefined,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private async persistComplianceAlert(alert: ComplianceAlert): Promise<void> {
+    this.alerts.set(alert.alertId, alert);
+
+    try {
+      await redis.set(
+        this.complianceAlertKey(alert.alertId),
+        this.serializeComplianceAlert(alert),
+        'EX',
+        this.alertTtlSeconds,
+      );
+
+      if (alert.resolvedAt) {
+        await redis.srem(this.activeAlertSetKey, alert.alertId);
+      } else {
+        await redis.sadd(this.activeAlertSetKey, alert.alertId);
+        await redis.expire(this.activeAlertSetKey, this.alertTtlSeconds);
+      }
+    } catch (err) {
+      logger.error('compliance_alert_persist_error', {
+        alertId: alert.alertId,
+        error: (err as Error).message,
+      });
+    }
+  }
+
+  private async loadComplianceAlert(alertId: string): Promise<ComplianceAlert | null> {
+    try {
+      const alert = this.parseComplianceAlert(
+        await redis.get(this.complianceAlertKey(alertId)),
+      );
+      if (alert) {
+        this.alerts.set(alert.alertId, alert);
+        return alert;
+      }
+    } catch (err) {
+      logger.warn('compliance_alert_load_failed', {
+        alertId,
+        error: (err as Error).message,
+      });
+    }
+
+    return this.alerts.get(alertId) ?? null;
+  }
+
+  private async getRedisBackedActiveAlerts(): Promise<ComplianceAlert[]> {
+    try {
+      const alertIds = await redis.smembers(this.activeAlertSetKey);
+      if (alertIds.length === 0) return [];
+
+      const alerts = await Promise.all(
+        alertIds.map(async (alertId) => {
+          const alert = this.parseComplianceAlert(
+            await redis.get(this.complianceAlertKey(alertId)),
+          );
+          if (!alert) {
+            await redis.srem(this.activeAlertSetKey, alertId);
+            return null;
+          }
+          this.alerts.set(alert.alertId, alert);
+          return alert;
+        }),
+      );
+
+      return alerts.filter(
+        (alert): alert is ComplianceAlert => Boolean(alert && !alert.resolvedAt),
+      );
+    } catch (err) {
+      logger.warn('compliance_alerts_active_load_failed', {
+        error: (err as Error).message,
+      });
+      return [];
+    }
   }
 
   // -------------------------------------------------------------------------
