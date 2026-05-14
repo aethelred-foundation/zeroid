@@ -52,6 +52,20 @@ export function buildBackendHeaders(
   return headers;
 }
 
+export async function readJsonObjectBody(
+  request: Request,
+): Promise<Record<string, unknown> | null> {
+  try {
+    const body = await request.json();
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      return null;
+    }
+    return body as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
 export async function readBackendError(
   response: Response,
   fallback: string,

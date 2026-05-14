@@ -4,12 +4,20 @@ import {
   buildBackendHeaders,
   getBackendApiBaseUrl,
   readBackendError,
+  readJsonObjectBody,
   requireAuthorization,
 } from "../../_lib/backend";
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
+    const body = await readJsonObjectBody(request);
+    if (!body) {
+      return NextResponse.json(
+        { error: "Request body must be a JSON object" },
+        { status: 400 },
+      );
+    }
+
     const credentialId = body.credentialId ?? body.credentialHash;
     const { proof, attributeName } = body;
 

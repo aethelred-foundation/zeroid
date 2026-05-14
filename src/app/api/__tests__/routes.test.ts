@@ -216,7 +216,7 @@ describe("POST /api/credential/verify", () => {
     expect(data.error).toBe("Internal server error");
   });
 
-  it("returns 500 when request body is invalid JSON", async () => {
+  it("returns 400 when request body is invalid JSON", async () => {
     const request = new Request("http://localhost/api/credential/verify", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -224,7 +224,10 @@ describe("POST /api/credential/verify", () => {
     });
 
     const response = await POST(request);
-    expect(response.status).toBe(500);
+    const data = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(data.error).toBe("Request body must be a JSON object");
   });
 });
 
@@ -442,7 +445,7 @@ describe("POST /api/proof/generate", () => {
     expect(data.error).toBe("Internal server error");
   });
 
-  it("returns 500 when request body is invalid JSON", async () => {
+  it("returns 400 when request body is invalid JSON", async () => {
     const request = new Request("http://localhost/api/proof/generate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -450,7 +453,10 @@ describe("POST /api/proof/generate", () => {
     });
 
     const response = await POST(request);
-    expect(response.status).toBe(500);
+    const data = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(data.error).toBe("Request body must be a JSON object");
   });
 
   it("uses default development backend URL when env var is not set", async () => {
