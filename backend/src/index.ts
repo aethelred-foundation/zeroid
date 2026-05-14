@@ -160,14 +160,14 @@ app.use(helmet({
 app.use(cors({
   origin: getAllowedCorsOrigins(),
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-Id'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-Id', 'X-Zeroid-Org-Id'],
   credentials: true,
   maxAge: 86400,
 }));
 
 // Body parsing
 app.use(express.json({ limit: '2mb' }));
-app.use(express.urlencoded({ extended: true, limit: '2mb' }));
+app.use(express.urlencoded({ extended: true, limit: '2mb', parameterLimit: 100 }));
 
 // Compression
 app.use(compression());
@@ -418,12 +418,17 @@ async function shutdown(signal: string): Promise<void> {
   process.exit(0);
 }
 
-process.on('SIGTERM', () => shutdown('SIGTERM'));
-process.on('SIGINT', () => shutdown('SIGINT'));
-process.on('unhandledRejection', (reason) => {
-  logger.error('Unhandled rejection', { reason });
-});
+function registerProcessHandlers(): void {
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
+  process.on('unhandledRejection', (reason) => {
+    logger.error('Unhandled rejection', { reason });
+  });
+}
 
-bootstrap();
+if (require.main === module) {
+  registerProcessHandlers();
+  void bootstrap();
+}
 
 export default app;
