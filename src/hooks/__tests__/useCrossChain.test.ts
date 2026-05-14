@@ -34,6 +34,17 @@ jest.mock("sonner", () => ({
 const mockToast = jest.requireMock("sonner").toast;
 
 jest.mock("@/lib/api/client", () => ({
+  ZeroIDApiError: class ZeroIDApiError extends Error {
+    code: string;
+    statusCode: number;
+
+    constructor(message: string, code: string, statusCode: number) {
+      super(message);
+      this.name = "ZeroIDApiError";
+      this.code = code;
+      this.statusCode = statusCode;
+    }
+  },
   apiClient: {
     get: jest.fn(),
     post: jest.fn(),
@@ -84,25 +95,17 @@ beforeEach(() => {
 // ===========================================================================
 
 describe("useSupportedChains", () => {
-  const mockChains = [
-    {
-      chainId: 1,
-      name: "Ethereum",
-      shortName: "ETH",
-      network: "mainnet",
-      isActive: true,
-    },
-  ];
-
-  it("fetches supported chains", async () => {
-    mockApiClient.get.mockResolvedValue(mockChains);
+  it("fails closed instead of calling a stale bridge chain route", async () => {
     const { result } = renderHook(() => useSupportedChains(), {
       wrapper: createWrapper(),
     });
 
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(mockApiClient.get).toHaveBeenCalledWith("/api/v1/bridge/chains");
-    expect(result.current.data).toEqual(mockChains);
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(result.current.error).toMatchObject({
+      code: "BRIDGE_CHAIN_DISCOVERY_UNAVAILABLE",
+      statusCode: 501,
+    });
+    expect(mockApiClient.get).not.toHaveBeenCalled();
   });
 });
 
@@ -111,91 +114,58 @@ describe("useSupportedChains", () => {
 // ===========================================================================
 
 describe("useBridgeCredential", () => {
-  const mockBridgeTx = {
-    id: "bridge-1",
-    credentialId: "cred-1",
-    credentialSchemaName: "KYC",
-    sourceChainId: 1,
-    destinationChainId: 137,
-    sourceChainName: "Ethereum",
-    destinationChainName: "Polygon",
-    status: "pending",
-    priority: "standard",
-    sourceTxHash: "0xtx",
-    initiatedAt: "2026-01-01T00:00:00Z",
-    estimatedCompletionAt: "2026-01-01T01:00:00Z",
-    fee: {
-      baseFee: "0.01",
-      priorityFee: "0",
-      totalFee: "0.01",
-      feeCurrency: "ETH",
-      feeUSD: 30,
-    },
-    sourceConfirmations: 0,
-    requiredConfirmations: 12,
-  };
-
-  it("initiates bridge on-chain and via API", async () => {
-    mockWriteContractAsync.mockResolvedValue("0xtxhash");
-    mockApiClient.post.mockResolvedValue(mockBridgeTx);
+  it("fails closed before submitting any bridge transaction", async () => {
     const { result } = renderHook(() => useBridgeCredential(), {
       wrapper: createWrapper(),
     });
 
     await act(async () => {
-      await result.current.mutateAsync({
-        credentialId: "cred-1",
-        destinationChainId: 137,
-        priority: "standard" as const,
-        preservePrivacy: true,
+      await expect(
+        result.current.mutateAsync({
+          credentialId: "cred-1",
+          destinationChainId: 137,
+          priority: "standard" as const,
+          preservePrivacy: true,
+        }),
+      ).rejects.toMatchObject({
+        code: "BRIDGE_INITIATE_UNAVAILABLE",
+        statusCode: 501,
       });
     });
 
-    expect(mockWriteContractAsync).toHaveBeenCalled();
-    expect(mockApiClient.post).toHaveBeenCalledWith(
-      "/api/v1/bridge/initiate",
-      expect.objectContaining({
-        credentialId: "cred-1",
-        destinationChainId: 137,
-        sourceTxHash: "0xtxhash",
-      }),
-    );
-    expect(mockToast.success).toHaveBeenCalledWith("Bridge initiated", {
-      description: expect.stringContaining("Polygon"),
+    expect(mockWriteContractAsync).not.toHaveBeenCalled();
+    expect(mockApiClient.post).not.toHaveBeenCalled();
+    expect(mockToast.error).toHaveBeenCalledWith("Bridge initiation failed", {
+      description: expect.stringContaining("not exposed"),
     });
+    expect(mockToast.success).not.toHaveBeenCalled();
   });
 
-  it("uses recipientAddress when provided", async () => {
+  it("does not submit a transaction when recipientAddress is provided", async () => {
     const customRecipient = "0xCustomRecipient" as any;
-    mockWriteContractAsync.mockResolvedValue("0xtxhash2");
-    mockApiClient.post.mockResolvedValue({
-      ...mockBridgeTx,
-      id: "bridge-2",
-    });
     const { result } = renderHook(() => useBridgeCredential(), {
       wrapper: createWrapper(),
     });
 
     await act(async () => {
-      await result.current.mutateAsync({
-        credentialId: "cred-1",
-        destinationChainId: 137,
-        recipientAddress: customRecipient,
-        priority: "standard" as const,
-        preservePrivacy: true,
-      });
+      try {
+        await result.current.mutateAsync({
+          credentialId: "cred-1",
+          destinationChainId: 137,
+          recipientAddress: customRecipient,
+          priority: "standard" as const,
+          preservePrivacy: true,
+        });
+      } catch {
+        // Expected
+      }
     });
 
-    expect(mockApiClient.post).toHaveBeenCalledWith(
-      "/api/v1/bridge/initiate",
-      expect.objectContaining({
-        recipientAddress: customRecipient,
-      }),
-    );
+    expect(mockWriteContractAsync).not.toHaveBeenCalled();
+    expect(mockApiClient.post).not.toHaveBeenCalled();
   });
 
   it("shows error toast on failure", async () => {
-    mockWriteContractAsync.mockRejectedValue(new Error("User rejected"));
     const { result } = renderHook(() => useBridgeCredential(), {
       wrapper: createWrapper(),
     });
@@ -212,8 +182,9 @@ describe("useBridgeCredential", () => {
     });
 
     expect(mockToast.error).toHaveBeenCalledWith("Bridge initiation failed", {
-      description: "User rejected",
+      description: expect.stringContaining("not exposed"),
     });
+    expect(mockWriteContractAsync).not.toHaveBeenCalled();
   });
 });
 
@@ -222,19 +193,17 @@ describe("useBridgeCredential", () => {
 // ===========================================================================
 
 describe("useBridgeStatus", () => {
-  it("fetches bridge status by id", async () => {
-    mockApiClient.get.mockResolvedValue({
-      id: "bridge-1",
-      status: "completed",
-    });
+  it("fails closed instead of calling a stale status route", async () => {
     const { result } = renderHook(() => useBridgeStatus("bridge-1"), {
       wrapper: createWrapper(),
     });
 
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(mockApiClient.get).toHaveBeenCalledWith(
-      "/api/v1/bridge/status/bridge-1",
-    );
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(result.current.error).toMatchObject({
+      code: "BRIDGE_STATUS_UNAVAILABLE",
+      statusCode: 501,
+    });
+    expect(mockApiClient.get).not.toHaveBeenCalled();
   });
 
   it("is disabled when bridgeId is undefined", () => {
@@ -244,16 +213,13 @@ describe("useBridgeStatus", () => {
     expect(result.current.fetchStatus).toBe("idle");
   });
 
-  it("continues polling for in-progress bridge status", async () => {
-    mockApiClient.get.mockResolvedValue({ id: "bridge-1", status: "relaying" });
+  it("does not poll a stale in-progress bridge status route", async () => {
     const { result } = renderHook(() => useBridgeStatus("bridge-1"), {
       wrapper: createWrapper(),
     });
 
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(result.current.data).toEqual(
-      expect.objectContaining({ status: "relaying" }),
-    );
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(mockApiClient.get).not.toHaveBeenCalled();
   });
 });
 
@@ -262,17 +228,17 @@ describe("useBridgeStatus", () => {
 // ===========================================================================
 
 describe("useBridgedCredentials", () => {
-  it("fetches bridged credentials for connected address", async () => {
-    mockApiClient.get.mockResolvedValue([]);
+  it("fails closed instead of calling a stale bridged credentials route", async () => {
     const { result } = renderHook(() => useBridgedCredentials(), {
       wrapper: createWrapper(),
     });
 
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(mockApiClient.get).toHaveBeenCalledWith(
-      "/api/v1/bridge/credentials",
-      { owner: mockAddress },
-    );
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(result.current.error).toMatchObject({
+      code: "BRIDGE_CREDENTIALS_UNAVAILABLE",
+      statusCode: 501,
+    });
+    expect(mockApiClient.get).not.toHaveBeenCalled();
   });
 
   it("is disabled when no address", () => {
@@ -292,24 +258,17 @@ describe("useBridgedCredentials", () => {
 // ===========================================================================
 
 describe("useBridgeFeeEstimate", () => {
-  it("fetches fee estimate for credential and chain", async () => {
-    const mockEstimate = {
-      credentialId: "c-1",
-      destinationChainId: 137,
-      estimates: {},
-      estimatedTimes: {},
-      validUntil: "2026-01-01T00:00:00Z",
-    };
-    mockApiClient.get.mockResolvedValue(mockEstimate);
+  it("fails closed instead of calling a stale fee estimate route", async () => {
     const { result } = renderHook(() => useBridgeFeeEstimate("c-1", 137), {
       wrapper: createWrapper(),
     });
 
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(mockApiClient.get).toHaveBeenCalledWith("/api/v1/bridge/estimate", {
-      credentialId: "c-1",
-      destinationChainId: 137,
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(result.current.error).toMatchObject({
+      code: "BRIDGE_FEE_ESTIMATE_UNAVAILABLE",
+      statusCode: 501,
     });
+    expect(mockApiClient.get).not.toHaveBeenCalled();
   });
 
   it("is disabled when credentialId is undefined", () => {
@@ -333,60 +292,48 @@ describe("useBridgeFeeEstimate", () => {
 // ===========================================================================
 
 describe("useVerifyBridgedCredential", () => {
-  it("shows success toast when credential verified", async () => {
-    mockApiClient.post.mockResolvedValue({
-      credentialId: "c-1",
-      chainId: 137,
-      chainName: "Polygon",
-      verified: true,
-      verifiedAt: "2026-01-01T00:00:00Z",
-      integrityValid: true,
-      expiryValid: true,
-      issuerValid: true,
-      revocationChecked: true,
-      isRevoked: false,
-    });
+  it("fails closed instead of calling a stale bridge verification route", async () => {
     const { result } = renderHook(() => useVerifyBridgedCredential(), {
       wrapper: createWrapper(),
     });
 
     await act(async () => {
-      await result.current.mutateAsync({ credentialId: "c-1", chainId: 137 });
+      await expect(
+        result.current.mutateAsync({ credentialId: "c-1", chainId: 137 }),
+      ).rejects.toMatchObject({
+        code: "BRIDGE_VERIFY_UNAVAILABLE",
+        statusCode: 501,
+      });
     });
 
-    expect(mockToast.success).toHaveBeenCalledWith(
-      "Credential verified on destination chain",
-      {
-        description: expect.stringContaining("Polygon"),
-      },
+    expect(mockApiClient.post).not.toHaveBeenCalled();
+    expect(mockToast.error).toHaveBeenCalledWith(
+      "Cross-chain verification failed",
+      { description: expect.stringContaining("not exposed") },
     );
+    expect(mockToast.success).not.toHaveBeenCalled();
   });
 
-  it("shows error toast when verification fails", async () => {
-    mockApiClient.post.mockResolvedValue({
-      credentialId: "c-1",
-      chainId: 137,
-      chainName: "Polygon",
-      verified: false,
-    });
+  it("does not treat unsupported verification as a negative credential result", async () => {
     const { result } = renderHook(() => useVerifyBridgedCredential(), {
       wrapper: createWrapper(),
     });
 
     await act(async () => {
-      await result.current.mutateAsync({ credentialId: "c-1", chainId: 137 });
+      try {
+        await result.current.mutateAsync({ credentialId: "c-1", chainId: 137 });
+      } catch {
+        // Expected
+      }
     });
 
     expect(mockToast.error).toHaveBeenCalledWith(
-      "Credential verification failed",
-      {
-        description: expect.stringContaining("Polygon"),
-      },
+      "Cross-chain verification failed",
+      { description: expect.stringContaining("not exposed") },
     );
   });
 
-  it("shows error toast on network error", async () => {
-    mockApiClient.post.mockRejectedValue(new Error("Network error"));
+  it("shows error toast on unsupported verification", async () => {
     const { result } = renderHook(() => useVerifyBridgedCredential(), {
       wrapper: createWrapper(),
     });
@@ -399,7 +346,7 @@ describe("useVerifyBridgedCredential", () => {
 
     expect(mockToast.error).toHaveBeenCalledWith(
       "Cross-chain verification failed",
-      { description: "Network error" },
+      { description: expect.stringContaining("not exposed") },
     );
   });
 });

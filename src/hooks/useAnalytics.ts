@@ -6,10 +6,10 @@
  * recommendations, and encrypted report export.
  */
 
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { useAccount } from "wagmi";
 import { toast } from "sonner";
-import { apiClient } from "@/lib/api/client";
+import { ZeroIDApiError } from "@/lib/api/client";
 import type { ISODateString } from "@/types";
 
 // ---------------------------------------------------------------------------
@@ -186,6 +186,10 @@ const analyticsKeys = {
   recommendations: () => [...analyticsKeys.all, "recommendations"] as const,
 };
 
+function unsupportedAnalyticsFlow(message: string, code: string): never {
+  throw new ZeroIDApiError(message, code, 501);
+}
+
 // ---------------------------------------------------------------------------
 // Privacy Score
 // ---------------------------------------------------------------------------
@@ -195,10 +199,13 @@ export function usePrivacyScore() {
 
   return useQuery({
     queryKey: analyticsKeys.privacy(),
-    queryFn: () =>
-      apiClient.get<PrivacyScore>("/api/v1/analytics/privacy-score", {
-        owner: address as string,
-      }) as unknown as PrivacyScore,
+    queryFn: () => {
+      void address;
+      unsupportedAnalyticsFlow(
+        "Privacy score analytics are not exposed by the backend API.",
+        "ANALYTICS_PRIVACY_SCORE_UNAVAILABLE",
+      );
+    },
     enabled: !!address,
     staleTime: 120_000,
   });
@@ -213,14 +220,14 @@ export function useCredentialUsageAnalytics(period: AnalyticsPeriod = "30d") {
 
   return useQuery({
     queryKey: analyticsKeys.credentialUsage(period),
-    queryFn: () =>
-      apiClient.get<CredentialUsageAnalytics>(
-        "/api/v1/analytics/credential-usage",
-        {
-          owner: address as string,
-          period,
-        },
-      ) as unknown as CredentialUsageAnalytics,
+    queryFn: () => {
+      void address;
+      void period;
+      unsupportedAnalyticsFlow(
+        "Credential usage analytics are not exposed by the backend API.",
+        "ANALYTICS_CREDENTIAL_USAGE_UNAVAILABLE",
+      );
+    },
     enabled: !!address,
     staleTime: 60_000,
   });
@@ -235,10 +242,13 @@ export function useVerifierAnalytics() {
 
   return useQuery({
     queryKey: analyticsKeys.verifiers(),
-    queryFn: () =>
-      apiClient.get<VerifierAnalytics>("/api/v1/analytics/verifiers", {
-        owner: address as string,
-      }) as unknown as VerifierAnalytics,
+    queryFn: () => {
+      void address;
+      unsupportedAnalyticsFlow(
+        "Verifier analytics are not exposed by the backend API.",
+        "ANALYTICS_VERIFIERS_UNAVAILABLE",
+      );
+    },
     enabled: !!address,
     staleTime: 120_000,
   });
@@ -253,10 +263,13 @@ export function useDataExposureTimeline() {
 
   return useQuery({
     queryKey: analyticsKeys.exposure(),
-    queryFn: () =>
-      apiClient.get<DataExposureTimeline>("/api/v1/analytics/exposure", {
-        owner: address as string,
-      }) as unknown as DataExposureTimeline,
+    queryFn: () => {
+      void address;
+      unsupportedAnalyticsFlow(
+        "Data exposure analytics are not exposed by the backend API.",
+        "ANALYTICS_EXPOSURE_UNAVAILABLE",
+      );
+    },
     enabled: !!address,
     staleTime: 60_000,
   });
@@ -271,10 +284,13 @@ export function useNetworkBenchmarks() {
 
   return useQuery({
     queryKey: analyticsKeys.benchmarks(),
-    queryFn: () =>
-      apiClient.get<NetworkBenchmarks>("/api/v1/analytics/benchmarks", {
-        owner: address as string,
-      }) as unknown as NetworkBenchmarks,
+    queryFn: () => {
+      void address;
+      unsupportedAnalyticsFlow(
+        "Network benchmark analytics are not exposed by the backend API.",
+        "ANALYTICS_BENCHMARKS_UNAVAILABLE",
+      );
+    },
     enabled: !!address,
     staleTime: 300_000,
   });
@@ -289,13 +305,13 @@ export function usePrivacyRecommendations() {
 
   return useQuery({
     queryKey: analyticsKeys.recommendations(),
-    queryFn: () =>
-      apiClient.get<PrivacyRecommendation[]>(
-        "/api/v1/analytics/recommendations",
-        {
-          owner: address as string,
-        },
-      ) as unknown as PrivacyRecommendation[],
+    queryFn: () => {
+      void address;
+      unsupportedAnalyticsFlow(
+        "Privacy recommendations are not exposed by the backend API.",
+        "ANALYTICS_RECOMMENDATIONS_UNAVAILABLE",
+      );
+    },
     enabled: !!address,
     staleTime: 300_000,
   });
@@ -313,10 +329,11 @@ export function useExportAnalyticsReport() {
       sections?: string[];
       encryptionKey?: string;
     }): Promise<AnalyticsExport> => {
-      return apiClient.post<AnalyticsExport>(
-        "/api/v1/analytics/export",
-        params,
-      ) as unknown as AnalyticsExport;
+      void params;
+      unsupportedAnalyticsFlow(
+        "Analytics report export is not exposed by the backend API.",
+        "ANALYTICS_EXPORT_UNAVAILABLE",
+      );
     },
     onSuccess: (data) => {
       toast.success("Analytics report exported", {

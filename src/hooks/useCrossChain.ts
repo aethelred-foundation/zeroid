@@ -7,12 +7,10 @@
  */
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useAccount, useReadContract, useWriteContract } from "wagmi";
-import { type Address as ViemAddress, type Hash } from "viem";
+import { useAccount } from "wagmi";
 import { toast } from "sonner";
-import { apiClient } from "@/lib/api/client";
-import { CONTRACT_ADDRESSES } from "@/config/constants";
-import type { Address, Bytes32, ISODateString, UnixTimestamp } from "@/types";
+import { ZeroIDApiError } from "@/lib/api/client";
+import type { Address, Bytes32, ISODateString } from "@/types";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -140,6 +138,10 @@ const crossChainKeys = {
     [...crossChainKeys.all, "fee", credId, chainId] as const,
 };
 
+function unsupportedBridgeFlow(message: string, code: string): never {
+  throw new ZeroIDApiError(message, code, 501);
+}
+
 // ---------------------------------------------------------------------------
 // Supported Chains
 // ---------------------------------------------------------------------------
@@ -148,9 +150,10 @@ export function useSupportedChains() {
   return useQuery({
     queryKey: crossChainKeys.chains(),
     queryFn: () =>
-      apiClient.get<SupportedChain[]>(
-        "/api/v1/bridge/chains",
-      ) as unknown as SupportedChain[],
+      unsupportedBridgeFlow(
+        "Cross-chain bridge discovery is not exposed by the backend API.",
+        "BRIDGE_CHAIN_DISCOVERY_UNAVAILABLE",
+      ),
     staleTime: 600_000,
   });
 }
@@ -162,45 +165,15 @@ export function useSupportedChains() {
 export function useBridgeCredential() {
   const queryClient = useQueryClient();
   const { address } = useAccount();
-  const { writeContractAsync } = useWriteContract();
 
   return useMutation({
     mutationFn: async (request: BridgeRequest): Promise<BridgeTransaction> => {
-      const recipient = (request.recipientAddress ?? address) as
-        | ViemAddress
-        | undefined;
-      if (!recipient) {
-        throw new Error("Wallet must be connected before bridging credentials");
-      }
-
-      // 1. Initiate bridge on source chain
-      const txHash = await writeContractAsync({
-        address: CONTRACT_ADDRESSES.credentialRegistry as ViemAddress,
-        abi: BRIDGE_ABI,
-        functionName: "inititateBridge",
-        args: [
-          request.credentialId as `0x${string}`,
-          BigInt(request.destinationChainId),
-          recipient,
-          request.preservePrivacy,
-        ],
-      });
-
-      // 2. Register bridge with API for relay tracking
-      const bridgeTx = await apiClient.post<BridgeTransaction>(
-        "/api/v1/bridge/initiate",
-        {
-          credentialId: request.credentialId,
-          destinationChainId: request.destinationChainId,
-          sourceTxHash: txHash,
-          senderAddress: address,
-          recipientAddress: recipient,
-          priority: request.priority,
-          preservePrivacy: request.preservePrivacy,
-        },
+      void request;
+      void address;
+      unsupportedBridgeFlow(
+        "Cross-chain bridging is not exposed by the backend API; no bridge transaction was submitted.",
+        "BRIDGE_INITIATE_UNAVAILABLE",
       );
-
-      return bridgeTx as unknown as BridgeTransaction;
     },
     onSuccess: (data) => {
       toast.success("Bridge initiated", {
@@ -222,9 +195,10 @@ export function useBridgeStatus(bridgeId: string | undefined) {
   return useQuery({
     queryKey: crossChainKeys.bridge(bridgeId ?? ""),
     queryFn: () =>
-      apiClient.get<BridgeTransaction>(
-        `/api/v1/bridge/status/${bridgeId}`,
-      ) as unknown as BridgeTransaction,
+      unsupportedBridgeFlow(
+        "Cross-chain bridge status is not exposed by the backend API.",
+        "BRIDGE_STATUS_UNAVAILABLE",
+      ),
     enabled: !!bridgeId,
     staleTime: 5_000,
     refetchInterval: (query) => {
@@ -252,9 +226,10 @@ export function useBridgedCredentials() {
   return useQuery({
     queryKey: crossChainKeys.bridged(),
     queryFn: () =>
-      apiClient.get<BridgedCredential[]>("/api/v1/bridge/credentials", {
-        owner: address as string,
-      }) as unknown as BridgedCredential[],
+      unsupportedBridgeFlow(
+        "Bridged credential inventory is not exposed by the backend API.",
+        "BRIDGE_CREDENTIALS_UNAVAILABLE",
+      ),
     enabled: !!address,
     staleTime: 30_000,
   });
@@ -271,10 +246,10 @@ export function useBridgeFeeEstimate(
   return useQuery({
     queryKey: crossChainKeys.fee(credentialId ?? "", destinationChainId ?? 0),
     queryFn: () =>
-      apiClient.get<BridgeFeeEstimate>(`/api/v1/bridge/estimate`, {
-        credentialId: credentialId!,
-        destinationChainId: destinationChainId!,
-      }) as unknown as BridgeFeeEstimate,
+      unsupportedBridgeFlow(
+        "Cross-chain bridge fee estimation is not exposed by the backend API.",
+        "BRIDGE_FEE_ESTIMATE_UNAVAILABLE",
+      ),
     enabled: !!credentialId && !!destinationChainId,
     staleTime: 30_000,
   });
@@ -290,10 +265,11 @@ export function useVerifyBridgedCredential() {
       credentialId: string;
       chainId: number;
     }): Promise<CrossChainVerification> => {
-      return apiClient.post<CrossChainVerification>(
-        "/api/v1/bridge/verify",
-        params,
-      ) as unknown as CrossChainVerification;
+      void params;
+      unsupportedBridgeFlow(
+        "Cross-chain credential verification is not exposed by the backend API.",
+        "BRIDGE_VERIFY_UNAVAILABLE",
+      );
     },
     onSuccess: (data) => {
       if (data.verified) {
@@ -313,33 +289,3 @@ export function useVerifyBridgedCredential() {
     },
   });
 }
-
-// ---------------------------------------------------------------------------
-// Minimal Bridge ABI
-// ---------------------------------------------------------------------------
-
-const BRIDGE_ABI = [
-  {
-    name: "inititateBridge",
-    type: "function",
-    stateMutability: "payable",
-    inputs: [
-      { name: "credentialId", type: "bytes32" },
-      { name: "destinationChainId", type: "uint256" },
-      { name: "recipient", type: "address" },
-      { name: "preservePrivacy", type: "bool" },
-    ],
-    outputs: [{ name: "bridgeNonce", type: "uint256" }],
-  },
-  {
-    name: "getBridgeStatus",
-    type: "function",
-    stateMutability: "view",
-    inputs: [{ name: "bridgeNonce", type: "uint256" }],
-    outputs: [
-      { name: "status", type: "uint8" },
-      { name: "destinationChainId", type: "uint256" },
-      { name: "timestamp", type: "uint256" },
-    ],
-  },
-] as const;
