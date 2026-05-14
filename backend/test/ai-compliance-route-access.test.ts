@@ -3,6 +3,7 @@ import request from 'supertest';
 
 const mockResolveContext = jest.fn();
 const mockScreenIdentity = jest.fn();
+const mockAcknowledgeAlert = jest.fn();
 
 class MockEnterpriseOrganizationError extends Error {
   constructor(
@@ -63,6 +64,7 @@ jest.mock('../src/services/ai/compliance-advisor', () => ({
     computeComplianceScore: jest.fn(),
     queryComplianceAdvisor: jest.fn(),
     getActiveAlerts: jest.fn(),
+    acknowledgeAlert: mockAcknowledgeAlert,
     simulateRegulatoryChange: jest.fn(),
   },
 }));
@@ -154,5 +156,41 @@ describe('AI compliance route enterprise access control', () => {
       ['operator', 'admin', 'compliance_officer'],
     );
     expect(mockScreenIdentity).toHaveBeenCalledWith(screenBody);
+  });
+
+  it('acknowledges an alert for a resolved write role', async () => {
+    mockResolveContext.mockResolvedValue({
+      organizationId: 'org-1',
+      identityId: '550e8400-e29b-41d4-a716-446655440001',
+      role: 'compliance_officer',
+    });
+    mockAcknowledgeAlert.mockResolvedValue({
+      alertId: 'alert-123',
+      entityId: '550e8400-e29b-41d4-a716-446655440000',
+      level: 'warning',
+      category: 'sanctions',
+      title: 'Review required',
+      description: 'Potential match',
+      regulation: 'FATF',
+      actionRequired: 'Review',
+      createdAt: new Date('2026-05-03T00:00:00.000Z'),
+      acknowledgedAt: new Date('2026-05-03T00:05:00.000Z'),
+    });
+
+    const response = await request(createApp())
+      .post('/ai/compliance/alerts/alert-123/acknowledge')
+      .send({})
+      .expect(200);
+
+    expect(response.body.success).toBe(true);
+    expect(mockResolveContext).toHaveBeenCalledWith(
+      '550e8400-e29b-41d4-a716-446655440001',
+      undefined,
+      ['operator', 'admin', 'compliance_officer'],
+    );
+    expect(mockAcknowledgeAlert).toHaveBeenCalledWith(
+      'alert-123',
+      '550e8400-e29b-41d4-a716-446655440001',
+    );
   });
 });

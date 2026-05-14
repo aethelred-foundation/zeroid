@@ -43,6 +43,10 @@ const RiskAssessmentParamsSchema = z.object({
   identityId: z.string().uuid(),
 });
 
+const AlertParamsSchema = z.object({
+  alertId: z.string().min(1).max(120),
+});
+
 const RiskAssessmentQuerySchema = z.object({
   jurisdiction: z.string().min(2).max(10).optional(),
   entityType: z.enum(['identity', 'credential', 'transaction']).default('identity'),
@@ -268,6 +272,40 @@ router.get(
           complianceAlertCount: complianceAlerts.length,
           fraudAlertCount: fraudAlerts.length,
         },
+      });
+    } catch (error) {
+      handleError(error, res);
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// POST /ai/compliance/alerts/:alertId/acknowledge
+// Acknowledge a compliance alert without resolving it
+// ---------------------------------------------------------------------------
+router.post(
+  '/alerts/:alertId/acknowledge',
+  validate({ params: AlertParamsSchema }),
+  requireEnterpriseContext(COMPLIANCE_WRITE_ROLES),
+  async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    try {
+      if (!req.identity?.id) {
+        res.status(401).json({
+          error: 'UNAUTHENTICATED',
+          message: 'Authentication required',
+        });
+        return;
+      }
+
+      const { alertId } = req.params as { alertId: string };
+      const alert = await complianceAdvisorService.acknowledgeAlert(
+        alertId,
+        req.identity.id,
+      );
+
+      res.json({
+        success: true,
+        data: alert,
       });
     } catch (error) {
       handleError(error, res);

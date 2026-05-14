@@ -1,7 +1,7 @@
 /**
  * useAICompliance — Unit Tests
  *
- * Tests for all AI compliance hooks: screening, risk assessment, copilot,
+ * Tests for all AI compliance hooks: screening, risk assessment, advisor,
  * alerts, report generation, and regulatory change simulation.
  */
 
@@ -43,7 +43,7 @@ import {
   useScreenIdentity,
   useRiskAssessment,
   useRefreshRiskAssessment,
-  useComplianceCopilot,
+  useComplianceAdvisor,
   useComplianceAlerts,
   useAcknowledgeAlert,
   useGenerateReport,
@@ -76,46 +76,56 @@ beforeEach(() => {
 
 describe("useScreenIdentity", () => {
   const cleanResult = {
+    screeningId: "scr-1",
     identityId: "id-1",
-    sanctionsHit: false,
-    pepHit: false,
-    adverseMediaHits: 0,
-    matchedEntities: [],
+    result: "clear",
+    matchScore: 0,
+    matchedLists: [],
+    pepMatches: [],
+    adverseMedia: [],
+    riskIndicators: [],
     screenedAt: "2026-01-01T00:00:00Z",
     expiresAt: "2026-02-01T00:00:00Z",
-    confidence: 0.99,
+    listsChecked: ["ofac_sdn"],
   };
 
   const flaggedResult = {
     ...cleanResult,
-    sanctionsHit: true,
-    matchedEntities: [
+    result: "potential_match",
+    matchScore: 95,
+    matchedLists: [
       {
-        name: "Entity A",
+        listName: "OFAC SDN",
         listSource: "OFAC",
-        matchScore: 0.95,
-        category: "sanctions",
-        jurisdiction: "US",
+        matchedName: "Entity A",
+        matchConfidence: 0.95,
+        entityType: "individual",
+        sanctions: ["asset_freeze"],
+        listedSince: "2025-01-01T00:00:00Z",
+        lastUpdated: "2026-01-01T00:00:00Z",
       },
     ],
   };
 
-  it("calls API with identityId and screeningTypes", async () => {
+  it("calls API with the screening identity payload", async () => {
     mockApiClient.post.mockResolvedValue(cleanResult);
     const { result } = renderHook(() => useScreenIdentity(), {
       wrapper: createWrapper(),
     });
+    const input = {
+      identityId: "550e8400-e29b-41d4-a716-446655440000",
+      fullName: "Example Person",
+      jurisdiction: "US",
+      nationality: "US",
+    };
 
     await act(async () => {
-      await result.current.mutateAsync("id-1");
+      await result.current.mutateAsync(input);
     });
 
     expect(mockApiClient.post).toHaveBeenCalledWith(
-      "/api/v1/compliance/screen",
-      {
-        identityId: "id-1",
-        screeningTypes: ["sanctions", "pep", "adverse_media"],
-      },
+      "/api/v1/ai/compliance/screen",
+      input,
     );
   });
 
@@ -126,7 +136,11 @@ describe("useScreenIdentity", () => {
     });
 
     await act(async () => {
-      await result.current.mutateAsync("id-1");
+      await result.current.mutateAsync({
+        identityId: "id-1",
+        fullName: "Example Person",
+        jurisdiction: "US",
+      });
     });
 
     expect(mockToast.success).toHaveBeenCalledWith(
@@ -141,7 +155,11 @@ describe("useScreenIdentity", () => {
     });
 
     await act(async () => {
-      await result.current.mutateAsync("id-1");
+      await result.current.mutateAsync({
+        identityId: "id-1",
+        fullName: "Entity A",
+        jurisdiction: "US",
+      });
     });
 
     expect(mockToast.warning).toHaveBeenCalledWith(
@@ -155,14 +173,17 @@ describe("useScreenIdentity", () => {
   it("shows warning toast when pepHit is true and sanctionsHit is false", async () => {
     const pepResult = {
       ...cleanResult,
-      pepHit: true,
-      matchedEntities: [
+      result: "potential_match",
+      matchScore: 90,
+      pepMatches: [
         {
           name: "PEP Entity",
-          listSource: "PEP_DB",
-          matchScore: 0.9,
-          category: "pep",
-          jurisdiction: "UK",
+          position: "Senior Official",
+          country: "UK",
+          level: "senior_official",
+          active: true,
+          matchConfidence: 0.9,
+          source: "PEP_DB",
         },
       ],
     };
@@ -172,7 +193,11 @@ describe("useScreenIdentity", () => {
     });
 
     await act(async () => {
-      await result.current.mutateAsync("id-1");
+      await result.current.mutateAsync({
+        identityId: "id-1",
+        fullName: "PEP Entity",
+        jurisdiction: "UK",
+      });
     });
 
     expect(mockToast.warning).toHaveBeenCalledWith(
@@ -191,7 +216,11 @@ describe("useScreenIdentity", () => {
 
     await act(async () => {
       try {
-        await result.current.mutateAsync("id-1");
+        await result.current.mutateAsync({
+          identityId: "id-1",
+          fullName: "Example Person",
+          jurisdiction: "US",
+        });
       } catch {}
     });
 
@@ -206,27 +235,39 @@ describe("useScreenIdentity", () => {
 // ===========================================================================
 
 describe("useRiskAssessment", () => {
-  const mockRisk = {
-    identityId: "id-1",
-    compositeScore: 25,
-    riskLevel: "low",
-    factors: [],
-    assessedAt: "2026-01-01T00:00:00Z",
-    nextReviewAt: "2026-04-01T00:00:00Z",
-    modelVersion: "2.1",
+  const mockRiskResponse = {
+    riskAssessment: {
+      assessmentId: "risk-1",
+      entityId: "id-1",
+      entityType: "identity",
+      compositeScore: 25,
+      decision: "approve",
+      factors: [],
+      trend: "stable",
+      confidence: 0.9,
+      timestamp: "2026-01-01T00:00:00Z",
+    },
+    complianceScore: {
+      entityId: "id-1",
+      jurisdiction: "US",
+      overallScore: 92,
+      rating: "excellent",
+      components: {},
+      computedAt: "2026-01-01T00:00:00Z",
+    },
   };
 
   it("fetches risk assessment for given identityId", async () => {
-    mockApiClient.get.mockResolvedValue(mockRisk);
+    mockApiClient.get.mockResolvedValue(mockRiskResponse);
     const { result } = renderHook(() => useRiskAssessment("id-1"), {
       wrapper: createWrapper(),
     });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(mockApiClient.get).toHaveBeenCalledWith(
-      "/api/v1/compliance/risk/id-1",
+      "/api/v1/ai/compliance/risk/id-1",
     );
-    expect(result.current.data).toEqual(mockRisk);
+    expect(result.current.data).toEqual(mockRiskResponse);
   });
 
   it("is disabled when identityId is undefined", () => {
@@ -242,18 +283,30 @@ describe("useRiskAssessment", () => {
 // ===========================================================================
 
 describe("useRefreshRiskAssessment", () => {
-  const mockRisk = {
-    identityId: "id-1",
-    compositeScore: 42,
-    riskLevel: "medium",
-    factors: [],
-    assessedAt: "2026-01-01T00:00:00Z",
-    nextReviewAt: "2026-04-01T00:00:00Z",
-    modelVersion: "2.2",
+  const mockRiskResponse = {
+    riskAssessment: {
+      assessmentId: "risk-2",
+      entityId: "id-1",
+      entityType: "identity",
+      compositeScore: 42,
+      decision: "review",
+      factors: [],
+      trend: "stable",
+      confidence: 0.88,
+      timestamp: "2026-01-01T00:00:00Z",
+    },
+    complianceScore: {
+      entityId: "id-1",
+      jurisdiction: "US",
+      overallScore: 80,
+      rating: "good",
+      components: {},
+      computedAt: "2026-01-01T00:00:00Z",
+    },
   };
 
-  it("posts refresh and shows success toast with score", async () => {
-    mockApiClient.post.mockResolvedValue(mockRisk);
+  it("fetches latest risk and shows success toast with score", async () => {
+    mockApiClient.get.mockResolvedValue(mockRiskResponse);
     const { result } = renderHook(() => useRefreshRiskAssessment(), {
       wrapper: createWrapper(),
     });
@@ -262,17 +315,16 @@ describe("useRefreshRiskAssessment", () => {
       await result.current.mutateAsync("id-1");
     });
 
-    expect(mockApiClient.post).toHaveBeenCalledWith(
-      "/api/v1/compliance/risk/refresh",
-      { identityId: "id-1" },
+    expect(mockApiClient.get).toHaveBeenCalledWith(
+      "/api/v1/ai/compliance/risk/id-1",
     );
     expect(mockToast.success).toHaveBeenCalledWith("Risk assessment updated", {
-      description: "Score: 42 (medium)",
+      description: "Score: 42 (review)",
     });
   });
 
   it("shows error toast on failure", async () => {
-    mockApiClient.post.mockRejectedValue(new Error("Timeout"));
+    mockApiClient.get.mockRejectedValue(new Error("Timeout"));
     const { result } = renderHook(() => useRefreshRiskAssessment(), {
       wrapper: createWrapper(),
     });
@@ -290,20 +342,24 @@ describe("useRefreshRiskAssessment", () => {
 });
 
 // ===========================================================================
-// useComplianceCopilot
+// useComplianceAdvisor
 // ===========================================================================
 
-describe("useComplianceCopilot", () => {
+describe("useComplianceAdvisor", () => {
   const mockResponse = {
-    role: "assistant",
-    content: "According to UAE VASP regulations...",
+    queryId: "query-1",
+    question: "What are UAE KYC rules?",
+    answer: "According to UAE VASP regulations...",
+    confidence: 0.9,
     timestamp: "2026-01-01T00:00:00Z",
-    citations: [{ regulation: "UAE VASP", section: "3.1" }],
+    citations: [{ regulation: "UAE VASP", section: "3.1", text: "CDD" }],
+    relatedTopics: ["CDD"],
+    disclaimer: "For compliance review only.",
   };
 
   it("sends message and returns response", async () => {
     mockApiClient.post.mockResolvedValue(mockResponse);
-    const { result } = renderHook(() => useComplianceCopilot(), {
+    const { result } = renderHook(() => useComplianceAdvisor(), {
       wrapper: createWrapper(),
     });
 
@@ -313,17 +369,17 @@ describe("useComplianceCopilot", () => {
     });
 
     expect(mockApiClient.post).toHaveBeenCalledWith(
-      "/api/v1/compliance/copilot",
+      "/api/v1/ai/compliance/advisor/query",
       {
-        message: "What are UAE KYC rules?",
-        context: "zeroid_compliance",
+        question: "What are UAE KYC rules?",
+        context: {},
       },
     );
     expect(response).toEqual(mockResponse);
   });
 
   it("exposes isLoading and error state", () => {
-    const { result } = renderHook(() => useComplianceCopilot(), {
+    const { result } = renderHook(() => useComplianceAdvisor(), {
       wrapper: createWrapper(),
     });
     expect(result.current.isLoading).toBe(false);
@@ -331,8 +387,8 @@ describe("useComplianceCopilot", () => {
   });
 
   it("shows error toast on failure", async () => {
-    mockApiClient.post.mockRejectedValue(new Error("AI unavailable"));
-    const { result } = renderHook(() => useComplianceCopilot(), {
+    mockApiClient.post.mockRejectedValue(new Error("Advisor unavailable"));
+    const { result } = renderHook(() => useComplianceAdvisor(), {
       wrapper: createWrapper(),
     });
 
@@ -342,8 +398,8 @@ describe("useComplianceCopilot", () => {
       } catch {}
     });
 
-    expect(mockToast.error).toHaveBeenCalledWith("Copilot request failed", {
-      description: "AI unavailable",
+    expect(mockToast.error).toHaveBeenCalledWith("Advisor request failed", {
+      description: "Advisor unavailable",
     });
   });
 });
@@ -353,29 +409,37 @@ describe("useComplianceCopilot", () => {
 // ===========================================================================
 
 describe("useComplianceAlerts", () => {
-  const mockAlerts = [
-    {
-      id: "a-1",
-      severity: "warning",
-      type: "sanctions",
-      title: "Alert 1",
-      description: "desc",
-      createdAt: "2026-01-01T00:00:00Z",
-    },
-  ];
+  const mockAlertsResponse = {
+    alerts: [
+      {
+        alertId: "a-1",
+        entityId: "id-1",
+        level: "warning",
+        category: "sanctions",
+        title: "Alert 1",
+        description: "desc",
+        regulation: "FATF",
+        actionRequired: "Review",
+        createdAt: "2026-01-01T00:00:00Z",
+        source: "compliance",
+      },
+    ],
+    total: 1,
+    complianceAlertCount: 1,
+    fraudAlertCount: 0,
+  };
 
   it("fetches alerts for connected address", async () => {
-    mockApiClient.get.mockResolvedValue(mockAlerts);
+    mockApiClient.get.mockResolvedValue(mockAlertsResponse);
     const { result } = renderHook(() => useComplianceAlerts(), {
       wrapper: createWrapper(),
     });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(mockApiClient.get).toHaveBeenCalledWith(
-      "/api/v1/compliance/alerts",
-      { owner: mockAddress },
+      "/api/v1/ai/compliance/alerts",
     );
-    expect(result.current.data).toEqual(mockAlerts);
+    expect(result.current.data).toEqual(mockAlertsResponse);
   });
 
   it("is disabled when address is not connected", () => {
@@ -406,7 +470,7 @@ describe("useAcknowledgeAlert", () => {
     });
 
     expect(mockApiClient.post).toHaveBeenCalledWith(
-      "/api/v1/compliance/alerts/alert-123/acknowledge",
+      "/api/v1/ai/compliance/alerts/alert-123/acknowledge",
       {},
     );
     expect(mockToast.success).toHaveBeenCalledWith("Alert acknowledged");
@@ -437,12 +501,19 @@ describe("useAcknowledgeAlert", () => {
 
 describe("useGenerateReport", () => {
   const mockReport = {
-    id: "rpt-1",
-    type: "sar",
+    reportId: "rpt-1",
+    entityId: "550e8400-e29b-41d4-a716-446655440000",
+    reportType: "kyc",
+    status: "complete",
+    summary: "KYC complete",
+    sections: [],
+    complianceScore: 92,
+    gaps: [],
+    recommendations: [],
     generatedAt: "2026-01-01T00:00:00Z",
-    format: "pdf",
-    downloadUrl: "https://example.com/report.pdf",
-    expiresAt: "2026-01-08T00:00:00Z",
+    validUntil: "2026-02-01T00:00:00Z",
+    jurisdiction: "US",
+    regulatoryFramework: "FATF",
   };
 
   it("generates report and shows success toast", async () => {
@@ -452,15 +523,23 @@ describe("useGenerateReport", () => {
     });
 
     await act(async () => {
-      await result.current.mutateAsync({ type: "sar", format: "pdf" });
+      await result.current.mutateAsync({
+        entityId: "550e8400-e29b-41d4-a716-446655440000",
+        reportType: "kyc",
+        jurisdiction: "US",
+      });
     });
 
     expect(mockApiClient.post).toHaveBeenCalledWith(
-      "/api/v1/compliance/reports/generate",
-      { type: "sar", format: "pdf" },
+      "/api/v1/ai/compliance/report",
+      {
+        entityId: "550e8400-e29b-41d4-a716-446655440000",
+        reportType: "kyc",
+        jurisdiction: "US",
+      },
     );
     expect(mockToast.success).toHaveBeenCalledWith("Report generated", {
-      description: "sar report ready for download",
+      description: "kyc report complete",
     });
   });
 
@@ -472,7 +551,11 @@ describe("useGenerateReport", () => {
 
     await act(async () => {
       try {
-        await result.current.mutateAsync({ type: "ctr" });
+        await result.current.mutateAsync({
+          entityId: "550e8400-e29b-41d4-a716-446655440000",
+          reportType: "aml",
+          jurisdiction: "US",
+        });
       } catch {}
     });
 
@@ -487,45 +570,64 @@ describe("useGenerateReport", () => {
 // ===========================================================================
 
 describe("useSimulateRegChange", () => {
-  const simWithGaps = {
+  const simHighEffort = {
+    changeId: "change-1",
     regulation: "MiCA",
-    changes: {},
-    impactedIdentities: 100,
-    complianceGapsBefore: 2,
-    complianceGapsAfter: 5,
-    estimatedRemediationCost: 50000,
-    affectedJurisdictions: ["EU", "UK"],
-    recommendations: ["Update KYC"],
+    effectiveDate: "2026-05-01T00:00:00Z",
+    description: "Raise transfer screening requirements",
+    impactedEntities: 100,
+    impactedCredentialTypes: ["KYC_LEVEL_2"],
+    requiredActions: ["Update KYC"],
+    estimatedEffort: "high",
+    automationPossible: true,
   };
 
-  const simNoGaps = {
-    ...simWithGaps,
-    complianceGapsAfter: 1,
+  const simLowEffort = {
+    ...simHighEffort,
+    impactedEntities: 10,
+    requiredActions: [],
+    estimatedEffort: "low",
   };
 
-  it("shows warning toast when new gaps detected", async () => {
-    mockApiClient.post.mockResolvedValue(simWithGaps);
+  it("shows warning toast when high remediation effort is detected", async () => {
+    mockApiClient.post.mockResolvedValue(simHighEffort);
     const { result } = renderHook(() => useSimulateRegChange(), {
       wrapper: createWrapper(),
     });
 
     await act(async () => {
-      await result.current.mutateAsync({ regulation: "MiCA", changes: {} });
+      await result.current.mutateAsync({
+        regulation: "MiCA",
+        changes: "Raise transfer screening requirements",
+        jurisdiction: "EU",
+      });
     });
 
+    expect(mockApiClient.post).toHaveBeenCalledWith(
+      "/api/v1/ai/compliance/simulate",
+      {
+        regulation: "MiCA",
+        changes: "Raise transfer screening requirements",
+        jurisdiction: "EU",
+      },
+    );
     expect(mockToast.warning).toHaveBeenCalledWith("Simulation complete", {
-      description: "3 new compliance gap(s) detected across 2 jurisdiction(s)",
+      description: "100 impacted entity(ies); 1 action(s) required",
     });
   });
 
-  it("shows success toast when no new gaps", async () => {
-    mockApiClient.post.mockResolvedValue(simNoGaps);
+  it("shows success toast when effort is low", async () => {
+    mockApiClient.post.mockResolvedValue(simLowEffort);
     const { result } = renderHook(() => useSimulateRegChange(), {
       wrapper: createWrapper(),
     });
 
     await act(async () => {
-      await result.current.mutateAsync({ regulation: "MiCA", changes: {} });
+      await result.current.mutateAsync({
+        regulation: "MiCA",
+        changes: "Lower manual review thresholds",
+        jurisdiction: "EU",
+      });
     });
 
     expect(mockToast.success).toHaveBeenCalledWith(
@@ -541,7 +643,11 @@ describe("useSimulateRegChange", () => {
 
     await act(async () => {
       try {
-        await result.current.mutateAsync({ regulation: "X", changes: {} });
+        await result.current.mutateAsync({
+          regulation: "MiCA",
+          changes: "Invalid simulation request",
+          jurisdiction: "EU",
+        });
       } catch {}
     });
 

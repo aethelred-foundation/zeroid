@@ -1,7 +1,7 @@
 /**
  * useAICompliance — Hook for AI-powered compliance operations.
  *
- * Provides sanctions/PEP screening, risk assessment, AI copilot queries,
+ * Provides sanctions/PEP screening, risk assessment, advisor queries,
  * compliance alert management, report generation, and regulatory change
  * simulation. All mutations surface feedback via sonner toasts.
  */
@@ -11,99 +11,206 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAccount } from "wagmi";
 import { toast } from "sonner";
 import { apiClient } from "@/lib/api/client";
-import type { Address, ISODateString } from "@/types";
+import type { ISODateString } from "@/types";
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
 export interface ScreeningResult {
+  screeningId: string;
   identityId: string;
-  sanctionsHit: boolean;
-  pepHit: boolean;
-  adverseMediaHits: number;
-  matchedEntities: MatchedEntity[];
+  result: "clear" | "potential_match" | "confirmed_match" | "inconclusive";
+  matchScore: number;
+  matchedLists: SanctionsListMatch[];
+  pepMatches: PepMatch[];
+  adverseMedia: AdverseMediaHit[];
+  riskIndicators: string[];
   screenedAt: ISODateString;
   expiresAt: ISODateString;
-  confidence: number;
+  listsChecked: string[];
 }
 
-export interface MatchedEntity {
-  name: string;
+export interface SanctionsListMatch {
+  listName: string;
   listSource: string;
-  matchScore: number;
-  category: "sanctions" | "pep" | "adverse_media" | "watchlist";
+  matchedName: string;
+  matchConfidence: number;
+  entityType: "individual" | "entity" | "vessel" | "aircraft";
+  sanctions: string[];
+  listedSince: ISODateString;
+  lastUpdated: ISODateString;
+  sdnId?: string;
+}
+
+export interface PepMatch {
+  name: string;
+  position: string;
+  country: string;
+  level:
+    | "head_of_state"
+    | "senior_official"
+    | "family_member"
+    | "close_associate";
+  active: boolean;
+  matchConfidence: number;
+  source: string;
+}
+
+export interface AdverseMediaHit {
+  headline: string;
+  source: string;
+  publishedAt: ISODateString;
+  relevanceScore: number;
+  categories: string[];
+  url: string;
+}
+
+export interface ScreenIdentityInput {
+  identityId: string;
+  fullName: string;
   jurisdiction: string;
+  dateOfBirth?: string;
+  nationality?: string;
+  aliases?: string[];
+  documentNumbers?: string[];
 }
 
 export interface RiskAssessment {
-  identityId: string;
+  assessmentId: string;
+  entityId: string;
+  entityType: "identity" | "credential" | "transaction";
   compositeScore: number;
-  riskLevel: "low" | "medium" | "high" | "critical";
-  factors: RiskFactor[];
-  assessedAt: ISODateString;
-  nextReviewAt: ISODateString;
-  modelVersion: string;
+  decision: "approve" | "review" | "reject" | "escalate";
+  factors: RiskFactorDetail[];
+  trend: "improving" | "stable" | "degrading" | "volatile";
+  jurisdiction?: string;
+  regulatoryRegime?: string;
+  confidence: number;
+  timestamp: ISODateString;
 }
 
-export interface RiskFactor {
+export interface RiskFactorDetail {
+  name: string;
   category: string;
-  score: number;
+  rawValue: number;
+  normalizedScore: number;
   weight: number;
-  description: string;
-  mitigations: string[];
+  impact: "increasing" | "decreasing" | "neutral";
+  explanation: string;
+}
+
+export interface ComplianceScore {
+  entityId: string;
+  jurisdiction: string;
+  overallScore: number;
+  rating: "excellent" | "good" | "fair" | "poor" | "critical";
+  components: Record<string, number>;
+  computedAt: ISODateString;
+}
+
+export interface RiskAssessmentResponse {
+  riskAssessment: RiskAssessment;
+  complianceScore: ComplianceScore;
 }
 
 export interface ComplianceAlert {
-  id: string;
-  severity: "info" | "warning" | "critical";
-  type: string;
+  alertId: string;
+  entityId: string;
+  level:
+    | "info"
+    | "warning"
+    | "violation"
+    | "critical"
+    | "low"
+    | "medium"
+    | "high";
+  category: string;
   title: string;
   description: string;
-  identityId?: string;
+  regulation: string;
+  actionRequired: string;
   createdAt: ISODateString;
   acknowledgedAt?: ISODateString;
   resolvedAt?: ISODateString;
+  source?: "compliance" | "fraud";
 }
 
-export interface CopilotMessage {
-  role: "user" | "assistant";
-  content: string;
+export interface ComplianceAlertsResponse {
+  alerts: ComplianceAlert[];
+  total: number;
+  complianceAlertCount: number;
+  fraudAlertCount: number;
+}
+
+export interface AdvisorResponse {
+  queryId: string;
+  question: string;
+  answer: string;
+  confidence: number;
+  citations: AdvisorCitation[];
+  relatedTopics: string[];
+  disclaimer: string;
   timestamp: ISODateString;
-  citations?: CopilotCitation[];
 }
 
-export interface CopilotCitation {
+export interface AdvisorCitation {
   regulation: string;
   section: string;
-  url?: string;
+  text: string;
 }
 
 export interface ComplianceReport {
-  id: string;
-  type: ComplianceReportType;
+  reportId: string;
+  entityId: string;
+  reportType: ComplianceReportType;
+  status: "generating" | "complete" | "failed";
+  summary: string;
+  sections: ComplianceReportSection[];
+  complianceScore: number;
+  gaps: ComplianceGap[];
+  recommendations: string[];
   generatedAt: ISODateString;
-  format: "pdf" | "json" | "csv";
-  downloadUrl: string;
-  expiresAt: ISODateString;
+  validUntil: ISODateString;
+  jurisdiction: string;
+  regulatoryFramework: string;
 }
 
 export type ComplianceReportType =
-  | "sar"
-  | "ctr"
-  | "risk_summary"
-  | "audit_trail"
-  | "regulatory_filing";
+  | "kyc"
+  | "aml"
+  | "sanctions"
+  | "pep"
+  | "travel_rule"
+  | "comprehensive";
+
+export interface ComplianceReportSection {
+  title: string;
+  status: "pass" | "warning" | "fail" | "not_applicable";
+  findings: string[];
+  evidence: Record<string, unknown>;
+}
+
+export interface ComplianceGap {
+  gapId: string;
+  category: string;
+  severity: "info" | "warning" | "violation" | "critical";
+  description: string;
+  regulation: string;
+  remediation: string;
+  deadline?: ISODateString;
+}
 
 export interface RegulationSimulation {
+  changeId: string;
   regulation: string;
-  changes: Record<string, unknown>;
-  impactedIdentities: number;
-  complianceGapsBefore: number;
-  complianceGapsAfter: number;
-  estimatedRemediationCost: number;
-  affectedJurisdictions: string[];
-  recommendations: string[];
+  effectiveDate: ISODateString;
+  description: string;
+  impactedEntities: number;
+  impactedCredentialTypes: string[];
+  requiredActions: string[];
+  estimatedEffort: "low" | "medium" | "high" | "critical";
+  automationPossible: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -117,6 +224,8 @@ const complianceKeys = {
   alerts: () => [...complianceKeys.all, "alerts"] as const,
 };
 
+const AI_COMPLIANCE_BASE = "/api/v1/ai/compliance";
+
 // ---------------------------------------------------------------------------
 // Screening
 // ---------------------------------------------------------------------------
@@ -125,23 +234,29 @@ export function useScreenIdentity() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async (identityId: string): Promise<ScreeningResult> => {
-      return apiClient.post<ScreeningResult>("/api/v1/compliance/screen", {
-        identityId,
-        screeningTypes: ["sanctions", "pep", "adverse_media"],
-      }) as unknown as ScreeningResult;
+    mutationFn: async (
+      input: ScreenIdentityInput,
+    ): Promise<ScreeningResult> => {
+      return apiClient.post<ScreeningResult>(
+        `${AI_COMPLIANCE_BASE}/screen`,
+        input,
+      ) as unknown as ScreeningResult;
     },
-    onSuccess: (data, identityId) => {
-      const hits = data.sanctionsHit || data.pepHit;
+    onSuccess: (data, input) => {
+      const hits = data.result !== "clear";
       if (hits) {
+        const matchCount =
+          data.matchedLists.length +
+          data.pepMatches.length +
+          data.adverseMedia.length;
         toast.warning("Screening flagged potential matches", {
-          description: `${data.matchedEntities.length} match(es) found — review required`,
+          description: `${matchCount} match(es) found — review required`,
         });
       } else {
         toast.success("Screening complete — no matches found");
       }
       queryClient.invalidateQueries({
-        queryKey: complianceKeys.screening(identityId),
+        queryKey: complianceKeys.screening(input.identityId),
       });
     },
     onError: (err: Error) => {
@@ -158,9 +273,9 @@ export function useRiskAssessment(identityId: string | undefined) {
   return useQuery({
     queryKey: complianceKeys.risk(identityId ?? ""),
     queryFn: () =>
-      apiClient.get<RiskAssessment>(
-        `/api/v1/compliance/risk/${identityId}`,
-      ) as unknown as RiskAssessment,
+      apiClient.get<RiskAssessmentResponse>(
+        `${AI_COMPLIANCE_BASE}/risk/${identityId}`,
+      ) as unknown as RiskAssessmentResponse,
     enabled: !!identityId,
     staleTime: 60_000,
     refetchInterval: 120_000,
@@ -171,14 +286,14 @@ export function useRefreshRiskAssessment() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async (identityId: string): Promise<RiskAssessment> => {
-      return apiClient.post<RiskAssessment>("/api/v1/compliance/risk/refresh", {
-        identityId,
-      }) as unknown as RiskAssessment;
+    mutationFn: async (identityId: string): Promise<RiskAssessmentResponse> => {
+      return apiClient.get<RiskAssessmentResponse>(
+        `${AI_COMPLIANCE_BASE}/risk/${identityId}`,
+      ) as unknown as RiskAssessmentResponse;
     },
     onSuccess: (data, identityId) => {
       toast.success("Risk assessment updated", {
-        description: `Score: ${data.compositeScore} (${data.riskLevel})`,
+        description: `Score: ${data.riskAssessment.compositeScore} (${data.riskAssessment.decision})`,
       });
       queryClient.setQueryData(complianceKeys.risk(identityId), data);
     },
@@ -189,21 +304,22 @@ export function useRefreshRiskAssessment() {
 }
 
 // ---------------------------------------------------------------------------
-// Compliance Copilot
+// Compliance Advisor
 // ---------------------------------------------------------------------------
 
-export function useComplianceCopilot() {
-  const queryClient = useQueryClient();
-
+export function useComplianceAdvisor() {
   const sendMessage = useMutation({
-    mutationFn: async (message: string): Promise<CopilotMessage> => {
-      return apiClient.post<CopilotMessage>("/api/v1/compliance/copilot", {
-        message,
-        context: "zeroid_compliance",
-      }) as unknown as CopilotMessage;
+    mutationFn: async (message: string): Promise<AdvisorResponse> => {
+      return apiClient.post<AdvisorResponse>(
+        `${AI_COMPLIANCE_BASE}/advisor/query`,
+        {
+          question: message,
+          context: {},
+        },
+      ) as unknown as AdvisorResponse;
     },
     onError: (err: Error) => {
-      toast.error("Copilot request failed", { description: err.message });
+      toast.error("Advisor request failed", { description: err.message });
     },
   });
 
@@ -225,9 +341,9 @@ export function useComplianceAlerts() {
   return useQuery({
     queryKey: complianceKeys.alerts(),
     queryFn: () =>
-      apiClient.get<ComplianceAlert[]>("/api/v1/compliance/alerts", {
-        owner: address as string,
-      }) as unknown as ComplianceAlert[],
+      apiClient.get<ComplianceAlertsResponse>(
+        `${AI_COMPLIANCE_BASE}/alerts`,
+      ) as unknown as ComplianceAlertsResponse,
     enabled: !!address,
     staleTime: 10_000,
     refetchInterval: 30_000,
@@ -240,7 +356,7 @@ export function useAcknowledgeAlert() {
   return useMutation({
     mutationFn: async (alertId: string): Promise<void> => {
       await apiClient.post(
-        `/api/v1/compliance/alerts/${alertId}/acknowledge`,
+        `${AI_COMPLIANCE_BASE}/alerts/${alertId}/acknowledge`,
         {},
       );
     },
@@ -261,20 +377,18 @@ export function useAcknowledgeAlert() {
 export function useGenerateReport() {
   return useMutation({
     mutationFn: async (params: {
-      type: ComplianceReportType;
-      startDate?: ISODateString;
-      endDate?: ISODateString;
-      identityIds?: string[];
-      format?: "pdf" | "json" | "csv";
+      entityId: string;
+      reportType: ComplianceReportType;
+      jurisdiction: string;
     }): Promise<ComplianceReport> => {
       return apiClient.post<ComplianceReport>(
-        "/api/v1/compliance/reports/generate",
+        `${AI_COMPLIANCE_BASE}/report`,
         params,
       ) as unknown as ComplianceReport;
     },
     onSuccess: (data) => {
       toast.success("Report generated", {
-        description: `${data.type} report ready for download`,
+        description: `${data.reportType} report ${data.status}`,
       });
     },
     onError: (err: Error) => {
@@ -291,18 +405,21 @@ export function useSimulateRegChange() {
   return useMutation({
     mutationFn: async (params: {
       regulation: string;
-      changes: Record<string, unknown>;
+      changes: string;
+      jurisdiction: string;
     }): Promise<RegulationSimulation> => {
       return apiClient.post<RegulationSimulation>(
-        "/api/v1/compliance/simulate",
+        `${AI_COMPLIANCE_BASE}/simulate`,
         params,
       ) as unknown as RegulationSimulation;
     },
     onSuccess: (data) => {
-      const delta = data.complianceGapsAfter - data.complianceGapsBefore;
-      if (delta > 0) {
+      if (
+        data.estimatedEffort === "high" ||
+        data.estimatedEffort === "critical"
+      ) {
         toast.warning("Simulation complete", {
-          description: `${delta} new compliance gap(s) detected across ${data.affectedJurisdictions.length} jurisdiction(s)`,
+          description: `${data.impactedEntities} impacted entity(ies); ${data.requiredActions.length} action(s) required`,
         });
       } else {
         toast.success("Simulation complete — no new gaps detected");

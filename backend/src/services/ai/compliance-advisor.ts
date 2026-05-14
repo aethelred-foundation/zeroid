@@ -905,6 +905,30 @@ export class ComplianceAdvisorService {
     return alerts.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
   }
 
+  async acknowledgeAlert(alertId: string, actorId: string): Promise<ComplianceAlert> {
+    const alert = this.alerts.get(alertId);
+    if (!alert || alert.resolvedAt) {
+      throw new ComplianceAdvisorError(
+        'Compliance alert not found',
+        'COMPLIANCE_ALERT_NOT_FOUND',
+        404,
+      );
+    }
+
+    if (!alert.acknowledgedAt) {
+      alert.acknowledgedAt = new Date();
+      this.alerts.set(alertId, alert);
+    }
+
+    logger.info('compliance_alert_acknowledged', {
+      alertId,
+      actorId,
+      entityId: alert.entityId,
+    });
+
+    return alert;
+  }
+
   async createComplianceAlert(
     entityId: string,
     level: ComplianceAlertLevel,
