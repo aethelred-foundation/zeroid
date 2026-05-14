@@ -80,6 +80,36 @@ describe('production safety controls', () => {
     );
   });
 
+  it('flags conflicting Node and ZeroID production runtime markers', () => {
+    expect(
+      collectProductionSafetyViolations({
+        ...PROD_BASE_ENV,
+        NODE_ENV: 'test',
+        ZEROID_ENV: 'production',
+      }),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          control: 'NODE_ENV_ZEROID_ENV_CONSISTENCY',
+        }),
+      ]),
+    );
+
+    expect(
+      collectProductionSafetyViolations({
+        ...PROD_BASE_ENV,
+        NODE_ENV: 'production',
+        ZEROID_ENV: 'staging',
+      }),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          control: 'NODE_ENV_ZEROID_ENV_CONSISTENCY',
+        }),
+      ]),
+    );
+  });
+
   it('blocks production startup when Redis is missing or local', () => {
     expect(collectProductionSafetyViolations({
       ...PROD_BASE_ENV,

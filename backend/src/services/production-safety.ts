@@ -135,6 +135,7 @@ export function checkedProductionSafetyControls(): string[] {
     ...UNSAFE_PRODUCTION_FLAGS.map((flag) => flag.control),
     'REDIS_URL',
     'REDIS_TLS_REQUIRED',
+    'NODE_ENV_ZEROID_ENV_CONSISTENCY',
     'JWT_SECRET',
     'TRUSTED_PROXY',
     'CORS_ORIGINS',
@@ -183,6 +184,19 @@ export function collectProductionSafetyViolations(
   const violations = UNSAFE_PRODUCTION_FLAGS
     .filter((flag) => isTrue(env[flag.control]))
     .map((flag) => ({ ...flag }));
+
+  const nodeEnvIsProduction = env.NODE_ENV === 'production';
+  const zeroIdEnvIsProduction = env.ZEROID_ENV === 'production';
+  if (
+    env.NODE_ENV &&
+    env.ZEROID_ENV &&
+    nodeEnvIsProduction !== zeroIdEnvIsProduction
+  ) {
+    violations.push({
+      control: 'NODE_ENV_ZEROID_ENV_CONSISTENCY',
+      risk: 'NODE_ENV and ZEROID_ENV disagree about production mode; deployment guardrails must use one unambiguous runtime profile',
+    });
+  }
 
   const redisUrl = env.REDIS_URL?.trim();
   if (!redisUrl) {
