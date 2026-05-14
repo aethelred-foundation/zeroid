@@ -7,6 +7,7 @@ const mockGetAnalytics = jest.fn();
 const mockGetViolations = jest.fn();
 const mockGetAlerts = jest.fn();
 const mockRegisterSLA = jest.fn();
+const mockUpdateGovernanceSchemaSafeParse = jest.fn();
 
 jest.mock('express', () => {
   const createRouter = () => {
@@ -100,7 +101,9 @@ jest.mock('../src/services/enterprise/sla-monitor', () => ({
 jest.mock('../src/services/enterprise/organization-service', () => ({
   CreateOrganizationSchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
   AddOrganizationMemberSchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
-  UpdateOrganizationGovernanceSchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
+  UpdateOrganizationGovernanceSchema: {
+    safeParse: (value: unknown) => mockUpdateGovernanceSchemaSafeParse(value),
+  },
   enterpriseOrganizationService: {
     getGovernanceSettings: mockGetGovernanceSettings,
     updateGovernanceSettings: mockUpdateGovernanceSettings,
@@ -257,6 +260,10 @@ describe('enterprise organization governance routes', () => {
     mockGetViolations.mockReturnValue([]);
     mockGetAlerts.mockReturnValue([]);
     mockRegisterSLA.mockReturnValue(undefined);
+    mockUpdateGovernanceSchemaSafeParse.mockImplementation((value: unknown) => ({
+      success: true,
+      data: value,
+    }));
   });
 
   it('returns organization governance settings', async () => {
@@ -299,6 +306,29 @@ describe('enterprise organization governance routes', () => {
         defaultPack: { packId: 'sovereign-core', version: '2026.04' },
       }),
     );
+  });
+
+  it('rejects invalid governance update bodies before service execution', async () => {
+    mockUpdateGovernanceSchemaSafeParse.mockReturnValueOnce({
+      success: false,
+      error: {
+        flatten: () => ({
+          fieldErrors: { defaultPack: ['packId is required'] },
+          formErrors: [],
+        }),
+      },
+    });
+
+    const response = await invokeRoute('PATCH', '/organizations/:id/governance', {
+      params: { id: 'org-1' },
+      body: {
+        defaultPack: { packId: '' },
+      },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.body.code).toBe('VALIDATION_ERROR');
+    expect(mockUpdateGovernanceSettings).not.toHaveBeenCalled();
   });
 
   it('lists available governance packs', async () => {
