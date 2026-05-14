@@ -143,6 +143,16 @@ const apiRouteLimiter = createRateLimiter({
   keyPrefix: 'rl:api-route',
 });
 
+const REQUEST_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
+
+function resolveRequestId(value: unknown): string {
+  if (typeof value === 'string' && REQUEST_ID_PATTERN.test(value)) {
+    return value;
+  }
+
+  return crypto.randomUUID();
+}
+
 // Security headers
 app.use(helmet({
   contentSecurityPolicy: {
@@ -168,14 +178,21 @@ app.use(cors({
 
 // Body parsing
 app.use(express.json({ limit: '2mb' }));
-app.use(express.urlencoded({ extended: true, limit: '2mb', parameterLimit: 100 }));
+app.use(express.urlencoded({
+  extended: true,
+  limit: '2mb',
+  parameterLimit: 100,
+  depth: 5,
+} as Parameters<typeof express.urlencoded>[0] & { depth: number }));
 
 // Compression
 app.use(compression());
 
 // Request ID & timing
-app.use((req: Request, _res: Response, next: NextFunction) => {
-  req.headers['x-request-id'] = req.headers['x-request-id'] ?? crypto.randomUUID();
+app.use((req: Request, res: Response, next: NextFunction) => {
+  const requestId = resolveRequestId(req.headers['x-request-id']);
+  req.headers['x-request-id'] = requestId;
+  res.setHeader('X-Request-Id', requestId);
   next();
 });
 
