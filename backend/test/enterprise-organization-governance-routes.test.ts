@@ -1,4 +1,7 @@
-const routeRegistry: Record<string, Array<(req: any, res: any, next: (err?: unknown) => void) => unknown>> = {};
+const routeRegistry: Record<
+  string,
+  Array<(req: any, res: any, next: (err?: unknown) => void) => unknown>
+> = {};
 
 const mockGetGovernanceSettings = jest.fn();
 const mockUpdateGovernanceSettings = jest.fn();
@@ -9,84 +12,135 @@ const mockGetAlerts = jest.fn();
 const mockRegisterSLA = jest.fn();
 const mockUpdateGovernanceSchemaSafeParse = jest.fn();
 
-jest.mock('express', () => {
-  const createRouter = () => {
-    const router: any = {
-      use: jest.fn(() => router),
-      get: jest.fn((path: string, ...handlers: Array<(req: any, res: any, next: (err?: unknown) => void) => unknown>) => {
-        routeRegistry[`GET ${path}`] = handlers;
-        return router;
-      }),
-      post: jest.fn((path: string, ...handlers: Array<(req: any, res: any, next: (err?: unknown) => void) => unknown>) => {
-        routeRegistry[`POST ${path}`] = handlers;
-        return router;
-      }),
-      patch: jest.fn((path: string, ...handlers: Array<(req: any, res: any, next: (err?: unknown) => void) => unknown>) => {
-        routeRegistry[`PATCH ${path}`] = handlers;
-        return router;
-      }),
-      delete: jest.fn((path: string, ...handlers: Array<(req: any, res: any, next: (err?: unknown) => void) => unknown>) => {
-        routeRegistry[`DELETE ${path}`] = handlers;
-        return router;
-      }),
+jest.mock(
+  'express',
+  () => {
+    const createRouter = () => {
+      const router: any = {
+        use: jest.fn(() => router),
+        get: jest.fn(
+          (
+            path: string,
+            ...handlers: Array<
+              (req: any, res: any, next: (err?: unknown) => void) => unknown
+            >
+          ) => {
+            routeRegistry[`GET ${path}`] = handlers;
+            return router;
+          },
+        ),
+        post: jest.fn(
+          (
+            path: string,
+            ...handlers: Array<
+              (req: any, res: any, next: (err?: unknown) => void) => unknown
+            >
+          ) => {
+            routeRegistry[`POST ${path}`] = handlers;
+            return router;
+          },
+        ),
+        patch: jest.fn(
+          (
+            path: string,
+            ...handlers: Array<
+              (req: any, res: any, next: (err?: unknown) => void) => unknown
+            >
+          ) => {
+            routeRegistry[`PATCH ${path}`] = handlers;
+            return router;
+          },
+        ),
+        delete: jest.fn(
+          (
+            path: string,
+            ...handlers: Array<
+              (req: any, res: any, next: (err?: unknown) => void) => unknown
+            >
+          ) => {
+            routeRegistry[`DELETE ${path}`] = handlers;
+            return router;
+          },
+        ),
+      };
+      return router;
     };
-    return router;
-  };
 
-  return {
-    Router: jest.fn(() => createRouter()),
-  };
-}, { virtual: true });
+    return {
+      Router: jest.fn(() => createRouter()),
+    };
+  },
+  { virtual: true },
+);
 
-jest.mock('winston', () => {
-  const noop = jest.fn();
-  return {
-    createLogger: jest.fn(() => ({ info: noop, warn: noop, error: noop, debug: noop })),
-    format: {
-      combine: jest.fn(),
-      timestamp: jest.fn(),
-      json: jest.fn(),
-    },
-    transports: { Console: jest.fn() },
-  };
-}, { virtual: true });
+jest.mock(
+  'winston',
+  () => {
+    const noop = jest.fn();
+    return {
+      createLogger: jest.fn(() => ({
+        info: noop,
+        warn: noop,
+        error: noop,
+        debug: noop,
+      })),
+      format: {
+        combine: jest.fn(),
+        timestamp: jest.fn(),
+        json: jest.fn(),
+      },
+      transports: { Console: jest.fn() },
+    };
+  },
+  { virtual: true },
+);
 
 jest.mock('../src/middleware/enterprise', () => ({
-  requireEnterpriseContext: () => (req: Record<string, any>, _res: unknown, next: () => void) => {
-    req.identity = { id: 'admin-1' };
-    if (req.headers?.['x-test-skip-enterprise-context'] === 'true') {
+  requireEnterpriseContext:
+    () => (req: Record<string, any>, _res: unknown, next: () => void) => {
+      req.identity = { id: 'admin-1' };
+      if (req.headers?.['x-test-skip-enterprise-context'] === 'true') {
+        next();
+        return;
+      }
+      req.enterpriseContext = {
+        organizationId: 'org-1',
+        role: 'admin',
+        membershipId: 'membership-1',
+      };
       next();
-      return;
-    }
-    req.enterpriseContext = {
-      organizationId: 'org-1',
-      role: 'admin',
-      membershipId: 'membership-1',
-    };
-    next();
-  },
+    },
 }));
 
 jest.mock('../src/middleware/rateLimit', () => ({
-  createRateLimiter: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+  createRateLimiter: () => (_req: unknown, _res: unknown, next: () => void) =>
+    next(),
 }));
 
 jest.mock('../src/services/enterprise/webhook-system', () => ({
   webhookSystem: {},
-  WebhookRegistrationSchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
-  WebhookUpdateSchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
+  WebhookRegistrationSchema: {
+    safeParse: (value: unknown) => ({ success: true, data: value }),
+  },
+  WebhookUpdateSchema: {
+    safeParse: (value: unknown) => ({ success: true, data: value }),
+  },
 }));
 
 jest.mock('../src/services/enterprise/api-gateway', () => ({
   apiGateway: {
     getAnalytics: mockGetAnalytics,
   },
-  CreateAPIKeySchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
+  CreateAPIKeySchema: {
+    safeParse: (value: unknown) => ({ success: true, data: value }),
+  },
 }));
 
 jest.mock('../src/services/enterprise/oidc-bridge', () => ({
   oidcBridge: { getDiscoveryDocument: jest.fn(), getJWKS: jest.fn() },
-  OIDCClientRegistrationSchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
+  OIDCClientRegistrationSchema: {
+    safeParse: (value: unknown) => ({ success: true, data: value }),
+  },
 }));
 
 jest.mock('../src/services/enterprise/sla-monitor', () => ({
@@ -95,12 +149,18 @@ jest.mock('../src/services/enterprise/sla-monitor', () => ({
     getViolations: mockGetViolations,
     getAlerts: mockGetAlerts,
   },
-  SLADefinitionSchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
+  SLADefinitionSchema: {
+    safeParse: (value: unknown) => ({ success: true, data: value }),
+  },
 }));
 
 jest.mock('../src/services/enterprise/organization-service', () => ({
-  CreateOrganizationSchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
-  AddOrganizationMemberSchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
+  CreateOrganizationSchema: {
+    safeParse: (value: unknown) => ({ success: true, data: value }),
+  },
+  AddOrganizationMemberSchema: {
+    safeParse: (value: unknown) => ({ success: true, data: value }),
+  },
   UpdateOrganizationGovernanceSchema: {
     safeParse: (value: unknown) => mockUpdateGovernanceSchemaSafeParse(value),
   },
@@ -112,15 +172,29 @@ jest.mock('../src/services/enterprise/organization-service', () => ({
 
 jest.mock('../src/services/enterprise/issuer-trust-service', () => ({
   issuerTrustRegistryService: {},
-  RegisterIssuerTrustSchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
-  RecordIssuerKeySchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
+  RegisterIssuerTrustSchema: {
+    safeParse: (value: unknown) => ({ success: true, data: value }),
+  },
+  RecordIssuerKeySchema: {
+    safeParse: (value: unknown) => ({ success: true, data: value }),
+  },
 }));
 
 jest.mock('../src/services/enterprise/policy-registry-service', () => ({
-  POLICY_APPROVAL_MODES: ['single_admin', 'separation_of_duties', 'dual_control'],
-  CreatePolicyDefinitionSchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
-  DeprecatePolicyDefinitionSchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
-  RevokePolicyDefinitionSchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
+  POLICY_APPROVAL_MODES: [
+    'single_admin',
+    'separation_of_duties',
+    'dual_control',
+  ],
+  CreatePolicyDefinitionSchema: {
+    safeParse: (value: unknown) => ({ success: true, data: value }),
+  },
+  DeprecatePolicyDefinitionSchema: {
+    safeParse: (value: unknown) => ({ success: true, data: value }),
+  },
+  RevokePolicyDefinitionSchema: {
+    safeParse: (value: unknown) => ({ success: true, data: value }),
+  },
   policyRegistryService: {
     createPolicyDraft: jest.fn(),
     listPolicies: jest.fn(),
@@ -133,8 +207,12 @@ jest.mock('../src/services/enterprise/policy-registry-service', () => ({
 }));
 
 jest.mock('../src/services/enterprise/policy-exception-service', () => ({
-  CreatePolicyExceptionSchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
-  RevokePolicyExceptionSchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
+  CreatePolicyExceptionSchema: {
+    safeParse: (value: unknown) => ({ success: true, data: value }),
+  },
+  RevokePolicyExceptionSchema: {
+    safeParse: (value: unknown) => ({ success: true, data: value }),
+  },
   policyExceptionService: {
     createExceptionRequest: jest.fn(),
     listExceptions: jest.fn(),
@@ -211,9 +289,11 @@ async function invokeRoute(
       try {
         const result = handler(req, res, next);
         if (result && typeof (result as Promise<unknown>).then === 'function') {
-          (result as Promise<unknown>).then(() => {
-            if (!nextCalled) resolve();
-          }).catch(reject);
+          (result as Promise<unknown>)
+            .then(() => {
+              if (!nextCalled) resolve();
+            })
+            .catch(reject);
           return;
         }
         if (!nextCalled) resolve();
@@ -260,10 +340,12 @@ describe('enterprise organization governance routes', () => {
     mockGetViolations.mockReturnValue([]);
     mockGetAlerts.mockReturnValue([]);
     mockRegisterSLA.mockReturnValue(undefined);
-    mockUpdateGovernanceSchemaSafeParse.mockImplementation((value: unknown) => ({
-      success: true,
-      data: value,
-    }));
+    mockUpdateGovernanceSchemaSafeParse.mockImplementation(
+      (value: unknown) => ({
+        success: true,
+        data: value,
+      }),
+    );
   });
 
   it('returns organization governance settings', async () => {
@@ -282,15 +364,19 @@ describe('enterprise organization governance routes', () => {
   });
 
   it('updates organization governance settings', async () => {
-    const response = await invokeRoute('PATCH', '/organizations/:id/governance', {
-      params: { id: 'org-1' },
-      body: {
-        defaultPack: { packId: 'sovereign-core', version: '2026.04' },
-        familyPacks: {
-          privacy: { packId: 'enterprise-privacy', version: '2026.04' },
+    const response = await invokeRoute(
+      'PATCH',
+      '/organizations/:id/governance',
+      {
+        params: { id: 'org-1' },
+        body: {
+          defaultPack: { packId: 'sovereign-core', version: '2026.04' },
+          familyPacks: {
+            privacy: { packId: 'enterprise-privacy', version: '2026.04' },
+          },
         },
       },
-    });
+    );
 
     expect(response.statusCode).toBe(200);
     expect(response.body.data).toEqual({
@@ -319,12 +405,16 @@ describe('enterprise organization governance routes', () => {
       },
     });
 
-    const response = await invokeRoute('PATCH', '/organizations/:id/governance', {
-      params: { id: 'org-1' },
-      body: {
-        defaultPack: { packId: '' },
+    const response = await invokeRoute(
+      'PATCH',
+      '/organizations/:id/governance',
+      {
+        params: { id: 'org-1' },
+        body: {
+          defaultPack: { packId: '' },
+        },
       },
-    });
+    );
 
     expect(response.statusCode).toBe(400);
     expect(response.body.code).toBe('VALIDATION_ERROR');
@@ -332,9 +422,13 @@ describe('enterprise organization governance routes', () => {
   });
 
   it('lists available governance packs', async () => {
-    const response = await invokeRoute('GET', '/organizations/:id/governance/packs', {
-      params: { id: 'org-1' },
-    });
+    const response = await invokeRoute(
+      'GET',
+      '/organizations/:id/governance/packs',
+      {
+        params: { id: 'org-1' },
+      },
+    );
 
     expect(response.statusCode).toBe(200);
     expect(response.body.data).toEqual([
@@ -374,6 +468,16 @@ describe('enterprise organization governance routes', () => {
     expect(mockGetAlerts).toHaveBeenCalledWith('org-1', 10);
   });
 
+  it('rejects out-of-range enterprise query parameters before service execution', async () => {
+    const response = await invokeRoute('GET', '/sla/alerts', {
+      query: { limit: '1000000' },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.body.code).toBe('VALIDATION_ERROR');
+    expect(mockGetAlerts).not.toHaveBeenCalled();
+  });
+
   it('binds SLA registration to the enterprise context organization', async () => {
     const response = await invokeRoute('POST', '/sla/register', {
       body: {
@@ -395,10 +499,12 @@ describe('enterprise organization governance routes', () => {
     });
 
     expect(response.statusCode).toBe(201);
-    expect(mockRegisterSLA).toHaveBeenCalledWith(expect.objectContaining({
-      clientId: 'org-1',
-      tier: 'enterprise',
-    }));
+    expect(mockRegisterSLA).toHaveBeenCalledWith(
+      expect.objectContaining({
+        clientId: 'org-1',
+        tier: 'enterprise',
+      }),
+    );
   });
 
   it('fails closed when an enterprise-scoped route lacks organization context', async () => {

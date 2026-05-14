@@ -104,8 +104,11 @@ function sendPublicOAuthError(
     Number.isInteger(error.statusCode) &&
     error.statusCode! >= 400 &&
     error.statusCode! < 600;
-  const statusCode =
-    isValidationError ? 400 : hasExplicitStatus ? error.statusCode! : 500;
+  const statusCode = isValidationError
+    ? 400
+    : hasExplicitStatus
+      ? error.statusCode!
+      : 500;
   const isServerError = statusCode >= 500;
   const protocolCode = isValidationError
     ? 'invalid_request'
@@ -232,6 +235,123 @@ function getAliasedBodyField(
   return hasPrimary ? body[primaryField] : body[alternateField];
 }
 
+function validatePublicOAuthBody(schema: z.ZodSchema) {
+  return (req: Request, res: Response, next: () => void) => {
+    const result = schema.safeParse(req.body);
+    if (!result.success) {
+      sendPublicOAuthError(res, result.error, 'invalid_request');
+      return;
+    }
+
+    req.body = result.data;
+    next();
+  };
+}
+
+const RouteIdSchema = z.string().trim().min(1).max(160);
+const RouteIdParamSchema = z.object({ id: RouteIdSchema });
+const PolicyIdParamSchema = z.object({ policyId: RouteIdSchema });
+const ExceptionIdParamSchema = z.object({ exceptionId: RouteIdSchema });
+const TrustIdParamSchema = z.object({ trustId: RouteIdSchema });
+const IssuerIdentityIdParamSchema = z.object({
+  issuerIdentityId: RouteIdSchema,
+});
+const IssuerKeyHistoryParamSchema = z.object({
+  issuerIdentityId: RouteIdSchema,
+  keyHistoryId: RouteIdSchema,
+});
+const OIDCClientIdParamSchema = z.object({ clientId: RouteIdSchema });
+
+const LimitedListQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(50),
+});
+
+const PeriodQuerySchema = z.object({
+  period: z.coerce.number().int().min(1).max(366).optional(),
+});
+
+const SinceQuerySchema = z.object({
+  since: z.string().datetime().optional(),
+});
+
+const WebhookReplaySchema = z
+  .object({
+    since: z.string().datetime(),
+    until: z.string().datetime().optional(),
+  })
+  .refine(
+    ({ since, until }) => !until || Date.parse(until) >= Date.parse(since),
+    {
+      message: 'until must be at or after since',
+      path: ['until'],
+    },
+  );
+
+const OptionalReasonSchema = z.object({
+  reason: z.string().trim().min(1).max(500).optional(),
+});
+
+const OptionalEffectiveFromSchema = z.object({
+  effectiveFrom: z.string().datetime().optional(),
+});
+
+const OAuthStringSchema = z.string().trim().min(1).max(2048);
+const OAuthSecretSchema = z.string().min(1).max(4096);
+const OptionalScopeSchema = z.string().trim().min(1).max(2048).optional();
+
+const OAuth2ClientCredentialsTokenBodySchema = z.object({
+  grantType: OAuthStringSchema.optional(),
+  grant_type: OAuthStringSchema.optional(),
+  clientId: OAuthStringSchema.optional(),
+  client_id: OAuthStringSchema.optional(),
+  clientSecret: OAuthSecretSchema.optional(),
+  client_secret: OAuthSecretSchema.optional(),
+  scope: OptionalScopeSchema,
+});
+
+const OIDCAuthorizationBodySchema = z.object({
+  clientId: OAuthStringSchema.optional(),
+  client_id: OAuthStringSchema.optional(),
+  redirectUri: z.string().url().max(2048).optional(),
+  redirect_uri: z.string().url().max(2048).optional(),
+  responseType: OAuthStringSchema.optional(),
+  response_type: OAuthStringSchema.optional(),
+  scope: OAuthStringSchema.optional(),
+  state: OAuthStringSchema.optional(),
+  nonce: OAuthStringSchema.optional(),
+  codeChallenge: OAuthStringSchema.optional(),
+  code_challenge: OAuthStringSchema.optional(),
+  codeChallengeMethod: z.enum(['S256', 'plain']).optional(),
+  code_challenge_method: z.enum(['S256', 'plain']).optional(),
+  prompt: OAuthStringSchema.optional(),
+  maxAge: z.coerce.number().int().min(0).max(31_536_000).optional(),
+  max_age: z.coerce.number().int().min(0).max(31_536_000).optional(),
+  acrValues: OAuthStringSchema.optional(),
+  acr_values: OAuthStringSchema.optional(),
+  claims: z.record(z.unknown()).optional(),
+  zeroidCredentialTypes: z.array(z.string().trim().min(1).max(120)).optional(),
+  zeroid_credential_types: z
+    .array(z.string().trim().min(1).max(120))
+    .optional(),
+});
+
+const OIDCTokenBodySchema = z.object({
+  grantType: OAuthStringSchema.optional(),
+  grant_type: OAuthStringSchema.optional(),
+  code: OAuthStringSchema.optional(),
+  redirectUri: z.string().url().max(2048).optional(),
+  redirect_uri: z.string().url().max(2048).optional(),
+  clientId: OAuthStringSchema.optional(),
+  client_id: OAuthStringSchema.optional(),
+  clientSecret: OAuthSecretSchema.optional(),
+  client_secret: OAuthSecretSchema.optional(),
+  codeVerifier: OAuthStringSchema.optional(),
+  code_verifier: OAuthStringSchema.optional(),
+  refreshToken: OAuthSecretSchema.optional(),
+  refresh_token: OAuthSecretSchema.optional(),
+  scope: OptionalScopeSchema,
+});
+
 // ---------------------------------------------------------------------------
 // Middleware: strip spoofable identity headers at the enterprise edge
 //
@@ -280,8 +400,8 @@ type ValidationSchemas = {
 function isZodSchema(value: unknown): value is z.ZodSchema {
   return Boolean(
     value &&
-      typeof value === 'object' &&
-      typeof (value as { safeParse?: unknown }).safeParse === 'function',
+    typeof value === 'object' &&
+    typeof (value as { safeParse?: unknown }).safeParse === 'function',
   );
 }
 
@@ -333,7 +453,9 @@ function getClientId(req: Request): string {
   const enterpriseReq = req as EnterpriseAuthenticatedRequest;
   const organizationId = enterpriseReq.enterpriseContext?.organizationId;
   if (!organizationId) {
-    const error = new Error('Enterprise organization context required') as Error & {
+    const error = new Error(
+      'Enterprise organization context required',
+    ) as Error & {
       statusCode?: number;
       code?: string;
     };
@@ -1223,6 +1345,7 @@ router.patch(
 router.delete(
   '/webhooks/:id',
   requireEnterpriseContext(ENTERPRISE_OPERATOR_ROLES),
+  validate({ params: RouteIdParamSchema }),
   async (req: Request, res: Response): Promise<void> => {
     try {
       const clientId = getClientId(req);
@@ -1245,10 +1368,13 @@ router.delete(
 router.get(
   '/webhooks/:id/deliveries',
   requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES),
+  validate({ params: RouteIdParamSchema, query: LimitedListQuerySchema }),
   async (req: Request, res: Response): Promise<void> => {
     try {
       const clientId = getClientId(req);
-      const limit = parseInt(req.query.limit as string, 10) || 50;
+      const { limit } = req.query as unknown as z.infer<
+        typeof LimitedListQuerySchema
+      >;
       const deliveries = await webhookSystem.getDeliveries(
         req.params.id as string,
         clientId,
@@ -1271,16 +1397,10 @@ router.get(
 router.post(
   '/webhooks/:id/replay',
   requireEnterpriseContext(ENTERPRISE_OPERATOR_ROLES),
+  validate({ params: RouteIdParamSchema, body: WebhookReplaySchema }),
   async (req: Request, res: Response): Promise<void> => {
     try {
       const { since, until } = req.body;
-      if (!since) {
-        res.status(400).json({
-          error: '"since" timestamp is required',
-          code: 'VALIDATION_ERROR',
-        });
-        return;
-      }
       const clientId = getClientId(req);
       const result = await webhookSystem.replayEvents(
         req.params.id as string,
@@ -1356,6 +1476,7 @@ router.get(
 router.delete(
   '/api-keys/:id',
   requireEnterpriseContext(ENTERPRISE_OPERATOR_ROLES),
+  validate({ params: RouteIdParamSchema, body: OptionalReasonSchema }),
   async (req: Request, res: Response): Promise<void> => {
     try {
       const clientId = getClientId(req);
@@ -1379,6 +1500,7 @@ router.delete(
 router.get(
   '/api-keys/:id/quota',
   requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES),
+  validate({ params: RouteIdParamSchema }),
   async (req: Request, res: Response): Promise<void> => {
     try {
       const clientId = getClientId(req);
@@ -1406,6 +1528,7 @@ router.get(
 // ---------------------------------------------------------------------------
 router.post(
   '/oauth2/token',
+  validatePublicOAuthBody(OAuth2ClientCredentialsTokenBodySchema),
   async (req: Request, res: Response): Promise<void> => {
     try {
       const grantType = req.body.grantType ?? req.body.grant_type;
@@ -1518,6 +1641,7 @@ router.get(
 router.get(
   '/policies/:policyId/evidence',
   requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES),
+  validate({ params: PolicyIdParamSchema }),
   async (req: Request, res: Response): Promise<void> => {
     try {
       const enterpriseReq = req as EnterpriseAuthenticatedRequest;
@@ -1552,6 +1676,7 @@ router.get(
 router.post(
   '/policies/:policyId/submit',
   requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES),
+  validate({ params: PolicyIdParamSchema }),
   async (req: Request, res: Response): Promise<void> => {
     try {
       const enterpriseReq = req as EnterpriseAuthenticatedRequest;
@@ -1591,6 +1716,7 @@ router.post(
 router.post(
   '/policies/:policyId/approve',
   requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES),
+  validate({ params: PolicyIdParamSchema, body: OptionalEffectiveFromSchema }),
   async (req: Request, res: Response): Promise<void> => {
     try {
       const enterpriseReq = req as EnterpriseAuthenticatedRequest;
@@ -1638,7 +1764,10 @@ router.post(
 router.post(
   '/policies/:policyId/deprecate',
   requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES),
-  validate({ body: DeprecatePolicyDefinitionSchema }),
+  validate({
+    params: PolicyIdParamSchema,
+    body: DeprecatePolicyDefinitionSchema,
+  }),
   async (req: Request, res: Response): Promise<void> => {
     try {
       const enterpriseReq = req as EnterpriseAuthenticatedRequest;
@@ -1679,7 +1808,7 @@ router.post(
 router.post(
   '/policies/:policyId/revoke',
   requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES),
-  validate({ body: RevokePolicyDefinitionSchema }),
+  validate({ params: PolicyIdParamSchema, body: RevokePolicyDefinitionSchema }),
   async (req: Request, res: Response): Promise<void> => {
     try {
       const enterpriseReq = req as EnterpriseAuthenticatedRequest;
@@ -1843,6 +1972,7 @@ router.get(
 router.get(
   '/policies/exceptions/:exceptionId/evidence',
   requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES),
+  validate({ params: ExceptionIdParamSchema }),
   async (req: Request, res: Response): Promise<void> => {
     try {
       const enterpriseReq = req as EnterpriseAuthenticatedRequest;
@@ -1879,6 +2009,10 @@ router.get(
 router.post(
   '/policies/exceptions/:exceptionId/approve',
   requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES),
+  validate({
+    params: ExceptionIdParamSchema,
+    body: OptionalEffectiveFromSchema,
+  }),
   async (req: Request, res: Response): Promise<void> => {
     try {
       const enterpriseReq = req as EnterpriseAuthenticatedRequest;
@@ -1926,6 +2060,7 @@ router.post(
 router.post(
   '/policies/exceptions/:exceptionId/reject',
   requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES),
+  validate({ params: ExceptionIdParamSchema, body: OptionalReasonSchema }),
   async (req: Request, res: Response): Promise<void> => {
     try {
       const enterpriseReq = req as EnterpriseAuthenticatedRequest;
@@ -1968,7 +2103,10 @@ router.post(
 router.post(
   '/policies/exceptions/:exceptionId/revoke',
   requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES),
-  validate({ body: RevokePolicyExceptionSchema }),
+  validate({
+    params: ExceptionIdParamSchema,
+    body: RevokePolicyExceptionSchema,
+  }),
   async (req: Request, res: Response): Promise<void> => {
     try {
       const enterpriseReq = req as EnterpriseAuthenticatedRequest;
@@ -2079,6 +2217,7 @@ router.get(
 router.get(
   '/trust/issuers/:trustId/evidence',
   requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES),
+  validate({ params: TrustIdParamSchema }),
   async (req: Request, res: Response): Promise<void> => {
     try {
       const enterpriseReq = req as EnterpriseAuthenticatedRequest;
@@ -2115,6 +2254,7 @@ router.get(
 router.post(
   '/trust/issuers/:trustId/approve',
   requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES),
+  validate({ params: TrustIdParamSchema }),
   async (req: Request, res: Response): Promise<void> => {
     try {
       const enterpriseReq = req as EnterpriseAuthenticatedRequest;
@@ -2154,6 +2294,7 @@ router.post(
 router.post(
   '/trust/issuers/:trustId/suspend',
   requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES),
+  validate({ params: TrustIdParamSchema, body: OptionalReasonSchema }),
   async (req: Request, res: Response): Promise<void> => {
     try {
       const enterpriseReq = req as EnterpriseAuthenticatedRequest;
@@ -2198,7 +2339,10 @@ router.post(
 router.post(
   '/trust/issuers/:issuerIdentityId/keys',
   requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES),
-  validate({ body: RecordIssuerKeySchema }),
+  validate({
+    params: IssuerIdentityIdParamSchema,
+    body: RecordIssuerKeySchema,
+  }),
   async (req: Request, res: Response): Promise<void> => {
     try {
       const enterpriseReq = req as EnterpriseAuthenticatedRequest;
@@ -2239,6 +2383,7 @@ router.post(
 router.get(
   '/trust/issuers/:issuerIdentityId/keys',
   requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES),
+  validate({ params: IssuerIdentityIdParamSchema }),
   async (req: Request, res: Response): Promise<void> => {
     try {
       const enterpriseReq = req as EnterpriseAuthenticatedRequest;
@@ -2273,6 +2418,7 @@ router.get(
 router.get(
   '/trust/issuers/:issuerIdentityId/keys/:keyHistoryId/evidence',
   requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES),
+  validate({ params: IssuerKeyHistoryParamSchema }),
   async (req: Request, res: Response): Promise<void> => {
     try {
       const enterpriseReq = req as EnterpriseAuthenticatedRequest;
@@ -2423,6 +2569,7 @@ router.get(
 router.post(
   '/oidc/clients/:clientId/approve',
   requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES),
+  validate({ params: OIDCClientIdParamSchema }),
   async (req: Request, res: Response): Promise<void> => {
     try {
       const enterpriseReq = req as EnterpriseAuthenticatedRequest;
@@ -2465,6 +2612,7 @@ router.post(
 router.post(
   '/oidc/clients/:clientId/deactivate',
   requireEnterpriseContext(ENTERPRISE_ADMIN_ROLES),
+  validate({ params: OIDCClientIdParamSchema, body: OptionalReasonSchema }),
   async (req: Request, res: Response): Promise<void> => {
     try {
       const enterpriseReq = req as EnterpriseAuthenticatedRequest;
@@ -2513,6 +2661,7 @@ router.post(
 // The authenticated identity is sourced from the JWT — never from raw headers.
 router.post(
   '/oidc/authorize',
+  validatePublicOAuthBody(OIDCAuthorizationBodySchema),
   async (req: Request, res: Response): Promise<void> => {
     try {
       const authReq = req as AuthenticatedRequest;
@@ -2573,7 +2722,8 @@ router.post(
         acrValues: requestBody.acr_values ?? requestBody.acrValues,
         claims: requestBody.claims,
         zeroidCredentialTypes:
-          requestBody.zeroid_credential_types ?? requestBody.zeroidCredentialTypes,
+          requestBody.zeroid_credential_types ??
+          requestBody.zeroidCredentialTypes,
       } as AuthorizationRequest;
       const result = await oidcBridge.authorize(
         authorizationRequest,
@@ -2601,6 +2751,7 @@ router.post(
 // ---------------------------------------------------------------------------
 oidcPublicRouter.post(
   '/oidc/token',
+  validatePublicOAuthBody(OIDCTokenBodySchema),
   async (req: Request, res: Response): Promise<void> => {
     try {
       const basicAuth = parseBasicClientAuth(req.headers.authorization);
@@ -2747,10 +2898,13 @@ router.post(
 router.get(
   '/sla/report',
   requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES),
+  validate({ query: PeriodQuerySchema }),
   async (req: Request, res: Response): Promise<void> => {
     try {
       const clientId = getClientId(req);
-      const periodDays = parseInt(req.query.period as string, 10) || undefined;
+      const { period: periodDays } = req.query as unknown as z.infer<
+        typeof PeriodQuerySchema
+      >;
       const report = slaMonitor.generateReport(clientId, periodDays);
       res.status(200).json({ data: report });
     } catch (err) {
@@ -2769,21 +2923,22 @@ router.get(
 router.get(
   '/sla/violations',
   requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES),
+  validate({ query: SinceQuerySchema }),
   async (req: Request, res: Response): Promise<void> => {
     try {
       const clientId = getClientId(req);
-      const since = req.query.since as string | undefined;
+      const { since } = req.query as unknown as z.infer<
+        typeof SinceQuerySchema
+      >;
       const violations = slaMonitor.getViolations(clientId, since);
       res.status(200).json({ data: violations });
     } catch (err) {
       const error = err as Error & { statusCode?: number; code?: string };
       logger.error('sla_violations_error', { error: error.message });
-      res
-        .status(error.statusCode ?? 500)
-        .json({
-          error: error.message,
-          code: error.code ?? 'SLA_VIOLATIONS_ERROR',
-        });
+      res.status(error.statusCode ?? 500).json({
+        error: error.message,
+        code: error.code ?? 'SLA_VIOLATIONS_ERROR',
+      });
     }
   },
 );
@@ -2794,10 +2949,13 @@ router.get(
 router.get(
   '/sla/alerts',
   requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES),
+  validate({ query: LimitedListQuerySchema }),
   async (req: Request, res: Response): Promise<void> => {
     try {
       const clientId = getClientId(req);
-      const limit = parseInt(req.query.limit as string, 10) || 50;
+      const { limit } = req.query as unknown as z.infer<
+        typeof LimitedListQuerySchema
+      >;
       const alerts = slaMonitor.getAlerts(clientId, limit);
       res.status(200).json({ data: alerts });
     } catch (err) {
@@ -2821,10 +2979,13 @@ router.get(
 router.get(
   '/usage',
   requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES),
+  validate({ query: PeriodQuerySchema }),
   async (req: Request, res: Response): Promise<void> => {
     try {
       const clientId = getClientId(req);
-      const periodDays = parseInt(req.query.period as string, 10) || 30;
+      const { period: periodDays = 30 } = req.query as unknown as z.infer<
+        typeof PeriodQuerySchema
+      >;
       const analytics = await apiGateway.getAnalytics(clientId, periodDays);
       res.status(200).json({ data: analytics });
     } catch (err) {

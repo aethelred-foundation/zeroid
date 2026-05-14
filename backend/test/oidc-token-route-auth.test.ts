@@ -1,5 +1,3 @@
-import { z } from 'zod';
-
 const routeRegistry: Record<
   string,
   Array<(req: any, res: any, next: (err?: unknown) => void) => unknown>
@@ -9,78 +7,95 @@ const mockExchangeToken = jest.fn();
 const mockAuthorize = jest.fn();
 const mockIdentityFindUnique = jest.fn();
 
-jest.mock('express', () => {
-  const createRouter = () => {
-    const router: any = {
-      use: jest.fn(() => router),
-      get: jest.fn(
-        (
-          path: string,
-          ...handlers: Array<
-            (req: any, res: any, next: (err?: unknown) => void) => unknown
-          >
-        ) => {
-          routeRegistry[`GET ${path}`] = handlers;
-          return router;
-        },
-      ),
-      post: jest.fn(
-        (
-          path: string,
-          ...handlers: Array<
-            (req: any, res: any, next: (err?: unknown) => void) => unknown
-          >
-        ) => {
-          routeRegistry[`POST ${path}`] = handlers;
-          return router;
-        },
-      ),
-      patch: jest.fn(() => router),
-      delete: jest.fn(() => router),
+jest.mock(
+  'express',
+  () => {
+    const createRouter = () => {
+      const router: any = {
+        use: jest.fn(() => router),
+        get: jest.fn(
+          (
+            path: string,
+            ...handlers: Array<
+              (req: any, res: any, next: (err?: unknown) => void) => unknown
+            >
+          ) => {
+            routeRegistry[`GET ${path}`] = handlers;
+            return router;
+          },
+        ),
+        post: jest.fn(
+          (
+            path: string,
+            ...handlers: Array<
+              (req: any, res: any, next: (err?: unknown) => void) => unknown
+            >
+          ) => {
+            routeRegistry[`POST ${path}`] = handlers;
+            return router;
+          },
+        ),
+        patch: jest.fn(() => router),
+        delete: jest.fn(() => router),
+      };
+      return router;
     };
-    return router;
-  };
 
-  return {
-    Router: jest.fn(() => createRouter()),
-  };
-}, { virtual: true });
+    return {
+      Router: jest.fn(() => createRouter()),
+    };
+  },
+  { virtual: true },
+);
 
-jest.mock('winston', () => {
-  const noop = jest.fn();
-  return {
-    createLogger: jest.fn(() => ({
-      info: noop,
-      warn: noop,
-      error: noop,
-      debug: noop,
-    })),
-    format: {
-      combine: jest.fn(),
-      timestamp: jest.fn(),
-      json: jest.fn(),
-    },
-    transports: { Console: jest.fn() },
-  };
-}, { virtual: true });
+jest.mock(
+  'winston',
+  () => {
+    const noop = jest.fn();
+    return {
+      createLogger: jest.fn(() => ({
+        info: noop,
+        warn: noop,
+        error: noop,
+        debug: noop,
+      })),
+      format: {
+        combine: jest.fn(),
+        timestamp: jest.fn(),
+        json: jest.fn(),
+      },
+      transports: { Console: jest.fn() },
+    };
+  },
+  { virtual: true },
+);
 
 jest.mock('../src/middleware/enterprise', () => ({
-  requireEnterpriseContext: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+  requireEnterpriseContext:
+    () => (_req: unknown, _res: unknown, next: () => void) =>
+      next(),
 }));
 
 jest.mock('../src/middleware/rateLimit', () => ({
-  createRateLimiter: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+  createRateLimiter: () => (_req: unknown, _res: unknown, next: () => void) =>
+    next(),
 }));
 
 jest.mock('../src/services/enterprise/webhook-system', () => ({
   webhookSystem: {},
-  WebhookRegistrationSchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
-  WebhookUpdateSchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
+  WebhookRegistrationSchema: {
+    safeParse: (value: unknown) => ({ success: true, data: value }),
+  },
+  WebhookUpdateSchema: {
+    safeParse: (value: unknown) => ({ success: true, data: value }),
+  },
 }));
 
 jest.mock('../src/services/enterprise/api-gateway', () => ({
   apiGateway: {},
-  CreateAPIKeySchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
+  CreateAPIKeySchema: {
+    safeParse: (value: unknown) => ({ success: true, data: value }),
+  },
 }));
 
 jest.mock('../src/services/enterprise/oidc-bridge', () => ({
@@ -104,13 +119,21 @@ jest.mock('../src/services/enterprise/oidc-claims', () => ({
 
 jest.mock('../src/services/enterprise/sla-monitor', () => ({
   slaMonitor: {},
-  SLADefinitionSchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
+  SLADefinitionSchema: {
+    safeParse: (value: unknown) => ({ success: true, data: value }),
+  },
 }));
 
 jest.mock('../src/services/enterprise/organization-service', () => ({
-  CreateOrganizationSchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
-  AddOrganizationMemberSchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
-  UpdateOrganizationGovernanceSchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
+  CreateOrganizationSchema: {
+    safeParse: (value: unknown) => ({ success: true, data: value }),
+  },
+  AddOrganizationMemberSchema: {
+    safeParse: (value: unknown) => ({ success: true, data: value }),
+  },
+  UpdateOrganizationGovernanceSchema: {
+    safeParse: (value: unknown) => ({ success: true, data: value }),
+  },
   enterpriseOrganizationService: {},
 }));
 
@@ -120,21 +143,39 @@ jest.mock('../src/services/enterprise/policy-governance-service', () => ({
 
 jest.mock('../src/services/enterprise/issuer-trust-service', () => ({
   issuerTrustRegistryService: {},
-  RegisterIssuerTrustSchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
-  RecordIssuerKeySchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
+  RegisterIssuerTrustSchema: {
+    safeParse: (value: unknown) => ({ success: true, data: value }),
+  },
+  RecordIssuerKeySchema: {
+    safeParse: (value: unknown) => ({ success: true, data: value }),
+  },
 }));
 
 jest.mock('../src/services/enterprise/policy-registry-service', () => ({
-  POLICY_APPROVAL_MODES: ['single_admin', 'separation_of_duties', 'dual_control'],
-  CreatePolicyDefinitionSchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
-  DeprecatePolicyDefinitionSchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
-  RevokePolicyDefinitionSchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
+  POLICY_APPROVAL_MODES: [
+    'single_admin',
+    'separation_of_duties',
+    'dual_control',
+  ],
+  CreatePolicyDefinitionSchema: {
+    safeParse: (value: unknown) => ({ success: true, data: value }),
+  },
+  DeprecatePolicyDefinitionSchema: {
+    safeParse: (value: unknown) => ({ success: true, data: value }),
+  },
+  RevokePolicyDefinitionSchema: {
+    safeParse: (value: unknown) => ({ success: true, data: value }),
+  },
   policyRegistryService: {},
 }));
 
 jest.mock('../src/services/enterprise/policy-exception-service', () => ({
-  CreatePolicyExceptionSchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
-  RevokePolicyExceptionSchema: { safeParse: (value: unknown) => ({ success: true, data: value }) },
+  CreatePolicyExceptionSchema: {
+    safeParse: (value: unknown) => ({ success: true, data: value }),
+  },
+  RevokePolicyExceptionSchema: {
+    safeParse: (value: unknown) => ({ success: true, data: value }),
+  },
   policyExceptionService: {},
 }));
 
@@ -247,7 +288,8 @@ describe('OIDC token route client authentication', () => {
       scope: 'openid',
     });
     mockAuthorize.mockResolvedValue({
-      redirectUrl: 'https://app.example.com/callback?code=secret-code&state=state-1',
+      redirectUrl:
+        'https://app.example.com/callback?code=secret-code&state=state-1',
       sessionId: 'session-1',
     });
     mockIdentityFindUnique.mockResolvedValue({
@@ -361,15 +403,7 @@ describe('OIDC token route client authentication', () => {
     );
   });
 
-  it('returns invalid_request when bridge request validation fails', async () => {
-    const parsed = z.object({ grantType: z.string() }).safeParse({
-      grantType: 123,
-    });
-    if (parsed.success) {
-      throw new Error('expected malformed OAuth fixture');
-    }
-    mockExchangeToken.mockRejectedValueOnce(parsed.error);
-
+  it('rejects malformed token request bodies before bridge execution', async () => {
     const response = await invokeRoute('POST', '/oidc/token', {
       body: {
         grant_type: 123,
@@ -380,7 +414,8 @@ describe('OIDC token route client authentication', () => {
     expect(response.body).toMatchObject({
       error: 'invalid_request',
     });
-    expect(response.body.error_description).toContain('grantType');
+    expect(response.body.error_description).toContain('grant_type');
+    expect(mockExchangeToken).not.toHaveBeenCalled();
   });
 
   it('keeps the SAML bridge disabled without returning assertion material', async () => {
