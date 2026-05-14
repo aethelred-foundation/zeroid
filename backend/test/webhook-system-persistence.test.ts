@@ -185,6 +185,16 @@ describe('WebhookSystem persistence', () => {
     });
   });
 
+  it('rejects low-diversity caller-supplied webhook secrets', async () => {
+    await expect(webhookSystem.register('org-1', {
+      url: 'https://hooks.zeroid.example/weak-secret',
+      events: ['credential.issued'],
+      secret: 'a'.repeat(64),
+    })).rejects.toThrow();
+
+    expect(mockWebhookCreate).not.toHaveBeenCalled();
+  });
+
   it('rejects unsafe production webhook endpoints before persistence', async () => {
     process.env.NODE_ENV = 'production';
 
@@ -262,7 +272,7 @@ describe('WebhookSystem persistence', () => {
     try {
       const createdAt = new Date('2026-04-21T00:00:00.000Z');
       const updatedAt = new Date('2026-04-21T00:00:00.000Z');
-      const rawSecret = 's'.repeat(64);
+      const rawSecret = 'whsec_A1b2C3d4E5f6G7h8I9j0K1l2M3n4P5q6';
 
       mockWebhookCreate.mockImplementation(async ({ data }: any) => ({
         ...data,

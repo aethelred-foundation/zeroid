@@ -30,6 +30,8 @@ const UNSAFE_WEBHOOK_RESOLUTION_MESSAGE =
   'Webhook hostname resolved to a localhost or private network address.';
 const RESERVED_WEBHOOK_HEADER_MESSAGE =
   'Webhook headers must not override platform delivery headers.';
+const WEBHOOK_SECRET_STRENGTH_MESSAGE =
+  'Webhook secret must be at least 32 characters with sufficient character diversity.';
 const RESERVED_WEBHOOK_HEADER_NAMES = new Set([
   'content-type',
   'user-agent',
@@ -166,6 +168,12 @@ function safeCustomWebhookHeaders(headers: Record<string, string>): Record<strin
   );
 }
 
+function hasWebhookSecretStrength(secret: string): boolean {
+  const trimmed = secret.trim();
+  const uniqueCharacters = new Set(trimmed).size;
+  return uniqueCharacters >= 8 && !/(.)\1{15,}/.test(trimmed);
+}
+
 async function readWebhookResponsePreview(response: Response): Promise<string> {
   if (!response.body) {
     const body = await response.text();
@@ -225,7 +233,7 @@ export type WebhookEventType = z.infer<typeof WebhookEventTypeSchema>;
 export const WebhookRegistrationSchema = z.object({
   url: z.string().url().refine(isSafeWebhookEndpoint, SAFE_WEBHOOK_ENDPOINT_MESSAGE),
   events: z.array(WebhookEventTypeSchema).min(1),
-  secret: z.string().min(32).optional(),
+  secret: z.string().min(32).refine(hasWebhookSecretStrength, WEBHOOK_SECRET_STRENGTH_MESSAGE).optional(),
   description: z.string().optional(),
   active: z.boolean().default(true),
   metadata: z.record(z.string()).default({}),
