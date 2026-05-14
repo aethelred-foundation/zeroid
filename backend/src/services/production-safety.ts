@@ -8,7 +8,6 @@ export interface ProductionSafetyViolation {
 }
 
 const MIN_METRICS_TOKEN_LENGTH = 32;
-const MIN_JWT_SECRET_LENGTH = 48;
 const MIN_POLICY_RECEIPT_SECRET_LENGTH = 48;
 const MIN_ENTERPRISE_SECRET_HASH_PEPPER_LENGTH = 48;
 const MIN_IDENTITY_RECOVERY_HASH_PEPPER_LENGTH = 48;
@@ -16,6 +15,7 @@ const MIN_GOVERNMENT_CACHE_HASH_PEPPER_LENGTH = 48;
 const DEFAULT_DEVELOPMENT_CORS_ORIGINS = ['http://localhost:3000'];
 const REQUIRED_SECRET_KEY_BYTES = 32;
 const MAX_PRODUCTION_SANCTIONS_LIST_AGE_HOURS = 24;
+const SUPPORTED_API_JWT_SIGNING_ALGORITHMS = new Set(['RS256', 'ES256']);
 const SUPPORTED_OIDC_SIGNING_ALGORITHMS = new Set(['RS256', 'PS256']);
 const PRODUCTION_KMS_PROVIDERS = new Set(['aws-kms', 'gcp-kms', 'azure-kms']);
 const PRIVATE_HOSTNAME_SUFFIXES = [
@@ -41,7 +41,7 @@ const REJECTED_PRODUCTION_TEE_TCB_STATUSES = new Set([
   'OutOfDate',
   'Revoked',
 ]);
-const KNOWN_UNSAFE_JWT_SECRETS = new Set([
+const KNOWN_UNSAFE_SHARED_SECRETS = new Set([
   'change-me',
   'changeme',
   'dev',
@@ -53,7 +53,6 @@ const KNOWN_UNSAFE_JWT_SECRETS = new Set([
   'test-secret-that-is-at-least-32-chars!!',
   'zeroid-secret',
 ]);
-
 const UNSAFE_PRODUCTION_FLAGS: ProductionSafetyViolation[] = [
   {
     control: 'ALLOW_LOCAL_CREDENTIAL_SIGNING',
@@ -136,7 +135,9 @@ export function checkedProductionSafetyControls(): string[] {
     'REDIS_URL',
     'REDIS_TLS_REQUIRED',
     'NODE_ENV_ZEROID_ENV_CONSISTENCY',
-    'JWT_SECRET',
+    'API_JWT_ASYMMETRIC_KEYS',
+    'API_JWT_ALGORITHM',
+    'API_JWT_KEY_ID',
     'TRUSTED_PROXY',
     'CORS_ORIGINS',
     'METRICS_PUBLIC_DISABLED_OR_METRICS_AUTH_TOKEN',
@@ -211,21 +212,35 @@ export function collectProductionSafetyViolations(
     });
   }
 
-  const jwtSecret = env.JWT_SECRET?.trim();
-  if (!jwtSecret) {
+  const apiJwtPrivateKey = (
+    env.API_JWT_SIGNING_PRIVATE_KEY ??
+    env.JWT_SIGNING_PRIVATE_KEY ??
+    ''
+  ).trim();
+  const apiJwtPublicKey = (
+    env.API_JWT_VERIFICATION_PUBLIC_KEY ??
+    env.JWT_VERIFICATION_PUBLIC_KEY ??
+    ''
+  ).trim();
+  const apiJwtAlgorithm = (env.API_JWT_ALGORITHM ?? env.JWT_ALGORITHM ?? 'RS256').trim();
+  const apiJwtKeyId = (env.API_JWT_KEY_ID ?? env.JWT_KEY_ID ?? '').trim();
+
+  if (!apiJwtPrivateKey || !apiJwtPublicKey) {
     violations.push({
-      control: 'JWT_SECRET',
-      risk: 'Production API JWT signing secret is missing',
+      control: 'API_JWT_ASYMMETRIC_KEYS',
+      risk: 'Production API JWTs require asymmetric signing and verification keys',
     });
-  } else if (jwtSecret.length < MIN_JWT_SECRET_LENGTH) {
+  }
+  if (!SUPPORTED_API_JWT_SIGNING_ALGORITHMS.has(apiJwtAlgorithm)) {
     violations.push({
-      control: 'JWT_SECRET',
-      risk: `Production API JWT signing secret must be at least ${MIN_JWT_SECRET_LENGTH} characters`,
+      control: 'API_JWT_ALGORITHM',
+      risk: 'Production API JWT signing algorithm must be asymmetric',
     });
-  } else if (isKnownUnsafeJwtSecret(jwtSecret)) {
+  }
+  if (apiJwtKeyId.length < 8) {
     violations.push({
-      control: 'JWT_SECRET',
-      risk: 'Production API JWT signing secret must not use a known development or test placeholder',
+      control: 'API_JWT_KEY_ID',
+      risk: 'Production API JWT signing keys require a stable key id for rotation and incident response',
     });
   }
 
@@ -320,7 +335,7 @@ export function collectProductionSafetyViolations(
       control: 'POLICY_RECEIPT_SIGNING_SECRET',
       risk: `Policy receipt signing secret must be at least ${MIN_POLICY_RECEIPT_SECRET_LENGTH} characters`,
     });
-  } else if (isKnownUnsafeJwtSecret(policyReceiptSecret)) {
+  } else if (isKnownUnsafeSharedSecret(policyReceiptSecret)) {
     violations.push({
       control: 'POLICY_RECEIPT_SIGNING_SECRET',
       risk: 'Policy receipt signing secret must not use a known development or test placeholder',
@@ -340,7 +355,7 @@ export function collectProductionSafetyViolations(
       control: 'ENTERPRISE_SECRET_HASH_PEPPER',
       risk: `Enterprise secret hash pepper must be at least ${MIN_ENTERPRISE_SECRET_HASH_PEPPER_LENGTH} characters`,
     });
-  } else if (isKnownUnsafeJwtSecret(enterpriseSecretHashPepper)) {
+  } else if (isKnownUnsafeSharedSecret(enterpriseSecretHashPepper)) {
     violations.push({
       control: 'ENTERPRISE_SECRET_HASH_PEPPER',
       risk: 'Enterprise secret hash pepper must not use a known development or test placeholder',
@@ -360,7 +375,7 @@ export function collectProductionSafetyViolations(
       control: 'IDENTITY_RECOVERY_HASH_PEPPER',
       risk: `Identity recovery hash pepper must be at least ${MIN_IDENTITY_RECOVERY_HASH_PEPPER_LENGTH} characters`,
     });
-  } else if (isKnownUnsafeJwtSecret(recoveryHashPepper)) {
+  } else if (isKnownUnsafeSharedSecret(recoveryHashPepper)) {
     violations.push({
       control: 'IDENTITY_RECOVERY_HASH_PEPPER',
       risk: 'Identity recovery hash pepper must not use a known development or test placeholder',
@@ -380,7 +395,7 @@ export function collectProductionSafetyViolations(
       control: 'GOVERNMENT_CACHE_HASH_PEPPER',
       risk: `Government verification cache hash pepper must be at least ${MIN_GOVERNMENT_CACHE_HASH_PEPPER_LENGTH} characters`,
     });
-  } else if (isKnownUnsafeJwtSecret(governmentCacheHashPepper)) {
+  } else if (isKnownUnsafeSharedSecret(governmentCacheHashPepper)) {
     violations.push({
       control: 'GOVERNMENT_CACHE_HASH_PEPPER',
       risk: 'Government verification cache hash pepper must not use a known development or test placeholder',
@@ -817,8 +832,8 @@ function isValidSecretEncryptionKey(value: string): boolean {
   return decodeSecretEncryptionKey(value)?.length === REQUIRED_SECRET_KEY_BYTES;
 }
 
-function isKnownUnsafeJwtSecret(value: string): boolean {
-  return KNOWN_UNSAFE_JWT_SECRETS.has(value.trim().toLowerCase());
+function isKnownUnsafeSharedSecret(value: string): boolean {
+  return KNOWN_UNSAFE_SHARED_SECRETS.has(value.trim().toLowerCase());
 }
 
 function decodeSecretEncryptionKey(value: string): Buffer | null {

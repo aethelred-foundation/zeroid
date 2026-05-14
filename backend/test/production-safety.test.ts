@@ -18,6 +18,15 @@ const oidcPublicKey = oidcKeyPair.publicKey.export({
   type: 'spki',
   format: 'pem',
 }) as string;
+const apiJwtKeyPair = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+const apiJwtPrivateKey = apiJwtKeyPair.privateKey.export({
+  type: 'pkcs8',
+  format: 'pem',
+}) as string;
+const apiJwtPublicKey = apiJwtKeyPair.publicKey.export({
+  type: 'spki',
+  format: 'pem',
+}) as string;
 
 const BASE_ENV: NodeJS.ProcessEnv = { NODE_ENV: 'test' };
 const circuitDigestManifest = Object.fromEntries(
@@ -29,7 +38,10 @@ const circuitDigestManifest = Object.fromEntries(
 const PROD_BASE_ENV: NodeJS.ProcessEnv = {
   NODE_ENV: 'production',
   REDIS_URL: 'rediss://redis.zeroid.example:6380',
-  JWT_SECRET: 'j'.repeat(64),
+  API_JWT_SIGNING_PRIVATE_KEY: apiJwtPrivateKey,
+  API_JWT_VERIFICATION_PUBLIC_KEY: apiJwtPublicKey,
+  API_JWT_ALGORITHM: 'RS256',
+  API_JWT_KEY_ID: 'api-jwt-key-1',
   CORS_ORIGINS: 'https://app.zeroid.example,https://admin.zeroid.example',
   SANCTIONS_SCREENING_DISABLED: 'false',
   SANCTIONS_LIST_SIGNATURE_PUBLIC_KEYS_JSON: JSON.stringify({
@@ -75,7 +87,7 @@ describe('production safety controls', () => {
     expect(collectProductionSafetyViolations({ ZEROID_ENV: 'production' })).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ control: 'REDIS_URL' }),
-        expect.objectContaining({ control: 'JWT_SECRET' }),
+        expect.objectContaining({ control: 'API_JWT_ASYMMETRIC_KEYS' }),
       ]),
     );
   });
@@ -155,29 +167,38 @@ describe('production safety controls', () => {
     ]);
   });
 
-  it('requires a strong JWT signing secret in production', () => {
+  it('requires asymmetric API JWT signing keys in production', () => {
     expect(collectProductionSafetyViolations({
       ...PROD_BASE_ENV,
-      JWT_SECRET: '',
+      API_JWT_SIGNING_PRIVATE_KEY: '',
+      API_JWT_VERIFICATION_PUBLIC_KEY: '',
       METRICS_PUBLIC_DISABLED: 'true',
     })).toEqual([
-      expect.objectContaining({ control: 'JWT_SECRET' }),
+      expect.objectContaining({ control: 'API_JWT_ASYMMETRIC_KEYS' }),
     ]);
 
     expect(collectProductionSafetyViolations({
       ...PROD_BASE_ENV,
-      JWT_SECRET: 'short-secret',
+      API_JWT_VERIFICATION_PUBLIC_KEY: '',
       METRICS_PUBLIC_DISABLED: 'true',
     })).toEqual([
-      expect.objectContaining({ control: 'JWT_SECRET' }),
+      expect.objectContaining({ control: 'API_JWT_ASYMMETRIC_KEYS' }),
     ]);
 
     expect(collectProductionSafetyViolations({
       ...PROD_BASE_ENV,
-      JWT_SECRET: 'test-secret-that-is-at-least-32-chars!!',
+      API_JWT_ALGORITHM: 'HS256',
       METRICS_PUBLIC_DISABLED: 'true',
     })).toEqual([
-      expect.objectContaining({ control: 'JWT_SECRET' }),
+      expect.objectContaining({ control: 'API_JWT_ALGORITHM' }),
+    ]);
+
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      API_JWT_KEY_ID: 'short',
+      METRICS_PUBLIC_DISABLED: 'true',
+    })).toEqual([
+      expect.objectContaining({ control: 'API_JWT_KEY_ID' }),
     ]);
   });
 

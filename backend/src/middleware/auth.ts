@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import * as jose from 'jose';
 import { prisma, logger, redis } from '../index';
 import { isAethelredDid } from '../utils/did';
+import { isProductionRuntime } from '../services/production-safety';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -25,10 +26,20 @@ interface JWTPayload {
   jti: string;        // session ID
 }
 
+type ApiJwtAlgorithm = 'HS256' | 'RS256' | 'ES256';
+
+interface JwtKeyConfig {
+  algorithm: ApiJwtAlgorithm;
+  keyId?: string;
+  mode: 'asymmetric' | 'legacy-hmac';
+  signingKey: Promise<Uint8Array | jose.KeyLike>;
+  verificationKey: Promise<Uint8Array | jose.KeyLike>;
+}
+
 // ---------------------------------------------------------------------------
 // Key management
 // ---------------------------------------------------------------------------
-function loadJWTSecret(): Uint8Array {
+function loadLegacyJWTSecret(): Uint8Array {
   const secret = process.env.JWT_SECRET;
   if (!secret) {
     throw new Error(
@@ -45,14 +56,85 @@ function loadJWTSecret(): Uint8Array {
   return new TextEncoder().encode(secret);
 }
 
-const JWT_SECRET = loadJWTSecret();
 const JWT_ISSUER = 'zeroid-api';
 const JWT_AUDIENCE = 'zeroid-client';
-const JWT_ALGORITHM = 'HS256';
 const TOKEN_EXPIRY = '24h';
+const SESSION_TTL_SECONDS = 24 * 60 * 60;
+
+function normalizePem(value: string): string {
+  return value.replace(/\\n/g, '\n').trim();
+}
+
+function loadApiJwtAlgorithm(hasAsymmetricKeys: boolean): ApiJwtAlgorithm {
+  const configured = (process.env.API_JWT_ALGORITHM ?? process.env.JWT_ALGORITHM)?.trim();
+  const algorithm = configured || (hasAsymmetricKeys ? 'RS256' : 'HS256');
+  if (!['HS256', 'RS256', 'ES256'].includes(algorithm)) {
+    throw new Error(`FATAL: Unsupported API JWT algorithm: ${algorithm}`);
+  }
+  if (hasAsymmetricKeys && algorithm === 'HS256') {
+    throw new Error('FATAL: API JWT asymmetric keys cannot be used with HS256');
+  }
+  return algorithm as ApiJwtAlgorithm;
+}
+
+function loadJwtKeyConfig(): JwtKeyConfig {
+  const privateKeyPem = (
+    process.env.API_JWT_SIGNING_PRIVATE_KEY ??
+    process.env.JWT_SIGNING_PRIVATE_KEY ??
+    ''
+  ).trim();
+  const publicKeyPem = (
+    process.env.API_JWT_VERIFICATION_PUBLIC_KEY ??
+    process.env.JWT_VERIFICATION_PUBLIC_KEY ??
+    ''
+  ).trim();
+  const hasAsymmetricKeys = privateKeyPem.length > 0 || publicKeyPem.length > 0;
+  const algorithm = loadApiJwtAlgorithm(hasAsymmetricKeys);
+
+  if (hasAsymmetricKeys) {
+    if (!privateKeyPem || !publicKeyPem) {
+      throw new Error(
+        'FATAL: Both API_JWT_SIGNING_PRIVATE_KEY and API_JWT_VERIFICATION_PUBLIC_KEY are required',
+      );
+    }
+
+    return {
+      algorithm,
+      keyId: (process.env.API_JWT_KEY_ID ?? process.env.JWT_KEY_ID)?.trim() || undefined,
+      mode: 'asymmetric',
+      signingKey: jose.importPKCS8(normalizePem(privateKeyPem), algorithm),
+      verificationKey: jose.importSPKI(normalizePem(publicKeyPem), algorithm),
+    };
+  }
+
+  if (isProductionRuntime()) {
+    throw new Error(
+      'FATAL: Production API JWTs require asymmetric signing keys; configure API_JWT_SIGNING_PRIVATE_KEY and API_JWT_VERIFICATION_PUBLIC_KEY',
+    );
+  }
+
+  const secret = loadLegacyJWTSecret();
+  return {
+    algorithm: 'HS256',
+    mode: 'legacy-hmac',
+    signingKey: Promise.resolve(secret),
+    verificationKey: Promise.resolve(secret),
+  };
+}
+
+const JWT_KEYS = loadJwtKeyConfig();
 
 function isAcceptedJwtHeader(header: jose.JWTHeaderParameters): boolean {
-  return header.alg === JWT_ALGORITHM && header.typ === 'JWT';
+  if (header.alg !== JWT_KEYS.algorithm || header.typ !== 'JWT') {
+    return false;
+  }
+
+  return JWT_KEYS.mode !== 'asymmetric' || !JWT_KEYS.keyId || header.kid === JWT_KEYS.keyId;
+}
+
+function sessionTtlSeconds(expiresAt: Date): number {
+  const secondsRemaining = Math.floor((expiresAt.getTime() - Date.now()) / 1000);
+  return Math.max(1, Math.min(SESSION_TTL_SECONDS, secondsRemaining));
 }
 
 // ---------------------------------------------------------------------------
@@ -62,14 +144,18 @@ export async function generateToken(identityId: string, did: string): Promise<{ 
   const sessionId = crypto.randomUUID();
 
   const token = await new jose.SignJWT({ did } as unknown as jose.JWTPayload)
-    .setProtectedHeader({ alg: JWT_ALGORITHM, typ: 'JWT' })
+    .setProtectedHeader({
+      alg: JWT_KEYS.algorithm,
+      typ: 'JWT',
+      ...(JWT_KEYS.keyId ? { kid: JWT_KEYS.keyId } : {}),
+    })
     .setSubject(identityId)
     .setIssuedAt()
     .setExpirationTime(TOKEN_EXPIRY)
     .setIssuer(JWT_ISSUER)
     .setAudience(JWT_AUDIENCE)
     .setJti(sessionId)
-    .sign(JWT_SECRET);
+    .sign(await JWT_KEYS.signingKey);
 
   // Store session in database and cache
   const tokenHash = await hashToken(token);
@@ -89,7 +175,7 @@ export async function generateToken(identityId: string, did: string): Promise<{ 
     `session:${sessionId}`,
     JSON.stringify({ identityId, did, tokenHash, expiresAt: expiresAt.toISOString() }),
     'EX',
-    86400,
+    sessionTtlSeconds(expiresAt),
   );
 
   logger.info('token_generated', { identityId, did, sessionId });
@@ -172,10 +258,10 @@ export async function authMiddleware(
     const tokenHash = await hashToken(token);
 
     // Verify JWT signature and claims
-    const { payload, protectedHeader } = await jose.jwtVerify(token, JWT_SECRET, {
+    const { payload, protectedHeader } = await jose.jwtVerify(token, await JWT_KEYS.verificationKey, {
       issuer: JWT_ISSUER,
       audience: JWT_AUDIENCE,
-      algorithms: [JWT_ALGORITHM],
+      algorithms: [JWT_KEYS.algorithm],
     });
 
     if (!isAcceptedJwtHeader(protectedHeader)) {
@@ -238,7 +324,12 @@ export async function authMiddleware(
           tokenHash: session.tokenHash,
           expiresAt: session.expiresAt.toISOString(),
         };
-        await redis.set(`session:${sessionId}`, JSON.stringify(identityData), 'EX', 86400);
+        await redis.set(
+          `session:${sessionId}`,
+          JSON.stringify(identityData),
+          'EX',
+          sessionTtlSeconds(session.expiresAt),
+        );
       }
     }
 
@@ -299,10 +390,10 @@ export async function optionalAuthMiddleware(
   try {
     const token = authHeader.slice(7);
     const tokenHash = await hashToken(token);
-    const { payload, protectedHeader } = await jose.jwtVerify(token, JWT_SECRET, {
+    const { payload, protectedHeader } = await jose.jwtVerify(token, await JWT_KEYS.verificationKey, {
       issuer: JWT_ISSUER,
       audience: JWT_AUDIENCE,
-      algorithms: [JWT_ALGORITHM],
+      algorithms: [JWT_KEYS.algorithm],
     });
 
     if (!isAcceptedJwtHeader(protectedHeader)) {
@@ -362,7 +453,12 @@ export async function optionalAuthMiddleware(
           tokenHash: session.tokenHash,
           expiresAt: session.expiresAt.toISOString(),
         };
-        await redis.set(`session:${sessionId}`, JSON.stringify(identityData), 'EX', 86400);
+        await redis.set(
+          `session:${sessionId}`,
+          JSON.stringify(identityData),
+          'EX',
+          sessionTtlSeconds(session.expiresAt),
+        );
       }
     }
 
