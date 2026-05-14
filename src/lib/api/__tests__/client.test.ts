@@ -12,7 +12,7 @@
  * - Timeout behaviour
  */
 
-import { ZeroIDApiError, apiClient } from "@/lib/api/client";
+import { ZeroIDApiError, apiClient, buildApiUrl } from "@/lib/api/client";
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -39,6 +39,9 @@ jest.mock("@/config/constants", () => ({
 // Global fetch mock
 const mockFetch = jest.fn();
 (globalThis as unknown as { fetch: jest.Mock }).fetch = mockFetch;
+
+const REQUEST_ID_PATTERN =
+  /^zid-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -148,7 +151,7 @@ describe("request internals (tested via apiClient methods)", () => {
     const [, init] = mockFetch.mock.calls[0];
     expect(init.headers["Content-Type"]).toBe("application/json");
     expect(init.headers["Accept"]).toBe("application/json");
-    expect(init.headers["X-Request-ID"]).toMatch(/^zid-[a-z0-9]+-[a-z0-9]+$/);
+    expect(init.headers["X-Request-ID"]).toMatch(REQUEST_ID_PATTERN);
   });
 
   it("includes Authorization header when authToken is provided", async () => {
@@ -303,6 +306,18 @@ describe("request internals (tested via apiClient methods)", () => {
 // ===========================================================================
 
 describe("URL building", () => {
+  it("rejects absolute URLs before a request is sent", () => {
+    expect(() => buildApiUrl("https://evil.example/api")).toThrow(
+      ZeroIDApiError,
+    );
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("rejects protocol-relative and backslash paths", () => {
+    expect(() => buildApiUrl("//evil.example/api")).toThrow(ZeroIDApiError);
+    expect(() => buildApiUrl("/api\\evil")).toThrow(ZeroIDApiError);
+  });
+
   it("constructs full URL from API_BASE_URL and path", async () => {
     mockFetch.mockResolvedValue(jsonResponse({ status: "ok" }));
     await apiClient.health();
@@ -908,7 +923,7 @@ describe("edge cases", () => {
     } catch (err) {
       const e = err as ZeroIDApiError;
       // Falls back to local generated ID
-      expect(e.requestId).toMatch(/^zid-[a-z0-9]+-[a-z0-9]+$/);
+      expect(e.requestId).toMatch(REQUEST_ID_PATTERN);
     }
   });
 

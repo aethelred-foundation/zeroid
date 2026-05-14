@@ -128,16 +128,32 @@ export class ZeroIDApiError extends Error {
 
 /** Generate a short random request ID for tracing */
 function generateRequestId(): string {
-  const segment = () => Math.random().toString(36).slice(2, 8);
-  return `zid-${segment()}-${segment()}`;
+  return `zid-${crypto.randomUUID()}`;
 }
 
-/** Build full URL from a relative path */
-function buildUrl(
+/** Build a backend URL without allowing absolute/protocol-relative path escape. */
+export function buildApiUrl(
   path: string,
   params?: Record<string, string | number>,
 ): string {
+  if (!path.startsWith("/") || path.startsWith("//") || path.includes("\\")) {
+    throw new ZeroIDApiError(
+      "API path must be a same-backend relative path.",
+      "API_PATH_INVALID",
+      0,
+    );
+  }
+
+  const baseUrl = new URL(API_BASE_URL);
   const url = new URL(path, API_BASE_URL);
+  if (url.origin !== baseUrl.origin) {
+    throw new ZeroIDApiError(
+      "API path resolved outside the configured backend origin.",
+      "API_PATH_INVALID",
+      0,
+    );
+  }
+
   if (params) {
     for (const [key, value] of Object.entries(params)) {
       if (value !== undefined && value !== null && value !== "") {
@@ -189,7 +205,7 @@ async function request<T>(
     headers["Authorization"] = `Bearer ${resolvedAuthToken}`;
   }
 
-  const fetchPromise = fetch(buildUrl(path, params), {
+  const fetchPromise = fetch(buildApiUrl(path, params), {
     method,
     headers,
     body: body ? JSON.stringify(body) : undefined,
