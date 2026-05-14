@@ -208,6 +208,19 @@ jobs:
         run: $(go env GOPATH)/bin/govulncheck ./...
 
   # ===========================================================================
+  # PRODUCTION IMAGE
+  # ===========================================================================
+  test-docker:
+    name: Production Image Build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - name: Build frontend production image
+        run: docker build --pull --progress=plain -t zeroid-frontend:${{ github.sha }} .
+
+  # ===========================================================================
   # BUILD
   # ===========================================================================
   build:
@@ -224,6 +237,7 @@ jobs:
         test-contracts,
         test-rust,
         test-go,
+        test-docker,
       ]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
