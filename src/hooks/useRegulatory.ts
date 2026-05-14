@@ -6,10 +6,10 @@
  * data sovereignty status queries.
  */
 
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { useAccount } from "wagmi";
 import { toast } from "sonner";
-import { apiClient } from "@/lib/api/client";
+import { apiClient, ZeroIDApiError } from "@/lib/api/client";
 import type { ISODateString } from "@/types";
 
 // ---------------------------------------------------------------------------
@@ -193,6 +193,42 @@ const regulatoryKeys = {
   sovereignty: () => [...regulatoryKeys.all, "sovereignty"] as const,
 };
 
+type EnterpriseCrossBorderResult = {
+  allowed?: boolean;
+  eligible?: boolean;
+  riskLevel?: CrossBorderAssessment["riskLevel"];
+  restrictions?: string[];
+  requirements?: string[];
+  requiredActions?: string[];
+  additionalCredentials?: string[];
+  mutualRecognitionAgreements?: string[];
+  bilateralAgreements?: string[];
+  estimatedProcessingDays?: number;
+};
+
+function unsupportedRegulatoryFlow(message: string, code: string): never {
+  throw new ZeroIDApiError(message, code, 501);
+}
+
+function mapCrossBorderResult(
+  params: { fromJurisdiction: string; toJurisdiction: string },
+  result: EnterpriseCrossBorderResult,
+): CrossBorderAssessment {
+  const eligible = result.allowed ?? result.eligible ?? false;
+  return {
+    fromJurisdiction: params.fromJurisdiction,
+    toJurisdiction: params.toJurisdiction,
+    eligible,
+    riskLevel: result.riskLevel ?? (eligible ? "low" : "high"),
+    requiredActions: result.requiredActions ?? result.requirements ?? [],
+    additionalCredentials: result.additionalCredentials ?? [],
+    estimatedProcessingDays: result.estimatedProcessingDays ?? 0,
+    restrictions: result.restrictions ?? [],
+    bilateralAgreements:
+      result.bilateralAgreements ?? result.mutualRecognitionAgreements ?? [],
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Jurisdictions
 // ---------------------------------------------------------------------------
@@ -202,7 +238,7 @@ export function useJurisdictions() {
     queryKey: regulatoryKeys.jurisdictions(),
     queryFn: () =>
       apiClient.get<Jurisdiction[]>(
-        "/api/v1/regulatory/jurisdictions",
+        "/api/v1/enterprise/compliance/jurisdictions",
       ) as unknown as Jurisdiction[],
     staleTime: 300_000,
   });
@@ -213,10 +249,13 @@ export function useJurisdictionRequirements(
 ) {
   return useQuery({
     queryKey: regulatoryKeys.requirements(jurisdictionId ?? ""),
-    queryFn: () =>
-      apiClient.get<JurisdictionRequirements>(
-        `/api/v1/regulatory/jurisdictions/${jurisdictionId}/requirements`,
-      ) as unknown as JurisdictionRequirements,
+    queryFn: () => {
+      void jurisdictionId;
+      unsupportedRegulatoryFlow(
+        "Jurisdiction requirement detail is not exposed by the backend API.",
+        "REGULATORY_REQUIREMENTS_UNAVAILABLE",
+      );
+    },
     enabled: !!jurisdictionId,
     staleTime: 120_000,
   });
@@ -233,8 +272,8 @@ export function useComplianceStatus(jurisdictionId: string | undefined) {
     queryKey: regulatoryKeys.compliance(jurisdictionId ?? ""),
     queryFn: () =>
       apiClient.get<ComplianceStatus>(
-        `/api/v1/regulatory/compliance/${jurisdictionId}`,
-        { owner: address as string },
+        `/api/v1/enterprise/compliance/status/${address}`,
+        { jurisdiction: jurisdictionId as string },
       ) as unknown as ComplianceStatus,
     enabled: !!jurisdictionId && !!address,
     staleTime: 60_000,
@@ -252,10 +291,17 @@ export function useCheckCrossBorder() {
       fromJurisdiction: string;
       toJurisdiction: string;
     }): Promise<CrossBorderAssessment> => {
-      return apiClient.post<CrossBorderAssessment>(
-        "/api/v1/regulatory/cross-border/check",
-        params,
-      ) as unknown as CrossBorderAssessment;
+      const result = await apiClient.post<EnterpriseCrossBorderResult>(
+        "/api/v1/enterprise/compliance/cross-border",
+        {
+          sourceJurisdiction: params.fromJurisdiction,
+          targetJurisdiction: params.toJurisdiction,
+          entityId: "current-subject",
+          dataCategories: ["personal"],
+          purpose: "identity_verification",
+        },
+      );
+      return mapCrossBorderResult(params, result);
     },
     onSuccess: (data) => {
       if (data.eligible) {
@@ -283,11 +329,14 @@ export function useGapAnalysis(jurisdictionId: string | undefined) {
 
   return useQuery({
     queryKey: regulatoryKeys.gaps(jurisdictionId ?? ""),
-    queryFn: () =>
-      apiClient.get<GapAnalysis>(
-        `/api/v1/regulatory/gap-analysis/${jurisdictionId}`,
-        { owner: address as string },
-      ) as unknown as GapAnalysis,
+    queryFn: () => {
+      void jurisdictionId;
+      void address;
+      unsupportedRegulatoryFlow(
+        "Regulatory gap analysis is not exposed by the backend API.",
+        "REGULATORY_GAP_ANALYSIS_UNAVAILABLE",
+      );
+    },
     enabled: !!jurisdictionId && !!address,
     staleTime: 120_000,
   });
@@ -301,9 +350,10 @@ export function useRegulatoryFeed() {
   return useQuery({
     queryKey: regulatoryKeys.feed(),
     queryFn: () =>
-      apiClient.get<RegulatoryUpdate[]>(
-        "/api/v1/regulatory/feed",
-      ) as unknown as RegulatoryUpdate[],
+      unsupportedRegulatoryFlow(
+        "Regulatory change feed is not exposed by the backend API.",
+        "REGULATORY_FEED_UNAVAILABLE",
+      ),
     staleTime: 60_000,
     refetchInterval: 300_000,
   });
@@ -318,11 +368,13 @@ export function useDataSovereigntyStatus() {
 
   return useQuery({
     queryKey: regulatoryKeys.sovereignty(),
-    queryFn: () =>
-      apiClient.get<DataSovereigntyStatus>(
-        "/api/v1/regulatory/data-sovereignty",
-        { owner: address as string },
-      ) as unknown as DataSovereigntyStatus,
+    queryFn: () => {
+      void address;
+      unsupportedRegulatoryFlow(
+        "Data sovereignty status is not exposed by the backend API.",
+        "REGULATORY_DATA_SOVEREIGNTY_UNAVAILABLE",
+      );
+    },
     enabled: !!address,
     staleTime: 120_000,
   });

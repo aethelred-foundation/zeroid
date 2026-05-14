@@ -35,6 +35,17 @@ jest.mock("@/lib/api/client", () => ({
     put: jest.fn(),
     del: jest.fn(),
   },
+  ZeroIDApiError: class ZeroIDApiError extends Error {
+    code: string;
+    status: number;
+
+    constructor(message: string, code: string, status: number) {
+      super(message);
+      this.name = "ZeroIDApiError";
+      this.code = code;
+      this.status = status;
+    }
+  },
 }));
 const mockApiClient = jest.requireMock("@/lib/api/client").apiClient;
 
@@ -92,7 +103,7 @@ describe("useJurisdictions", () => {
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(mockApiClient.get).toHaveBeenCalledWith(
-      "/api/v1/regulatory/jurisdictions",
+      "/api/v1/enterprise/compliance/jurisdictions",
     );
     expect(result.current.data).toEqual(mockJurisdictions);
   });
@@ -103,27 +114,18 @@ describe("useJurisdictions", () => {
 // ===========================================================================
 
 describe("useJurisdictionRequirements", () => {
-  const mockReqs = {
-    jurisdictionId: "uae",
-    requiredCredentials: [],
-    dataRetentionDays: 365,
-    consentRequirements: [],
-    reportingObligations: [],
-    kycLevel: 3,
-    amlThresholds: [],
-    updateFrequency: "monthly",
-  };
-
-  it("fetches requirements for a jurisdiction", async () => {
-    mockApiClient.get.mockResolvedValue(mockReqs);
-    const { result } = renderHook(() => useJurisdictionRequirements("uae"), {
-      wrapper: createWrapper(),
-    });
-
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(mockApiClient.get).toHaveBeenCalledWith(
-      "/api/v1/regulatory/jurisdictions/uae/requirements",
+  it("fails closed because detailed requirements are not exposed", async () => {
+    const { result } = renderHook(
+      () => useJurisdictionRequirements("AE-CBUAE"),
+      { wrapper: createWrapper() },
     );
+
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(mockApiClient.get).not.toHaveBeenCalled();
+    expect(result.current.error).toMatchObject({
+      code: "REGULATORY_REQUIREMENTS_UNAVAILABLE",
+      status: 501,
+    });
   });
 
   it("is disabled when jurisdictionId is undefined", () => {
@@ -141,7 +143,7 @@ describe("useJurisdictionRequirements", () => {
 
 describe("useComplianceStatus", () => {
   const mockStatus = {
-    jurisdictionId: "uae",
+    jurisdictionId: "AE-CBUAE",
     jurisdictionName: "UAE",
     overallStatus: "compliant",
     score: 95,
@@ -153,14 +155,14 @@ describe("useComplianceStatus", () => {
 
   it("fetches compliance status for jurisdiction and address", async () => {
     mockApiClient.get.mockResolvedValue(mockStatus);
-    const { result } = renderHook(() => useComplianceStatus("uae"), {
+    const { result } = renderHook(() => useComplianceStatus("AE-CBUAE"), {
       wrapper: createWrapper(),
     });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(mockApiClient.get).toHaveBeenCalledWith(
-      "/api/v1/regulatory/compliance/uae",
-      { owner: mockAddress },
+      `/api/v1/enterprise/compliance/status/${mockAddress}`,
+      { jurisdiction: "AE-CBUAE" },
     );
   });
 
@@ -176,7 +178,7 @@ describe("useComplianceStatus", () => {
       address: undefined,
       isConnected: false,
     });
-    const { result } = renderHook(() => useComplianceStatus("uae"), {
+    const { result } = renderHook(() => useComplianceStatus("AE-CBUAE"), {
       wrapper: createWrapper(),
     });
     expect(result.current.fetchStatus).toBe("idle");
@@ -190,15 +192,11 @@ describe("useComplianceStatus", () => {
 describe("useCheckCrossBorder", () => {
   it("shows success toast when eligible", async () => {
     mockApiClient.post.mockResolvedValue({
-      fromJurisdiction: "uae",
-      toJurisdiction: "eu",
-      eligible: true,
+      allowed: true,
       riskLevel: "low",
-      requiredActions: [],
-      additionalCredentials: [],
-      estimatedProcessingDays: 2,
       restrictions: [],
-      bilateralAgreements: ["UAE-EU MRA"],
+      requirements: [],
+      mutualRecognitionAgreements: ["UAE-EU MRA"],
     });
     const { result } = renderHook(() => useCheckCrossBorder(), {
       wrapper: createWrapper(),
@@ -206,11 +204,21 @@ describe("useCheckCrossBorder", () => {
 
     await act(async () => {
       await result.current.mutateAsync({
-        fromJurisdiction: "uae",
-        toJurisdiction: "eu",
+        fromJurisdiction: "AE-CBUAE",
+        toJurisdiction: "EU-GDPR",
       });
     });
 
+    expect(mockApiClient.post).toHaveBeenCalledWith(
+      "/api/v1/enterprise/compliance/cross-border",
+      {
+        sourceJurisdiction: "AE-CBUAE",
+        targetJurisdiction: "EU-GDPR",
+        entityId: "current-subject",
+        dataCategories: ["personal"],
+        purpose: "identity_verification",
+      },
+    );
     expect(mockToast.success).toHaveBeenCalledWith(
       "Cross-border transfer eligible",
       {
@@ -221,15 +229,9 @@ describe("useCheckCrossBorder", () => {
 
   it("shows warning toast when not eligible", async () => {
     mockApiClient.post.mockResolvedValue({
-      fromJurisdiction: "uae",
-      toJurisdiction: "restricted",
-      eligible: false,
+      allowed: false,
       riskLevel: "prohibited",
-      requiredActions: [],
-      additionalCredentials: [],
-      estimatedProcessingDays: 0,
       restrictions: ["Sanctions apply", "No bilateral agreement"],
-      bilateralAgreements: [],
     });
     const { result } = renderHook(() => useCheckCrossBorder(), {
       wrapper: createWrapper(),
@@ -237,8 +239,8 @@ describe("useCheckCrossBorder", () => {
 
     await act(async () => {
       await result.current.mutateAsync({
-        fromJurisdiction: "uae",
-        toJurisdiction: "restricted",
+        fromJurisdiction: "AE-CBUAE",
+        toJurisdiction: "RESTRICTED",
       });
     });
 
@@ -276,26 +278,17 @@ describe("useCheckCrossBorder", () => {
 // ===========================================================================
 
 describe("useGapAnalysis", () => {
-  const mockGap = {
-    jurisdictionId: "uae",
-    totalRequired: 10,
-    totalMet: 8,
-    gaps: [],
-    remediationPriority: [],
-    estimatedRemediationDays: 14,
-  };
-
-  it("fetches gap analysis for jurisdiction and address", async () => {
-    mockApiClient.get.mockResolvedValue(mockGap);
-    const { result } = renderHook(() => useGapAnalysis("uae"), {
+  it("fails closed because gap analysis is not exposed", async () => {
+    const { result } = renderHook(() => useGapAnalysis("AE-CBUAE"), {
       wrapper: createWrapper(),
     });
 
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(mockApiClient.get).toHaveBeenCalledWith(
-      "/api/v1/regulatory/gap-analysis/uae",
-      { owner: mockAddress },
-    );
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(mockApiClient.get).not.toHaveBeenCalled();
+    expect(result.current.error).toMatchObject({
+      code: "REGULATORY_GAP_ANALYSIS_UNAVAILABLE",
+      status: 501,
+    });
   });
 
   it("is disabled when jurisdictionId is undefined", () => {
@@ -310,7 +303,7 @@ describe("useGapAnalysis", () => {
       address: undefined,
       isConnected: false,
     });
-    const { result } = renderHook(() => useGapAnalysis("uae"), {
+    const { result } = renderHook(() => useGapAnalysis("AE-CBUAE"), {
       wrapper: createWrapper(),
     });
     expect(result.current.fetchStatus).toBe("idle");
@@ -322,31 +315,17 @@ describe("useGapAnalysis", () => {
 // ===========================================================================
 
 describe("useRegulatoryFeed", () => {
-  const mockFeed = [
-    {
-      id: "update-1",
-      jurisdictionId: "uae",
-      jurisdictionName: "UAE",
-      title: "New VASP regulation",
-      summary: "Updated KYC requirements",
-      category: "new_regulation",
-      severity: "high",
-      effectiveDate: "2026-06-01T00:00:00Z",
-      publishedAt: "2026-01-01T00:00:00Z",
-      sourceUrl: "https://example.com",
-      impactsIdentity: true,
-    },
-  ];
-
-  it("fetches regulatory feed", async () => {
-    mockApiClient.get.mockResolvedValue(mockFeed);
+  it("fails closed because the change feed is not exposed", async () => {
     const { result } = renderHook(() => useRegulatoryFeed(), {
       wrapper: createWrapper(),
     });
 
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(mockApiClient.get).toHaveBeenCalledWith("/api/v1/regulatory/feed");
-    expect(result.current.data).toEqual(mockFeed);
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(mockApiClient.get).not.toHaveBeenCalled();
+    expect(result.current.error).toMatchObject({
+      code: "REGULATORY_FEED_UNAVAILABLE",
+      status: 501,
+    });
   });
 });
 
@@ -355,34 +334,17 @@ describe("useRegulatoryFeed", () => {
 // ===========================================================================
 
 describe("useDataSovereigntyStatus", () => {
-  const mockSov = {
-    compliantRegions: ["mena", "eu"],
-    nonCompliantRegions: [],
-    dataResidencyMap: [],
-    gdprStatus: {
-      dataProcessingAgreement: true,
-      dataProtectionOfficer: true,
-      privacyImpactAssessment: true,
-      consentManagement: true,
-      rightToErasure: true,
-      dataPortability: true,
-      breachNotificationProcess: true,
-      overallCompliant: true,
-    },
-    pendingTransfers: 0,
-  };
-
-  it("fetches sovereignty status for connected address", async () => {
-    mockApiClient.get.mockResolvedValue(mockSov);
+  it("fails closed because sovereignty status is not exposed", async () => {
     const { result } = renderHook(() => useDataSovereigntyStatus(), {
       wrapper: createWrapper(),
     });
 
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(mockApiClient.get).toHaveBeenCalledWith(
-      "/api/v1/regulatory/data-sovereignty",
-      { owner: mockAddress },
-    );
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(mockApiClient.get).not.toHaveBeenCalled();
+    expect(result.current.error).toMatchObject({
+      code: "REGULATORY_DATA_SOVEREIGNTY_UNAVAILABLE",
+      status: 501,
+    });
   });
 
   it("is disabled when no address", () => {
