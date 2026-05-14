@@ -82,7 +82,7 @@ const UNSAFE_PRODUCTION_FLAGS: ProductionSafetyViolation[] = [
 ];
 
 export function isProductionRuntime(env: NodeJS.ProcessEnv = process.env): boolean {
-  return env.NODE_ENV === 'production';
+  return env.NODE_ENV === 'production' || env.ZEROID_ENV === 'production';
 }
 
 function isTrue(value: string | undefined): boolean {

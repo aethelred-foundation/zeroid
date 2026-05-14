@@ -33,10 +33,10 @@ jest.mock('../src/services/compliance/sanctions-screening', () => ({
 }));
 
 import {
-  ComplianceCopilotError,
-  ComplianceCopilotService,
+  ComplianceAdvisorError,
+  ComplianceAdvisorService,
   SanctionsScreeningRequest,
-} from '../src/services/ai/compliance-copilot';
+} from '../src/services/ai/compliance-advisor';
 
 const previousNodeEnv = process.env.NODE_ENV;
 
@@ -50,7 +50,7 @@ const request: SanctionsScreeningRequest = {
   jurisdiction: 'AE',
 };
 
-describe('ComplianceCopilotService production screening guardrails', () => {
+describe('ComplianceAdvisorService production screening guardrails', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     process.env.NODE_ENV = 'production';
@@ -88,7 +88,7 @@ describe('ComplianceCopilotService production screening guardrails', () => {
       nextScreeningDate: '2026-05-04T00:00:00.000Z',
     });
 
-    const result = await new ComplianceCopilotService().screenIdentity(request);
+    const result = await new ComplianceAdvisorService().screenIdentity(request);
 
     expect(mockScreenEntity).toHaveBeenCalledWith(expect.objectContaining({
       entityId: request.identityId,
@@ -128,9 +128,9 @@ describe('ComplianceCopilotService production screening guardrails', () => {
     notReady.code = 'SANCTIONS_LIST_NOT_READY';
     mockScreenEntity.mockRejectedValue(notReady);
 
-    await expect(new ComplianceCopilotService().screenIdentity(request))
+    await expect(new ComplianceAdvisorService().screenIdentity(request))
       .rejects
-      .toMatchObject<Partial<ComplianceCopilotError>>({
+      .toMatchObject<Partial<ComplianceAdvisorError>>({
         code: 'PRODUCTION_SCREENING_UNAVAILABLE',
         statusCode: 503,
       });

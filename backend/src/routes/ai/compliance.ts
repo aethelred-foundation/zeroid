@@ -7,9 +7,9 @@ import { apiRateLimiter } from '../../middleware/rateLimit';
 import { validate } from '../../middleware/validation';
 import { EnterpriseRole } from '../../services/enterprise/organization-service';
 import {
-  complianceCopilotService,
-  ComplianceCopilotError,
-} from '../../services/ai/compliance-copilot';
+  complianceAdvisorService,
+  ComplianceAdvisorError,
+} from '../../services/ai/compliance-advisor';
 import {
   riskScoringService,
   RiskScoringError,
@@ -48,7 +48,7 @@ const RiskAssessmentQuerySchema = z.object({
   entityType: z.enum(['identity', 'credential', 'transaction']).default('identity'),
 });
 
-const CopilotQuerySchema = z.object({
+const AdvisorQuerySchema = z.object({
   question: z.string().min(5).max(1000),
   context: z.object({
     identityId: z.string().uuid().optional(),
@@ -103,7 +103,7 @@ router.post(
   requireEnterpriseContext(COMPLIANCE_WRITE_ROLES),
   async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
-      const result = await complianceCopilotService.screenIdentity(req.body);
+      const result = await complianceAdvisorService.screenIdentity(req.body);
 
       const statusCode = result.result === 'confirmed_match' ? 200
         : result.result === 'potential_match' ? 200
@@ -133,7 +133,7 @@ router.post(
   async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
       const { entityId, reportType, jurisdiction } = req.body;
-      const report = await complianceCopilotService.generateReport(
+      const report = await complianceAdvisorService.generateReport(
         entityId,
         reportType,
         jurisdiction,
@@ -175,7 +175,7 @@ router.get(
       );
 
       // Also fetch compliance score
-      const complianceScore = await complianceCopilotService.computeComplianceScore(
+      const complianceScore = await complianceAdvisorService.computeComplianceScore(
         identityId as string,
         jurisdiction ?? 'US',
       );
@@ -194,16 +194,16 @@ router.get(
 );
 
 // ---------------------------------------------------------------------------
-// POST /ai/compliance/copilot/query
+// POST /ai/compliance/advisor/query
 // Natural language compliance query
 // ---------------------------------------------------------------------------
 router.post(
-  '/copilot/query',
-  validate({ body: CopilotQuerySchema }),
+  '/advisor/query',
+  validate({ body: AdvisorQuerySchema }),
   requireEnterpriseContext(COMPLIANCE_READ_ROLES),
   async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
-      const response = await complianceCopilotService.queryComplianceCopilot(req.body);
+      const response = await complianceAdvisorService.queryComplianceAdvisor(req.body);
 
       res.json({
         success: true,
@@ -233,7 +233,7 @@ router.get(
 
       // Fetch both compliance alerts and fraud alerts
       const [complianceAlerts, fraudAlerts] = await Promise.all([
-        complianceCopilotService.getActiveAlerts(entityId),
+        complianceAdvisorService.getActiveAlerts(entityId),
         fraudDetectionService.getActiveAlerts(
           severity as 'low' | 'medium' | 'high' | 'critical' | undefined,
         ),
@@ -287,7 +287,7 @@ router.post(
     try {
       const { regulation, changes, jurisdiction } = req.body;
 
-      const impact = await complianceCopilotService.simulateRegulatoryChange(
+      const impact = await complianceAdvisorService.simulateRegulatoryChange(
         regulation,
         changes,
         jurisdiction,
@@ -328,7 +328,7 @@ router.get(
 // ---------------------------------------------------------------------------
 function handleError(error: unknown, res: Response): void {
   if (
-    error instanceof ComplianceCopilotError ||
+    error instanceof ComplianceAdvisorError ||
     error instanceof RiskScoringError ||
     error instanceof FraudDetectionError
   ) {

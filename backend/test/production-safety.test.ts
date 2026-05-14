@@ -1,5 +1,6 @@
 import {
   collectProductionSafetyViolations,
+  isProductionRuntime,
   isMetricsAccessConfigured,
   isMetricsEndpointDisabled,
   isMetricsRequestAuthorized,
@@ -67,6 +68,16 @@ describe('production safety controls', () => {
     expect(collectProductionSafetyViolations(BASE_ENV)).toEqual([]);
     expect(isMetricsAccessConfigured(BASE_ENV)).toBe(true);
     expect(isMetricsRequestAuthorized(undefined, BASE_ENV)).toBe(true);
+  });
+
+  it('treats explicit ZeroID production runtime as production even when NODE_ENV is not set', () => {
+    expect(isProductionRuntime({ ZEROID_ENV: 'production' })).toBe(true);
+    expect(collectProductionSafetyViolations({ ZEROID_ENV: 'production' })).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ control: 'REDIS_URL' }),
+        expect.objectContaining({ control: 'JWT_SECRET' }),
+      ]),
+    );
   });
 
   it('blocks production startup when Redis is missing or local', () => {

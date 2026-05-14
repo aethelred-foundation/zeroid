@@ -40,6 +40,10 @@ describe("GET /api/health", () => {
 
 describe("POST /api/credential/verify", () => {
   let POST: (request: Request) => Promise<Response>;
+  const authHeaders = {
+    "Content-Type": "application/json",
+    Authorization: "Bearer test-token",
+  };
 
   beforeAll(async () => {
     const mod = await import("@/app/api/credential/verify/route");
@@ -61,7 +65,7 @@ describe("POST /api/credential/verify", () => {
     const data = await response.json();
 
     expect(response.status).toBe(400);
-    expect(data.error).toBe("Missing credentialHash or proof");
+    expect(data.error).toBe("Missing credentialId or proof");
   });
 
   it("returns 400 when proof is missing", async () => {
@@ -75,7 +79,25 @@ describe("POST /api/credential/verify", () => {
     const data = await response.json();
 
     expect(response.status).toBe(400);
-    expect(data.error).toBe("Missing credentialHash or proof");
+    expect(data.error).toBe("Missing credentialId or proof");
+  });
+
+  it("returns 401 when authorization is missing", async () => {
+    const request = new Request("http://localhost/api/credential/verify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        credentialId: "550e8400-e29b-41d4-a716-446655440000",
+        proof: "0xabc",
+      }),
+    });
+
+    const response = await POST(request);
+    const data = await response.json();
+
+    expect(response.status).toBe(401);
+    expect(data.error).toBe("Authorization bearer token required");
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 
   it("returns 400 when both are missing", async () => {
@@ -98,9 +120,9 @@ describe("POST /api/credential/verify", () => {
 
     const request = new Request("http://localhost/api/credential/verify", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: authHeaders,
       body: JSON.stringify({
-        credentialHash: "0x123",
+        credentialId: "550e8400-e29b-41d4-a716-446655440000",
         proof: "0xabc",
         attributeName: "age",
       }),
@@ -112,12 +134,16 @@ describe("POST /api/credential/verify", () => {
     expect(response.status).toBe(200);
     expect(data).toEqual(mockResult);
     expect(mockFetch).toHaveBeenCalledWith(
-      expect.stringContaining("/api/v1/credentials/verify"),
+      expect.stringContaining(
+        "/api/v1/credentials/550e8400-e29b-41d4-a716-446655440000/verify",
+      ),
       expect.objectContaining({
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: expect.objectContaining({
+          "Content-Type": "application/json",
+          Authorization: "Bearer test-token",
+        }),
         body: JSON.stringify({
-          credentialHash: "0x123",
           proof: "0xabc",
           attributeName: "age",
         }),
@@ -134,9 +160,9 @@ describe("POST /api/credential/verify", () => {
 
     const request = new Request("http://localhost/api/credential/verify", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: authHeaders,
       body: JSON.stringify({
-        credentialHash: "0x123",
+        credentialId: "550e8400-e29b-41d4-a716-446655440000",
         proof: "0xbad",
       }),
     });
@@ -157,9 +183,9 @@ describe("POST /api/credential/verify", () => {
 
     const request = new Request("http://localhost/api/credential/verify", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: authHeaders,
       body: JSON.stringify({
-        credentialHash: "0x123",
+        credentialId: "550e8400-e29b-41d4-a716-446655440000",
         proof: "0xbad",
       }),
     });
@@ -176,9 +202,9 @@ describe("POST /api/credential/verify", () => {
 
     const request = new Request("http://localhost/api/credential/verify", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: authHeaders,
       body: JSON.stringify({
-        credentialHash: "0x123",
+        credentialId: "550e8400-e29b-41d4-a716-446655440000",
         proof: "0xabc",
       }),
     });
@@ -204,6 +230,16 @@ describe("POST /api/credential/verify", () => {
 
 describe("POST /api/proof/generate", () => {
   let POST: (request: Request) => Promise<Response>;
+  const authHeaders = {
+    "Content-Type": "application/json",
+    Authorization: "Bearer test-token",
+  };
+  const validProofBody = {
+    credentialId: "550e8400-e29b-41d4-a716-446655440000",
+    circuitName: "age_verification_context_v2",
+    inputs: { ageThresholdYears: "18" },
+    audience: "did:aethelred:verifier:enterprise",
+  };
 
   beforeAll(async () => {
     const mod = await import("@/app/api/proof/generate/route");
@@ -214,41 +250,14 @@ describe("POST /api/proof/generate", () => {
     mockFetch.mockReset();
   });
 
-  it("returns 400 when circuitType is missing", async () => {
-    const request = new Request("http://localhost/api/proof/generate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ publicInputs: ["1", "2"] }),
-    });
-
-    const response = await POST(request);
-    const data = await response.json();
-
-    expect(response.status).toBe(400);
-    expect(data.error).toBe("Missing circuitType or publicInputs");
-  });
-
-  it("returns 400 when publicInputs is missing", async () => {
-    const request = new Request("http://localhost/api/proof/generate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ circuitType: "age_proof" }),
-    });
-
-    const response = await POST(request);
-    const data = await response.json();
-
-    expect(response.status).toBe(400);
-    expect(data.error).toBe("Missing circuitType or publicInputs");
-  });
-
-  it("returns 400 for invalid circuit type", async () => {
+  it("returns 400 when circuitName is missing", async () => {
     const request = new Request("http://localhost/api/proof/generate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        circuitType: "invalid_circuit",
-        publicInputs: ["1"],
+        credentialId: validProofBody.credentialId,
+        inputs: validProofBody.inputs,
+        audience: validProofBody.audience,
       }),
     });
 
@@ -256,17 +265,66 @@ describe("POST /api/proof/generate", () => {
     const data = await response.json();
 
     expect(response.status).toBe(400);
-    expect(data.error).toContain("Invalid circuit type");
-    expect(data.error).toContain("age_proof");
+    expect(data.error).toBe(
+      "Missing credentialId, circuitName, inputs, or audience",
+    );
   });
 
-  it.each([
-    "age_proof",
-    "residency_proof",
-    "credit_tier_proof",
-    "nationality_proof",
-    "composite_proof",
-  ])("accepts valid circuit type: %s", async (circuitType) => {
+  it("returns 400 when inputs are missing", async () => {
+    const request = new Request("http://localhost/api/proof/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        credentialId: validProofBody.credentialId,
+        circuitName: validProofBody.circuitName,
+        audience: validProofBody.audience,
+      }),
+    });
+
+    const response = await POST(request);
+    const data = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(data.error).toBe(
+      "Missing credentialId, circuitName, inputs, or audience",
+    );
+  });
+
+  it("returns 400 when inputs are not keyed by circuit signal name", async () => {
+    const request = new Request("http://localhost/api/proof/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...validProofBody,
+        inputs: ["1"],
+      }),
+    });
+
+    const response = await POST(request);
+    const data = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(data.error).toBe(
+      "Proof inputs must be an object keyed by circuit signal name",
+    );
+  });
+
+  it("returns 401 when authorization is missing", async () => {
+    const request = new Request("http://localhost/api/proof/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(validProofBody),
+    });
+
+    const response = await POST(request);
+    const data = await response.json();
+
+    expect(response.status).toBe(401);
+    expect(data.error).toBe("Authorization bearer token required");
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("accepts legacy circuitType naming while forwarding backend schema", async () => {
     const mockProof = { proof: "0xproof", publicSignals: ["1"] };
     mockFetch.mockResolvedValueOnce({
       ok: true,
@@ -275,8 +333,13 @@ describe("POST /api/proof/generate", () => {
 
     const request = new Request("http://localhost/api/proof/generate", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ circuitType, publicInputs: ["1", "2"] }),
+      headers: authHeaders,
+      body: JSON.stringify({
+        credentialId: validProofBody.credentialId,
+        circuitType: "age_verification_context_v2",
+        inputs: validProofBody.inputs,
+        audience: validProofBody.audience,
+      }),
     });
 
     const response = await POST(request);
@@ -286,7 +349,7 @@ describe("POST /api/proof/generate", () => {
     expect(data).toEqual(mockProof);
   });
 
-  it("forwards request to backend TEE service", async () => {
+  it("forwards request to backend ZK proof endpoint", async () => {
     const mockProof = { proof: "0xgenerated" };
     mockFetch.mockResolvedValueOnce({
       ok: true,
@@ -295,45 +358,52 @@ describe("POST /api/proof/generate", () => {
 
     const request = new Request("http://localhost/api/proof/generate", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: authHeaders,
       body: JSON.stringify({
-        circuitType: "age_proof",
-        publicInputs: ["18", "1700000000", "0xhash"],
+        ...validProofBody,
+        nonce: "nonce-1234567890123456",
+        selectiveDisclosure: ["age"],
       }),
     });
 
     await POST(request);
 
+    const [, init] = mockFetch.mock.calls[0];
     expect(mockFetch).toHaveBeenCalledWith(
-      expect.stringContaining("/api/v1/verification/generate-proof"),
+      expect.stringContaining("/api/v1/verification/zk-proof"),
       expect.objectContaining({
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: expect.objectContaining({
+          "Content-Type": "application/json",
+          Authorization: "Bearer test-token",
+        }),
       }),
     );
+    expect(JSON.parse(init.body as string)).toEqual({
+      ...validProofBody,
+      nonce: "nonce-1234567890123456",
+      selectiveDisclosure: ["age"],
+    });
   });
 
   it("returns backend error status when backend fails", async () => {
     mockFetch.mockResolvedValueOnce({
       ok: false,
       status: 503,
-      json: async () => ({ message: "TEE unavailable" }),
+      json: async () => ({ message: "Proof service unavailable" }),
     });
 
     const request = new Request("http://localhost/api/proof/generate", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        circuitType: "age_proof",
-        publicInputs: ["18"],
-      }),
+      headers: authHeaders,
+      body: JSON.stringify(validProofBody),
     });
 
     const response = await POST(request);
     const data = await response.json();
 
     expect(response.status).toBe(503);
-    expect(data.error).toBe("TEE unavailable");
+    expect(data.error).toBe("Proof service unavailable");
   });
 
   it("returns fallback error message when backend error has no message", async () => {
@@ -345,11 +415,8 @@ describe("POST /api/proof/generate", () => {
 
     const request = new Request("http://localhost/api/proof/generate", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        circuitType: "age_proof",
-        publicInputs: ["18"],
-      }),
+      headers: authHeaders,
+      body: JSON.stringify(validProofBody),
     });
 
     const response = await POST(request);
@@ -364,11 +431,8 @@ describe("POST /api/proof/generate", () => {
 
     const request = new Request("http://localhost/api/proof/generate", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        circuitType: "age_proof",
-        publicInputs: ["18"],
-      }),
+      headers: authHeaders,
+      body: JSON.stringify(validProofBody),
     });
 
     const response = await POST(request);
@@ -389,9 +453,13 @@ describe("POST /api/proof/generate", () => {
     expect(response.status).toBe(500);
   });
 
-  it("uses default API URL when env var is not set", async () => {
-    const originalEnv = process.env.NEXT_PUBLIC_API_URL;
+  it("uses default development backend URL when env var is not set", async () => {
+    const originalServerEnv = process.env.ZEROID_BACKEND_API_URL;
+    const originalPublicEnv = process.env.NEXT_PUBLIC_API_URL;
+    const originalZeroIdPublicEnv = process.env.NEXT_PUBLIC_ZEROID_API_URL;
+    delete process.env.ZEROID_BACKEND_API_URL;
     delete process.env.NEXT_PUBLIC_API_URL;
+    delete process.env.NEXT_PUBLIC_ZEROID_API_URL;
 
     const mockProof = { proof: "0x" };
     mockFetch.mockResolvedValueOnce({
@@ -401,20 +469,54 @@ describe("POST /api/proof/generate", () => {
 
     const request = new Request("http://localhost/api/proof/generate", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        circuitType: "age_proof",
-        publicInputs: ["18"],
-      }),
+      headers: authHeaders,
+      body: JSON.stringify(validProofBody),
     });
 
     await POST(request);
 
     expect(mockFetch).toHaveBeenCalledWith(
-      expect.stringContaining("localhost:4003"),
+      expect.stringContaining("localhost:4000"),
       expect.anything(),
     );
 
-    if (originalEnv) process.env.NEXT_PUBLIC_API_URL = originalEnv;
+    if (originalServerEnv) {
+      process.env.ZEROID_BACKEND_API_URL = originalServerEnv;
+    }
+    if (originalPublicEnv) {
+      process.env.NEXT_PUBLIC_API_URL = originalPublicEnv;
+    }
+    if (originalZeroIdPublicEnv) {
+      process.env.NEXT_PUBLIC_ZEROID_API_URL = originalZeroIdPublicEnv;
+    }
+  });
+
+  it("fails closed when production backend URL is not configured", async () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    const originalServerEnv = process.env.ZEROID_BACKEND_API_URL;
+    process.env.NODE_ENV = "production";
+    delete process.env.ZEROID_BACKEND_API_URL;
+
+    const request = new Request("http://localhost/api/proof/generate", {
+      method: "POST",
+      headers: authHeaders,
+      body: JSON.stringify(validProofBody),
+    });
+
+    const response = await POST(request);
+    const data = await response.json();
+
+    expect(response.status).toBe(503);
+    expect(data.error).toBe("Backend API URL is not configured for production");
+    expect(mockFetch).not.toHaveBeenCalled();
+
+    if (originalNodeEnv === undefined) {
+      delete process.env.NODE_ENV;
+    } else {
+      process.env.NODE_ENV = originalNodeEnv;
+    }
+    if (originalServerEnv) {
+      process.env.ZEROID_BACKEND_API_URL = originalServerEnv;
+    }
   });
 });

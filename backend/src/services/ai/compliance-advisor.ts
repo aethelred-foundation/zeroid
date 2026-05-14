@@ -128,7 +128,7 @@ export interface ComplianceAlert {
   resolvedAt?: Date;
 }
 
-export interface CopilotQuery {
+export interface AdvisorQuery {
   question: string;
   context?: {
     identityId?: string;
@@ -137,7 +137,7 @@ export interface CopilotQuery {
   };
 }
 
-export interface CopilotResponse {
+export interface AdvisorResponse {
   queryId: string;
   question: string;
   answer: string;
@@ -189,7 +189,7 @@ const PEP_DATABASE: PEPMatch[] = [
 ];
 
 // ---------------------------------------------------------------------------
-// Regulatory knowledge base (for copilot queries)
+// Regulatory knowledge base (for advisor queries)
 // ---------------------------------------------------------------------------
 
 interface RegulatoryKBEntry {
@@ -213,10 +213,10 @@ const REGULATORY_KB: RegulatoryKBEntry[] = [
 ];
 
 // ---------------------------------------------------------------------------
-// Compliance Copilot Service
+// Compliance Advisor Service
 // ---------------------------------------------------------------------------
 
-export class ComplianceCopilotService {
+export class ComplianceAdvisorService {
   private alerts: Map<string, ComplianceAlert> = new Map();
 
   // -------------------------------------------------------------------------
@@ -353,7 +353,7 @@ export class ComplianceCopilotService {
         error: (err as Error).message,
         code: (err as Error & { code?: string }).code,
       });
-      throw new ComplianceCopilotError(
+      throw new ComplianceAdvisorError(
         'Production sanctions screening is unavailable until signed sanctions and PEP list data are configured.',
         'PRODUCTION_SCREENING_UNAVAILABLE',
         503,
@@ -594,17 +594,49 @@ export class ComplianceCopilotService {
 
     // Section: Travel Rule
     if (reportType === 'travel_rule' || reportType === 'comprehensive') {
+      const activeCredentialTypes = new Set(
+        (identity?.credentials ?? []).map((credential: { credentialType?: string }) =>
+          credential.credentialType,
+        ),
+      );
+      const hasTransferEvidence = activeCredentialTypes.has('travel_rule_compliance');
+      const hasOriginatorEvidence = activeCredentialTypes.has('kyc_enhanced');
+      const transferScreeningClear =
+        screeningCurrent && latestScreening?.result === 'clear';
+      const travelRuleReady =
+        Boolean(identity) &&
+        hasTransferEvidence &&
+        hasOriginatorEvidence &&
+        transferScreeningClear;
+
       sections.push({
         title: 'Travel Rule Compliance',
-        status: 'pass',
+        status: travelRuleReady ? 'pass' : 'fail',
         findings: [
-          'Originator information: complete',
-          'Beneficiary information: complete for all applicable transfers',
-          'VASP-to-VASP data sharing: protocol compliant',
+          `Originator evidence: ${hasOriginatorEvidence ? 'present' : 'missing'}`,
+          `Beneficiary evidence: ${hasTransferEvidence ? 'present' : 'missing'}`,
+          `Transfer screening: ${transferScreeningClear ? 'clear and current' : 'missing, stale, or non-clear'}`,
           `Threshold: ${jurisdiction === 'EU' ? 'EUR 1,000' : 'USD 3,000'}`,
         ],
-        evidence: { originatorComplete: true, beneficiaryComplete: true },
+        evidence: {
+          originatorComplete: hasOriginatorEvidence,
+          beneficiaryComplete: hasTransferEvidence,
+          screeningCurrent,
+          screeningResult: latestScreening?.result ?? null,
+        },
       });
+
+      if (!travelRuleReady) {
+        gaps.push({
+          gapId: `gap-${crypto.randomUUID().slice(0, 8)}`,
+          category: 'travel_rule_evidence',
+          severity: 'violation',
+          description: 'Travel Rule report cannot pass without current transfer screening and originator/beneficiary evidence',
+          regulation: `${framework} - Travel Rule`,
+          remediation: 'Collect required transfer parties, run current screening, and issue travel_rule_compliance evidence before report approval',
+        });
+        recommendations.push('Block Travel Rule report approval until required transfer evidence is present');
+      }
     }
 
     // Compute compliance score
@@ -649,12 +681,12 @@ export class ComplianceCopilotService {
   }
 
   // -------------------------------------------------------------------------
-  // Natural language compliance copilot
+  // Natural language compliance advisor
   // -------------------------------------------------------------------------
-  async queryComplianceCopilot(query: CopilotQuery): Promise<CopilotResponse> {
+  async queryComplianceAdvisor(query: AdvisorQuery): Promise<AdvisorResponse> {
     const queryId = `cq-${crypto.randomUUID()}`;
 
-    logger.info('copilot_query', {
+    logger.info('compliance_advisor_query', {
       queryId,
       question: query.question.slice(0, 100),
       jurisdiction: query.context?.jurisdiction,
@@ -702,7 +734,7 @@ export class ComplianceCopilotService {
     // Build response
     let answer: string;
     let confidence: number;
-    const citations: CopilotResponse['citations'] = [];
+    const citations: AdvisorResponse['citations'] = [];
 
     if (topEntries.length === 0) {
       answer = 'I could not find specific regulatory guidance matching your query in the current knowledge base. Please consult with your compliance team or legal counsel for authoritative guidance on this topic.';
@@ -732,7 +764,7 @@ export class ComplianceCopilotService {
       .filter((topic, idx, arr) => arr.indexOf(topic) === idx)
       .slice(0, 5);
 
-    const response: CopilotResponse = {
+    const response: AdvisorResponse = {
       queryId,
       question: query.question,
       answer,
@@ -747,8 +779,8 @@ export class ComplianceCopilotService {
     await prisma.auditLog.create({
       data: {
         identityId: query.context?.identityId ?? 'system',
-        action: 'COMPLIANCE_COPILOT_QUERY' as any,
-        resourceType: 'copilot_query',
+        action: 'COMPLIANCE_ADVISOR_QUERY' as any,
+        resourceType: 'compliance_advisor_query',
         resourceId: queryId,
         details: {
           question: query.question.slice(0, 200),
@@ -1118,18 +1150,18 @@ export class ComplianceCopilotService {
 // ---------------------------------------------------------------------------
 // Error class
 // ---------------------------------------------------------------------------
-export class ComplianceCopilotError extends Error {
+export class ComplianceAdvisorError extends Error {
   constructor(
     message: string,
     public code: string,
     public statusCode: number = 400,
   ) {
     super(message);
-    this.name = 'ComplianceCopilotError';
+    this.name = 'ComplianceAdvisorError';
   }
 }
 
 // ---------------------------------------------------------------------------
 // Singleton
 // ---------------------------------------------------------------------------
-export const complianceCopilotService = new ComplianceCopilotService();
+export const complianceAdvisorService = new ComplianceAdvisorService();

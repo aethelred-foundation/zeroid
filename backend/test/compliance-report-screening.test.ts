@@ -24,7 +24,7 @@ jest.mock('../src/index', () => ({
   },
 }));
 
-import { ComplianceCopilotService } from '../src/services/ai/compliance-copilot';
+import { ComplianceAdvisorService } from '../src/services/ai/compliance-advisor';
 
 function identityFixture() {
   return {
@@ -32,8 +32,8 @@ function identityFixture() {
     status: 'ACTIVE',
     teeAttested: true,
     credentials: [
-      { id: 'credential-1', status: 'ACTIVE', issuedAt: new Date('2026-04-01T00:00:00.000Z') },
-      { id: 'credential-2', status: 'ACTIVE', issuedAt: new Date('2026-04-02T00:00:00.000Z') },
+      { id: 'credential-1', credentialType: 'kyc_enhanced', status: 'ACTIVE', issuedAt: new Date('2026-04-01T00:00:00.000Z') },
+      { id: 'credential-2', credentialType: 'proof_of_residency', status: 'ACTIVE', issuedAt: new Date('2026-04-02T00:00:00.000Z') },
     ],
   };
 }
@@ -65,7 +65,7 @@ describe('Compliance report screening evidence', () => {
       listsChecked: ['ofac_sdn', 'eu_consolidated', 'un_sanctions', 'uae_local', 'pep_database'],
     }));
 
-    const report = await new ComplianceCopilotService().generateReport(
+    const report = await new ComplianceAdvisorService().generateReport(
       '550e8400-e29b-41d4-a716-446655440000',
       'comprehensive',
       'US',
@@ -92,7 +92,7 @@ describe('Compliance report screening evidence', () => {
   it('does not mark PEP evidence as pass when screening evidence is missing', async () => {
     mockRedisGet.mockResolvedValue(null);
 
-    const report = await new ComplianceCopilotService().generateReport(
+    const report = await new ComplianceAdvisorService().generateReport(
       '550e8400-e29b-41d4-a716-446655440000',
       'pep',
       'US',
@@ -104,5 +104,77 @@ describe('Compliance report screening evidence', () => {
         status: 'warning',
       }),
     ]);
+  });
+
+  it('does not mark Travel Rule evidence as pass without transfer evidence', async () => {
+    mockRedisGet.mockResolvedValue(JSON.stringify({
+      screenedAt: new Date().toISOString(),
+      result: 'clear',
+      matchScore: 0,
+      matchedLists: [],
+      pepMatches: [],
+      listsChecked: ['ofac_sdn', 'eu_consolidated', 'un_sanctions', 'pep_database'],
+    }));
+
+    const report = await new ComplianceAdvisorService().generateReport(
+      '550e8400-e29b-41d4-a716-446655440000',
+      'travel_rule',
+      'US',
+    );
+
+    expect(report.sections).toEqual([
+      expect.objectContaining({
+        title: 'Travel Rule Compliance',
+        status: 'fail',
+        evidence: expect.objectContaining({
+          originatorComplete: true,
+          beneficiaryComplete: false,
+          screeningCurrent: true,
+        }),
+      }),
+    ]);
+    expect(report.gaps).toEqual([
+      expect.objectContaining({
+        category: 'travel_rule_evidence',
+        severity: 'violation',
+      }),
+    ]);
+  });
+
+  it('passes Travel Rule evidence only when transfer evidence and current screening are present', async () => {
+    mockIdentityFindUnique.mockResolvedValue({
+      ...identityFixture(),
+      credentials: [
+        { id: 'credential-1', credentialType: 'kyc_enhanced', status: 'ACTIVE' },
+        { id: 'credential-2', credentialType: 'travel_rule_compliance', status: 'ACTIVE' },
+      ],
+    });
+    mockRedisGet.mockResolvedValue(JSON.stringify({
+      screenedAt: new Date().toISOString(),
+      result: 'clear',
+      matchScore: 0,
+      matchedLists: [],
+      pepMatches: [],
+      listsChecked: ['ofac_sdn', 'eu_consolidated', 'un_sanctions', 'pep_database'],
+    }));
+
+    const report = await new ComplianceAdvisorService().generateReport(
+      '550e8400-e29b-41d4-a716-446655440000',
+      'travel_rule',
+      'US',
+    );
+
+    expect(report.sections).toEqual([
+      expect.objectContaining({
+        title: 'Travel Rule Compliance',
+        status: 'pass',
+        evidence: expect.objectContaining({
+          originatorComplete: true,
+          beneficiaryComplete: true,
+          screeningCurrent: true,
+        }),
+      }),
+    ]);
+    expect(report.gaps).toEqual([]);
   });
 });

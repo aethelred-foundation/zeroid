@@ -47,8 +47,8 @@ jest.mock('../src/services/enterprise/organization-service', () => ({
   },
 }));
 
-jest.mock('../src/services/ai/compliance-copilot', () => ({
-  ComplianceCopilotError: class ComplianceCopilotError extends Error {
+jest.mock('../src/services/ai/compliance-advisor', () => ({
+  ComplianceAdvisorError: class ComplianceAdvisorError extends Error {
     constructor(
       message: string,
       public code: string,
@@ -57,11 +57,11 @@ jest.mock('../src/services/ai/compliance-copilot', () => ({
       super(message);
     }
   },
-  complianceCopilotService: {
+  complianceAdvisorService: {
     screenIdentity: mockScreenIdentity,
     generateReport: jest.fn(),
     computeComplianceScore: jest.fn(),
-    queryComplianceCopilot: jest.fn(),
+    queryComplianceAdvisor: jest.fn(),
     getActiveAlerts: jest.fn(),
     simulateRegulatoryChange: jest.fn(),
   },

@@ -23,6 +23,7 @@ import {
   isMetricsAccessConfigured,
   isMetricsEndpointDisabled,
   isMetricsRequestAuthorized,
+  isProductionRuntime,
 } from './services/production-safety';
 import {
   parseExpectedCircuitArtifactDigests,
@@ -316,6 +317,11 @@ app.use('/api/v1/enterprise', oidcPublicLimiter, oidcPublicRouter);
 app.use('/api/v1/enterprise', enterpriseLimiter, authMiddleware, enterpriseIntegrationRoutes);
 app.use('/api/v1/enterprise/compliance', enterpriseLimiter, authMiddleware, enterpriseComplianceRoutes);
 
+const { aiComplianceRoutes } = require('./routes/ai/compliance') as typeof import('./routes/ai/compliance');
+const { aiAgentIdentityRoutes } = require('./routes/ai/agent-identity') as typeof import('./routes/ai/agent-identity');
+app.use('/api/v1/ai/compliance', enterpriseLimiter, aiComplianceRoutes);
+app.use('/api/v1/ai/agents', enterpriseLimiter, aiAgentIdentityRoutes);
+
 // ---------------------------------------------------------------------------
 // 404 handler
 // ---------------------------------------------------------------------------
@@ -354,7 +360,7 @@ const PORT = parseInt(process.env.PORT ?? '4000', 10);
 // Production Safety Gates
 // ---------------------------------------------------------------------------
 function validateProductionConfig(): void {
-  if (process.env.NODE_ENV !== 'production') return;
+  if (!isProductionRuntime()) return;
 
   const violations = collectProductionSafetyViolations();
 

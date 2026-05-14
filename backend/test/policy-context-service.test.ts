@@ -96,6 +96,14 @@ describe('PolicyContextService', () => {
     expect(mockIssuerTrustFindMany).not.toHaveBeenCalled();
   });
 
+  it('fails closed for policy names without an approved definition', async () => {
+    await expect(
+      policyContextService.resolvePolicyContext('unknown_policy', 'org-1'),
+    ).rejects.toMatchObject({
+      code: 'POLICY_DEFINITION_NOT_FOUND',
+    });
+  });
+
   it('prefers an approved organization-specific policy definition over the static catalog', async () => {
     mockPolicyDefinitionFindFirst.mockResolvedValue({
       id: 'policy-42',

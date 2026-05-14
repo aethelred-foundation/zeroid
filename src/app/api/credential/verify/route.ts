@@ -1,28 +1,44 @@
 import { NextRequest, NextResponse } from "next/server";
+import {
+  BackendProxyConfigError,
+  buildBackendHeaders,
+  getBackendApiBaseUrl,
+  readBackendError,
+  requireAuthorization,
+} from "../../_lib/backend";
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { credentialHash, proof, attributeName } = body;
+    const credentialId = body.credentialId ?? body.credentialHash;
+    const { proof, attributeName } = body;
 
-    if (!credentialHash || !proof) {
+    if (!credentialId || !proof) {
       return NextResponse.json(
-        { error: "Missing credentialHash or proof" },
+        { error: "Missing credentialId or proof" },
         { status: 400 },
       );
     }
 
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4003";
-    const response = await fetch(`${apiUrl}/api/v1/credentials/verify`, {
+    const authorization = requireAuthorization(request);
+    if (!authorization) {
+      return NextResponse.json(
+        { error: "Authorization bearer token required" },
+        { status: 401 },
+      );
+    }
+
+    const apiUrl = getBackendApiBaseUrl();
+    const encodedCredentialId = encodeURIComponent(String(credentialId));
+    const response = await fetch(`${apiUrl}/api/v1/credentials/${encodedCredentialId}/verify`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ credentialHash, proof, attributeName }),
+      headers: buildBackendHeaders(request, authorization),
+      body: JSON.stringify({ proof, attributeName }),
     });
 
     if (!response.ok) {
-      const error = await response.json();
       return NextResponse.json(
-        { error: error.message ?? "Verification failed" },
+        { error: await readBackendError(response, "Verification failed") },
         { status: response.status },
       );
     }
@@ -30,6 +46,13 @@ export async function POST(request: NextRequest) {
     const result = await response.json();
     return NextResponse.json(result);
   } catch (error) {
+    if (error instanceof BackendProxyConfigError) {
+      return NextResponse.json(
+        { error: error.message },
+        { status: 503 },
+      );
+    }
+
     return NextResponse.json(
       { error: "Internal server error" },
       { status: 500 },

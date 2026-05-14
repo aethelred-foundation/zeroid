@@ -1,6 +1,16 @@
 import { prisma } from '../../index';
 import type { EnterpriseApprovalClass, EnterpriseRole } from './organization-service';
 
+export class PolicyContextError extends Error {
+  constructor(
+    message: string,
+    public readonly code: string,
+  ) {
+    super(message);
+    this.name = 'PolicyContextError';
+  }
+}
+
 export interface PolicyDefinition {
   id?: string;
   policyName: string;
@@ -325,12 +335,15 @@ export class PolicyContextService {
       }
     }
 
-    return POLICY_DEFINITIONS[policyName] ?? {
-      policyName,
-      version: '2026.04.1',
-      reference: `zeroid://policy/custom/${policyName}@2026.04.1`,
-      family: 'compliance',
-    };
+    const staticDefinition = POLICY_DEFINITIONS[policyName];
+    if (staticDefinition) {
+      return staticDefinition;
+    }
+
+    throw new PolicyContextError(
+      `No approved policy definition exists for ${policyName}`,
+      'POLICY_DEFINITION_NOT_FOUND',
+    );
   }
 
   private normalizeRequiredApprovalRoles(value: unknown): EnterpriseRole[] {
