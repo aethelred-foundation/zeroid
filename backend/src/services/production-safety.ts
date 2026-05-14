@@ -143,6 +143,7 @@ export function checkedProductionSafetyControls(): string[] {
     'METRICS_PUBLIC_DISABLED_OR_METRICS_AUTH_TOKEN',
     'SANCTIONS_SCREENING_DISABLED_OR_SANCTIONS_LIST_SIGNATURE_PUBLIC_KEYS_JSON',
     'SANCTIONS_LIST_MAX_AGE_HOURS',
+    'SANCTIONS_SCREENING_STORE_FILE',
     'WEBHOOK_SECRET_ENCRYPTION_KEY',
     'POLICY_RECEIPT_SIGNING_SECRET',
     'REGULATORY_REPORT_STORE_DIR',
@@ -311,6 +312,14 @@ export function collectProductionSafetyViolations(
     }
 
     validateSanctionsListMaxAge(env, violations);
+
+    const sanctionsScreeningStoreFile = env.SANCTIONS_SCREENING_STORE_FILE?.trim();
+    if (!sanctionsScreeningStoreFile) {
+      violations.push({
+        control: 'SANCTIONS_SCREENING_STORE_FILE',
+        risk: 'Production sanctions screening requires durable list, decision, audit, and false-positive evidence storage',
+      });
+    }
   }
 
   const webhookSecretKey = env.WEBHOOK_SECRET_ENCRYPTION_KEY?.trim();

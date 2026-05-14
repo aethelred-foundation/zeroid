@@ -5,8 +5,23 @@ import {
   ScreeningRequest,
 } from '../src/services/compliance/sanctions-screening';
 import crypto from 'crypto';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 
 const ORIGINAL_ENV = { ...process.env };
+const tempDirs: string[] = [];
+
+function createTempStoreFile(): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zeroid-sanctions-screening-'));
+  tempDirs.push(dir);
+  return path.join(dir, 'state.json');
+}
+
+function enableProductionWithStore(): void {
+  process.env.NODE_ENV = 'production';
+  process.env.SANCTIONS_SCREENING_STORE_FILE = createTempStoreFile();
+}
 
 const listEntry: SanctionsListEntry = {
   id: 'ofac-1',
@@ -57,6 +72,15 @@ describe('SanctionsScreeningService readiness', () => {
     process.env = { ...ORIGINAL_ENV, NODE_ENV: 'test' };
   });
 
+  afterEach(() => {
+    while (tempDirs.length > 0) {
+      const dir = tempDirs.pop();
+      if (dir) {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
   afterAll(() => {
     process.env = ORIGINAL_ENV;
   });
@@ -77,11 +101,21 @@ describe('SanctionsScreeningService readiness', () => {
   });
 
   it('blocks production screening when requested lists are empty', async () => {
-    process.env.NODE_ENV = 'production';
+    enableProductionWithStore();
     const service = new SanctionsScreeningService();
 
     await expect(service.screenEntity(request)).rejects.toMatchObject({
       code: 'SANCTIONS_LIST_NOT_READY',
+    });
+  });
+
+  it('fails closed in production when durable screening storage is missing', async () => {
+    process.env.NODE_ENV = 'production';
+    delete process.env.SANCTIONS_SCREENING_STORE_FILE;
+    const service = new SanctionsScreeningService();
+
+    await expect(service.screenEntity(request)).rejects.toMatchObject({
+      code: 'SANCTIONS_SCREENING_STORE_REQUIRED',
     });
   });
 
@@ -95,7 +129,7 @@ describe('SanctionsScreeningService readiness', () => {
   });
 
   it('requires source metadata for production updates', async () => {
-    process.env.NODE_ENV = 'production';
+    enableProductionWithStore();
     const service = new SanctionsScreeningService();
 
     await expect(service.onListUpdate('ofac_sdn', [listEntry])).rejects.toMatchObject({
@@ -104,7 +138,7 @@ describe('SanctionsScreeningService readiness', () => {
   });
 
   it('screens in production after a fresh list update with source metadata', async () => {
-    process.env.NODE_ENV = 'production';
+    enableProductionWithStore();
     const privateKey = configureTrustedListKey();
     const service = new SanctionsScreeningService();
 
@@ -173,6 +207,41 @@ describe('SanctionsScreeningService readiness', () => {
     expect(service.getAuditTrail(orgAResult.screeningId, 'org-b')).toEqual([]);
   });
 
+  it('recovers screening evidence and monitoring state from durable storage', async () => {
+    const storeFile = createTempStoreFile();
+    const writer = new SanctionsScreeningService({ storeFile });
+    writer.updateSanctionsList('ofac_sdn', [listEntry]);
+
+    const result = await writer.screenEntity(request, 'org-a');
+    await writer.resolveMatch({
+      matchId: result.matches[0].matchId,
+      decision: 'false_positive',
+      reason: 'Reviewed against source documents and cleared',
+      decidedBy: 'reviewer-a',
+    }, 'org-a');
+    writer.enableContinuousMonitoring('entity-1', 'org-a');
+
+    const reader = new SanctionsScreeningService({ storeFile });
+
+    expect(reader.getListReadiness(['ofac_sdn'])).toEqual([
+      expect.objectContaining({ listName: 'ofac_sdn', ready: true, issues: [] }),
+    ]);
+    expect(reader.getScreeningResult(result.screeningId, 'org-a')).toMatchObject({
+      screeningId: result.screeningId,
+      overallRisk: 'clear',
+    });
+    expect(reader.getAuditTrail(result.screeningId, 'org-a')).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ action: 'screening_completed' }),
+        expect.objectContaining({ action: 'match_false_positive' }),
+      ]),
+    );
+
+    const refreshed = await reader.onListUpdate('ofac_sdn', [listEntry]);
+    expect(refreshed).toHaveLength(1);
+    expect(reader.getEntityScreenings('entity-1', 'org-a')).toHaveLength(2);
+  });
+
   it('re-screens continuously monitored entities after list updates', async () => {
     const service = new SanctionsScreeningService();
     service.updateSanctionsList('ofac_sdn', []);
@@ -195,7 +264,7 @@ describe('SanctionsScreeningService readiness', () => {
   });
 
   it('blocks production screening when list metadata is stale', async () => {
-    process.env.NODE_ENV = 'production';
+    enableProductionWithStore();
     process.env.SANCTIONS_LIST_MAX_AGE_HOURS = '1';
     const privateKey = configureTrustedListKey();
     const service = new SanctionsScreeningService();
@@ -222,7 +291,7 @@ describe('SanctionsScreeningService readiness', () => {
   });
 
   it('rejects tampered production list manifests', async () => {
-    process.env.NODE_ENV = 'production';
+    enableProductionWithStore();
     const privateKey = configureTrustedListKey();
     const service = new SanctionsScreeningService();
     const metadata = signMetadata(privateKey);

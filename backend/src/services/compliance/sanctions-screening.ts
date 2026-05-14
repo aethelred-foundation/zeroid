@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import { createLogger, format, transports } from 'winston';
 import crypto from 'crypto';
+import * as fs from 'fs';
+import * as path from 'path';
 import { isProductionRuntime, isSanctionsScreeningDisabled } from '../production-safety';
 
 // ---------------------------------------------------------------------------
@@ -140,6 +142,24 @@ export interface SanctionsListReadiness {
   signingKeyId?: string;
 }
 
+interface SanctionsScreeningSnapshot {
+  version: 1;
+  savedAt: string;
+  sanctionsLists: Array<[string, SanctionsListEntry[]]>;
+  sanctionsListMetadata: Array<[string, SanctionsListMetadata]>;
+  screeningResults: Array<[string, ScreeningResult]>;
+  screeningRequests: Array<[string, ScreeningRequestSnapshot]>;
+  auditLog: AuditEntry[];
+  falsePositives: Array<[string, ScopedFalsePositiveDecision]>;
+  continuousMonitoringEntities: string[];
+  matchThreshold: number;
+}
+
+export interface SanctionsScreeningServiceOptions {
+  matchThreshold?: number;
+  storeFile?: string;
+}
+
 export function computeSanctionsListDigest(entries: SanctionsListEntry[]): string {
   return crypto
     .createHash('sha256')
@@ -197,17 +217,35 @@ export class SanctionsScreeningService {
   private continuousMonitoringEntities: Set<string> = new Set();
   private matchThreshold: number;
   private listMaxAgeMs: number;
+  private readonly storeFile?: string;
 
-  constructor(matchThreshold = 0.78) {
-    this.matchThreshold = matchThreshold;
+  constructor(matchThreshold?: number);
+  constructor(options?: SanctionsScreeningServiceOptions);
+  constructor(optionsOrThreshold: number | SanctionsScreeningServiceOptions = 0.78) {
+    const options = typeof optionsOrThreshold === 'number'
+      ? { matchThreshold: optionsOrThreshold }
+      : optionsOrThreshold;
+    this.matchThreshold = options.matchThreshold ?? 0.78;
     this.listMaxAgeMs = this.resolveListMaxAgeMs();
+    const configuredStoreFile = options.storeFile ?? process.env.SANCTIONS_SCREENING_STORE_FILE;
+    this.storeFile = configuredStoreFile?.trim() || undefined;
     this.initializeLists();
-    logger.info('SanctionsScreeningService initialized', { threshold: matchThreshold });
+    this.initializeStore();
+    logger.info('SanctionsScreeningService initialized', {
+      threshold: this.matchThreshold,
+      durableStoreConfigured: Boolean(this.storeFile),
+    });
   }
 
   private initializeLists(): void {
+    this.ensureAllSanctionsListBuckets();
+  }
+
+  private ensureAllSanctionsListBuckets(): void {
     for (const listName of SANCTIONS_LIST_NAMES) {
-      this.sanctionsLists.set(listName, []);
+      if (!this.sanctionsLists.has(listName)) {
+        this.sanctionsLists.set(listName, []);
+      }
     }
   }
 
@@ -222,6 +260,8 @@ export class SanctionsScreeningService {
       (error as Error & { code: string }).code = 'SANCTIONS_SCREENING_DISABLED';
       throw error;
     }
+    this.refreshStateFromStore();
+    this.assertStoreAvailable();
     this.assertScreeningListsReady(parsed.screenAgainst);
     const startTime = Date.now();
     const screeningId = crypto.randomUUID();
@@ -282,6 +322,7 @@ export class SanctionsScreeningService {
       matchCount: resolved.length,
       overallRisk,
     }, scopeOrganizationId);
+    this.persistState();
 
     if (this.continuousMonitoringEntities.has(this.entityScopeKey(parsed.entityId, scopeOrganizationId))) {
       logger.info('continuous_monitoring_screening', {
@@ -603,6 +644,8 @@ export class SanctionsScreeningService {
   async resolveMatch(decision: FalsePositiveDecision, organizationId?: string): Promise<void> {
     const parsed = FalsePositiveDecisionSchema.parse(decision);
     const scopeOrganizationId = this.normalizeOrganizationId(organizationId);
+    this.refreshStateFromStore();
+    this.assertStoreAvailable();
     const owner = this.findMatchOwner(parsed.matchId, scopeOrganizationId);
     if (!owner) {
       const error = new Error('Sanctions match not found for this organization');
@@ -626,6 +669,7 @@ export class SanctionsScreeningService {
       reason: parsed.reason,
       evidenceRefs: parsed.evidenceRefs,
     }, scopeOrganizationId);
+    this.persistState();
 
     logger.info('match_resolved', {
       matchId: parsed.matchId,
@@ -642,13 +686,19 @@ export class SanctionsScreeningService {
   // -------------------------------------------------------------------------
   enableContinuousMonitoring(entityId: string, organizationId?: string): void {
     const scopeOrganizationId = this.normalizeOrganizationId(organizationId);
+    this.refreshStateFromStore();
+    this.assertStoreAvailable();
     this.continuousMonitoringEntities.add(this.entityScopeKey(entityId, scopeOrganizationId));
+    this.persistState();
     logger.info('continuous_monitoring_enabled', { entityId, organizationId: scopeOrganizationId });
   }
 
   disableContinuousMonitoring(entityId: string, organizationId?: string): void {
     const scopeOrganizationId = this.normalizeOrganizationId(organizationId);
+    this.refreshStateFromStore();
+    this.assertStoreAvailable();
     this.continuousMonitoringEntities.delete(this.entityScopeKey(entityId, scopeOrganizationId));
+    this.persistState();
     logger.info('continuous_monitoring_disabled', { entityId, organizationId: scopeOrganizationId });
   }
 
@@ -685,6 +735,9 @@ export class SanctionsScreeningService {
     updatedEntries: SanctionsListEntry[],
     metadata?: SanctionsListMetadata,
   ): void {
+    this.refreshStateFromStore();
+    this.assertStoreAvailable();
+
     if (!SANCTIONS_LIST_NAMES.includes(listName)) {
       throw new Error(`Unsupported sanctions list: ${listName}`);
     }
@@ -704,9 +757,11 @@ export class SanctionsScreeningService {
     this.assertListSignatureTrusted(listName, updatedEntries, nextMetadata);
     this.sanctionsLists.set(listName, [...updatedEntries]);
     this.sanctionsListMetadata.set(listName, nextMetadata);
+    this.persistState();
   }
 
   getListReadiness(screenAgainst: SanctionsListName[] = [...SANCTIONS_LIST_NAMES]): SanctionsListReadiness[] {
+    this.refreshStateFromStore();
     return screenAgainst.map((listName) => this.buildListReadiness(listName));
   }
 
@@ -714,6 +769,7 @@ export class SanctionsScreeningService {
   // Retrieve results
   // -------------------------------------------------------------------------
   getScreeningResult(screeningId: string, organizationId?: string): ScreeningResult | null {
+    this.refreshStateFromStore();
     const result = this.screeningResults.get(screeningId);
     if (!result || !this.resultMatchesOrganization(result, this.normalizeOrganizationId(organizationId))) {
       return null;
@@ -722,6 +778,7 @@ export class SanctionsScreeningService {
   }
 
   getEntityScreenings(entityId: string, organizationId?: string): ScreeningResult[] {
+    this.refreshStateFromStore();
     const scopeOrganizationId = this.normalizeOrganizationId(organizationId);
     return [...this.screeningResults.values()]
       .filter((r) => r.entityId === entityId && this.resultMatchesOrganization(r, scopeOrganizationId))
@@ -732,6 +789,7 @@ export class SanctionsScreeningService {
   // Audit trail
   // -------------------------------------------------------------------------
   getAuditTrail(screeningId: string, organizationId?: string): AuditEntry[] {
+    this.refreshStateFromStore();
     const scopeOrganizationId = this.normalizeOrganizationId(organizationId);
     return this.auditLog.filter((e) => (
       e.screeningId === screeningId &&
@@ -764,7 +822,10 @@ export class SanctionsScreeningService {
     if (threshold < 0 || threshold > 1) {
       throw new Error('Threshold must be between 0 and 1');
     }
+    this.refreshStateFromStore();
+    this.assertStoreAvailable();
     this.matchThreshold = threshold;
+    this.persistState();
     logger.info('match_threshold_updated', { threshold });
   }
 
@@ -973,6 +1034,115 @@ export class SanctionsScreeningService {
     }
     const hours = Number.isFinite(configuredHours) && configuredHours > 0 ? configuredHours : 24;
     return hours * 60 * 60 * 1000;
+  }
+
+  private initializeStore(): void {
+    if (!this.storeFile) return;
+
+    try {
+      fs.mkdirSync(path.dirname(this.storeFile), { recursive: true, mode: 0o700 });
+      this.refreshStateFromStore();
+    } catch (error) {
+      throw new SanctionsScreeningError(
+        `Durable sanctions screening store could not be initialized: ${(error as Error).message}`,
+        'SANCTIONS_SCREENING_STORE_INITIALIZATION_FAILED',
+        503,
+      );
+    }
+  }
+
+  private assertStoreAvailable(): void {
+    if (!isProductionRuntime() || this.storeFile) return;
+
+    throw new SanctionsScreeningError(
+      'Durable sanctions screening store is required in production',
+      'SANCTIONS_SCREENING_STORE_REQUIRED',
+      503,
+    );
+  }
+
+  private persistState(): void {
+    this.assertStoreAvailable();
+    if (!this.storeFile) return;
+
+    const snapshot: SanctionsScreeningSnapshot = {
+      version: 1,
+      savedAt: new Date().toISOString(),
+      sanctionsLists: Array.from(this.sanctionsLists.entries()),
+      sanctionsListMetadata: Array.from(this.sanctionsListMetadata.entries()),
+      screeningResults: Array.from(this.screeningResults.entries()),
+      screeningRequests: Array.from(this.screeningRequests.entries()),
+      auditLog: [...this.auditLog],
+      falsePositives: Array.from(this.falsePositives.entries()),
+      continuousMonitoringEntities: Array.from(this.continuousMonitoringEntities.values()),
+      matchThreshold: this.matchThreshold,
+    };
+    const tempFile = `${this.storeFile}.${process.pid}.${Date.now()}.tmp`;
+
+    try {
+      fs.writeFileSync(tempFile, JSON.stringify(snapshot, null, 2), {
+        encoding: 'utf8',
+        mode: 0o600,
+      });
+      fs.renameSync(tempFile, this.storeFile);
+    } catch (error) {
+      if (fs.existsSync(tempFile)) {
+        fs.unlinkSync(tempFile);
+      }
+      throw new SanctionsScreeningError(
+        `Durable sanctions screening store could not be written: ${(error as Error).message}`,
+        'SANCTIONS_SCREENING_STORE_WRITE_FAILED',
+        503,
+      );
+    }
+  }
+
+  private refreshStateFromStore(): void {
+    if (!this.storeFile || !fs.existsSync(this.storeFile)) return;
+
+    try {
+      const snapshot = JSON.parse(fs.readFileSync(this.storeFile, 'utf8')) as Partial<SanctionsScreeningSnapshot>;
+      if (snapshot.version !== 1) {
+        throw new Error(`unsupported snapshot version: ${String(snapshot.version)}`);
+      }
+
+      this.sanctionsLists = new Map(snapshot.sanctionsLists ?? []);
+      this.ensureAllSanctionsListBuckets();
+      this.sanctionsListMetadata = new Map(snapshot.sanctionsListMetadata ?? []);
+      this.screeningResults = new Map(snapshot.screeningResults ?? []);
+      this.screeningRequests = new Map(snapshot.screeningRequests ?? []);
+      this.auditLog = [...(snapshot.auditLog ?? [])];
+      this.falsePositives = new Map(snapshot.falsePositives ?? []);
+      this.continuousMonitoringEntities = new Set(snapshot.continuousMonitoringEntities ?? []);
+      if (typeof snapshot.matchThreshold === 'number') {
+        this.matchThreshold = snapshot.matchThreshold;
+      }
+    } catch (error) {
+      logger.error('sanctions_screening_store_load_failed', {
+        storeFile: this.storeFile,
+        error: (error as Error).message,
+      });
+
+      if (isProductionRuntime()) {
+        throw new SanctionsScreeningError(
+          `Durable sanctions screening store could not be loaded: ${(error as Error).message}`,
+          'SANCTIONS_SCREENING_STORE_READ_FAILED',
+          503,
+        );
+      }
+    }
+  }
+}
+
+export class SanctionsScreeningError extends Error {
+  readonly code: string;
+  readonly statusCode: number;
+
+  constructor(message: string, code: string, statusCode: number) {
+    super(message);
+    this.name = 'SanctionsScreeningError';
+    this.code = code;
+    this.statusCode = statusCode;
   }
 }
 

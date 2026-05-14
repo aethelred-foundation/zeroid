@@ -48,6 +48,7 @@ const PROD_BASE_ENV: NodeJS.ProcessEnv = {
     sovereign_list_signer: '-----BEGIN PUBLIC KEY-----trusted-sanctions-list-key-----END PUBLIC KEY-----',
   }),
   SANCTIONS_LIST_MAX_AGE_HOURS: '24',
+  SANCTIONS_SCREENING_STORE_FILE: '/var/lib/zeroid/sanctions-screening/state.json',
   WEBHOOK_SECRET_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64'),
   POLICY_RECEIPT_SIGNING_SECRET: 'r'.repeat(64),
   REGULATORY_REPORT_STORE_DIR: '/var/lib/zeroid/regulatory-reports',
@@ -335,6 +336,16 @@ describe('production safety controls', () => {
       SANCTIONS_LIST_MAX_AGE_HOURS: 'not-a-number',
     })).toEqual([
       expect.objectContaining({ control: 'SANCTIONS_LIST_MAX_AGE_HOURS' }),
+    ]);
+  });
+
+  it('requires durable sanctions screening storage in production', () => {
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      METRICS_PUBLIC_DISABLED: 'true',
+      SANCTIONS_SCREENING_STORE_FILE: '',
+    })).toEqual([
+      expect.objectContaining({ control: 'SANCTIONS_SCREENING_STORE_FILE' }),
     ]);
   });
 
