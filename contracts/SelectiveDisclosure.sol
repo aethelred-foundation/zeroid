@@ -92,11 +92,23 @@ contract SelectiveDisclosure is ISelectiveDisclosure, AccessControl, Pausable, R
         bytes32 nullifier;
     }
 
+    struct DisclosureCircuitPolicy {
+        bool active;
+        uint16 publicInputCount;
+        uint16 merkleRootIndex;
+        uint16 contextHashIndex;
+        uint16 nullifierIndex;
+        uint64 updatedAt;
+    }
+
     /// @dev requestId => DisclosureRequest
     mapping(bytes32 => DisclosureRequest) private _requests;
 
     /// @dev requestId => DisclosureResult
     mapping(bytes32 => DisclosureResult) private _results;
+
+    /// @dev circuitId => approved public-input schema for disclosure proofs
+    mapping(bytes32 => DisclosureCircuitPolicy) private _circuitPolicies;
 
     /// @dev Context-scoped nullifier tracking: context hash => nullifier => used
     mapping(bytes32 => mapping(bytes32 => bool)) private _contextNullifiers;
@@ -122,6 +134,14 @@ contract SelectiveDisclosure is ISelectiveDisclosure, AccessControl, Pausable, R
 
     event DisclosureNullifierUsed(bytes32 indexed requestId, bytes32 indexed nullifier);
     event MerkleProofVerified(bytes32 indexed requestId, bytes32 indexed attributeHash, bool valid);
+    event DisclosureCircuitPolicyUpdated(
+        bytes32 indexed circuitId,
+        uint16 publicInputCount,
+        uint16 merkleRootIndex,
+        uint16 contextHashIndex,
+        uint16 nullifierIndex,
+        bool active
+    );
 
     // ──────────────────────────────────────────────────────────────
     // Errors
@@ -139,9 +159,14 @@ contract SelectiveDisclosure is ISelectiveDisclosure, AccessControl, Pausable, R
     error MerkleProofInvalid(bytes32 leaf, bytes32 root);
     error ZKProofInvalid(bytes32 circuitId);
     error NullifierAlreadyUsed(bytes32 contextHash, bytes32 nullifier);
+    error InvalidNullifierValue();
     error NoAttributesRequested();
     error AttributeCountMismatch(uint256 expected, uint256 actual);
     error CredentialSubjectMismatch(bytes32 credentialHash, bytes32 requestedSubjectDid, bytes32 credentialSubjectDid);
+    error DisclosureCircuitNotConfigured(bytes32 circuitId);
+    error InvalidDisclosureCircuitPolicy(bytes32 circuitId);
+    error PublicInputSchemaMismatch(bytes32 circuitId, uint256 expected, uint256 actual);
+    error PublicInputBindingMismatch(bytes32 circuitId, uint256 index, bytes32 expected, bytes32 actual);
 
     // ──────────────────────────────────────────────────────────────
     // Modifiers
@@ -183,6 +208,52 @@ contract SelectiveDisclosure is ISelectiveDisclosure, AccessControl, Pausable, R
     // ──────────────────────────────────────────────────────────────
     // Disclosure Request Management
     // ──────────────────────────────────────────────────────────────
+
+    /// @notice Approve the exact public-input schema expected for a disclosure circuit.
+    /// @dev Governance pins the credential, context, and replay-binding positions.
+    function setDisclosureCircuitPolicy(
+        bytes32 circuitId,
+        uint16 publicInputCount,
+        uint16 merkleRootIndex,
+        uint16 contextHashIndex,
+        uint16 nullifierIndex,
+        bool active
+    ) external onlyRole(GOVERNANCE_ROLE) {
+        if (
+            circuitId == bytes32(0) ||
+            publicInputCount < 3 ||
+            merkleRootIndex >= publicInputCount ||
+            contextHashIndex >= publicInputCount ||
+            nullifierIndex >= publicInputCount ||
+            merkleRootIndex == contextHashIndex ||
+            merkleRootIndex == nullifierIndex ||
+            contextHashIndex == nullifierIndex
+        ) {
+            revert InvalidDisclosureCircuitPolicy(circuitId);
+        }
+
+        if (active && !zkVerifier.isCircuitRegistered(circuitId)) {
+            revert DisclosureCircuitNotConfigured(circuitId);
+        }
+
+        _circuitPolicies[circuitId] = DisclosureCircuitPolicy({
+            active: active,
+            publicInputCount: publicInputCount,
+            merkleRootIndex: merkleRootIndex,
+            contextHashIndex: contextHashIndex,
+            nullifierIndex: nullifierIndex,
+            updatedAt: uint64(block.timestamp)
+        });
+
+        emit DisclosureCircuitPolicyUpdated(
+            circuitId,
+            publicInputCount,
+            merkleRootIndex,
+            contextHashIndex,
+            nullifierIndex,
+            active
+        );
+    }
 
     /// @inheritdoc ISelectiveDisclosure
     function createDisclosureRequest(
@@ -266,6 +337,11 @@ contract SelectiveDisclosure is ISelectiveDisclosure, AccessControl, Pausable, R
         bytes32[] calldata merkleProof
     ) external override requestExists(requestId) requestOpen(requestId) whenNotPaused nonReentrant returns (bool) {
         DisclosureRequest storage req = _requests[requestId];
+        DisclosureCircuitPolicy memory policy = _circuitPolicies[circuitId];
+        if (!policy.active) revert DisclosureCircuitNotConfigured(circuitId);
+        if (publicInputs.length != policy.publicInputCount) {
+            revert PublicInputSchemaMismatch(circuitId, policy.publicInputCount, publicInputs.length);
+        }
 
         if (merkleProof.length > MAX_MERKLE_PROOF_DEPTH) {
             revert MerkleProofTooDeep(uint32(merkleProof.length));
@@ -276,12 +352,12 @@ contract SelectiveDisclosure is ISelectiveDisclosure, AccessControl, Pausable, R
             revert CredentialNotValid(req.credentialHash);
         }
 
-        // Context hash for nullifier scoping
-        bytes32 contextHash = keccak256(abi.encodePacked(requestId, req.verifier));
+        // Context hash for nullifier scoping and public-input binding.
+        bytes32 contextHash = _requestContextHash(requestId, req);
 
-        // Extract nullifier from public inputs (convention: last public input)
-        require(publicInputs.length >= 3, "Insufficient public inputs");
-        bytes32 nullifier = bytes32(publicInputs[publicInputs.length - 1]);
+        // Extract nullifier from the governance-pinned public input position.
+        bytes32 nullifier = bytes32(publicInputs[policy.nullifierIndex]);
+        if (nullifier == bytes32(0)) revert InvalidNullifierValue();
 
         // Prevent nullifier reuse within this context
         if (_contextNullifiers[contextHash][nullifier]) {
@@ -297,11 +373,18 @@ contract SelectiveDisclosure is ISelectiveDisclosure, AccessControl, Pausable, R
             revert MerkleProofInvalid(req.attributeHashes[0], cred.merkleRoot);
         }
 
-        // ZID-010: Bind ZK proof public inputs to request context
-        // publicInputs[0] must commit to the credential's merkle root
-        require(bytes32(publicInputs[0]) == cred.merkleRoot, "Public input[0] must match credential merkle root");
-        // publicInputs[1] must commit to the request context hash
-        require(bytes32(publicInputs[1]) == contextHash, "Public input[1] must match request context hash");
+        _requirePublicInputBinding(
+            circuitId,
+            policy.merkleRootIndex,
+            publicInputs[policy.merkleRootIndex],
+            cred.merkleRoot
+        );
+        _requirePublicInputBinding(
+            circuitId,
+            policy.contextHashIndex,
+            publicInputs[policy.contextHashIndex],
+            contextHash
+        );
 
         // Step 2: Verify ZK proof — proves the holder knows attribute values
         //         matching the disclosed Merkle leaves without revealing them
@@ -387,10 +470,19 @@ contract SelectiveDisclosure is ISelectiveDisclosure, AccessControl, Pausable, R
         return _subjectDisclosures[subjectDid];
     }
 
+    /// @notice Return the approved public-input schema for a disclosure circuit.
+    function getDisclosureCircuitPolicy(bytes32 circuitId)
+        external
+        view
+        returns (DisclosureCircuitPolicy memory)
+    {
+        return _circuitPolicies[circuitId];
+    }
+
     /// @notice Check if a nullifier has been used in a specific disclosure context
     function isNullifierUsedInContext(bytes32 requestId, bytes32 nullifier) external view returns (bool) {
         DisclosureRequest storage req = _requests[requestId];
-        bytes32 contextHash = keccak256(abi.encodePacked(requestId, req.verifier));
+        bytes32 contextHash = _requestContextHash(requestId, req);
         return _contextNullifiers[contextHash][nullifier];
     }
 
@@ -429,6 +521,43 @@ contract SelectiveDisclosure is ISelectiveDisclosure, AccessControl, Pausable, R
         }
 
         return computedHash == root;
+    }
+
+    function _requestContextHash(
+        bytes32 requestId,
+        DisclosureRequest storage req
+    ) internal view returns (bytes32) {
+        bytes32 attributesHash = keccak256(abi.encodePacked(req.attributeHashes.length));
+        for (uint256 i = 0; i < req.attributeHashes.length;) {
+            attributesHash = keccak256(abi.encodePacked(attributesHash, req.attributeHashes[i]));
+            unchecked {
+                i++;
+            }
+        }
+
+        return keccak256(
+            abi.encode(
+                address(this),
+                block.chainid,
+                requestId,
+                req.verifier,
+                req.subjectDid,
+                req.credentialHash,
+                attributesHash
+            )
+        );
+    }
+
+    function _requirePublicInputBinding(
+        bytes32 circuitId,
+        uint256 index,
+        uint256 supplied,
+        bytes32 expected
+    ) internal pure {
+        bytes32 actual = bytes32(supplied);
+        if (actual != expected) {
+            revert PublicInputBindingMismatch(circuitId, index, expected, actual);
+        }
     }
 
     /// @dev Gas-efficient hash of two bytes32 values using assembly

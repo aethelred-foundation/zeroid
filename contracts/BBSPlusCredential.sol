@@ -234,6 +234,7 @@ contract BBSPlusCredential is AccessControl, Pausable, ReentrancyGuard {
         if (h.length == 0) revert InvalidPublicKeyLength();
         if (_issuerKeys[issuerId].active) revert PublicKeyAlreadyRegistered();
         if (domainTag == bytes32(0)) revert InvalidDomainTag();
+        if (_registeredDomains[domainTag]) revert InvalidDomainTag();
         _requireValidNonZeroG1(h0);
 
         IssuerPublicKey storage key = _issuerKeys[issuerId];
@@ -299,7 +300,17 @@ contract BBSPlusCredential is AccessControl, Pausable, ReentrancyGuard {
         }
 
         credentialHash = keccak256(
-            abi.encodePacked(issuerId, messages, signature.e, signature.s)
+            abi.encode(
+                address(this),
+                block.chainid,
+                issuerId,
+                pk.domainTag,
+                messages,
+                signature.a.x,
+                signature.a.y,
+                signature.e,
+                signature.s
+            )
         );
         _issuedCredentials[credentialHash] = true;
         unchecked { ++totalCredentialsIssued; }
@@ -433,20 +444,10 @@ contract BBSPlusCredential is AccessControl, Pausable, ReentrancyGuard {
         // Witness must be for the current epoch
         if (witness.epoch != acc.epoch) return false;
 
-        // Verify the ZK proof of non-membership
-        // The proof binds the witness to the accumulator root and credential hash
-        bytes32 proofTarget = keccak256(
-            abi.encodePacked(
-                acc.root,
-                witness.credentialHash,
-                BN254.encodeG1(witness.witnessPoint),
-                witness.epoch
-            )
-        );
-
         // No production verifier is wired for this legacy BBS accumulator path.
         // Fail closed instead of accepting shape-only or placeholder proofs.
-        valid = keccak256(proofData) == proofTarget;
+        proofData;
+        valid = false;
     }
 
     /**

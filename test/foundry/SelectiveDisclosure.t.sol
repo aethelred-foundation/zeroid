@@ -71,6 +71,9 @@ contract SelectiveDisclosureTest is TestHelper {
         vm.prank(admin);
         sd.grantRole(verifierRole, alice);
 
+        vm.prank(admin);
+        sd.setDisclosureCircuitPolicy(CIRCUIT_ID, 3, 0, 1, 2, true);
+
         // Set credential as valid
         mockCred.setValid(CRED_HASH, true);
         mockCred.setCred(CRED_HASH, _credentialForSubject(SUBJECT_DID));
@@ -296,9 +299,47 @@ contract SelectiveDisclosureTest is TestHelper {
         });
     }
 
+    function _requestContextHash(bytes32 requestId) internal view returns (bytes32) {
+        bytes32 attributesHash = keccak256(abi.encodePacked(uint256(1)));
+        attributesHash = keccak256(abi.encodePacked(attributesHash, keccak256("attr:age")));
+        return keccak256(
+            abi.encode(
+                address(sd),
+                block.chainid,
+                requestId,
+                alice,
+                SUBJECT_DID,
+                CRED_HASH,
+                attributesHash
+            )
+        );
+    }
+
+    function _validPublicInputs(
+        bytes32 requestId,
+        bytes32 merkleRoot,
+        bytes32 nullifier
+    ) internal view returns (uint256[] memory publicInputs) {
+        publicInputs = new uint256[](3);
+        publicInputs[0] = uint256(merkleRoot);
+        publicInputs[1] = uint256(_requestContextHash(requestId));
+        publicInputs[2] = uint256(nullifier);
+    }
+
     // ════════════════════════════════════════════════════════════════
     // ZID-010: Proof Context Binding
     // ════════════════════════════════════════════════════════════════
+
+    function test_SetDisclosureCircuitPolicy_RevertsInvalidSchema() public {
+        vm.prank(admin);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                SelectiveDisclosure.InvalidDisclosureCircuitPolicy.selector,
+                CIRCUIT_ID
+            )
+        );
+        sd.setDisclosureCircuitPolicy(CIRCUIT_ID, 2, 0, 1, 1, true);
+    }
 
     function test_SubmitDisclosureProof_RevertsInsufficientPublicInputs() public {
         bytes32 requestId = _createRequest();
@@ -324,47 +365,125 @@ contract SelectiveDisclosureTest is TestHelper {
 
         bytes32[] memory merkleProof = new bytes32[](0);
 
-        vm.expectRevert("Insufficient public inputs");
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                SelectiveDisclosure.PublicInputSchemaMismatch.selector,
+                CIRCUIT_ID,
+                uint256(3),
+                uint256(2)
+            )
+        );
         sd.submitDisclosureProof(requestId, CIRCUIT_ID, proof, publicInputs, merkleProof);
+    }
+
+    function test_SubmitDisclosureProof_RevertsUnconfiguredCircuit() public {
+        bytes32 requestId = _createRequest();
+        bytes32 merkleRoot = keccak256("attr:age");
+        Credential memory cred = _credentialForSubject(SUBJECT_DID);
+        cred.merkleRoot = merkleRoot;
+        mockCred.setCred(CRED_HASH, cred);
+
+        uint256[] memory publicInputs = _validPublicInputs(
+            requestId,
+            merkleRoot,
+            keccak256("nullifier")
+        );
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                SelectiveDisclosure.DisclosureCircuitNotConfigured.selector,
+                keccak256("circuit:unconfigured")
+            )
+        );
+        sd.submitDisclosureProof(
+            requestId,
+            keccak256("circuit:unconfigured"),
+            _dummyProof(),
+            publicInputs,
+            new bytes32[](0)
+        );
     }
 
     function test_SubmitDisclosureProof_RevertsWrongMerkleRootInput() public {
         bytes32 requestId = _createRequest();
 
-        // Set up credential with merkle root
-        bytes32 merkleRoot = keccak256("merkle_root");
-        Credential memory cred = Credential({
-            credentialHash: CRED_HASH,
-            schemaHash: keccak256("schema"),
-            issuerDid: keccak256("issuer"),
-            subjectDid: SUBJECT_DID,
-            issuedAt: uint64(block.timestamp),
-            expiresAt: uint64(block.timestamp + 365 days),
-            status: CredentialStatus.Active,
-            merkleRoot: merkleRoot
-        });
+        bytes32 merkleRoot = keccak256("attr:age");
+        Credential memory cred = _credentialForSubject(SUBJECT_DID);
+        cred.merkleRoot = merkleRoot;
         mockCred.setCred(CRED_HASH, cred);
 
         Groth16Proof memory proof = _dummyProof();
-        uint256[] memory publicInputs = new uint256[](3);
-        publicInputs[0] = uint256(keccak256("wrong_merkle_root")); // wrong!
-        publicInputs[1] = uint256(keccak256("context"));
-        publicInputs[2] = uint256(keccak256("nullifier"));
+        uint256[] memory publicInputs = _validPublicInputs(
+            requestId,
+            keccak256("wrong_merkle_root"),
+            keccak256("nullifier")
+        );
 
-        // Use a merkle proof that results in the root matching
-        bytes32[] memory attrHashes = new bytes32[](1);
-        attrHashes[0] = keccak256("attr:age");
-        // Build proof such that hash(attr) walks to merkleRoot
-        bytes32[] memory merkleProofPath = new bytes32[](0);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                SelectiveDisclosure.PublicInputBindingMismatch.selector,
+                CIRCUIT_ID,
+                uint256(0),
+                merkleRoot,
+                keccak256("wrong_merkle_root")
+            )
+        );
+        sd.submitDisclosureProof(requestId, CIRCUIT_ID, proof, publicInputs, new bytes32[](0));
+    }
 
-        // The merkle proof will fail before we get to the public input check,
-        // but let's test with a passing merkle proof scenario
-        // Actually the merkle proof verification happens first. Let's make it pass
-        // by setting merkleRoot = hash of the attribute
-        cred.merkleRoot = keccak256("attr:age");
+    function test_SubmitDisclosureProof_RevertsWrongContextInput() public {
+        bytes32 requestId = _createRequest();
+        bytes32 merkleRoot = keccak256("attr:age");
+        Credential memory cred = _credentialForSubject(SUBJECT_DID);
+        cred.merkleRoot = merkleRoot;
         mockCred.setCred(CRED_HASH, cred);
 
-        vm.expectRevert("Public input[0] must match credential merkle root");
-        sd.submitDisclosureProof(requestId, CIRCUIT_ID, proof, publicInputs, merkleProofPath);
+        uint256[] memory publicInputs = _validPublicInputs(
+            requestId,
+            merkleRoot,
+            keccak256("nullifier")
+        );
+        publicInputs[1] = uint256(keccak256("wrong-context"));
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                SelectiveDisclosure.PublicInputBindingMismatch.selector,
+                CIRCUIT_ID,
+                uint256(1),
+                _requestContextHash(requestId),
+                keccak256("wrong-context")
+            )
+        );
+        sd.submitDisclosureProof(
+            requestId,
+            CIRCUIT_ID,
+            _dummyProof(),
+            publicInputs,
+            new bytes32[](0)
+        );
+    }
+
+    function test_SubmitDisclosureProof_SuccessWithConfiguredCircuit() public {
+        bytes32 requestId = _createRequest();
+        bytes32 merkleRoot = keccak256("attr:age");
+        bytes32 nullifier = keccak256("nullifier");
+        Credential memory cred = _credentialForSubject(SUBJECT_DID);
+        cred.merkleRoot = merkleRoot;
+        mockCred.setCred(CRED_HASH, cred);
+
+        uint256[] memory publicInputs = _validPublicInputs(
+            requestId,
+            merkleRoot,
+            nullifier
+        );
+
+        assertTrue(sd.submitDisclosureProof(
+            requestId,
+            CIRCUIT_ID,
+            _dummyProof(),
+            publicInputs,
+            new bytes32[](0)
+        ));
+        assertTrue(sd.isNullifierUsedInContext(requestId, nullifier));
     }
 }

@@ -102,6 +102,17 @@ contract BBSPlusCredentialTest is TestHelper {
         bbs.registerIssuerKey(ISSUER_ID, _g2(), _g1(), h, bytes32(0));
     }
 
+    function test_RegisterIssuerKey_RevertsDuplicateDomainTag() public {
+        _registerKey();
+
+        BN254.G1Point[] memory h = new BN254.G1Point[](1);
+        h[0] = _g1();
+
+        vm.prank(admin);
+        vm.expectRevert(BBSPlusCredential.InvalidDomainTag.selector);
+        bbs.registerIssuerKey(keccak256("issuer:bbs:2"), _g2(), _g1(), h, DOMAIN_TAG);
+    }
+
     function test_RegisterIssuerKey_RevertsInvalidG1Generators() public {
         BN254.G1Point[] memory h = new BN254.G1Point[](1);
         h[0] = _g1();
@@ -212,6 +223,27 @@ contract BBSPlusCredentialTest is TestHelper {
         bytes memory fakeProof = new bytes(256);
 
         assertFalse(bbs.verifyNonRevocation(ACC_ID, witness, fakeProof));
+    }
+
+    function test_VerifyNonRevocation_RejectsHashPreimagePlaceholderProof() public {
+        bytes32 root = keccak256("root");
+        vm.prank(admin);
+        bbs.initializeAccumulator(ACC_ID, root);
+
+        BBSPlusCredential.NonRevocationWitness memory witness =
+            BBSPlusCredential.NonRevocationWitness({
+                witnessPoint: _g1(),
+                epoch: 1,
+                credentialHash: keccak256("credential")
+            });
+        bytes memory placeholderProof = abi.encodePacked(
+            root,
+            witness.credentialHash,
+            BN254.encodeG1(witness.witnessPoint),
+            witness.epoch
+        );
+
+        assertFalse(bbs.verifyNonRevocation(ACC_ID, witness, placeholderProof));
     }
 
     function test_GetHistoricalRoot() public {
