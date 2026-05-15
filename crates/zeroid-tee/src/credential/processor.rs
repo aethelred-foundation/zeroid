@@ -223,11 +223,12 @@ impl CredentialProcessor {
                         credential.schema_id
                     ))
                 })?;
-            schema.validate_attributes(&attr_names)?;
+            schema.validate_attribute_values(&credential.attributes.entries)?;
         }
 
         // Compute credential hash
-        let credential_hash = self.hash_credential(credential);
+        let credential_root = compute_credential_root(&credential.attributes)?;
+        let credential_hash = self.hash_credential(credential, &credential_root);
 
         Ok(VerificationResult {
             is_valid: true,
@@ -239,17 +240,15 @@ impl CredentialProcessor {
     }
 
     /// Compute a hash of a credential for the verification result.
-    fn hash_credential(&self, credential: &Credential) -> [u8; 32] {
+    fn hash_credential(&self, credential: &Credential, credential_root: &[u8; 32]) -> [u8; 32] {
         let mut data = Vec::new();
         data.extend_from_slice(credential.id.as_bytes());
         data.extend_from_slice(credential.issuer.as_bytes());
         data.extend_from_slice(credential.subject.as_bytes());
+        data.extend_from_slice(credential.schema_id.as_bytes());
         data.extend_from_slice(&credential.issued_at.to_le_bytes());
         data.extend_from_slice(&credential.expires_at.to_le_bytes());
-        // Include the attribute root if possible
-        if let Ok(root) = compute_credential_root(&credential.attributes) {
-            data.extend_from_slice(&root);
-        }
+        data.extend_from_slice(credential_root);
         keccak256(&data)
     }
 }
@@ -379,6 +378,30 @@ mod tests {
         schema.add_attribute("extra", AttributeType::String, true);
         p.add_schema(schema);
         let cred = sample_credential();
+        let result = p.verify(&cred, 2000);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn verify_schema_rejects_invalid_typed_value() {
+        let p = processor_with_issuer_and_schema();
+        let mut cred = sample_credential();
+        cred.attributes = AttributeSet::new();
+        cred.attributes.add("name", b"Alice".to_vec());
+        cred.attributes.add("verified", b"yes".to_vec());
+
+        let result = p.verify(&cred, 2000);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn verify_empty_attributes_rejects_without_credential_root() {
+        let mut p = CredentialProcessor::new([0; 32]);
+        p.add_issuer("did:example:issuer");
+        p.add_schema(CredentialSchema::new("id-v1", "Empty", 1));
+        let mut cred = sample_credential();
+        cred.attributes = AttributeSet::new();
+
         let result = p.verify(&cred, 2000);
         assert!(result.is_err());
     }

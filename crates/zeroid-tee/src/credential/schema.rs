@@ -122,6 +122,25 @@ impl CredentialSchema {
         Ok(())
     }
 
+    /// Validate attribute names and canonical value encodings against the schema.
+    pub fn validate_attribute_values(&self, provided: &[(String, Vec<u8>)]) -> Result<()> {
+        let provided_names: Vec<&str> = provided.iter().map(|(name, _)| name.as_str()).collect();
+        self.validate_attributes(&provided_names)?;
+
+        for (name, value) in provided {
+            let attr = self
+                .attributes
+                .iter()
+                .find(|attr| attr.name == *name)
+                .ok_or_else(|| {
+                    ZeroIdTeeError::InvalidSchema(format!("unknown attribute: {name}"))
+                })?;
+            validate_attribute_value(attr, value)?;
+        }
+
+        Ok(())
+    }
+
     /// Return the names of all required attributes.
     pub fn required_attributes(&self) -> Vec<&str> {
         self.attributes
@@ -135,6 +154,82 @@ impl CredentialSchema {
     pub fn attribute_count(&self) -> usize {
         self.attributes.len()
     }
+}
+
+fn validate_attribute_value(attr: &AttributeDefinition, value: &[u8]) -> Result<()> {
+    match attr.attr_type {
+        AttributeType::String => std::str::from_utf8(value)
+            .map(|_| ())
+            .map_err(|_| invalid_type(&attr.name, "valid UTF-8 string")),
+        AttributeType::Uint => {
+            let text = std::str::from_utf8(value)
+                .map_err(|_| invalid_type(&attr.name, "ASCII decimal uint"))?;
+            if !text.is_empty()
+                && text.bytes().all(|b| b.is_ascii_digit())
+                && (text == "0" || !text.starts_with('0'))
+            {
+                Ok(())
+            } else {
+                Err(invalid_type(&attr.name, "ASCII decimal uint"))
+            }
+        }
+        AttributeType::Bool => {
+            if value == b"true" || value == b"false" {
+                Ok(())
+            } else {
+                Err(invalid_type(&attr.name, "boolean true/false"))
+            }
+        }
+        AttributeType::Bytes => Ok(()),
+        AttributeType::Date => {
+            let text = std::str::from_utf8(value)
+                .map_err(|_| invalid_type(&attr.name, "YYYY-MM-DD date"))?;
+            let bytes = text.as_bytes();
+            if bytes.len() == 10
+                && bytes[4] == b'-'
+                && bytes[7] == b'-'
+                && bytes
+                    .iter()
+                    .enumerate()
+                    .all(|(idx, b)| idx == 4 || idx == 7 || b.is_ascii_digit())
+                && valid_calendar_date(text)
+            {
+                Ok(())
+            } else {
+                Err(invalid_type(&attr.name, "YYYY-MM-DD date"))
+            }
+        }
+    }
+}
+
+fn invalid_type(name: &str, expected: &str) -> ZeroIdTeeError {
+    ZeroIdTeeError::InvalidSchema(format!("attribute {name} must be {expected}"))
+}
+
+fn valid_calendar_date(text: &str) -> bool {
+    let year = text[0..4].parse::<u32>().ok();
+    let month = text[5..7].parse::<u32>().ok();
+    let day = text[8..10].parse::<u32>().ok();
+    match (year, month, day) {
+        (Some(year), Some(month @ 1..=12), Some(day)) => {
+            day >= 1 && day <= days_in_month(year, month)
+        }
+        _ => false,
+    }
+}
+
+fn days_in_month(year: u32, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if is_leap_year(year) => 29,
+        2 => 28,
+        _ => 0,
+    }
+}
+
+fn is_leap_year(year: u32) -> bool {
+    year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
 }
 
 #[cfg(test)]
@@ -210,6 +305,66 @@ mod tests {
     fn validate_unknown_attribute() {
         let s = identity_schema();
         let result = s.validate_attributes(&["name", "verified", "unknown"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn validate_attribute_values_accepts_canonical_values() {
+        let mut s = CredentialSchema::new("typed-v1", "Typed", 1);
+        s.add_attribute("name", AttributeType::String, true);
+        s.add_attribute("age", AttributeType::Uint, true);
+        s.add_attribute("verified", AttributeType::Bool, true);
+        s.add_attribute("photo", AttributeType::Bytes, false);
+        s.add_attribute("issued", AttributeType::Date, true);
+
+        let attrs = vec![
+            ("name".to_string(), b"Alice".to_vec()),
+            ("age".to_string(), b"30".to_vec()),
+            ("verified".to_string(), b"true".to_vec()),
+            ("photo".to_string(), vec![0, 1, 2]),
+            ("issued".to_string(), b"2026-05-15".to_vec()),
+        ];
+
+        assert!(s.validate_attribute_values(&attrs).is_ok());
+    }
+
+    #[test]
+    fn validate_attribute_values_rejects_invalid_bool() {
+        let mut s = CredentialSchema::new("typed-v1", "Typed", 1);
+        s.add_attribute("verified", AttributeType::Bool, true);
+        let attrs = vec![("verified".to_string(), b"yes".to_vec())];
+
+        let result = s.validate_attribute_values(&attrs);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn validate_attribute_values_rejects_invalid_uint() {
+        let mut s = CredentialSchema::new("typed-v1", "Typed", 1);
+        s.add_attribute("age", AttributeType::Uint, true);
+        let attrs = vec![("age".to_string(), b"030".to_vec())];
+
+        let result = s.validate_attribute_values(&attrs);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn validate_attribute_values_rejects_invalid_date() {
+        let mut s = CredentialSchema::new("typed-v1", "Typed", 1);
+        s.add_attribute("issued", AttributeType::Date, true);
+        let attrs = vec![("issued".to_string(), b"15-05-2026".to_vec())];
+
+        let result = s.validate_attribute_values(&attrs);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn validate_attribute_values_rejects_invalid_calendar_date() {
+        let mut s = CredentialSchema::new("typed-v1", "Typed", 1);
+        s.add_attribute("issued", AttributeType::Date, true);
+        let attrs = vec![("issued".to_string(), b"2026-02-30".to_vec())];
+
+        let result = s.validate_attribute_values(&attrs);
         assert!(result.is_err());
     }
 
