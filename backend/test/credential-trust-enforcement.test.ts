@@ -37,6 +37,7 @@ const mockSchemaFindUnique = jest.fn();
 const mockAuditLogCreate = jest.fn();
 const mockIssuerTrustFindMany = jest.fn();
 const mockRedisDel = jest.fn();
+const mockPrismaTransaction = jest.fn();
 
 jest.mock('../src/index', () => ({
   logger: {
@@ -51,6 +52,7 @@ jest.mock('../src/index', () => ({
     del: mockRedisDel,
   },
   prisma: {
+    $transaction: mockPrismaTransaction,
     identity: {
       findUnique: mockIdentityFindUnique,
     },
@@ -192,6 +194,16 @@ describe('Credential trust enforcement', () => {
     mockAuditLogCreate.mockResolvedValue({});
     mockIssuerTrustFindMany.mockResolvedValue([buildTrustRecord()]);
     mockRedisDel.mockResolvedValue(1);
+    mockPrismaTransaction.mockImplementation(async (operation: any) =>
+      operation({
+        credential: {
+          create: mockCredentialCreate,
+        },
+        auditLog: {
+          create: mockAuditLogCreate,
+        },
+      }),
+    );
 
     service = new CredentialService();
   });
@@ -410,6 +422,7 @@ describe('Credential trust enforcement', () => {
 
     const credential = await service.issueCredential(baseRequest);
     expect(credential.id).toBe('cred-1');
+    expect(mockPrismaTransaction).toHaveBeenCalledTimes(1);
     expect(mockAuditLogCreate).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({

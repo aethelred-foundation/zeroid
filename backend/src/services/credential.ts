@@ -319,6 +319,25 @@ export class CredentialService {
     this.signer = new KMSCredentialSigner();
   }
 
+  private async runCredentialAuditTransaction<T>(
+    operation: (tx: any) => Promise<T>,
+  ): Promise<T> {
+    const transaction = (prisma as any).$transaction;
+    if (typeof transaction !== 'function') {
+      if (isProductionRuntime()) {
+        throw new CredentialError(
+          'Credential state changes require database transaction support for audit atomicity.',
+          'CRED_AUDIT_TRANSACTION_UNAVAILABLE',
+          500,
+        );
+      }
+
+      return operation(prisma);
+    }
+
+    return transaction.call(prisma, operation);
+  }
+
   // -------------------------------------------------------------------------
   // Issue a new credential
   // -------------------------------------------------------------------------
@@ -451,47 +470,49 @@ export class CredentialService {
       issuedAt,
     );
 
-    // Create the credential
-    const credential = await prisma.credential.create({
-      data: {
-        credentialType: request.credentialType,
-        issuerId: request.issuerId,
-        subjectId: request.subjectId,
-        schemaId: request.schemaId,
-        claims: request.claims as any,
-        claimsHash,
-        proof: proof as any,
-        expiresAt: request.expiresAt,
-        issuedAt,
-        status: 'ACTIVE',
-      },
-    });
-
-    // Audit log
-    await prisma.auditLog.create({
-      data: {
-        identityId: request.issuerId,
-        action: 'CREDENTIAL_ISSUED',
-        resourceType: 'credential',
-        resourceId: credential.id,
-        details: {
+    const credential = await this.runCredentialAuditTransaction(async (tx) => {
+      const created = await tx.credential.create({
+        data: {
           credentialType: request.credentialType,
+          issuerId: request.issuerId,
           subjectId: request.subjectId,
-          subjectDid: request.subjectDid,
           schemaId: request.schemaId,
-          keyVersion: this.signer.getKeyVersion(),
-          issuerTrustPolicy: {
-            enforced: trustPolicy.enforced,
-            accredited: trustPolicy.accredited,
-            trustRecordId: trustPolicy.trustRecordId ?? null,
-            accreditationScope: trustPolicy.accreditationScope ?? null,
-            assuranceLevel: trustPolicy.assuranceLevel ?? null,
-            evaluatedJurisdictions: trustPolicy.evaluatedJurisdictions,
-            matchedJurisdictions: trustPolicy.matchedJurisdictions,
-            organizationId: request.organizationId ?? null,
+          claims: request.claims as any,
+          claimsHash,
+          proof: proof as any,
+          expiresAt: request.expiresAt,
+          issuedAt,
+          status: 'ACTIVE',
+        },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          identityId: request.issuerId,
+          action: 'CREDENTIAL_ISSUED',
+          resourceType: 'credential',
+          resourceId: created.id,
+          details: {
+            credentialType: request.credentialType,
+            subjectId: request.subjectId,
+            subjectDid: request.subjectDid,
+            schemaId: request.schemaId,
+            keyVersion: this.signer.getKeyVersion(),
+            issuerTrustPolicy: {
+              enforced: trustPolicy.enforced,
+              accredited: trustPolicy.accredited,
+              trustRecordId: trustPolicy.trustRecordId ?? null,
+              accreditationScope: trustPolicy.accreditationScope ?? null,
+              assuranceLevel: trustPolicy.assuranceLevel ?? null,
+              evaluatedJurisdictions: trustPolicy.evaluatedJurisdictions,
+              matchedJurisdictions: trustPolicy.matchedJurisdictions,
+              organizationId: request.organizationId ?? null,
+            },
           },
         },
-      },
+      });
+
+      return created;
     });
 
     // Invalidate cached credential lists
@@ -901,34 +922,36 @@ export class CredentialService {
 
     const previousState = { status: credential.status };
 
-    const updated = await prisma.credential.update({
-      where: { id: request.credentialId },
-      data: {
-        status: 'REVOKED',
-        revocationReason: request.reason,
-      },
-    });
+    const updated = await this.runCredentialAuditTransaction(async (tx) => {
+      const revoked = await tx.credential.update({
+        where: { id: request.credentialId },
+        data: {
+          status: 'REVOKED',
+          revocationReason: request.reason,
+        },
+      });
 
-    // Add to revocation registry
-    await prisma.revocationRegistry.create({
-      data: {
-        credentialId: request.credentialId,
-        reason: request.reason,
-        revokedBy: request.revokedBy,
-      },
-    });
+      await tx.revocationRegistry.create({
+        data: {
+          credentialId: request.credentialId,
+          reason: request.reason,
+          revokedBy: request.revokedBy,
+        },
+      });
 
-    // Audit log
-    await prisma.auditLog.create({
-      data: {
-        identityId: request.revokedBy,
-        action: 'CREDENTIAL_REVOKED',
-        resourceType: 'credential',
-        resourceId: request.credentialId,
-        previousState,
-        newState: { status: 'REVOKED' },
-        details: { reason: request.reason },
-      },
+      await tx.auditLog.create({
+        data: {
+          identityId: request.revokedBy,
+          action: 'CREDENTIAL_REVOKED',
+          resourceType: 'credential',
+          resourceId: request.credentialId,
+          previousState,
+          newState: { status: 'REVOKED' },
+          details: { reason: request.reason },
+        },
+      });
+
+      return revoked;
     });
 
     // Invalidate caches
@@ -1164,20 +1187,39 @@ export class CredentialService {
     credentialId: string,
     credential: CredentialResponse,
   ): Promise<CredentialResponse> {
+    const expiresAt = credential.expiresAt;
     if (
-      credential.expiresAt &&
-      credential.expiresAt <= new Date() &&
+      expiresAt &&
+      expiresAt <= new Date() &&
       credential.status === 'ACTIVE'
     ) {
-      await prisma.credential.update({
-        where: { id: credentialId },
-        data: { status: 'EXPIRED' },
-      }).catch((error: Error) => {
+      try {
+        await this.runCredentialAuditTransaction(async (tx) => {
+          await tx.credential.update({
+            where: { id: credentialId },
+            data: { status: 'EXPIRED' },
+          });
+          await tx.auditLog.create({
+            data: {
+              identityId: credential.issuerId,
+              action: 'CREDENTIAL_EXPIRED',
+              resourceType: 'credential',
+              resourceId: credentialId,
+              previousState: { status: credential.status },
+              newState: { status: 'EXPIRED' },
+              details: {
+                expiredAt: expiresAt.toISOString(),
+                reason: 'automatic_expiry_enforcement',
+              },
+            },
+          });
+        });
+      } catch (error) {
         logger.warn('credential_expiry_status_update_failed', {
           credentialId,
-          error: error.message,
+          error: (error as Error).message,
         });
-      });
+      }
       const expiredCredential = { ...credential, status: 'EXPIRED' };
       await redis.set(
         `cred:${credentialId}`,
@@ -1216,15 +1258,33 @@ export class CredentialService {
     }
 
     const revokedCredential = { ...expiryChecked, status: 'REVOKED' };
-    await prisma.credential.update({
-      where: { id: credentialId },
-      data: { status: 'REVOKED' },
-    }).catch((error: Error) => {
+    try {
+      await this.runCredentialAuditTransaction(async (tx) => {
+        await tx.credential.update({
+          where: { id: credentialId },
+          data: { status: 'REVOKED' },
+        });
+        await tx.auditLog.create({
+          data: {
+            identityId: expiryChecked.issuerId,
+            action: 'CREDENTIAL_REVOKED',
+            resourceType: 'credential',
+            resourceId: credentialId,
+            previousState: { status: expiryChecked.status },
+            newState: { status: 'REVOKED' },
+            details: {
+              reason: revocation.reason ?? 'revocation_registry_sync',
+              source: 'revocation_registry',
+            },
+          },
+        });
+      });
+    } catch (error) {
       logger.warn('credential_revocation_status_update_failed', {
         credentialId,
-        error: error.message,
+        error: (error as Error).message,
       });
-    });
+    }
     await redis.set(
       `cred:${credentialId}`,
       JSON.stringify(revokedCredential),

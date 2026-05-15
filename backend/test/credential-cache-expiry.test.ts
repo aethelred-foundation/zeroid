@@ -1,6 +1,9 @@
 const mockCredentialFindUnique = jest.fn();
 const mockCredentialUpdate = jest.fn();
 const mockRevocationFindUnique = jest.fn();
+const mockRevocationCreate = jest.fn();
+const mockAuditLogCreate = jest.fn();
+const mockPrismaTransaction = jest.fn();
 const mockRedisGet = jest.fn();
 const mockRedisSet = jest.fn();
 const mockRedisDel = jest.fn();
@@ -12,12 +15,17 @@ jest.mock('../src/index', () => ({
     error: jest.fn(),
   },
   prisma: {
+    $transaction: mockPrismaTransaction,
     credential: {
       findUnique: mockCredentialFindUnique,
       update: mockCredentialUpdate,
     },
     revocationRegistry: {
       findUnique: mockRevocationFindUnique,
+      create: mockRevocationCreate,
+    },
+    auditLog: {
+      create: mockAuditLogCreate,
     },
   },
   redis: {
@@ -59,6 +67,21 @@ describe('Credential cache expiry enforcement', () => {
     mockCredentialFindUnique.mockResolvedValue(null);
     mockCredentialUpdate.mockResolvedValue({});
     mockRevocationFindUnique.mockResolvedValue(null);
+    mockRevocationCreate.mockResolvedValue({});
+    mockAuditLogCreate.mockResolvedValue({});
+    mockPrismaTransaction.mockImplementation(async (operation: any) =>
+      operation({
+        credential: {
+          update: mockCredentialUpdate,
+        },
+        revocationRegistry: {
+          create: mockRevocationCreate,
+        },
+        auditLog: {
+          create: mockAuditLogCreate,
+        },
+      }),
+    );
   });
 
   it('marks cached active credentials expired before returning them', async () => {
@@ -76,6 +99,14 @@ describe('Credential cache expiry enforcement', () => {
       data: { status: 'EXPIRED' },
     });
     expect(mockCredentialFindUnique).not.toHaveBeenCalled();
+    expect(mockAuditLogCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          action: 'CREDENTIAL_EXPIRED',
+          resourceId: 'credential-1',
+        }),
+      }),
+    );
   });
 
   it('caps active credential cache ttl to the remaining expiry window', async () => {
@@ -114,11 +145,58 @@ describe('Credential cache expiry enforcement', () => {
       where: { id: 'credential-1' },
       data: { status: 'REVOKED' },
     });
+    expect(mockAuditLogCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          action: 'CREDENTIAL_REVOKED',
+          resourceId: 'credential-1',
+          details: expect.objectContaining({
+            source: 'revocation_registry',
+          }),
+        }),
+      }),
+    );
     expect(mockRedisSet).toHaveBeenCalledWith(
       'cred:credential-1',
       expect.stringContaining('"status":"REVOKED"'),
       'EX',
       300,
+    );
+  });
+
+  it('revokes credentials and records evidence in one transaction', async () => {
+    mockCredentialFindUnique.mockResolvedValueOnce(credentialRecord());
+    mockCredentialUpdate.mockResolvedValueOnce(
+      credentialRecord({
+        status: 'REVOKED',
+        revocationReason: 'compromised',
+      }),
+    );
+    const service = new CredentialService();
+
+    const result = await service.revokeCredential({
+      credentialId: 'credential-1',
+      revokedBy: 'issuer-1',
+      reason: 'compromised',
+    });
+
+    expect(result.status).toBe('REVOKED');
+    expect(mockPrismaTransaction).toHaveBeenCalledTimes(1);
+    expect(mockRevocationCreate).toHaveBeenCalledWith({
+      data: {
+        credentialId: 'credential-1',
+        reason: 'compromised',
+        revokedBy: 'issuer-1',
+      },
+    });
+    expect(mockAuditLogCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          action: 'CREDENTIAL_REVOKED',
+          resourceId: 'credential-1',
+          details: { reason: 'compromised' },
+        }),
+      }),
     );
   });
 });
