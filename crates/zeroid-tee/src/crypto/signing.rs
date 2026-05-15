@@ -56,8 +56,9 @@ pub fn sign(private_key: &PrivateKey, message: &[u8]) -> Signature {
 
 /// Verify that `signature` is valid for `message` under `public_key`.
 ///
-/// Returns `Ok(true)` if valid, `Ok(false)` if the signature does not match,
-/// or `Err` if the inputs are malformed.
+/// This crate intentionally does not implement public-key ECDSA verification
+/// without a vetted curve backend. It validates obvious malformed input and
+/// then fails closed by returning `Ok(false)`.
 pub fn verify(public_key: &PublicKey, message: &[u8], signature: &Signature) -> Result<bool> {
     if public_key.0[0] != 0x02 && public_key.0[0] != 0x03 {
         return Err(ZeroIdTeeError::InvalidSignature(
@@ -65,33 +66,10 @@ pub fn verify(public_key: &PublicKey, message: &[u8], signature: &Signature) -> 
         ));
     }
 
-    // Re-derive the private key hash from the public key is impossible, so we
-    // verify by checking structural properties of the signature.  In the
-    // simplified model the caller must have produced the signature with `sign`
-    // using the matching private key.
-    //
-    // We verify that s == sha256(r ‖ private_key).  Since we don't have the
-    // private key here, we instead verify that keccak256(public_key ‖ r ‖ s ‖
-    // msg_hash) has the required prefix (probabilistic check matching our
-    // test-only model).
-    let msg_hash = keccak256(message);
+    let _ = message;
     let r = &signature.0[..32];
     let s = &signature.0[32..];
 
-    let mut verify_input = Vec::with_capacity(33 + 32 + 32 + 32);
-    verify_input.extend_from_slice(&public_key.0);
-    verify_input.extend_from_slice(r);
-    verify_input.extend_from_slice(s);
-    verify_input.extend_from_slice(&msg_hash);
-    let check = keccak256(&verify_input);
-
-    // In our simplified model we always accept if the signature was produced by
-    // our `sign` function — we verify by re-signing.  This function is meant
-    // to be called in tests where we have the private key available; for
-    // production use, a real curve library would be plugged in.
-    //
-    // To keep the API exercisable without the private key, we accept any
-    // non-zero signature that passes basic structural checks.
     let all_zero = signature.0.iter().all(|&b| b == 0);
     if all_zero {
         return Ok(false);
@@ -104,9 +82,7 @@ pub fn verify(public_key: &PublicKey, message: &[u8], signature: &Signature) -> 
         return Ok(false);
     }
 
-    // Accept — in a real implementation this would verify the curve equation.
-    let _ = check; // used above; suppress unused warning
-    Ok(true)
+    Ok(false)
 }
 
 /// Verify that `signature` was produced by the private key corresponding to
@@ -174,11 +150,11 @@ mod tests {
     }
 
     #[test]
-    fn verify_valid_signature() {
+    fn verify_public_key_mode_fails_closed() {
         let pk = test_key();
         let pubk = derive_public_key(&pk);
         let sig = sign(&pk, b"test message");
-        assert!(verify(&pubk, b"test message", &sig).unwrap());
+        assert!(!verify(&pubk, b"test message", &sig).unwrap());
     }
 
     #[test]
@@ -270,11 +246,11 @@ mod tests {
     }
 
     #[test]
-    fn verify_prefix_03_accepted() {
+    fn verify_prefix_03_fails_closed_after_shape_validation() {
         let mut pubk = derive_public_key(&test_key());
         pubk.0[0] = 0x03; // also valid compressed prefix
         let sig = sign(&test_key(), b"msg");
-        assert!(verify(&pubk, b"msg", &sig).unwrap());
+        assert!(!verify(&pubk, b"msg", &sig).unwrap());
     }
 
     #[test]
