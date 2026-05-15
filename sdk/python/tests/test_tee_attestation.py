@@ -13,7 +13,7 @@ class TestAttestationResult:
 
 class TestAttestationVerifier:
     def test_verify_valid(self) -> None:
-        verifier = AttestationVerifier()
+        verifier = AttestationVerifier(signature_verifier=lambda evidence: True)
         verifier.register_trusted_hash(TEEPlatform.SGX, "abc123")
         evidence = AttestationEvidence(
             platform=TEEPlatform.SGX,
@@ -96,7 +96,7 @@ class TestAttestationVerifier:
         assert any("No trusted" in e for e in result.errors)
 
     def test_verify_short_signature(self) -> None:
-        verifier = AttestationVerifier()
+        verifier = AttestationVerifier(signature_verifier=lambda evidence: True)
         verifier.register_trusted_hash(TEEPlatform.SGX, "abc")
         evidence = AttestationEvidence(
             platform=TEEPlatform.SGX,
@@ -108,8 +108,50 @@ class TestAttestationVerifier:
         assert result.valid is False
         assert any("too short" in e.lower() for e in result.errors)
 
-    def test_register_trusted_hash_case_insensitive(self) -> None:
+    def test_verify_requires_signature_verifier(self) -> None:
         verifier = AttestationVerifier()
+        verifier.register_trusted_hash(TEEPlatform.SGX, "abc")
+        evidence = AttestationEvidence(
+            platform=TEEPlatform.SGX,
+            enclave_hash="abc",
+            signature="sig123456",
+            certificates=["cert"],
+        )
+        result = verifier.verify(evidence)
+        assert result.valid is False
+        assert any("not configured" in e for e in result.errors)
+
+    def test_verify_rejects_signature_verifier_failure(self) -> None:
+        verifier = AttestationVerifier(signature_verifier=lambda evidence: False)
+        verifier.register_trusted_hash(TEEPlatform.SGX, "abc")
+        evidence = AttestationEvidence(
+            platform=TEEPlatform.SGX,
+            enclave_hash="abc",
+            signature="sig123456",
+            certificates=["cert"],
+        )
+        result = verifier.verify(evidence)
+        assert result.valid is False
+        assert any("signature verification failed" in e.lower() for e in result.errors)
+
+    def test_verify_rejects_signature_verifier_exception(self) -> None:
+        def failing_verifier(evidence: AttestationEvidence) -> bool:
+            raise ValueError("bad chain")
+
+        verifier = AttestationVerifier(signature_verifier=failing_verifier)
+        verifier.register_trusted_hash(TEEPlatform.SGX, "abc")
+        evidence = AttestationEvidence(
+            platform=TEEPlatform.SGX,
+            enclave_hash="abc",
+            signature="sig123456",
+            certificates=["cert"],
+        )
+        result = verifier.verify(evidence)
+        assert result.valid is False
+        assert any("bad chain" in e for e in result.errors)
+
+    def test_register_trusted_hash_case_insensitive(self) -> None:
+        verifier = AttestationVerifier(signature_verifier=lambda evidence: True)
         verifier.register_trusted_hash(TEEPlatform.SGX, "ABC123")
         evidence = AttestationEvidence(
             platform=TEEPlatform.SGX,
@@ -126,7 +168,7 @@ class TestAttestationVerifier:
         assert len(h) == 64  # hex-encoded 32 bytes
 
     def test_register_multiple_hashes(self) -> None:
-        verifier = AttestationVerifier()
+        verifier = AttestationVerifier(signature_verifier=lambda evidence: True)
         verifier.register_trusted_hash(TEEPlatform.SGX, "hash1")
         verifier.register_trusted_hash(TEEPlatform.SGX, "hash2")
         e1 = AttestationEvidence(

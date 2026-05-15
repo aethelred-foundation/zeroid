@@ -7,9 +7,12 @@ enclave measurements and platform-specific rules.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Callable
 
 from zeroid.crypto.hashing import keccak256
 from zeroid.tee.types import AttestationEvidence, TEEPlatform
+
+SignatureVerifier = Callable[[AttestationEvidence], bool]
 
 
 @dataclass(frozen=True)
@@ -36,9 +39,16 @@ class AttestationVerifier:
     attestation evidence against them.
     """
 
-    def __init__(self) -> None:
-        """Initialize the verifier with empty trusted measurements."""
+    def __init__(self, signature_verifier: SignatureVerifier | None = None) -> None:
+        """Initialize the verifier with empty trusted measurements.
+
+        Args:
+            signature_verifier: Platform-specific attestation verifier. It must
+                validate the evidence signature and certificate chain before the
+                attestation can be accepted.
+        """
         self._trusted_hashes: dict[TEEPlatform, set[str]] = {}
+        self._signature_verifier = signature_verifier
 
     def register_trusted_hash(
         self, platform: TEEPlatform, enclave_hash: str
@@ -60,7 +70,8 @@ class AttestationVerifier:
         - Evidence is complete (hash, signature, certificates)
         - Platform is supported (not UNKNOWN)
         - Enclave hash is in the trusted set for the platform
-        - Signature structure is valid (mock check)
+        - Signature and certificate chain are cryptographically verified by the
+          configured platform verifier
 
         Args:
             evidence: The attestation evidence to verify.
@@ -99,9 +110,19 @@ class AttestationVerifier:
         elif evidence.enclave_hash.lower() not in trusted:
             errors.append("Enclave hash not in trusted set")
 
-        # Mock signature verification
         if evidence.signature and len(evidence.signature) < 8:
             errors.append("Signature too short")
+
+        if self._signature_verifier is None:
+            errors.append("TEE attestation signature verifier is not configured")
+        else:
+            try:
+                signature_valid = self._signature_verifier(evidence)
+            except Exception as exc:  # pragma: no cover - exact verifier errors vary
+                errors.append(f"TEE attestation signature verification failed: {exc}")
+            else:
+                if not signature_valid:
+                    errors.append("TEE attestation signature verification failed")
 
         return AttestationResult(
             valid=len(errors) == 0,
