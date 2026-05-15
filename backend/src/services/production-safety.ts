@@ -247,6 +247,18 @@ export function collectProductionSafetyViolations(
       risk: 'Production API JWT signing keys require a stable key id for rotation and incident response',
     });
   }
+  if (
+    apiJwtPrivateKey &&
+    apiJwtPublicKey &&
+    SUPPORTED_API_JWT_SIGNING_ALGORITHMS.has(apiJwtAlgorithm)
+  ) {
+    validateApiJwtSigningConfig(
+      apiJwtPrivateKey,
+      apiJwtPublicKey,
+      apiJwtAlgorithm,
+      violations,
+    );
+  }
 
   validateTrustedProxyConfig(env, violations);
 
@@ -513,6 +525,65 @@ function validateOidcSigningConfig(
     violations.push({
       control: 'OIDC_SIGNING_KEYPAIR',
       risk: `OIDC signing key material is invalid: ${(error as Error).message}`,
+    });
+  }
+}
+
+function validateApiJwtSigningConfig(
+  rawPrivateKey: string,
+  rawPublicKey: string,
+  algorithm: string,
+  violations: ProductionSafetyViolation[],
+): void {
+  try {
+    const privateKey = parseSigningPrivateKey(rawPrivateKey);
+    const publicKey = parseSigningPublicKey(rawPublicKey);
+    const derivedPublicKey = crypto.createPublicKey(privateKey);
+
+    if (!publicKeyDerEquals(publicKey, derivedPublicKey)) {
+      violations.push({
+        control: 'API_JWT_KEYPAIR_CANARY',
+        risk: 'API_JWT_VERIFICATION_PUBLIC_KEY does not match API_JWT_SIGNING_PRIVATE_KEY',
+      });
+      return;
+    }
+
+    if (
+      algorithm === 'RS256' &&
+      !['rsa', 'rsa-pss'].includes(String(privateKey.asymmetricKeyType))
+    ) {
+      violations.push({
+        control: 'API_JWT_KEYPAIR_CANARY',
+        risk: 'API JWT RS256 signing requires an RSA key pair',
+      });
+      return;
+    }
+
+    if (algorithm === 'ES256') {
+      const details = privateKey.asymmetricKeyDetails as { namedCurve?: string } | undefined;
+      if (privateKey.asymmetricKeyType !== 'ec' || details?.namedCurve !== 'prime256v1') {
+        violations.push({
+          control: 'API_JWT_KEYPAIR_CANARY',
+          risk: 'API JWT ES256 signing requires a P-256 EC key pair',
+        });
+        return;
+      }
+    }
+
+    const signingAlgorithm = algorithm === 'RS256' ? 'RSA-SHA256' : 'SHA256';
+    const canaryPayload = Buffer.from('zeroid-api-jwt-keypair-canary-v1');
+    const signature = crypto.sign(signingAlgorithm, canaryPayload, privateKey);
+    const verified = crypto.verify(signingAlgorithm, canaryPayload, publicKey, signature);
+    if (!verified) {
+      violations.push({
+        control: 'API_JWT_KEYPAIR_CANARY',
+        risk: 'API JWT signing key canary signature could not be verified',
+      });
+    }
+  } catch (error) {
+    violations.push({
+      control: 'API_JWT_KEYPAIR_CANARY',
+      risk: `API JWT key material is invalid: ${(error as Error).message}`,
     });
   }
 }

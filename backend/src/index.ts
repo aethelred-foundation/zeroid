@@ -303,6 +303,13 @@ app.get('/ready', publicHealthLimiter, async (_req: Request, res: Response) => {
     checks.redis = 'unavailable';
   }
 
+  if (isProductionRuntime()) {
+    const violations = collectProductionSafetyViolations();
+    checks.productionSafety = violations.length === 0 ? 'ok' : 'unavailable';
+  } else {
+    checks.productionSafety = 'ok';
+  }
+
   const allHealthy = Object.values(checks).every((v) => v === 'ok');
   res.status(allHealthy ? 200 : 503).json({
     status: allHealthy ? 'ready' : 'degraded',

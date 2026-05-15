@@ -206,6 +206,30 @@ describe('production safety controls', () => {
     ]);
   });
 
+  it('requires API JWT key material to import and pass a sign-verify canary', () => {
+    const otherKeyPair = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+    const otherPublicKey = otherKeyPair.publicKey.export({
+      type: 'spki',
+      format: 'pem',
+    }) as string;
+
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      API_JWT_VERIFICATION_PUBLIC_KEY: otherPublicKey,
+      METRICS_PUBLIC_DISABLED: 'true',
+    })).toEqual([
+      expect.objectContaining({ control: 'API_JWT_KEYPAIR_CANARY' }),
+    ]);
+
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      API_JWT_SIGNING_PRIVATE_KEY: 'not-a-private-key',
+      METRICS_PUBLIC_DISABLED: 'true',
+    })).toEqual([
+      expect.objectContaining({ control: 'API_JWT_KEYPAIR_CANARY' }),
+    ]);
+  });
+
   it('blocks production startup when CORS origins are missing or unsafe', () => {
     expect(collectProductionSafetyViolations({
       ...PROD_BASE_ENV,
