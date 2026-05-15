@@ -3,6 +3,7 @@ import request from 'supertest';
 
 const mockExportCredentialEvidence = jest.fn();
 const mockGetCredential = jest.fn();
+const mockVerifyCredential = jest.fn();
 
 jest.mock('../src/middleware/rateLimit', () => ({
   apiRateLimiter: (_req: unknown, _res: unknown, next: () => void) => next(),
@@ -13,6 +14,7 @@ jest.mock('../src/services/credential', () => ({
   credentialService: {
     exportCredentialEvidence: mockExportCredentialEvidence,
     getCredential: mockGetCredential,
+    verifyCredential: mockVerifyCredential,
   },
 }));
 
@@ -98,6 +100,25 @@ describe('credential evidence routes', () => {
         matchedJurisdictions: ['UAE'],
       },
     });
+    mockVerifyCredential.mockResolvedValue({
+      valid: true,
+      checks: {
+        statusActive: true,
+        signatureValid: true,
+      },
+      credential: {
+        id: '11111111-1111-1111-1111-111111111111',
+        credentialType: 'KYC_LEVEL_2',
+        issuerId: 'issuer-1',
+        subjectId: 'subject-1',
+        claims: { level: 'enhanced' },
+        claimsHash: 'hash',
+        proof: { signatureValue: 'sig' },
+        status: 'ACTIVE',
+        issuedAt: '2026-04-21T00:00:00.000Z',
+        expiresAt: '2027-04-21T00:00:00.000Z',
+      },
+    });
   });
 
   it('returns the full evidence bundle to the issuer', async () => {
@@ -137,5 +158,38 @@ describe('credential evidence routes', () => {
       .expect(404);
 
     expect(mockExportCredentialEvidence).not.toHaveBeenCalled();
+  });
+
+  it('verifies credentials for the issuer', async () => {
+    const response = await request(createApp())
+      .post('/credentials/11111111-1111-1111-1111-111111111111/verify')
+      .set('x-test-identity-id', 'issuer-1')
+      .send({})
+      .expect(200);
+
+    expect(response.body.data).toMatchObject({
+      valid: true,
+      checks: {
+        statusActive: true,
+        signatureValid: true,
+      },
+      credential: {
+        id: '11111111-1111-1111-1111-111111111111',
+        claims: { level: 'enhanced' },
+      },
+    });
+    expect(mockVerifyCredential).toHaveBeenCalledWith(
+      '11111111-1111-1111-1111-111111111111',
+    );
+  });
+
+  it('does not verify or disclose credentials to non-owners', async () => {
+    await request(createApp())
+      .post('/credentials/11111111-1111-1111-1111-111111111111/verify')
+      .set('x-test-identity-id', 'verifier-9')
+      .send({})
+      .expect(404);
+
+    expect(mockVerifyCredential).not.toHaveBeenCalled();
   });
 });

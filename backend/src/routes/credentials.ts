@@ -225,33 +225,33 @@ router.post(
   async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
       const identity = req.identity!;
+      const credential = await credentialService.getCredential(
+        req.params.id as string,
+      );
+      if (!credential) {
+        sendCredentialNotFound(res);
+        return;
+      }
+
+      const isAuthorized =
+        credential.issuerId === identity.id ||
+        credential.subjectId === identity.id;
+
+      if (!isAuthorized) {
+        sendCredentialNotFound(res);
+        return;
+      }
+
       const result = await credentialService.verifyCredential(
         req.params.id as string,
       );
-
-      // Only return full credential data to issuer or subject
-      const isAuthorized =
-        result.credential.issuerId === identity.id ||
-        result.credential.subjectId === identity.id;
 
       res.json({
         data: {
           valid: result.valid,
           checks: result.checks,
           verifiedAt: new Date().toISOString(),
-          // Only include credential details for authorized parties
-          ...(isAuthorized
-            ? { credential: result.credential }
-            : {
-                credential: {
-                  id: result.credential.id,
-                  credentialType: result.credential.credentialType,
-                  status: result.credential.status,
-                  issuedAt: result.credential.issuedAt,
-                  expiresAt: result.credential.expiresAt,
-                  // Claims and proof are omitted for unauthorized verifiers
-                },
-              }),
+          credential: result.credential,
         },
       });
     } catch (err) {
