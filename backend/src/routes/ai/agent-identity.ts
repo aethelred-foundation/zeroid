@@ -4,6 +4,7 @@ import { logger } from '../../index';
 import { AuthenticatedRequest, authMiddleware } from '../../middleware/auth';
 import { apiRateLimiter } from '../../middleware/rateLimit';
 import { validate } from '../../middleware/validation';
+import type { AgentIdentity } from '../../services/ai/agent-identity';
 import {
   agentIdentityService,
   AgentIdentityError,
@@ -111,6 +112,30 @@ const router = Router();
 // All agent identity routes require authentication
 router.use(authMiddleware);
 router.use(apiRateLimiter);
+
+function requireAgentOperator(
+  req: AuthenticatedRequest,
+  res: Response,
+  agent: AgentIdentity,
+): boolean {
+  if (!req.identity) {
+    res.status(401).json({
+      error: 'AUTH_REQUIRED',
+      message: 'Authentication required',
+    });
+    return false;
+  }
+
+  if (agent.operatorId !== req.identity.id) {
+    res.status(404).json({
+      error: 'Agent not found',
+      code: 'AGENT_NOT_FOUND',
+    });
+    return false;
+  }
+
+  return true;
+}
 
 // ---------------------------------------------------------------------------
 // GET /ai/agents — List operator-owned agents
@@ -275,7 +300,10 @@ router.get(
   validate({ params: AgentIdParamsSchema }),
   async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
-      const agent = await agentIdentityService.getAgent(req.params.agentId as string);
+      const agent = await agentIdentityService.getAgent(
+        req.params.agentId as string,
+      );
+      if (!requireAgentOperator(req, res, agent)) return;
 
       res.json({
         success: true,
@@ -438,13 +466,14 @@ router.get(
   async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
       const limit = parseInt(req.query.limit as string) || 50;
+      const agent = await agentIdentityService.getAgent(
+        req.params.agentId as string,
+      );
+      if (!requireAgentOperator(req, res, agent)) return;
       const entries = await agentIdentityService.getAgentAudit(
         req.params.agentId as string,
         limit,
       );
-
-      // Also fetch the agent to include summary stats
-      const agent = await agentIdentityService.getAgent(req.params.agentId as string);
 
       res.json({
         success: true,
