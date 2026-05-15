@@ -2,6 +2,7 @@ package crypto
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -19,18 +20,18 @@ func validMessages() [][]byte {
 
 func TestBBSVerify(t *testing.T) {
 	tests := []struct {
-		name     string
-		pk       *BBSPublicKey
-		sig      *BBSSignature
-		msgs     [][]byte
-		wantErr  error
+		name    string
+		pk      *BBSPublicKey
+		sig     *BBSSignature
+		msgs    [][]byte
+		wantErr error
 	}{
 		{
 			name:    "valid signature",
 			pk:      validPK(),
 			sig:     validSig(),
 			msgs:    validMessages(),
-			wantErr: nil,
+			wantErr: ErrBBSUnavailable,
 		},
 		{
 			name:    "nil public key",
@@ -102,7 +103,8 @@ func TestBBSCreateProof(t *testing.T) {
 			sig:             validSig(),
 			msgs:            validMessages(),
 			revealedIndexes: []int{0},
-			wantErr:         false,
+			wantErr:         true,
+			errContains:     "implementation unavailable",
 		},
 		{
 			name:            "nil public key",
@@ -173,7 +175,8 @@ func TestBBSCreateProof(t *testing.T) {
 			sig:             validSig(),
 			msgs:            validMessages(),
 			revealedIndexes: []int{},
-			wantErr:         false,
+			wantErr:         true,
+			errContains:     "implementation unavailable",
 		},
 	}
 
@@ -183,6 +186,10 @@ func TestBBSCreateProof(t *testing.T) {
 			if tt.wantErr {
 				if err == nil {
 					t.Error("BBSCreateProof() expected error, got nil")
+					return
+				}
+				if tt.errContains != "" && !strings.Contains(err.Error(), tt.errContains) {
+					t.Errorf("BBSCreateProof() error = %v, want containing %q", err, tt.errContains)
 				}
 				return
 			}
@@ -220,7 +227,7 @@ func TestBBSVerifyProof(t *testing.T) {
 				RevealedIndexes: []int{0},
 			},
 			revealedMessages: [][]byte{[]byte("msg1")},
-			wantErr:          nil,
+			wantErr:          ErrBBSUnavailable,
 		},
 		{
 			name: "nil public key",

@@ -1,8 +1,10 @@
 package credential
 
 import (
+	"crypto/subtle"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -20,6 +22,10 @@ var (
 	ErrIssuerNotApproved = errors.New("credential: issuer not approved")
 	// ErrNoProof is returned when a credential has no proof.
 	ErrNoProof = errors.New("credential: no proof")
+	// ErrInvalidProof is returned when a credential proof is malformed or invalid.
+	ErrInvalidProof = errors.New("credential: invalid proof")
+	// ErrIssuerKeyNotTrusted is returned when no trusted proof key is configured for the issuer.
+	ErrIssuerKeyNotTrusted = errors.New("credential: issuer proof key not trusted")
 	// ErrSchemaNotFound is returned when the credential schema is not found.
 	ErrSchemaNotFound = errors.New("credential: schema not found")
 )
@@ -49,17 +55,36 @@ type VerificationResult struct {
 // Verifier verifies verifiable credentials against on-chain status,
 // expiry, and issuer authorization.
 type Verifier struct {
-	schemas SchemaRegistry
-	issuers IssuerRegistry
-	now     func() time.Time
+	schemas           SchemaRegistry
+	issuers           IssuerRegistry
+	trustedIssuerKeys map[string]string
+	now               func() time.Time
 }
 
 // NewVerifier creates a new credential verifier with the given registries.
 func NewVerifier(schemas SchemaRegistry, issuers IssuerRegistry) *Verifier {
 	return &Verifier{
-		schemas: schemas,
-		issuers: issuers,
-		now:     time.Now,
+		schemas:           schemas,
+		issuers:           issuers,
+		trustedIssuerKeys: make(map[string]string),
+		now:               time.Now,
+	}
+}
+
+// NewVerifierWithTrustedIssuerKeys creates a verifier with issuer-scoped proof keys.
+func NewVerifierWithTrustedIssuerKeys(schemas SchemaRegistry, issuers IssuerRegistry, keys map[string]string) *Verifier {
+	v := NewVerifier(schemas, issuers)
+	v.SetTrustedIssuerKeys(keys)
+	return v
+}
+
+// SetTrustedIssuerKeys replaces the issuer DID to proof-key mapping used to
+// authenticate credential proofs. Keys are copied so callers can safely mutate
+// their input map after configuration.
+func (v *Verifier) SetTrustedIssuerKeys(keys map[string]string) {
+	v.trustedIssuerKeys = make(map[string]string, len(keys))
+	for issuer, key := range keys {
+		v.trustedIssuerKeys[issuer] = key
 	}
 }
 
@@ -145,9 +170,63 @@ func (v *Verifier) checkProof(cred *VerifiableCredential, result *VerificationRe
 		result.Valid = false
 		result.Checks["proof"] = false
 		result.Errors = append(result.Errors, ErrNoProof.Error())
-	} else {
-		result.Checks["proof"] = true
+		return
 	}
+
+	proofErrors := make([]string, 0)
+	proof := cred.Proof
+
+	if proof.Type != "ZeroIDCredentialProof2026" {
+		proofErrors = append(proofErrors, "credential: unsupported proof type")
+	}
+	if proof.ProofPurpose != "assertionMethod" {
+		proofErrors = append(proofErrors, "credential: unsupported proof purpose")
+	}
+	if proof.Created.IsZero() {
+		proofErrors = append(proofErrors, "credential: missing proof creation time")
+	}
+	if proof.VerificationMethod == "" {
+		proofErrors = append(proofErrors, "credential: missing verification method")
+	} else if !strings.HasPrefix(proof.VerificationMethod, cred.Issuer+"#") {
+		proofErrors = append(proofErrors, "credential: verification method is not controlled by issuer")
+	}
+	if proof.ProofValue == "" {
+		proofErrors = append(proofErrors, "credential: missing proof value")
+	}
+	if proof.MerkleRoot == "" {
+		proofErrors = append(proofErrors, "credential: missing subject Merkle root")
+	}
+
+	subjectRoot, err := ComputeCredentialSubjectMerkleRoot(cred.CredentialSubject)
+	if err != nil {
+		proofErrors = append(proofErrors, err.Error())
+	} else if proof.MerkleRoot != "" && proof.MerkleRoot != subjectRoot {
+		proofErrors = append(proofErrors, "credential: subject does not match proof root")
+	}
+
+	issuerKey := v.trustedIssuerKeys[cred.Issuer]
+	if issuerKey == "" {
+		proofErrors = append(proofErrors, ErrIssuerKeyNotTrusted.Error())
+	} else if proof.ProofValue != "" && proof.MerkleRoot != "" {
+		payload, err := BuildCredentialProofPayload(cred, proof.MerkleRoot)
+		if err != nil {
+			proofErrors = append(proofErrors, err.Error())
+		} else {
+			expected := ComputeCredentialProofValue(issuerKey, payload)
+			if subtle.ConstantTimeCompare([]byte(proof.ProofValue), []byte(expected)) != 1 {
+				proofErrors = append(proofErrors, "credential: proof signature is invalid")
+			}
+		}
+	}
+
+	if len(proofErrors) > 0 {
+		result.Valid = false
+		result.Checks["proof"] = false
+		result.Errors = append(result.Errors, proofErrors...)
+		return
+	}
+
+	result.Checks["proof"] = true
 }
 
 func (v *Verifier) checkIssuer(cred *VerifiableCredential, result *VerificationResult) error {

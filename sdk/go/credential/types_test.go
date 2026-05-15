@@ -47,11 +47,12 @@ func TestVerifiableCredentialJSON(t *testing.T) {
 			},
 		},
 		Proof: &Proof{
-			Type:               "BbsBlsSignature2020",
+			Type:               "ZeroIDCredentialProof2026",
 			Created:            now,
-			VerificationMethod: "did:zero:0x1111#key-1",
+			VerificationMethod: "did:zero:0x1111111111111111111111111111111111111111#key-1",
 			ProofPurpose:       "assertionMethod",
 			ProofValue:         "z3abc123",
+			MerkleRoot:         "abc123",
 		},
 		Status:   StatusActive,
 		SchemaID: "https://schema.zeroid.io/identity/v1",
@@ -79,8 +80,11 @@ func TestVerifiableCredentialJSON(t *testing.T) {
 	if decoded.Proof == nil {
 		t.Fatal("Proof should not be nil")
 	}
-	if decoded.Proof.Type != "BbsBlsSignature2020" {
-		t.Errorf("Proof.Type = %q, want %q", decoded.Proof.Type, "BbsBlsSignature2020")
+	if decoded.Proof.Type != "ZeroIDCredentialProof2026" {
+		t.Errorf("Proof.Type = %q, want %q", decoded.Proof.Type, "ZeroIDCredentialProof2026")
+	}
+	if decoded.Proof.MerkleRoot != cred.Proof.MerkleRoot {
+		t.Errorf("Proof.MerkleRoot = %q, want %q", decoded.Proof.MerkleRoot, cred.Proof.MerkleRoot)
 	}
 	if decoded.SchemaID != cred.SchemaID {
 		t.Errorf("SchemaID = %q, want %q", decoded.SchemaID, cred.SchemaID)
@@ -200,11 +204,12 @@ func TestCredentialSubjectJSON(t *testing.T) {
 func TestProofJSON(t *testing.T) {
 	now := time.Now().Truncate(time.Second)
 	p := Proof{
-		Type:               "BbsBlsSignature2020",
+		Type:               "ZeroIDCredentialProof2026",
 		Created:            now,
 		VerificationMethod: "did:zero:0xabc#key-1",
 		ProofPurpose:       "assertionMethod",
 		ProofValue:         "z3signature",
+		MerkleRoot:         "abc123",
 	}
 
 	data, err := json.Marshal(p)
@@ -225,5 +230,8 @@ func TestProofJSON(t *testing.T) {
 	}
 	if decoded.ProofPurpose != p.ProofPurpose {
 		t.Errorf("ProofPurpose = %q, want %q", decoded.ProofPurpose, p.ProofPurpose)
+	}
+	if decoded.MerkleRoot != p.MerkleRoot {
+		t.Errorf("MerkleRoot = %q, want %q", decoded.MerkleRoot, p.MerkleRoot)
 	}
 }

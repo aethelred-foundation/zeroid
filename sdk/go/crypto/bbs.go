@@ -16,6 +16,9 @@ var ErrNoMessages = errors.New("bbs: no messages provided")
 // ErrNilPublicKey is returned when a nil public key is provided.
 var ErrNilPublicKey = errors.New("bbs: nil public key")
 
+// ErrBBSUnavailable is returned until a vetted BBS+ implementation is integrated.
+var ErrBBSUnavailable = errors.New("bbs: implementation unavailable")
+
 // BBSPublicKey represents a BBS+ public key used for signature verification
 // and selective disclosure proof verification.
 type BBSPublicKey struct {
@@ -40,7 +43,8 @@ type BBSProof struct {
 }
 
 // BBSVerify verifies a BBS+ signature against the given public key and messages.
-// This is a stub implementation that validates inputs and simulates verification.
+// It validates input shape, then fails closed until a vetted implementation is
+// integrated.
 func BBSVerify(pk *BBSPublicKey, signature *BBSSignature, messages [][]byte) error {
 	if pk == nil {
 		return ErrNilPublicKey
@@ -54,12 +58,10 @@ func BBSVerify(pk *BBSPublicKey, signature *BBSSignature, messages [][]byte) err
 	if len(pk.Key) == 0 {
 		return ErrInvalidSignature
 	}
-	// Stub: in a real implementation, this would perform BLS pairing checks.
-	// For now, a valid signature is one with exactly 48 bytes (simulated G1 point).
 	if len(signature.Data) != 48 {
 		return ErrInvalidSignature
 	}
-	return nil
+	return ErrBBSUnavailable
 }
 
 // BBSCreateProof creates a zero-knowledge proof for selective disclosure of
@@ -83,12 +85,7 @@ func BBSCreateProof(pk *BBSPublicKey, signature *BBSSignature, messages [][]byte
 			return nil, errors.New("bbs: revealed index out of range")
 		}
 	}
-	// Stub: produce a deterministic proof from a hash of the inputs.
-	h := Keccak256(signature.Data)
-	return &BBSProof{
-		Data:            h[:],
-		RevealedIndexes: revealedIndexes,
-	}, nil
+	return nil, ErrBBSUnavailable
 }
 
 // BBSVerifyProof verifies a BBS+ zero-knowledge proof for selective disclosure.
@@ -109,10 +106,8 @@ func BBSVerifyProof(pk *BBSPublicKey, proof *BBSProof, revealedMessages [][]byte
 	if len(revealedMessages) != len(proof.RevealedIndexes) {
 		return ErrInvalidProof
 	}
-	// Stub: in a real implementation, this would verify the ZK proof.
-	// We accept proofs with 32-byte data (matching our Keccak256 output).
 	if len(proof.Data) != 32 {
 		return ErrInvalidProof
 	}
-	return nil
+	return ErrBBSUnavailable
 }

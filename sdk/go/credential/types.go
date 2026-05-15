@@ -86,6 +86,8 @@ type Proof struct {
 	ProofPurpose string `json:"proofPurpose"`
 	// ProofValue is the encoded proof value.
 	ProofValue string `json:"proofValue"`
+	// MerkleRoot commits to the credential subject covered by the proof.
+	MerkleRoot string `json:"merkleRoot,omitempty"`
 }
 
 // VerifiablePresentation represents a W3C Verifiable Presentation.
