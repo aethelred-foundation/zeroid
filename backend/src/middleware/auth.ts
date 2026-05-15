@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
+import type { Prisma } from '@prisma/client';
 import * as jose from 'jose';
 import { prisma, logger, redis } from '../index';
 import { isAethelredDid } from '../utils/did';
@@ -34,6 +35,16 @@ interface JwtKeyConfig {
   mode: 'asymmetric' | 'legacy-hmac';
   signingKey: Promise<Uint8Array | jose.KeyLike>;
   verificationKey: Promise<Uint8Array | jose.KeyLike>;
+}
+
+interface AuthFailureAuditDetails {
+  code: string;
+  reason: string;
+  tokenHash?: string;
+  sessionId?: string;
+  subjectId?: string;
+  did?: string;
+  identityId?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -261,6 +272,72 @@ async function hashToken(token: string): Promise<string> {
     .join('');
 }
 
+function firstHeader(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function requestHeader(req: Request, name: string): string | undefined {
+  if (typeof req.get === 'function') {
+    return req.get(name);
+  }
+  return firstHeader(req.headers[name.toLowerCase()]);
+}
+
+function safeRequestId(req: Request): string | undefined {
+  const requestId = requestHeader(req, 'x-request-id');
+  return requestId && JWT_ID_PATTERN.test(requestId) ? requestId : undefined;
+}
+
+async function recordAuthFailure(
+  req: Request,
+  details: AuthFailureAuditDetails,
+): Promise<void> {
+  const tokenHashPrefix = details.tokenHash?.slice(0, 16);
+  const resourceId = details.sessionId ?? tokenHashPrefix ?? 'anonymous';
+  const requestId = safeRequestId(req);
+  const auditDetails: Prisma.InputJsonObject = {
+    code: details.code,
+    reason: details.reason,
+    method: req.method,
+    path: req.originalUrl ?? req.url,
+    ...(requestId ? { requestId } : {}),
+    ...(details.sessionId ? { sessionId: details.sessionId } : {}),
+    ...(details.subjectId ? { subjectId: details.subjectId } : {}),
+    ...(details.did ? { did: details.did } : {}),
+    ...(tokenHashPrefix ? { tokenHashPrefix } : {}),
+  };
+
+  try {
+    await prisma.auditLog.create({
+      data: {
+        ...(details.identityId ? { identityId: details.identityId } : {}),
+        action: 'AUTH_FAILED',
+        resourceType: 'auth',
+        resourceId,
+        ipAddress: req.ip ?? req.socket?.remoteAddress,
+        userAgent: requestHeader(req, 'user-agent'),
+        details: auditDetails,
+      },
+    });
+  } catch (err) {
+    logger.error('auth_failure_audit_error', { error: (err as Error).message });
+  }
+}
+
+async function rejectAuth(
+  req: Request,
+  res: Response,
+  payload: { error: string; code: string },
+  details: Omit<AuthFailureAuditDetails, 'code' | 'reason'> = {},
+): Promise<void> {
+  await recordAuthFailure(req, {
+    ...details,
+    code: payload.code,
+    reason: payload.error,
+  });
+  res.status(401).json(payload);
+}
+
 // ---------------------------------------------------------------------------
 // Authentication middleware
 // ---------------------------------------------------------------------------
@@ -271,7 +348,7 @@ export async function authMiddleware(
 ): Promise<void> {
   const authHeader = req.headers.authorization;
   if (!authHeader?.startsWith('Bearer ')) {
-    res.status(401).json({
+    await rejectAuth(req, res, {
       error: 'Missing or invalid authorization header',
       code: 'AUTH_MISSING_TOKEN',
     });
@@ -279,9 +356,10 @@ export async function authMiddleware(
   }
 
   const token = authHeader.slice(7);
+  let tokenHash: string | undefined;
 
   try {
-    const tokenHash = await hashToken(token);
+    tokenHash = await hashToken(token);
 
     // Verify JWT signature and claims
     const { payload, protectedHeader } = await jose.jwtVerify(token, await JWT_KEYS.verificationKey, {
@@ -291,13 +369,23 @@ export async function authMiddleware(
     });
 
     if (!isAcceptedJwtHeader(protectedHeader)) {
-      res.status(401).json({ error: 'Invalid token header', code: 'AUTH_CLAIMS_INVALID' });
+      await rejectAuth(
+        req,
+        res,
+        { error: 'Invalid token header', code: 'AUTH_CLAIMS_INVALID' },
+        { tokenHash },
+      );
       return;
     }
 
     const jwtPayload = parseJwtPayload(payload);
     if (!jwtPayload) {
-      res.status(401).json({ error: 'Invalid token claims', code: 'AUTH_CLAIMS_INVALID' });
+      await rejectAuth(
+        req,
+        res,
+        { error: 'Invalid token claims', code: 'AUTH_CLAIMS_INVALID' },
+        { tokenHash },
+      );
       return;
     }
     const sessionId = jwtPayload.jti;
@@ -306,7 +394,17 @@ export async function authMiddleware(
     const isRevoked = await redis.get(`revoked:${sessionId}`);
     if (isRevoked) {
       logger.warn('revoked_token_used', { sessionId, did: jwtPayload.did });
-      res.status(401).json({ error: 'Token has been revoked', code: 'AUTH_TOKEN_REVOKED' });
+      await rejectAuth(
+        req,
+        res,
+        { error: 'Token has been revoked', code: 'AUTH_TOKEN_REVOKED' },
+        {
+          tokenHash,
+          sessionId,
+          subjectId: jwtPayload.sub,
+          did: jwtPayload.did,
+        },
+      );
       return;
     }
 
@@ -359,7 +457,17 @@ export async function authMiddleware(
 
     if (!sessionValid) {
       logger.warn('session_not_found', { sessionId, sub: jwtPayload.sub });
-      res.status(401).json({ error: 'Session not found or expired', code: 'AUTH_SESSION_INVALID' });
+      await rejectAuth(
+        req,
+        res,
+        { error: 'Session not found or expired', code: 'AUTH_SESSION_INVALID' },
+        {
+          tokenHash,
+          sessionId,
+          subjectId: jwtPayload.sub,
+          did: jwtPayload.did,
+        },
+      );
       return;
     }
 
@@ -370,7 +478,18 @@ export async function authMiddleware(
     });
 
     if (!identity || identity.status !== 'ACTIVE') {
-      res.status(401).json({ error: 'Identity not found or inactive', code: 'AUTH_IDENTITY_INVALID' });
+      await rejectAuth(
+        req,
+        res,
+        { error: 'Identity not found or inactive', code: 'AUTH_IDENTITY_INVALID' },
+        {
+          tokenHash,
+          sessionId,
+          subjectId: jwtPayload.sub,
+          did: jwtPayload.did,
+          identityId: identity?.id,
+        },
+      );
       return;
     }
 
@@ -380,20 +499,40 @@ export async function authMiddleware(
     next();
   } catch (err) {
     if (err instanceof jose.errors.JWTExpired) {
-      res.status(401).json({ error: 'Token has expired', code: 'AUTH_TOKEN_EXPIRED' });
+      await rejectAuth(
+        req,
+        res,
+        { error: 'Token has expired', code: 'AUTH_TOKEN_EXPIRED' },
+        { tokenHash },
+      );
       return;
     }
     if (err instanceof jose.errors.JWTClaimValidationFailed) {
-      res.status(401).json({ error: 'Invalid token claims', code: 'AUTH_CLAIMS_INVALID' });
+      await rejectAuth(
+        req,
+        res,
+        { error: 'Invalid token claims', code: 'AUTH_CLAIMS_INVALID' },
+        { tokenHash },
+      );
       return;
     }
     if ((err as Error).name === 'JOSEAlgNotAllowed') {
-      res.status(401).json({ error: 'Invalid token header', code: 'AUTH_CLAIMS_INVALID' });
+      await rejectAuth(
+        req,
+        res,
+        { error: 'Invalid token header', code: 'AUTH_CLAIMS_INVALID' },
+        { tokenHash },
+      );
       return;
     }
 
     logger.error('auth_error', { error: (err as Error).message });
-    res.status(401).json({ error: 'Authentication failed', code: 'AUTH_FAILED' });
+    await rejectAuth(
+      req,
+      res,
+      { error: 'Authentication failed', code: 'AUTH_FAILED' },
+      { tokenHash },
+    );
   }
 }
 
