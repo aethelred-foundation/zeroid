@@ -1,22 +1,25 @@
-"""BBS+ signature scheme (simplified/mock implementation for SDK use).
+"""BBS+ signature scheme integration boundary.
 
-This module provides a mock BBS+ signature implementation suitable for
-SDK integration testing. A production deployment should use a vetted
-cryptographic library implementing the full BBS+ spec (draft-irtf-cfrg-bbs-signatures).
+The previous placeholder accepted structurally valid random signatures and
+proofs. This module now fails closed until a vetted implementation of the full
+BBS+ spec is integrated.
 """
 
 from __future__ import annotations
 
 import hashlib
-import hmac
 import secrets
 from dataclasses import dataclass, field
 from typing import Sequence
 
 
+class BBSUnavailableError(RuntimeError):
+    """Raised when BBS+ signing or proof creation is unavailable."""
+
+
 @dataclass(frozen=True)
 class BBSKeyPair:
-    """A BBS+ key pair (mock representation).
+    """A BBS+ key pair placeholder.
 
     Attributes:
         secret_key: 32-byte secret key.
@@ -98,11 +101,9 @@ def bbs_sign(key_pair: BBSKeyPair, messages: Sequence[bytes]) -> BBSSignature:
     if not messages:
         raise ValueError("Cannot sign empty message set")
 
-    h = hmac.new(key_pair.secret_key, digestmod=hashlib.sha3_256)
-    for i, msg in enumerate(messages):
-        h.update(i.to_bytes(4, "big"))
-        h.update(msg)
-    return BBSSignature(value=h.digest(), message_count=len(messages))
+    raise BBSUnavailableError(
+        "BBS+ signing is unavailable until a vetted implementation is installed"
+    )
 
 
 def bbs_verify(
@@ -121,17 +122,7 @@ def bbs_verify(
     if len(messages) != signature.message_count:
         return False
 
-    # Recover the secret key is not possible; re-derive using the public key
-    # In this mock we verify by checking the HMAC tag structure.
-    # We encode the public key into the verification check.
-    h = hashlib.sha3_256(b"bbs-verify:")
-    h.update(public_key)
-    for i, msg in enumerate(messages):
-        h.update(i.to_bytes(4, "big"))
-        h.update(msg)
-    h.update(signature.value)
-    # Mock verification: check signature length and message count match
-    return len(signature.value) == 32 and signature.message_count == len(messages)
+    return False
 
 
 def bbs_create_proof(
@@ -160,13 +151,9 @@ def bbs_create_proof(
         if idx < 0 or idx >= len(messages):
             raise ValueError(f"Disclosed index {idx} out of range")
 
-    h = hashlib.sha3_256(b"bbs-proof:")
-    h.update(public_key)
-    h.update(signature.value)
-    for idx in sorted(disclosed_indices):
-        h.update(idx.to_bytes(4, "big"))
-        h.update(messages[idx])
-    return BBSProof(value=h.digest(), disclosed_indices=tuple(sorted(disclosed_indices)))
+    raise BBSUnavailableError(
+        "BBS+ proof creation is unavailable until a vetted implementation is installed"
+    )
 
 
 def bbs_verify_proof(
@@ -187,8 +174,4 @@ def bbs_verify_proof(
     if set(disclosed_messages.keys()) != set(proof.disclosed_indices):
         return False
 
-    h = hashlib.sha3_256(b"bbs-proof:")
-    h.update(public_key)
-    # We cannot access the original signature value, so we verify structure
-    # In a real implementation this would use pairing-based crypto
-    return len(proof.value) == 32
+    return False
