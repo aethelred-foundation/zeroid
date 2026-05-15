@@ -38,6 +38,7 @@ const circuitDigestManifest = Object.fromEntries(
 const PROD_BASE_ENV: NodeJS.ProcessEnv = {
   NODE_ENV: 'production',
   REDIS_URL: 'rediss://redis.zeroid.example:6380',
+  TRUSTED_PROXY: '10.0.0.10',
   API_JWT_SIGNING_PRIVATE_KEY: apiJwtPrivateKey,
   API_JWT_VERIFICATION_PUBLIC_KEY: apiJwtPublicKey,
   API_JWT_ALGORITHM: 'RS256',
@@ -257,6 +258,21 @@ describe('production safety controls', () => {
   });
 
   it('rejects wildcard trusted proxy configuration in production', () => {
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      TRUSTED_PROXY: '',
+      METRICS_PUBLIC_DISABLED: 'true',
+    })).toEqual([
+      expect.objectContaining({ control: 'TRUSTED_PROXY' }),
+    ]);
+
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      TRUSTED_PROXY: '',
+      DIRECT_CLIENT_IP_MODE: 'true',
+      METRICS_PUBLIC_DISABLED: 'true',
+    })).toEqual([]);
+
     expect(collectProductionSafetyViolations({
       ...PROD_BASE_ENV,
       TRUSTED_PROXY: '*',

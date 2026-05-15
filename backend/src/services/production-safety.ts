@@ -139,6 +139,7 @@ export function checkedProductionSafetyControls(): string[] {
     'API_JWT_ALGORITHM',
     'API_JWT_KEY_ID',
     'TRUSTED_PROXY',
+    'DIRECT_CLIENT_IP_MODE',
     'CORS_ORIGINS',
     'METRICS_PUBLIC_DISABLED_OR_METRICS_AUTH_TOKEN',
     'SANCTIONS_SCREENING_DISABLED_OR_SANCTIONS_LIST_SIGNATURE_PUBLIC_KEYS_JSON',
@@ -876,7 +877,15 @@ function validateTrustedProxyConfig(
   violations: ProductionSafetyViolation[],
 ): void {
   const trustedProxy = env.TRUSTED_PROXY?.trim();
-  if (!trustedProxy) return;
+  if (!trustedProxy) {
+    if (!isTrue(env.DIRECT_CLIENT_IP_MODE)) {
+      violations.push({
+        control: 'TRUSTED_PROXY',
+        risk: 'Production deployments must configure TRUSTED_PROXY or explicitly set DIRECT_CLIENT_IP_MODE=true',
+      });
+    }
+    return;
+  }
 
   const entries = parseCsv(trustedProxy);
   const unsafeEntry = entries.find((entry) =>
