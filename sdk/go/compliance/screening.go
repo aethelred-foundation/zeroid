@@ -63,6 +63,8 @@ type ScreeningResult struct {
 	ScreenedAt time.Time
 	// ListsChecked contains the names of the sanctions lists checked.
 	ListsChecked []string
+	// Error describes why screening could not produce an authoritative result.
+	Error string
 }
 
 // SanctionEntry represents an entry on a sanctions list.
@@ -83,11 +85,13 @@ type Screener struct {
 	now     func() time.Time
 }
 
-// NewScreener creates a new Screener with a default mock sanctions list.
+// NewScreener creates a new Screener with no bundled sanctions data.
+//
+// Callers must provide current, authoritative sanctions entries with
+// NewScreenerWithEntries before using the result for compliance decisions.
 func NewScreener() *Screener {
 	return &Screener{
-		entries: defaultSanctionsList(),
-		now:     time.Now,
+		now: time.Now,
 	}
 }
 
@@ -112,6 +116,14 @@ func (s *Screener) Screen(entity *Entity) *ScreeningResult {
 		Risk:         RiskNone,
 		ScreenedAt:   s.now(),
 		ListsChecked: s.listNames(),
+	}
+
+	if len(s.entries) == 0 {
+		result.Clear = false
+		result.Risk = RiskHigh
+		result.Matches = append(result.Matches, "SANCTIONS_LIST_UNCONFIGURED")
+		result.Error = "sanctions screening entries are not configured"
+		return result
 	}
 
 	if entity == nil {
@@ -174,27 +186,4 @@ func (s *Screener) listNames() []string {
 		}
 	}
 	return names
-}
-
-func defaultSanctionsList() []SanctionEntry {
-	return []SanctionEntry{
-		{
-			Name:     "Sanctioned Corp Alpha",
-			Aliases:  []string{"SCA", "Alpha Corp Sanctioned"},
-			Country:  "XX",
-			ListName: "OFAC-SDN",
-		},
-		{
-			Name:     "Bad Actor Beta",
-			Aliases:  []string{"BAB", "Beta Bad"},
-			Country:  "YY",
-			ListName: "OFAC-SDN",
-		},
-		{
-			Name:     "Restricted Entity Gamma",
-			Aliases:  []string{"REG"},
-			Country:  "ZZ",
-			ListName: "EU-SANCTIONS",
-		},
-	}
 }

@@ -5,6 +5,29 @@ import (
 	"time"
 )
 
+func testSanctionsList() []SanctionEntry {
+	return []SanctionEntry{
+		{
+			Name:     "Sanctioned Corp Alpha",
+			Aliases:  []string{"SCA", "Alpha Corp Sanctioned"},
+			Country:  "XX",
+			ListName: "OFAC-SDN",
+		},
+		{
+			Name:     "Bad Actor Beta",
+			Aliases:  []string{"BAB", "Beta Bad"},
+			Country:  "YY",
+			ListName: "OFAC-SDN",
+		},
+		{
+			Name:     "Restricted Entity Gamma",
+			Aliases:  []string{"REG"},
+			Country:  "ZZ",
+			ListName: "EU-SANCTIONS",
+		},
+	}
+}
+
 func TestRiskLevelString(t *testing.T) {
 	tests := []struct {
 		level RiskLevel
@@ -32,8 +55,8 @@ func TestNewScreener(t *testing.T) {
 	if s == nil {
 		t.Fatal("NewScreener() returned nil")
 	}
-	if len(s.entries) == 0 {
-		t.Error("default screener should have entries")
+	if len(s.entries) != 0 {
+		t.Error("default screener must not ship bundled sanctions entries")
 	}
 }
 
@@ -143,7 +166,7 @@ func TestScreenerScreen(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			s := NewScreener()
+			s := NewScreenerWithEntries(testSanctionsList())
 			s.SetTimeFunc(func() time.Time { return now })
 
 			result := s.Screen(tt.entity)
@@ -167,7 +190,7 @@ func TestScreenerScreen(t *testing.T) {
 }
 
 func TestScreenerSetTimeFunc(t *testing.T) {
-	s := NewScreener()
+	s := NewScreenerWithEntries(testSanctionsList())
 	fixed := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
 	s.SetTimeFunc(func() time.Time { return fixed })
 	result := s.Screen(&Entity{Name: "test"})
@@ -179,8 +202,14 @@ func TestScreenerSetTimeFunc(t *testing.T) {
 func TestScreenerEmptyEntries(t *testing.T) {
 	s := NewScreenerWithEntries([]SanctionEntry{})
 	result := s.Screen(&Entity{Name: "anyone"})
-	if !result.Clear {
-		t.Error("empty entries should always be clear")
+	if result.Clear {
+		t.Error("empty entries must fail closed")
+	}
+	if result.Risk != RiskHigh {
+		t.Errorf("Risk = %v, want %v", result.Risk, RiskHigh)
+	}
+	if result.Error == "" {
+		t.Error("unconfigured screening should explain the failure")
 	}
 	if len(result.ListsChecked) != 0 {
 		t.Errorf("ListsChecked should be empty, got %v", result.ListsChecked)
@@ -202,8 +231,8 @@ func TestScreenerMultipleMatches(t *testing.T) {
 	}
 }
 
-func TestDefaultSanctionsList(t *testing.T) {
-	list := defaultSanctionsList()
+func TestTestSanctionsList(t *testing.T) {
+	list := testSanctionsList()
 	if len(list) != 3 {
 		t.Errorf("default list length = %d, want 3", len(list))
 	}
