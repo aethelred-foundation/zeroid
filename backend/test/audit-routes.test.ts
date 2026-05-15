@@ -2,6 +2,9 @@ import express from 'express';
 import request from 'supertest';
 
 const mockAuditFindUnique = jest.fn();
+const mockAuditFindMany = jest.fn();
+const mockAuditCount = jest.fn();
+const mockAuditCreate = jest.fn();
 const mockCredentialFindUnique = jest.fn();
 
 jest.mock('../src/middleware/rateLimit', () => ({
@@ -18,6 +21,9 @@ jest.mock('../src/index', () => ({
   prisma: {
     auditLog: {
       findUnique: mockAuditFindUnique,
+      findMany: mockAuditFindMany,
+      count: mockAuditCount,
+      create: mockAuditCreate,
       findFirst: jest.fn(),
     },
     credential: {
@@ -65,6 +71,9 @@ describe('audit route access control', () => {
       details: { valid: true },
       timestamp: new Date('2026-04-21T00:00:00.000Z'),
     });
+    mockAuditFindMany.mockResolvedValue([]);
+    mockAuditCount.mockResolvedValue(0);
+    mockAuditCreate.mockResolvedValue({});
   });
 
   it('hides identity-less audit logs when the caller cannot access the resource', async () => {
@@ -93,5 +102,57 @@ describe('audit route access control', () => {
       resourceType: 'credential',
       resourceId: CREDENTIAL_ID,
     });
+    expect(mockAuditCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          identityId: 'viewer-9',
+          action: 'AUDIT_LOG_ACCESSED',
+          resourceType: 'audit_log',
+          resourceId: AUDIT_ID,
+          details: expect.objectContaining({
+            operation: 'read',
+            targetResourceType: 'credential',
+            accessedViaResourceAccess: true,
+          }),
+        }),
+      }),
+    );
+  });
+
+  it('records audit exports before returning evidence', async () => {
+    mockAuditFindMany.mockResolvedValue([
+      {
+        id: AUDIT_ID,
+        identityId: 'viewer-9',
+        action: 'CREDENTIAL_VERIFIED',
+        resourceType: 'credential',
+        resourceId: CREDENTIAL_ID,
+        timestamp: new Date('2026-04-21T00:00:00.000Z'),
+      },
+    ]);
+
+    await request(createApp('viewer-9'))
+      .get('/audit/export/download')
+      .query({
+        from: '2026-04-01T00:00:00.000Z',
+        to: '2026-04-30T00:00:00.000Z',
+      })
+      .expect(200);
+
+    expect(mockAuditCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          identityId: 'viewer-9',
+          action: 'AUDIT_LOG_EXPORTED',
+          resourceType: 'audit_export',
+          resourceId: 'viewer-9',
+          details: expect.objectContaining({
+            operation: 'export',
+            format: 'json',
+            totalRecords: 1,
+          }),
+        }),
+      }),
+    );
   });
 });

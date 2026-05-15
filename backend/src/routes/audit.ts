@@ -1,4 +1,5 @@
 import { Router, Response } from 'express';
+import type { Prisma } from '@prisma/client';
 import { AuthenticatedRequest } from '../middleware/auth';
 import { apiRateLimiter } from '../middleware/rateLimit';
 import { validate, auditQuerySchema, uuidSchema } from '../middleware/validation';
@@ -8,6 +9,31 @@ import { z } from 'zod';
 
 const router = Router();
 router.use(apiRateLimiter);
+
+type AuditAccessAction = 'AUDIT_LOG_ACCESSED' | 'AUDIT_LOG_EXPORTED';
+
+async function recordAuditAccess(
+  req: AuthenticatedRequest,
+  params: {
+    action: AuditAccessAction;
+    resourceType: string;
+    resourceId: string;
+    details: Record<string, unknown>;
+  },
+): Promise<void> {
+  const identity = req.identity!;
+  await prisma.auditLog.create({
+    data: {
+      identityId: identity.id,
+      action: params.action as Prisma.AuditLogCreateInput['action'],
+      resourceType: params.resourceType,
+      resourceId: params.resourceId,
+      ipAddress: req.ip,
+      userAgent: req.get('user-agent'),
+      details: params.details as Prisma.InputJsonValue,
+    },
+  });
+}
 
 // ---------------------------------------------------------------------------
 // GET /api/v1/audit — Query audit logs
@@ -69,6 +95,20 @@ router.get(
         prisma.auditLog.count({ where }),
       ]);
 
+      await recordAuditAccess(req, {
+        action: 'AUDIT_LOG_ACCESSED',
+        resourceType: 'audit_log_query',
+        resourceId: identity.id,
+        details: {
+          operation: 'list',
+          filters: { identityId: where.identityId, action, resourceType, resourceId, from, to },
+          page,
+          limit,
+          resultCount: logs.length,
+          total,
+        },
+      });
+
       res.json({
         data: logs,
         pagination: {
@@ -115,6 +155,19 @@ router.get(
         res.status(404).json({ error: 'Audit log not found', code: 'AUDIT_NOT_FOUND' });
         return;
       }
+
+      await recordAuditAccess(req, {
+        action: 'AUDIT_LOG_ACCESSED',
+        resourceType: 'audit_log',
+        resourceId: log.id,
+        details: {
+          operation: 'read',
+          targetIdentityId: log.identityId,
+          targetResourceType: log.resourceType,
+          targetResourceId: log.resourceId,
+          accessedViaResourceAccess: !ownsLog && hasResourceAccess,
+        },
+      });
 
       res.json({ data: log });
     } catch (err) {
@@ -163,6 +216,21 @@ router.get(
         prisma.auditLog.count({ where }),
       ]);
 
+      await recordAuditAccess(req, {
+        action: 'AUDIT_LOG_ACCESSED',
+        resourceType: 'audit_resource_trail',
+        resourceId: `${type}:${resourceId}`,
+        details: {
+          operation: 'resource_trail',
+          targetResourceType: type,
+          targetResourceId: resourceId,
+          page,
+          limit,
+          resultCount: logs.length,
+          total,
+        },
+      });
+
       res.json({
         data: logs,
         pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
@@ -206,6 +274,17 @@ router.get(
         where: { identityId: identity.id },
         orderBy: { timestamp: 'desc' },
         select: { action: true, timestamp: true, resourceType: true },
+      });
+
+      await recordAuditAccess(req, {
+        action: 'AUDIT_LOG_ACCESSED',
+        resourceType: 'audit_summary',
+        resourceId: identity.id,
+        details: {
+          operation: 'summary',
+          totalEvents,
+          eventsLast30Days: recentEvents,
+        },
       });
 
       res.json({
@@ -267,6 +346,19 @@ router.get(
         },
         orderBy: { timestamp: 'asc' },
         take: 10000, // Hard cap
+      });
+
+      await recordAuditAccess(req, {
+        action: 'AUDIT_LOG_EXPORTED',
+        resourceType: 'audit_export',
+        resourceId: identity.id,
+        details: {
+          operation: 'export',
+          from: from.toISOString(),
+          to: to.toISOString(),
+          format: 'json',
+          totalRecords: logs.length,
+        },
       });
 
       res.set('Content-Type', 'application/json');
