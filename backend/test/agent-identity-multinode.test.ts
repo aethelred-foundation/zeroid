@@ -6,7 +6,10 @@ const mockIdentityFindUnique = jest.fn();
 const mockAuditLogCreate = jest.fn();
 
 const mockRedis = {
-  set: jest.fn(async (key: string, value: string) => {
+  set: jest.fn(async (key: string, value: string, ...args: unknown[]) => {
+    if (args.includes('NX') && redisStore.has(key)) {
+      return null;
+    }
     redisStore.set(key, value);
     return 'OK';
   }),
@@ -51,7 +54,12 @@ jest.mock('../src/index', () => ({
   redis: mockRedis,
 }));
 
-import { AgentCapability, AgentIdentityService } from '../src/services/ai/agent-identity';
+import {
+  AgentCapability,
+  AgentIdentityService,
+  AgentProtocol,
+  buildAgentVerificationSigningPayload,
+} from '../src/services/ai/agent-identity';
 
 const operatorId = 'identity-operator-1';
 const delegatedCapability: AgentCapability = {
@@ -77,6 +85,23 @@ function createSigningMaterial() {
     publicKey: publicKey.export({ type: 'spki', format: 'pem' }).toString(),
     sign: (message: string) => crypto.sign(null, Buffer.from(message, 'utf8'), privateKey).toString('base64'),
   };
+}
+
+function signVerificationRequest(
+  signing: ReturnType<typeof createSigningMaterial>,
+  request: {
+    agentId: string;
+    challenge: string;
+    requestedCapabilities: string[];
+    context: {
+      callerAgentId?: string;
+      callerProtocol?: AgentProtocol;
+      purpose: string;
+      resourceId?: string;
+    };
+  },
+): string {
+  return signing.sign(buildAgentVerificationSigningPayload(request));
 }
 
 async function registerServiceAgent(
@@ -147,15 +172,18 @@ describe('Agent identity multi-node persistence', () => {
       signing.publicKey,
     );
 
-    const verification = await writer.verifyAgent({
+    const request = {
       agentId: agent.agentId,
       challenge,
-      signature: signing.sign(challenge),
       requestedCapabilities: ['payment.release'],
       context: {
         purpose: 'settlement release',
         resourceId: 'payment-1',
       },
+    };
+    const verification = await writer.verifyAgent({
+      ...request,
+      signature: signVerificationRequest(signing, request),
     });
 
     expect(verification.verified).toBe(false);
@@ -208,19 +236,83 @@ describe('Agent identity multi-node persistence', () => {
       operatorId,
     );
 
-    const verification = await reader.verifyAgent({
+    const request = {
       agentId: delegate.agentId,
       challenge,
-      signature: delegateSigning.sign(challenge),
       requestedCapabilities: ['credential.verify'],
       context: {
         callerAgentId: delegator.agentId,
         purpose: 'delegated credential verification',
         resourceId: 'credential-1',
       },
+    };
+    const verification = await reader.verifyAgent({
+      ...request,
+      signature: signVerificationRequest(delegateSigning, request),
     });
 
     expect(verification.verified).toBe(true);
     expect(verification.authorizedCapabilities).toEqual(['credential.verify']);
+  });
+
+  it('rejects signatures rebound to different capabilities', async () => {
+    const service = new AgentIdentityService();
+    const signing = createSigningMaterial();
+    const agent = await registerServiceAgent(
+      service,
+      'Bound Verifier',
+      [delegatedCapability, approvalCapability],
+      signing.publicKey,
+    );
+    const signedRequest = {
+      agentId: agent.agentId,
+      challenge: 'capability-binding-challenge',
+      requestedCapabilities: ['credential.verify'],
+      context: {
+        purpose: 'credential verification',
+        resourceId: 'credential-1',
+      },
+    };
+
+    const verification = await service.verifyAgent({
+      ...signedRequest,
+      requestedCapabilities: ['payment.release'],
+      signature: signVerificationRequest(signing, signedRequest),
+    });
+
+    expect(verification.verified).toBe(false);
+    expect(verification.deniedCapabilities).toEqual([
+      { name: 'payment.release', reason: 'Signature verification failed' },
+    ]);
+  });
+
+  it('rejects replayed verification challenges', async () => {
+    const service = new AgentIdentityService();
+    const signing = createSigningMaterial();
+    const agent = await registerServiceAgent(
+      service,
+      'Replay Guard',
+      [delegatedCapability],
+      signing.publicKey,
+    );
+    const request = {
+      agentId: agent.agentId,
+      challenge: 'single-use-verification-challenge',
+      requestedCapabilities: ['credential.verify'],
+      context: {
+        purpose: 'credential verification',
+        resourceId: 'credential-1',
+      },
+    };
+    const signature = signVerificationRequest(signing, request);
+
+    const first = await service.verifyAgent({ ...request, signature });
+    const second = await service.verifyAgent({ ...request, signature });
+
+    expect(first.verified).toBe(true);
+    expect(second.verified).toBe(false);
+    expect(second.deniedCapabilities).toEqual([
+      { name: 'credential.verify', reason: 'Challenge has already been used' },
+    ]);
   });
 });

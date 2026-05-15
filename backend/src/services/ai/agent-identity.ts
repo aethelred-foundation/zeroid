@@ -5,6 +5,7 @@ import { prisma, logger, redis } from '../../index';
 const AGENT_RECORD_TTL_SECONDS = 30 * 86400;
 const APPROVAL_RECORD_TTL_SECONDS = 30 * 86400;
 const DELEGATION_RECORD_GRACE_SECONDS = 60;
+const AGENT_VERIFICATION_CHALLENGE_TTL_SECONDS = 300;
 
 // ---------------------------------------------------------------------------
 // Types & Enums
@@ -94,7 +95,7 @@ interface DelegationConstraintSpec {
 export interface AgentVerificationRequest {
   agentId: string;
   challenge: string;
-  signature: string;          // agent's signature of the challenge
+  signature: string;          // signature of the canonical verification payload
   requestedCapabilities: string[];
   context: {
     callerAgentId?: string;
@@ -144,6 +145,26 @@ export interface AgentAuditEntry {
   anomalyDetected: boolean;
   anomalyDetails?: string;
   timestamp: Date;
+}
+
+export function buildAgentVerificationSigningPayload(
+  request: Pick<
+    AgentVerificationRequest,
+    'agentId' | 'challenge' | 'requestedCapabilities' | 'context'
+  >,
+): string {
+  return JSON.stringify({
+    version: 'zeroid-agent-verification-v1',
+    agentId: request.agentId,
+    challenge: request.challenge,
+    requestedCapabilities: [...request.requestedCapabilities].sort(),
+    context: {
+      callerAgentId: request.context.callerAgentId ?? null,
+      callerProtocol: request.context.callerProtocol ?? null,
+      purpose: request.context.purpose,
+      resourceId: request.context.resourceId ?? null,
+    },
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -510,9 +531,10 @@ export class AgentIdentityService {
       };
     }
 
-    // 2. Verify cryptographic signature
+    // 2. Verify the full authorization payload, not just the nonce.
+    const signingPayload = buildAgentVerificationSigningPayload(request);
     const signatureValid = this.verifySignature(
-      request.challenge,
+      signingPayload,
       request.signature,
       agent.publicKey,
     );
@@ -536,6 +558,25 @@ export class AgentIdentityService {
       };
     }
     details.push('Cryptographic signature verified');
+
+    if (!(await this.reserveVerificationChallenge(request.agentId, request.challenge))) {
+      details.push('Challenge has already been used');
+      await this.recordAnomalyEvent(agent, 'Replayed verification challenge');
+
+      return {
+        verificationId,
+        agentId: request.agentId,
+        verified: false,
+        authorizedCapabilities: [],
+        deniedCapabilities: request.requestedCapabilities.map((c) => ({
+          name: c,
+          reason: 'Challenge has already been used',
+        })),
+        teeAttested: agent.teeAttested,
+        expiresAt: new Date(),
+        details,
+      };
+    }
 
     // 3. Check capability authorization
     const agentCapNames = new Set(agent.capabilities.map((c) => c.name));
@@ -942,11 +983,11 @@ export class AgentIdentityService {
   // -------------------------------------------------------------------------
   // Internal helpers
   // -------------------------------------------------------------------------
-  private verifySignature(challenge: string, signature: string, publicKey: string): boolean {
+  private verifySignature(payload: string, signature: string, publicKey: string): boolean {
     try {
       const key = this.parseVerificationKey(publicKey);
       const sigBuffer = this.decodeSignature(signature);
-      const message = Buffer.from(challenge, 'utf8');
+      const message = Buffer.from(payload, 'utf8');
 
       if (key.asymmetricKeyType === 'ed25519' || key.asymmetricKeyType === 'ed448') {
         return crypto.verify(null, message, key, sigBuffer);
@@ -963,6 +1004,25 @@ export class AgentIdentityService {
     } catch {
       return false;
     }
+  }
+
+  private async reserveVerificationChallenge(
+    agentId: string,
+    challenge: string,
+  ): Promise<boolean> {
+    const challengeDigest = crypto
+      .createHash('sha256')
+      .update(`${agentId}:${challenge}`)
+      .digest('hex');
+    const reserved = await redis.set(
+      `agent:verification-challenge:${challengeDigest}`,
+      JSON.stringify({ agentId, usedAt: new Date().toISOString() }),
+      'EX',
+      AGENT_VERIFICATION_CHALLENGE_TTL_SECONDS,
+      'NX',
+    );
+
+    return reserved === 'OK';
   }
 
   private parseVerificationKey(publicKey: string): crypto.KeyObject {
