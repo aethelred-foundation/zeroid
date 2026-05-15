@@ -284,9 +284,13 @@ function handleRateLimitStoreFailure(
 export function createDIDRateLimiter(config: Omit<RateLimitConfig, 'keyExtractor'>) {
   return createRateLimiter({
     ...config,
-    keyExtractor: (req: Request) => {
-      const authReq = req as Request & { identity?: { did: string } };
-      return authReq.identity?.did ?? extractClientIP(req);
-    },
+    keyExtractor: extractPrincipalRateLimitIdentifier,
   });
+}
+
+export function extractPrincipalRateLimitIdentifier(req: Request): string {
+  const authReq = req as Request & { identity?: { id?: string; did?: string } };
+  if (authReq.identity?.did) return authReq.identity.did;
+  if (authReq.identity?.id) return `identity:${authReq.identity.id}`;
+  return extractClientIP(req);
 }

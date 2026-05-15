@@ -15,7 +15,7 @@ import { auditRoutes } from './routes/audit';
 import enterpriseIntegrationRoutes, { oidcPublicRouter } from './routes/enterprise/integration';
 import enterpriseComplianceRoutes from './routes/enterprise/compliance';
 import { authMiddleware } from './middleware/auth';
-import { createRateLimiter } from './middleware/rateLimit';
+import { createRateLimiter, extractPrincipalRateLimitIdentifier } from './middleware/rateLimit';
 import {
   checkedProductionSafetyControls,
   collectProductionSafetyViolations,
@@ -174,6 +174,18 @@ const apiRouteLimiter = createRateLimiter({
   maxRequests: 120,
   keyPrefix: 'rl:api-route',
 });
+
+function createAuthenticatedPrincipalLimiter(
+  keyPrefix: string,
+  maxRequests: number,
+) {
+  return createRateLimiter({
+    windowMs: 60_000,
+    maxRequests,
+    keyPrefix,
+    keyExtractor: extractPrincipalRateLimitIdentifier,
+  });
+}
 
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
 
@@ -339,11 +351,16 @@ app.use('/api', globalLimiter);
 // ---------------------------------------------------------------------------
 // API routes
 // ---------------------------------------------------------------------------
+const credentialPrincipalLimiter = createAuthenticatedPrincipalLimiter('rl:principal:credentials', 30);
+const verificationPrincipalLimiter = createAuthenticatedPrincipalLimiter('rl:principal:verification', 60);
+const governancePrincipalLimiter = createAuthenticatedPrincipalLimiter('rl:principal:governance', 30);
+const auditPrincipalLimiter = createAuthenticatedPrincipalLimiter('rl:principal:audit', 30);
+
 app.use('/api/v1/identity', apiRouteLimiter, identityRoutes);
-app.use('/api/v1/credentials', apiRouteLimiter, authMiddleware, credentialRoutes);
-app.use('/api/v1/verification', apiRouteLimiter, authMiddleware, verificationRoutes);
-app.use('/api/v1/governance', apiRouteLimiter, authMiddleware, governanceRoutes);
-app.use('/api/v1/audit', apiRouteLimiter, authMiddleware, auditRoutes);
+app.use('/api/v1/credentials', apiRouteLimiter, authMiddleware, credentialPrincipalLimiter, credentialRoutes);
+app.use('/api/v1/verification', apiRouteLimiter, authMiddleware, verificationPrincipalLimiter, verificationRoutes);
+app.use('/api/v1/governance', apiRouteLimiter, authMiddleware, governancePrincipalLimiter, governanceRoutes);
+app.use('/api/v1/audit', apiRouteLimiter, authMiddleware, auditPrincipalLimiter, auditRoutes);
 
 // Enterprise routes — mounted behind auth + stricter rate limit
 const enterpriseLimiter = createRateLimiter({
@@ -351,6 +368,7 @@ const enterpriseLimiter = createRateLimiter({
   maxRequests: 30,
   keyPrefix: 'rl:enterprise',
 });
+const enterprisePrincipalLimiter = createAuthenticatedPrincipalLimiter('rl:principal:enterprise', 30);
 
 // OIDC public routes — discovery, JWKS, and token endpoints MUST be accessible
 // without a bearer token per OpenID Connect Discovery §4 and OAuth 2.0 §3.2.
@@ -363,8 +381,8 @@ const oidcPublicLimiter = createRateLimiter({
 app.use('/api/v1/enterprise', oidcPublicLimiter, oidcPublicRouter);
 
 // Auth-gated enterprise routes (registration, authorize, userinfo, webhooks, etc.)
-app.use('/api/v1/enterprise', enterpriseLimiter, authMiddleware, enterpriseIntegrationRoutes);
-app.use('/api/v1/enterprise/compliance', enterpriseLimiter, authMiddleware, enterpriseComplianceRoutes);
+app.use('/api/v1/enterprise', enterpriseLimiter, authMiddleware, enterprisePrincipalLimiter, enterpriseIntegrationRoutes);
+app.use('/api/v1/enterprise/compliance', enterpriseLimiter, authMiddleware, enterprisePrincipalLimiter, enterpriseComplianceRoutes);
 
 const { aiComplianceRoutes } = require('./routes/ai/compliance') as typeof import('./routes/ai/compliance');
 const { aiAgentIdentityRoutes } = require('./routes/ai/agent-identity') as typeof import('./routes/ai/agent-identity');

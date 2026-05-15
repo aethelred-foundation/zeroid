@@ -14,7 +14,10 @@ jest.mock('../src/index', () => ({
   },
 }));
 
-import { createRateLimiter } from '../src/middleware/rateLimit';
+import {
+  createRateLimiter,
+  extractPrincipalRateLimitIdentifier,
+} from '../src/middleware/rateLimit';
 
 const ORIGINAL_ENV = { ...process.env };
 
@@ -168,6 +171,58 @@ describe('createRateLimiter', () => {
       expect.stringContaining('ZREMRANGEBYSCORE'),
       1,
       `rl:test:sha256:${expectedHash}`,
+      expect.any(String),
+      expect.any(String),
+      expect.any(String),
+      expect.any(String),
+      expect.any(String),
+    );
+  });
+
+  it('keys authenticated principal limits by DID instead of source IP', async () => {
+    mockEval.mockResolvedValue(1);
+    const limiter = createRateLimiter({
+      windowMs: 60_000,
+      maxRequests: 2,
+      keyPrefix: 'rl:test',
+      keyExtractor: extractPrincipalRateLimitIdentifier,
+    });
+    const { req, next } = createMockHttp();
+    req.ip = '198.51.100.23';
+    req.identity = { id: 'identity-1', did: 'did:aethelred:alice' };
+
+    await limiter(req, createMockHttp().res, next);
+
+    expect(mockEval).toHaveBeenCalledWith(
+      expect.stringContaining('ZREMRANGEBYSCORE'),
+      1,
+      'rl:test:did:aethelred:alice',
+      expect.any(String),
+      expect.any(String),
+      expect.any(String),
+      expect.any(String),
+      expect.any(String),
+    );
+  });
+
+  it('falls back to IP for principal limits before authentication', async () => {
+    mockEval.mockResolvedValue(1);
+    const limiter = createRateLimiter({
+      windowMs: 60_000,
+      maxRequests: 2,
+      keyPrefix: 'rl:test',
+      keyExtractor: extractPrincipalRateLimitIdentifier,
+    });
+    const { req, next } = createMockHttp();
+    req.ip = '198.51.100.23';
+    req.socket.remoteAddress = '198.51.100.23';
+
+    await limiter(req, createMockHttp().res, next);
+
+    expect(mockEval).toHaveBeenCalledWith(
+      expect.stringContaining('ZREMRANGEBYSCORE'),
+      1,
+      'rl:test:198.51.100.23',
       expect.any(String),
       expect.any(String),
       expect.any(String),
