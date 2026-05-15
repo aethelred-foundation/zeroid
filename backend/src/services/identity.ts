@@ -50,6 +50,25 @@ export interface DelegationRequest {
 // Identity Service
 // ---------------------------------------------------------------------------
 export class IdentityService {
+  private async runIdentityAuditTransaction<T>(
+    operation: (tx: any) => Promise<T>,
+  ): Promise<T> {
+    const transaction = (prisma as any).$transaction;
+    if (typeof transaction !== 'function') {
+      if (isProductionRuntime()) {
+        throw new IdentityError(
+          'Identity state changes require database transaction support for audit atomicity.',
+          'IDENTITY_AUDIT_TRANSACTION_UNAVAILABLE',
+          500,
+        );
+      }
+
+      return operation(prisma);
+    }
+
+    return transaction.call(prisma, operation);
+  }
+
   // -------------------------------------------------------------------------
   // Register a new identity
   // -------------------------------------------------------------------------
@@ -79,35 +98,37 @@ export class IdentityService {
       throw new IdentityError('Invalid recovery hash format', 'IDENTITY_INVALID_RECOVERY_HASH');
     }
 
-    // Create identity
-    const identity = await prisma.identity.create({
-      data: {
-        did: request.did,
-        publicKey: request.publicKey,
-        recoveryHash: this.protectRecoveryHash(request.recoveryHash),
-        displayName: request.displayName,
-        metadata: (request.metadata ?? {}) as any,
-        status: 'ACTIVE',
-        delegatedTo: [],
-      },
+    const identity = await this.runIdentityAuditTransaction(async (tx) => {
+      const created = await tx.identity.create({
+        data: {
+          did: request.did,
+          publicKey: request.publicKey,
+          recoveryHash: this.protectRecoveryHash(request.recoveryHash),
+          displayName: request.displayName,
+          metadata: (request.metadata ?? {}) as any,
+          status: 'ACTIVE',
+          delegatedTo: [],
+        },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          identityId: created.id,
+          action: 'IDENTITY_CREATED',
+          resourceType: 'identity',
+          resourceId: created.id,
+          details: {
+            did: request.did,
+            displayName: request.displayName,
+          },
+        },
+      });
+
+      return created;
     });
 
     // Generate authentication token
     const { token, sessionId } = await generateToken(identity.id, identity.did);
-
-    // Audit log
-    await prisma.auditLog.create({
-      data: {
-        identityId: identity.id,
-        action: 'IDENTITY_CREATED',
-        resourceType: 'identity',
-        resourceId: identity.id,
-        details: {
-          did: request.did,
-          displayName: request.displayName,
-        },
-      },
-    });
 
     // Cache identity lookup
     await redis.set(
@@ -179,23 +200,30 @@ export class IdentityService {
       metadata: identity.metadata,
     };
 
-    const updated = await prisma.identity.update({
-      where: { id: identityId },
-      data: {
-        displayName: updates.displayName ?? identity.displayName,
-        metadata: (updates.metadata ?? identity.metadata ?? undefined) as any,
-      },
-    });
+    const updated = await this.runIdentityAuditTransaction(async (tx) => {
+      const nextIdentity = await tx.identity.update({
+        where: { id: identityId },
+        data: {
+          displayName: updates.displayName ?? identity.displayName,
+          metadata: (updates.metadata ?? identity.metadata ?? undefined) as any,
+        },
+      });
 
-    await prisma.auditLog.create({
-      data: {
-        identityId,
-        action: 'IDENTITY_UPDATED',
-        resourceType: 'identity',
-        resourceId: identityId,
-        previousState,
-        newState: { displayName: updated.displayName, metadata: updated.metadata },
-      },
+      await tx.auditLog.create({
+        data: {
+          identityId,
+          action: 'IDENTITY_UPDATED',
+          resourceType: 'identity',
+          resourceId: identityId,
+          previousState,
+          newState: {
+            displayName: nextIdentity.displayName,
+            metadata: nextIdentity.metadata,
+          },
+        },
+      });
+
+      return nextIdentity;
     });
 
     // Invalidate caches
@@ -276,41 +304,38 @@ export class IdentityService {
       await revokeToken(session.id);
     }
 
-    // Update identity with new key material
     const protectedNewRecoveryHash = this.protectRecoveryHash(
       request.newRecoveryHash,
     );
-    await prisma.identity.update({
-      where: { id: identity.id },
-      data: {
-        publicKey: request.newPublicKey,
-        recoveryHash: protectedNewRecoveryHash,
-        status: 'RECOVERED',
-        teeAttested: false, // Require re-attestation
-        teeAttestationId: null,
-      },
-    });
+    const activated = await this.runIdentityAuditTransaction(async (tx) => {
+      const updated = await tx.identity.update({
+        where: { id: identity.id },
+        data: {
+          publicKey: request.newPublicKey,
+          recoveryHash: protectedNewRecoveryHash,
+          status: 'ACTIVE',
+          teeAttested: false,
+          teeAttestationId: null,
+        },
+      });
 
-    // Re-activate after recovery
-    const activated = await prisma.identity.update({
-      where: { id: identity.id },
-      data: { status: 'ACTIVE' },
+      await tx.auditLog.create({
+        data: {
+          identityId: identity.id,
+          action: 'IDENTITY_RECOVERED',
+          resourceType: 'identity',
+          resourceId: identity.id,
+          details: { success: true },
+          previousState: { publicKey: identity.publicKey },
+          newState: { publicKey: request.newPublicKey },
+        },
+      });
+
+      return updated;
     });
 
     // Generate new token
     const { token, sessionId } = await generateToken(identity.id, identity.did);
-
-    await prisma.auditLog.create({
-      data: {
-        identityId: identity.id,
-        action: 'IDENTITY_RECOVERED',
-        resourceType: 'identity',
-        resourceId: identity.id,
-        details: { success: true },
-        previousState: { publicKey: identity.publicKey },
-        newState: { publicKey: request.newPublicKey },
-      },
-    });
 
     // Invalidate caches
     await redis.del(`identity:id:${identity.id}`);
@@ -353,21 +378,25 @@ export class IdentityService {
       throw new IdentityError('Maximum delegations reached (5)', 'IDENTITY_MAX_DELEGATIONS');
     }
 
-    const updated = await prisma.identity.update({
-      where: { id: request.delegatorId },
-      data: {
-        delegatedTo: [...identity.delegatedTo, request.delegateDid],
-      },
-    });
+    const updated = await this.runIdentityAuditTransaction(async (tx) => {
+      const nextIdentity = await tx.identity.update({
+        where: { id: request.delegatorId },
+        data: {
+          delegatedTo: [...identity.delegatedTo, request.delegateDid],
+        },
+      });
 
-    await prisma.auditLog.create({
-      data: {
-        identityId: request.delegatorId,
-        action: 'DELEGATION_GRANTED',
-        resourceType: 'identity',
-        resourceId: request.delegatorId,
-        details: { delegateDid: request.delegateDid },
-      },
+      await tx.auditLog.create({
+        data: {
+          identityId: request.delegatorId,
+          action: 'DELEGATION_GRANTED',
+          resourceType: 'identity',
+          resourceId: request.delegatorId,
+          details: { delegateDid: request.delegateDid },
+        },
+      });
+
+      return nextIdentity;
     });
 
     await redis.del(`identity:id:${request.delegatorId}`);
@@ -394,21 +423,25 @@ export class IdentityService {
       throw new IdentityError('Delegation not found', 'IDENTITY_DELEGATION_NOT_FOUND', 404);
     }
 
-    const updated = await prisma.identity.update({
-      where: { id: delegatorId },
-      data: {
-        delegatedTo: identity.delegatedTo.filter((d) => d !== delegateDid),
-      },
-    });
+    const updated = await this.runIdentityAuditTransaction(async (tx) => {
+      const nextIdentity = await tx.identity.update({
+        where: { id: delegatorId },
+        data: {
+          delegatedTo: identity.delegatedTo.filter((d) => d !== delegateDid),
+        },
+      });
 
-    await prisma.auditLog.create({
-      data: {
-        identityId: delegatorId,
-        action: 'DELEGATION_REVOKED',
-        resourceType: 'identity',
-        resourceId: delegatorId,
-        details: { delegateDid },
-      },
+      await tx.auditLog.create({
+        data: {
+          identityId: delegatorId,
+          action: 'DELEGATION_REVOKED',
+          resourceType: 'identity',
+          resourceId: delegatorId,
+          details: { delegateDid },
+        },
+      });
+
+      return nextIdentity;
     });
 
     await redis.del(`identity:id:${delegatorId}`);

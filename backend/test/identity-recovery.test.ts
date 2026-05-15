@@ -11,6 +11,7 @@ const mockGenerateToken = jest.fn();
 const mockRevokeToken = jest.fn();
 const mockRevokePlatformSession = jest.fn();
 const mockRevokeSubjectSessions = jest.fn();
+const mockPrismaTransaction = jest.fn();
 
 jest.mock('../src/index', () => ({
   logger: {
@@ -19,6 +20,7 @@ jest.mock('../src/index', () => ({
     error: jest.fn(),
   },
   prisma: {
+    $transaction: mockPrismaTransaction,
     identity: {
       findUnique: mockIdentityFindUnique,
       create: mockIdentityCreate,
@@ -105,6 +107,17 @@ describe('IdentityService recovery hardening', () => {
     });
     mockRevokePlatformSession.mockResolvedValue({ revokedSessions: 0 });
     mockRevokeSubjectSessions.mockResolvedValue({ revokedSessions: 0 });
+    mockPrismaTransaction.mockImplementation(async (operation: any) =>
+      operation({
+        identity: {
+          create: mockIdentityCreate,
+          update: mockIdentityUpdate,
+        },
+        auditLog: {
+          create: mockAuditLogCreate,
+        },
+      }),
+    );
   });
 
   it('does not self-reactivate suspended identities during recovery', async () => {
@@ -185,6 +198,7 @@ describe('IdentityService recovery hardening', () => {
       recoveryHash,
     });
 
+    expect(mockPrismaTransaction).toHaveBeenCalledTimes(1);
     expect(mockIdentityCreate).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({
         recoveryHash: protectedRecoveryHash(recoveryHash),
@@ -224,17 +238,13 @@ describe('IdentityService recovery hardening', () => {
       recoveryHash: protectedRecoveryHash(sha256Hex(recoveryProof)),
     });
     mockIdentityFindUnique.mockResolvedValue(currentIdentity);
-    mockIdentityUpdate
-      .mockResolvedValueOnce(baseIdentity({
-        publicKey: nextPublicKey,
-        recoveryHash: protectedRecoveryHash(nextRecoveryHash),
-        status: 'RECOVERED',
-      }))
-      .mockResolvedValueOnce(baseIdentity({
+    mockIdentityUpdate.mockResolvedValueOnce(
+      baseIdentity({
         publicKey: nextPublicKey,
         recoveryHash: protectedRecoveryHash(nextRecoveryHash),
         status: 'ACTIVE',
-      }));
+      }),
+    );
     const service = new IdentityService();
 
     await expect(
@@ -248,12 +258,21 @@ describe('IdentityService recovery hardening', () => {
       sessionId: 'session-1',
     });
 
+    expect(mockPrismaTransaction).toHaveBeenCalledTimes(1);
     expect(mockIdentityUpdate).toHaveBeenNthCalledWith(1, {
       where: { id: 'identity-1' },
       data: expect.objectContaining({
         publicKey: nextPublicKey,
         recoveryHash: protectedRecoveryHash(nextRecoveryHash),
+        status: 'ACTIVE',
       }),
     });
+    expect(mockAuditLogCreate).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        action: 'IDENTITY_RECOVERED',
+        resourceId: 'identity-1',
+        details: { success: true },
+      }),
+    }));
   });
 });
