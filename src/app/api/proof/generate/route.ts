@@ -2,7 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   BackendProxyConfigError,
   buildBackendHeaders,
+  buildBackendFetchSignal,
   getBackendApiBaseUrl,
+  isBackendFetchTimeout,
   JsonBodyReadError,
   readBackendError,
   readJsonObjectBody,
@@ -52,6 +54,7 @@ export async function POST(request: NextRequest) {
       method: "POST",
       headers: buildBackendHeaders(request, authorization),
       redirect: "manual",
+      signal: buildBackendFetchSignal(),
       body: JSON.stringify({
         credentialId,
         circuitName,
@@ -79,6 +82,12 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         { error: error.message },
         { status: error.statusCode },
+      );
+    }
+    if (isBackendFetchTimeout(error)) {
+      return NextResponse.json(
+        { error: "Backend request timed out" },
+        { status: 504 },
       );
     }
 

@@ -140,6 +140,7 @@ describe("POST /api/credential/verify", () => {
       expect.objectContaining({
         method: "POST",
         redirect: "manual",
+        signal: expect.any(AbortSignal),
         headers: expect.objectContaining({
           "Content-Type": "application/json",
           Authorization: "Bearer test-token",
@@ -239,6 +240,27 @@ describe("POST /api/credential/verify", () => {
 
     expect(response.status).toBe(500);
     expect(data.error).toBe("Internal server error");
+  });
+
+  it("returns 504 when backend verification request times out", async () => {
+    mockFetch.mockRejectedValueOnce(
+      Object.assign(new Error("Timeout"), { name: "TimeoutError" }),
+    );
+
+    const request = new Request("http://localhost/api/credential/verify", {
+      method: "POST",
+      headers: authHeaders,
+      body: JSON.stringify({
+        credentialId: "550e8400-e29b-41d4-a716-446655440000",
+        proof: "0xabc",
+      }),
+    });
+
+    const response = await POST(request);
+    const data = await response.json();
+
+    expect(response.status).toBe(504);
+    expect(data.error).toBe("Backend request timed out");
   });
 
   it("returns 400 when request body is invalid JSON", async () => {
@@ -443,6 +465,7 @@ describe("POST /api/proof/generate", () => {
       expect.objectContaining({
         method: "POST",
         redirect: "manual",
+        signal: expect.any(AbortSignal),
         headers: expect.objectContaining({
           "Content-Type": "application/json",
           Authorization: "Bearer test-token",
@@ -512,6 +535,24 @@ describe("POST /api/proof/generate", () => {
     expect(data.error).toBe("Internal server error");
   });
 
+  it("returns 504 when backend proof request times out", async () => {
+    mockFetch.mockRejectedValueOnce(
+      Object.assign(new Error("Timeout"), { name: "AbortError" }),
+    );
+
+    const request = new Request("http://localhost/api/proof/generate", {
+      method: "POST",
+      headers: authHeaders,
+      body: JSON.stringify(validProofBody),
+    });
+
+    const response = await POST(request);
+    const data = await response.json();
+
+    expect(response.status).toBe(504);
+    expect(data.error).toBe("Backend request timed out");
+  });
+
   it("returns 400 when request body is invalid JSON", async () => {
     const request = new Request("http://localhost/api/proof/generate", {
       method: "POST",
@@ -566,8 +607,10 @@ describe("POST /api/proof/generate", () => {
 
   it("fails closed when production backend URL is not configured", async () => {
     const originalNodeEnv = process.env.NODE_ENV;
+    const originalZeroidEnv = process.env.ZEROID_ENV;
     const originalServerEnv = process.env.ZEROID_BACKEND_API_URL;
     process.env.NODE_ENV = "production";
+    delete process.env.ZEROID_ENV;
     delete process.env.ZEROID_BACKEND_API_URL;
 
     const request = new Request("http://localhost/api/proof/generate", {
@@ -588,15 +631,60 @@ describe("POST /api/proof/generate", () => {
     } else {
       process.env.NODE_ENV = originalNodeEnv;
     }
+    if (originalZeroidEnv === undefined) {
+      delete process.env.ZEROID_ENV;
+    } else {
+      process.env.ZEROID_ENV = originalZeroidEnv;
+    }
     if (originalServerEnv) {
+      process.env.ZEROID_BACKEND_API_URL = originalServerEnv;
+    }
+  });
+
+  it("fails closed when zeroid production mode lacks backend URL", async () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    const originalZeroidEnv = process.env.ZEROID_ENV;
+    const originalServerEnv = process.env.ZEROID_BACKEND_API_URL;
+    process.env.NODE_ENV = "test";
+    process.env.ZEROID_ENV = "production";
+    delete process.env.ZEROID_BACKEND_API_URL;
+
+    const request = new Request("http://localhost/api/proof/generate", {
+      method: "POST",
+      headers: authHeaders,
+      body: JSON.stringify(validProofBody),
+    });
+
+    const response = await POST(request);
+    const data = await response.json();
+
+    expect(response.status).toBe(503);
+    expect(data.error).toBe("Backend API URL is not configured for production");
+    expect(mockFetch).not.toHaveBeenCalled();
+
+    if (originalNodeEnv === undefined) {
+      delete process.env.NODE_ENV;
+    } else {
+      process.env.NODE_ENV = originalNodeEnv;
+    }
+    if (originalZeroidEnv === undefined) {
+      delete process.env.ZEROID_ENV;
+    } else {
+      process.env.ZEROID_ENV = originalZeroidEnv;
+    }
+    if (originalServerEnv === undefined) {
+      delete process.env.ZEROID_BACKEND_API_URL;
+    } else {
       process.env.ZEROID_BACKEND_API_URL = originalServerEnv;
     }
   });
 
   it("fails closed when production backend URL targets a local address", async () => {
     const originalNodeEnv = process.env.NODE_ENV;
+    const originalZeroidEnv = process.env.ZEROID_ENV;
     const originalServerEnv = process.env.ZEROID_BACKEND_API_URL;
     process.env.NODE_ENV = "production";
+    delete process.env.ZEROID_ENV;
     process.env.ZEROID_BACKEND_API_URL = "https://127.0.0.1:4000";
 
     const request = new Request("http://localhost/api/proof/generate", {
@@ -618,6 +706,11 @@ describe("POST /api/proof/generate", () => {
       delete process.env.NODE_ENV;
     } else {
       process.env.NODE_ENV = originalNodeEnv;
+    }
+    if (originalZeroidEnv === undefined) {
+      delete process.env.ZEROID_ENV;
+    } else {
+      process.env.ZEROID_ENV = originalZeroidEnv;
     }
     if (originalServerEnv === undefined) {
       delete process.env.ZEROID_BACKEND_API_URL;

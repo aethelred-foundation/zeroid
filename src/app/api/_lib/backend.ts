@@ -1,4 +1,7 @@
 const DEFAULT_DEVELOPMENT_BACKEND_URL = "http://localhost:4000";
+const DEFAULT_BACKEND_FETCH_TIMEOUT_MS = 10_000;
+const MIN_BACKEND_FETCH_TIMEOUT_MS = 100;
+const MAX_BACKEND_FETCH_TIMEOUT_MS = 60_000;
 const MAX_JSON_BODY_BYTES = 1_048_576;
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
 
@@ -25,7 +28,7 @@ export function getBackendApiBaseUrl(): string {
     return normalizeBaseUrl(configured);
   }
 
-  if (process.env.NODE_ENV === "production") {
+  if (isProductionRuntime()) {
     throw new BackendProxyConfigError(
       "Backend API URL is not configured for production",
     );
@@ -62,6 +65,25 @@ export function buildBackendHeaders(
   }
 
   return headers;
+}
+
+export function buildBackendFetchSignal(): AbortSignal {
+  const timeoutMs = getBackendFetchTimeoutMs();
+  if (typeof AbortSignal.timeout === "function") {
+    return AbortSignal.timeout(timeoutMs);
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  (timeout as { unref?: () => void }).unref?.();
+  return controller.signal;
+}
+
+export function isBackendFetchTimeout(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error.name === "AbortError" || error.name === "TimeoutError")
+  );
 }
 
 export async function readJsonObjectBody(
@@ -125,7 +147,7 @@ function normalizeBaseUrl(value: string): string {
     );
   }
 
-  if (process.env.NODE_ENV === "production") {
+  if (isProductionRuntime()) {
     if (url.protocol !== "https:") {
       throw new BackendProxyConfigError(
         "Backend API URL must use HTTPS in production",
@@ -139,6 +161,29 @@ function normalizeBaseUrl(value: string): string {
   }
 
   return url.toString().replace(/\/+$/, "");
+}
+
+function isProductionRuntime(): boolean {
+  return (
+    process.env.NODE_ENV === "production" ||
+    process.env.ZEROID_ENV === "production"
+  );
+}
+
+function getBackendFetchTimeoutMs(): number {
+  const configured = process.env.ZEROID_BACKEND_FETCH_TIMEOUT_MS?.trim();
+  if (!configured) return DEFAULT_BACKEND_FETCH_TIMEOUT_MS;
+
+  const parsed = Number(configured);
+  if (
+    !Number.isSafeInteger(parsed) ||
+    parsed < MIN_BACKEND_FETCH_TIMEOUT_MS ||
+    parsed > MAX_BACKEND_FETCH_TIMEOUT_MS
+  ) {
+    return DEFAULT_BACKEND_FETCH_TIMEOUT_MS;
+  }
+
+  return parsed;
 }
 
 async function readBodyTextWithLimit(request: Request): Promise<string> {
