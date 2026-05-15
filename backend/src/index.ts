@@ -29,6 +29,10 @@ import {
   parseExpectedCircuitArtifactDigests,
   validateCircuitArtifacts,
 } from './services/circuit-artifacts';
+import {
+  AUDIT_CHAIN_GENESIS,
+  buildAuditIntegrityFields,
+} from './services/audit-integrity';
 
 // ---------------------------------------------------------------------------
 // Logger
@@ -57,6 +61,34 @@ export const prisma = new PrismaClient({
   log: process.env.NODE_ENV === 'production'
     ? ['error']
     : ['query', 'info', 'warn', 'error'],
+});
+
+prisma.$use(async (params, next) => {
+  if (params.model === 'AuditLog' && params.action === 'create') {
+    const data = (params.args?.data ?? {}) as Record<string, unknown>;
+    if (!data.entryHash) {
+      const lastSealedAudit = await (prisma.auditLog as any).findFirst({
+        where: {
+          entryHash: { not: null },
+        },
+        orderBy: [{ timestamp: 'desc' }, { id: 'desc' }],
+        select: {
+          entryHash: true,
+        },
+      });
+
+      Object.assign(
+        data,
+        buildAuditIntegrityFields(
+          data as any,
+          lastSealedAudit?.entryHash ?? AUDIT_CHAIN_GENESIS,
+        ),
+      );
+      params.args.data = data;
+    }
+  }
+
+  return next(params);
 });
 
 // ---------------------------------------------------------------------------

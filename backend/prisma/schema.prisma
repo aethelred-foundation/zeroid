@@ -178,6 +178,9 @@ model AuditLog {
   details         Json?
   previousState   Json?
   newState        Json?
+  previousHash    String?
+  entryHash       String?      @unique
+  integrityVersion String?
   timestamp       DateTime     @default(now())
 
   identity        Identity?    @relation(fields: [identityId], references: [id])
@@ -186,6 +189,7 @@ model AuditLog {
   @@index([action])
   @@index([resourceType, resourceId])
   @@index([timestamp])
+  @@index([previousHash])
   @@map("audit_logs")
 }
 
