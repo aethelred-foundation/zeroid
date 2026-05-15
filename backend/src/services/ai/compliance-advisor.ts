@@ -934,6 +934,10 @@ export class ComplianceAdvisorService {
     return alert;
   }
 
+  async getAlert(alertId: string): Promise<ComplianceAlert | null> {
+    return this.loadComplianceAlert(alertId);
+  }
+
   async createComplianceAlert(
     entityId: string,
     level: ComplianceAlertLevel,

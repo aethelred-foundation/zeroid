@@ -1,8 +1,11 @@
 import { Router, Response } from 'express';
 import { z } from 'zod';
-import { logger } from '../../index';
+import { logger, prisma } from '../../index';
 import { AuthenticatedRequest, authMiddleware } from '../../middleware/auth';
-import { requireEnterpriseContext } from '../../middleware/enterprise';
+import {
+  EnterpriseAuthenticatedRequest,
+  requireEnterpriseContext,
+} from '../../middleware/enterprise';
 import { apiRateLimiter } from '../../middleware/rateLimit';
 import { validate } from '../../middleware/validation';
 import { EnterpriseRole } from '../../services/enterprise/organization-service';
@@ -97,6 +100,103 @@ const COMPLIANCE_WRITE_ROLES: EnterpriseRole[] = [
 router.use(authMiddleware);
 router.use(apiRateLimiter);
 
+function getOrganizationId(
+  req: AuthenticatedRequest,
+  res: Response,
+): string | null {
+  const organizationId = (req as EnterpriseAuthenticatedRequest)
+    .enterpriseContext?.organizationId;
+  if (!organizationId) {
+    res.status(401).json({
+      error: 'ENTERPRISE_AUTH_REQUIRED',
+      message: 'Enterprise organization context required',
+    });
+    return null;
+  }
+  return organizationId;
+}
+
+function sendComplianceTargetNotFound(res: Response): void {
+  res.status(404).json({
+    error: 'COMPLIANCE_TARGET_NOT_FOUND',
+    message: 'Compliance target not found',
+  });
+}
+
+async function isIdentityInOrganization(
+  organizationId: string,
+  identityId: string,
+): Promise<boolean> {
+  const membership = await prisma.organizationMember.findUnique({
+    where: {
+      organizationId_identityId: {
+        organizationId,
+        identityId,
+      },
+    },
+    select: { identityId: true },
+  });
+  return Boolean(membership);
+}
+
+async function requireIdentityTarget(
+  req: AuthenticatedRequest,
+  res: Response,
+  identityId: string,
+): Promise<boolean> {
+  const organizationId = getOrganizationId(req, res);
+  if (!organizationId) return false;
+
+  if (!(await isIdentityInOrganization(organizationId, identityId))) {
+    sendComplianceTargetNotFound(res);
+    return false;
+  }
+
+  return true;
+}
+
+async function requireCredentialTarget(
+  req: AuthenticatedRequest,
+  res: Response,
+  credentialId: string,
+): Promise<{ subjectId: string } | null> {
+  const organizationId = getOrganizationId(req, res);
+  if (!organizationId) return null;
+
+  const credential = await prisma.credential.findUnique({
+    where: { id: credentialId },
+    select: { issuerId: true, subjectId: true },
+  });
+  if (!credential) {
+    sendComplianceTargetNotFound(res);
+    return null;
+  }
+
+  const membership = await prisma.organizationMember.findFirst({
+    where: {
+      organizationId,
+      identityId: { in: [credential.issuerId, credential.subjectId] },
+    },
+    select: { identityId: true },
+  });
+  if (!membership) {
+    sendComplianceTargetNotFound(res);
+    return null;
+  }
+
+  return { subjectId: credential.subjectId };
+}
+
+async function getOrganizationIdentityIds(
+  organizationId: string,
+): Promise<Set<string>> {
+  const memberships = await prisma.organizationMember.findMany({
+    where: { organizationId },
+    select: { identityId: true },
+  });
+  return new Set(memberships.map((membership) => membership.identityId));
+}
+
 // ---------------------------------------------------------------------------
 // POST /ai/compliance/screen
 // Screen an identity against sanctions/PEP lists
@@ -107,6 +207,7 @@ router.post(
   requireEnterpriseContext(COMPLIANCE_WRITE_ROLES),
   async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
+      if (!(await requireIdentityTarget(req, res, req.body.identityId))) return;
       const result = await complianceAdvisorService.screenIdentity(req.body);
 
       const statusCode = result.result === 'confirmed_match' ? 200
@@ -137,6 +238,7 @@ router.post(
   async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
       const { entityId, reportType, jurisdiction } = req.body;
+      if (!(await requireIdentityTarget(req, res, entityId))) return;
       const report = await complianceAdvisorService.generateReport(
         entityId,
         reportType,
@@ -171,6 +273,26 @@ router.get(
         jurisdiction?: string;
         entityType: 'identity' | 'credential' | 'transaction';
       };
+      let complianceScoreEntityId = identityId as string;
+
+      if (entityType === 'identity') {
+        if (!(await requireIdentityTarget(req, res, identityId as string))) return;
+      } else if (entityType === 'credential') {
+        const credentialTarget = await requireCredentialTarget(
+          req,
+          res,
+          identityId as string,
+        );
+        if (!credentialTarget) return;
+        complianceScoreEntityId = credentialTarget.subjectId;
+      } else {
+        res.status(403).json({
+          error: 'COMPLIANCE_TARGET_SCOPE_UNSUPPORTED',
+          message:
+            'Transaction risk requires an organization-scoped transaction record',
+        });
+        return;
+      }
 
       const assessment = await riskScoringService.assessRisk(
         identityId as string,
@@ -180,7 +302,7 @@ router.get(
 
       // Also fetch compliance score
       const complianceScore = await complianceAdvisorService.computeComplianceScore(
-        identityId as string,
+        complianceScoreEntityId,
         jurisdiction ?? 'US',
       );
 
@@ -207,6 +329,14 @@ router.post(
   requireEnterpriseContext(COMPLIANCE_READ_ROLES),
   async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
+      const contextIdentityId = req.body.context?.identityId;
+      if (
+        contextIdentityId &&
+        !(await requireIdentityTarget(req, res, contextIdentityId))
+      ) {
+        return;
+      }
+
       const response = await complianceAdvisorService.queryComplianceAdvisor(req.body);
 
       res.json({
@@ -234,6 +364,11 @@ router.get(
         severity?: 'low' | 'medium' | 'high' | 'critical';
         limit: number;
       };
+      const organizationId = getOrganizationId(req, res);
+      if (!organizationId) return;
+      if (entityId && !(await requireIdentityTarget(req, res, entityId))) return;
+      const organizationIdentityIds =
+        await getOrganizationIdentityIds(organizationId);
 
       // Fetch both compliance alerts and fraud alerts
       const [complianceAlerts, fraudAlerts] = await Promise.all([
@@ -262,15 +397,22 @@ router.get(
           source: 'fraud' as const,
         })),
       ].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+       .filter((alert) => organizationIdentityIds.has(alert.entityId))
        .slice(0, limit);
+      const complianceAlertCount = allAlerts.filter(
+        (alert) => alert.source === 'compliance',
+      ).length;
+      const fraudAlertCount = allAlerts.filter(
+        (alert) => alert.source === 'fraud',
+      ).length;
 
       res.json({
         success: true,
         data: {
           alerts: allAlerts,
           total: allAlerts.length,
-          complianceAlertCount: complianceAlerts.length,
-          fraudAlertCount: fraudAlerts.length,
+          complianceAlertCount,
+          fraudAlertCount,
         },
       });
     } catch (error) {
@@ -298,6 +440,14 @@ router.post(
       }
 
       const { alertId } = req.params as { alertId: string };
+      const targetAlert = await complianceAdvisorService.getAlert(alertId);
+      if (
+        !targetAlert ||
+        !(await requireIdentityTarget(req, res, targetAlert.entityId))
+      ) {
+        return;
+      }
+
       const alert = await complianceAdvisorService.acknowledgeAlert(
         alertId,
         req.identity.id,
