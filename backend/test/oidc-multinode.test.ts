@@ -2023,6 +2023,22 @@ describe('OIDC multi-node correctness', () => {
 
     const revoked = await bridgeB.revokePlatformSession(platformSessionId);
     expect(revoked.revokedSessions).toBe(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      BACKCHANNEL_LOGOUT_URI,
+      expect.objectContaining({
+        method: 'POST',
+        redirect: 'manual',
+        body: expect.any(String),
+      }),
+    );
+    const logoutBody = fetchMock.mock.calls[0]?.[1]?.body as string;
+    const logoutToken = new URLSearchParams(logoutBody).get('logout_token');
+    expect(decodeJwtPayload(logoutToken!)).toMatchObject({
+      aud: client.clientId,
+      sub: 'user-platform-logout',
+      sid: sessionId,
+      events: { 'http://schemas.openid.net/event/backchannel-logout': {} },
+    });
     expect(await redisMock.smembers(`oidc:platform-session:${platformSessionId}`)).toEqual([]);
 
     await expect(bridgeA.getUserInfo(tokens.access_token)).rejects.toMatchObject({

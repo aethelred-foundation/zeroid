@@ -1338,35 +1338,7 @@ export class OIDCBridge {
     if (!session) return { notified: false };
 
     await this.deactivateOidcSession(session, 'back_channel_logout');
-
-    const client = await this.getNormalizedClient(session.clientId);
-    const logoutUri = client?.registration.backchannelLogoutUri;
-    if (!logoutUri) {
-      logger.warn('back_channel_logout_uri_missing', {
-        sessionId,
-        clientId: session.clientId,
-      });
-      return { notified: false };
-    }
-
-    const logoutToken = this.signJwtPayload({
-      iss: this.issuer,
-      sub: session.subjectId,
-      aud: session.clientId,
-      iat: Math.floor(Date.now() / 1000),
-      jti: crypto.randomUUID(),
-      events: { 'http://schemas.openid.net/event/backchannel-logout': {} },
-      ...(client.registration.backchannelLogoutSessionRequired !== false
-        ? { sid: sessionId }
-        : {}),
-    });
-
-    const delivery = await this.deliverBackChannelLogout(
-      logoutUri,
-      logoutToken,
-      sessionId,
-      session.clientId,
-    );
+    const delivery = await this.deliverBackChannelLogoutForSession(session);
 
     logger.info('back_channel_logout', {
       sessionId,
@@ -1394,7 +1366,10 @@ export class OIDCBridge {
           session,
           'platform_session_revoked',
         );
-        if (revoked) revokedSessions += 1;
+        if (revoked) {
+          revokedSessions += 1;
+          await this.deliverBackChannelLogoutForSession(session);
+        }
       }
     }
     await redis.del(platformSessionSetKey(platformSessionId));
@@ -1413,7 +1388,10 @@ export class OIDCBridge {
           session,
           'subject_sessions_revoked',
         );
-        if (revoked) revokedSessions += 1;
+        if (revoked) {
+          revokedSessions += 1;
+          await this.deliverBackChannelLogoutForSession(session);
+        }
       }
     }
     await redis.del(subjectSessionSetKey(subjectId));
@@ -1468,6 +1446,39 @@ export class OIDCBridge {
         session.sessionId,
       );
     }
+  }
+
+  private async deliverBackChannelLogoutForSession(
+    session: OIDCSession,
+  ): Promise<{ notified: boolean; status?: number }> {
+    const client = await this.getNormalizedClient(session.clientId);
+    const logoutUri = client?.registration.backchannelLogoutUri;
+    if (!logoutUri) {
+      logger.warn('back_channel_logout_uri_missing', {
+        sessionId: session.sessionId,
+        clientId: session.clientId,
+      });
+      return { notified: false };
+    }
+
+    const logoutToken = this.signJwtPayload({
+      iss: this.issuer,
+      sub: session.subjectId,
+      aud: session.clientId,
+      iat: Math.floor(Date.now() / 1000),
+      jti: crypto.randomUUID(),
+      events: { 'http://schemas.openid.net/event/backchannel-logout': {} },
+      ...(client.registration.backchannelLogoutSessionRequired !== false
+        ? { sid: session.sessionId }
+        : {}),
+    });
+
+    return this.deliverBackChannelLogout(
+      logoutUri,
+      logoutToken,
+      session.sessionId,
+      session.clientId,
+    );
   }
 
   private async deliverBackChannelLogout(
