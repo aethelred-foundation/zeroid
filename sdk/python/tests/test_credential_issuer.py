@@ -27,7 +27,7 @@ class TestCredentialIssuer:
         assert vc.credential_status == CredentialStatus.ACTIVE
         assert vc.id.startswith("urn:uuid:")
         assert vc.issuance_date != ""
-        assert vc.proof["type"] == "EcdsaSecp256k1Signature2019"
+        assert vc.proof["type"] == "ZeroIDCredentialProof2026"
         assert "proofValue" in vc.proof
         assert "merkleRoot" in vc.proof
 

@@ -6,13 +6,16 @@ optional Merkle-tree-based selective disclosure.
 
 from __future__ import annotations
 
-import json
 import uuid
 from datetime import datetime, timezone
 
+from zeroid.credential.proof import (
+    build_credential_proof_payload,
+    compute_credential_proof_value,
+    compute_credential_subject_merkle_root,
+)
 from zeroid.credential.schema import SchemaRegistry
 from zeroid.credential.types import CredentialStatus, VerifiableCredential
-from zeroid.crypto.hashing import keccak256, compute_merkle_root
 
 
 class CredentialIssuer:
@@ -72,33 +75,33 @@ class CredentialIssuer:
         credential_subject = {"id": subject_did, **claims}
         cred_id = f"urn:uuid:{uuid.uuid4()}"
         now = datetime.now(timezone.utc).isoformat()
+        types = ["VerifiableCredential"]
+        if credential_type != "VerifiableCredential":
+            types.append(credential_type)
 
-        # Build Merkle tree for selective disclosure
-        merkle_leaves = []
-        for key, value in sorted(credential_subject.items()):
-            leaf_data = json.dumps({key: value}, sort_keys=True).encode("utf-8")
-            merkle_leaves.append(keccak256(leaf_data))
-
-        merkle_root = compute_merkle_root(merkle_leaves) if merkle_leaves else b""
-
-        # Generate mock proof
-        proof_input = (
-            self.signing_key + cred_id + now + merkle_root.hex()
-        ).encode("utf-8")
-        signature = keccak256(proof_input).hex()
+        merkle_root = compute_credential_subject_merkle_root(credential_subject)
+        proof_payload = build_credential_proof_payload(
+            credential_id=cred_id,
+            credential_types=types,
+            issuer=self.issuer_did,
+            issuance_date=now,
+            expiration_date=expiration_date,
+            credential_schema=schema_id,
+            subject_merkle_root=merkle_root.hex(),
+        )
+        signature = compute_credential_proof_value(
+            self.signing_key,
+            proof_payload,
+        )
 
         proof = {
-            "type": "EcdsaSecp256k1Signature2019",
+            "type": "ZeroIDCredentialProof2026",
             "created": now,
             "verificationMethod": f"{self.issuer_did}#key-1",
             "proofPurpose": "assertionMethod",
             "proofValue": signature,
             "merkleRoot": merkle_root.hex(),
         }
-
-        types = ["VerifiableCredential"]
-        if credential_type != "VerifiableCredential":
-            types.append(credential_type)
 
         return VerifiableCredential(
             id=cred_id,
