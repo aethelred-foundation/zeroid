@@ -60,6 +60,7 @@ const JWT_ISSUER = 'zeroid-api';
 const JWT_AUDIENCE = 'zeroid-client';
 const TOKEN_EXPIRY = '24h';
 const SESSION_TTL_SECONDS = 24 * 60 * 60;
+const JWT_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
 
 function normalizePem(value: string): string {
   return value.replace(/\\n/g, '\n').trim();
@@ -130,6 +131,31 @@ function isAcceptedJwtHeader(header: jose.JWTHeaderParameters): boolean {
   }
 
   return JWT_KEYS.mode !== 'asymmetric' || !JWT_KEYS.keyId || header.kid === JWT_KEYS.keyId;
+}
+
+function parseJwtPayload(payload: jose.JWTPayload): JWTPayload | null {
+  if (
+    typeof payload.sub !== 'string' ||
+    !JWT_ID_PATTERN.test(payload.sub) ||
+    typeof payload.did !== 'string' ||
+    !isAethelredDid(payload.did) ||
+    typeof payload.jti !== 'string' ||
+    !JWT_ID_PATTERN.test(payload.jti) ||
+    typeof payload.iat !== 'number' ||
+    !Number.isSafeInteger(payload.iat) ||
+    typeof payload.exp !== 'number' ||
+    !Number.isSafeInteger(payload.exp)
+  ) {
+    return null;
+  }
+
+  return {
+    sub: payload.sub,
+    did: payload.did,
+    iat: payload.iat,
+    exp: payload.exp,
+    jti: payload.jti,
+  };
 }
 
 function sessionTtlSeconds(expiresAt: Date): number {
@@ -269,14 +295,12 @@ export async function authMiddleware(
       return;
     }
 
-    const jwtPayload = payload as unknown as JWTPayload;
-    const sessionId = jwtPayload.jti;
-
-    // jti (session ID) is mandatory
-    if (!sessionId) {
-      res.status(401).json({ error: 'Token missing session identifier', code: 'AUTH_SESSION_MISSING' });
+    const jwtPayload = parseJwtPayload(payload);
+    if (!jwtPayload) {
+      res.status(401).json({ error: 'Invalid token claims', code: 'AUTH_CLAIMS_INVALID' });
       return;
     }
+    const sessionId = jwtPayload.jti;
 
     // Check revocation
     const isRevoked = await redis.get(`revoked:${sessionId}`);
@@ -401,14 +425,12 @@ export async function optionalAuthMiddleware(
       return;
     }
 
-    const jwtPayload = payload as unknown as JWTPayload;
-    const sessionId = jwtPayload.jti;
-
-    // Skip if no session ID
-    if (!sessionId) {
+    const jwtPayload = parseJwtPayload(payload);
+    if (!jwtPayload) {
       next();
       return;
     }
+    const sessionId = jwtPayload.jti;
 
     // Check revocation
     const isRevoked = await redis.get(`revoked:${sessionId}`);

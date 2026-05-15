@@ -3,6 +3,7 @@ import {
   BackendProxyConfigError,
   buildBackendHeaders,
   getBackendApiBaseUrl,
+  JsonBodyReadError,
   readBackendError,
   readJsonObjectBody,
   requireAuthorization,
@@ -43,6 +44,7 @@ export async function POST(request: NextRequest) {
       {
         method: "POST",
         headers: buildBackendHeaders(request, authorization),
+        redirect: "manual",
         body: JSON.stringify({ proof, attributeName }),
       },
     );
@@ -59,6 +61,12 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     if (error instanceof BackendProxyConfigError) {
       return NextResponse.json({ error: error.message }, { status: 503 });
+    }
+    if (error instanceof JsonBodyReadError) {
+      return NextResponse.json(
+        { error: error.message },
+        { status: error.statusCode },
+      );
     }
 
     return NextResponse.json(

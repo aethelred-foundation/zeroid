@@ -462,7 +462,7 @@ contract AccumulatorRevocationFuzzTest is TestHelper {
     // Fuzz: batchRevoke reverts when batch size exceeds MAX_BATCH_SIZE
     // ════════════════════════════════════════════════════════════════════
 
-    /// @notice Batch sizes greater than MAX_BATCH_SIZE (50) must revert
+    /// @notice Batch sizes greater than MAX_BATCH_SIZE (2) must revert
     ///         with BatchTooLarge.
     function testFuzz_BatchRevoke_RevertsOverBatchSize(uint8 batchSize) public {
         // Only test sizes that exceed the limit

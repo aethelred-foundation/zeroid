@@ -1,4 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
+import { createHash } from 'crypto';
+import { isIP } from 'net';
 import { redis, logger } from '../index';
 import { isProductionRuntime } from '../services/production-safety';
 
@@ -13,6 +15,8 @@ const RATE_LIMIT_WINDOW_SCRIPT = `
   redis.call('EXPIRE', KEYS[1], ARGV[5])
   return current_count + 1
 `;
+
+const SAFE_RATE_LIMIT_IDENTIFIER_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -52,7 +56,7 @@ export function createRateLimiter(config: RateLimitConfig) {
 
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const identifier = keyExtractor ? keyExtractor(req) : extractClientIP(req);
-    const key = `${keyPrefix}:${identifier}`;
+    const key = `${keyPrefix}:${rateLimitKeyForIdentifier(identifier)}`;
     const now = Date.now();
     const windowStart = now - windowMs;
 
@@ -185,12 +189,13 @@ function extractClientIP(req: Request): string {
     // Only trust forwarding headers when behind a known proxy
     const forwarded = req.headers['x-forwarded-for'];
     if (typeof forwarded === 'string') {
-      return forwarded.split(',')[0].trim();
+      const forwardedClient = normalizeClientAddress(forwarded.split(',')[0]);
+      if (forwardedClient) return forwardedClient;
     }
   }
 
   // Use socket peer address — not spoofable
-  return req.ip ?? req.socket.remoteAddress ?? 'unknown';
+  return normalizeClientAddress(req.socket.remoteAddress ?? req.ip) ?? 'unknown';
 }
 
 function isRequestFromTrustedProxy(req: Request): boolean {
@@ -215,6 +220,20 @@ function normalizeProxyAddress(value: string | undefined): string | null {
     .replace(/^\[|\]$/g, '')
     .replace(/^::ffff:/i, '')
     .toLowerCase();
+}
+
+function normalizeClientAddress(value: string | undefined): string | null {
+  const normalized = normalizeProxyAddress(value);
+  if (!normalized || isIP(normalized) === 0) return null;
+  return normalized;
+}
+
+function rateLimitKeyForIdentifier(identifier: string): string {
+  if (SAFE_RATE_LIMIT_IDENTIFIER_PATTERN.test(identifier)) {
+    return identifier;
+  }
+
+  return `sha256:${createHash('sha256').update(identifier).digest('hex')}`;
 }
 
 function shouldFailOpenOnStoreError(failOpenOnStoreError: boolean | undefined): boolean {

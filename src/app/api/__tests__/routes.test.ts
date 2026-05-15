@@ -139,6 +139,7 @@ describe("POST /api/credential/verify", () => {
       ),
       expect.objectContaining({
         method: "POST",
+        redirect: "manual",
         headers: expect.objectContaining({
           "Content-Type": "application/json",
           Authorization: "Bearer test-token",
@@ -149,6 +150,30 @@ describe("POST /api/credential/verify", () => {
         }),
       }),
     );
+  });
+
+  it("does not forward malformed request ids to backend", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ verified: true }),
+    });
+
+    const request = new Request("http://localhost/api/credential/verify", {
+      method: "POST",
+      headers: {
+        ...authHeaders,
+        "X-Request-Id": "../bad id",
+      },
+      body: JSON.stringify({
+        credentialId: "550e8400-e29b-41d4-a716-446655440000",
+        proof: "0xabc",
+      }),
+    });
+
+    await POST(request);
+
+    const [, init] = mockFetch.mock.calls[0];
+    expect(init.headers).not.toHaveProperty("X-Request-ID");
   });
 
   it("returns backend error status when backend fails", async () => {
@@ -228,6 +253,47 @@ describe("POST /api/credential/verify", () => {
 
     expect(response.status).toBe(400);
     expect(data.error).toBe("Request body must be a JSON object");
+  });
+
+  it("returns 413 when request body exceeds the proxy limit", async () => {
+    const request = new Request("http://localhost/api/credential/verify", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Content-Length": "1048577",
+      },
+      body: JSON.stringify({
+        credentialId: "550e8400-e29b-41d4-a716-446655440000",
+        proof: "0xabc",
+      }),
+    });
+
+    const response = await POST(request);
+    const data = await response.json();
+
+    expect(response.status).toBe(413);
+    expect(data.error).toBe("Request body too large");
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("returns 413 when streamed request body exceeds the proxy limit", async () => {
+    const request = new Request("http://localhost/api/credential/verify", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        credentialId: "550e8400-e29b-41d4-a716-446655440000",
+        proof: "x".repeat(1_048_576),
+      }),
+    });
+
+    const response = await POST(request);
+    const data = await response.json();
+
+    expect(response.status).toBe(413);
+    expect(data.error).toBe("Request body too large");
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 });
 
@@ -376,6 +442,7 @@ describe("POST /api/proof/generate", () => {
       expect.stringContaining("/api/v1/verification/zk-proof"),
       expect.objectContaining({
         method: "POST",
+        redirect: "manual",
         headers: expect.objectContaining({
           "Content-Type": "application/json",
           Authorization: "Bearer test-token",
@@ -522,6 +589,39 @@ describe("POST /api/proof/generate", () => {
       process.env.NODE_ENV = originalNodeEnv;
     }
     if (originalServerEnv) {
+      process.env.ZEROID_BACKEND_API_URL = originalServerEnv;
+    }
+  });
+
+  it("fails closed when production backend URL targets a local address", async () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    const originalServerEnv = process.env.ZEROID_BACKEND_API_URL;
+    process.env.NODE_ENV = "production";
+    process.env.ZEROID_BACKEND_API_URL = "https://127.0.0.1:4000";
+
+    const request = new Request("http://localhost/api/proof/generate", {
+      method: "POST",
+      headers: authHeaders,
+      body: JSON.stringify(validProofBody),
+    });
+
+    const response = await POST(request);
+    const data = await response.json();
+
+    expect(response.status).toBe(503);
+    expect(data.error).toBe(
+      "Backend API URL must not target local or private hosts in production",
+    );
+    expect(mockFetch).not.toHaveBeenCalled();
+
+    if (originalNodeEnv === undefined) {
+      delete process.env.NODE_ENV;
+    } else {
+      process.env.NODE_ENV = originalNodeEnv;
+    }
+    if (originalServerEnv === undefined) {
+      delete process.env.ZEROID_BACKEND_API_URL;
+    } else {
       process.env.ZEROID_BACKEND_API_URL = originalServerEnv;
     }
   });

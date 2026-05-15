@@ -1,3 +1,5 @@
+import { createHash } from 'crypto';
+
 const mockEval = jest.fn();
 const mockWarn = jest.fn();
 const mockError = jest.fn();
@@ -117,6 +119,55 @@ describe('createRateLimiter', () => {
       expect.stringContaining('ZREMRANGEBYSCORE'),
       1,
       'rl:test:198.51.100.9',
+      expect.any(String),
+      expect.any(String),
+      expect.any(String),
+      expect.any(String),
+      expect.any(String),
+    );
+  });
+
+  it('falls back to the proxy peer when forwarded client IP is malformed', async () => {
+    process.env.TRUSTED_PROXY = '10.0.0.5';
+    mockEval.mockResolvedValue(1);
+    const limiter = createRateLimiter({ windowMs: 60_000, maxRequests: 2, keyPrefix: 'rl:test' });
+    const { req, next } = createMockHttp();
+    req.ip = '10.0.0.5';
+    req.socket.remoteAddress = '10.0.0.5';
+    req.headers['x-forwarded-for'] = '../bad id';
+
+    await limiter(req, createMockHttp().res, next);
+
+    expect(mockEval).toHaveBeenCalledWith(
+      expect.stringContaining('ZREMRANGEBYSCORE'),
+      1,
+      'rl:test:10.0.0.5',
+      expect.any(String),
+      expect.any(String),
+      expect.any(String),
+      expect.any(String),
+      expect.any(String),
+    );
+  });
+
+  it('hashes custom identifiers before building Redis keys when they are unsafe', async () => {
+    mockEval.mockResolvedValue(1);
+    const unsafeIdentifier = 'tenant/key with spaces'.repeat(20);
+    const expectedHash = createHash('sha256').update(unsafeIdentifier).digest('hex');
+    const limiter = createRateLimiter({
+      windowMs: 60_000,
+      maxRequests: 2,
+      keyPrefix: 'rl:test',
+      keyExtractor: () => unsafeIdentifier,
+    });
+    const { req, next } = createMockHttp();
+
+    await limiter(req, createMockHttp().res, next);
+
+    expect(mockEval).toHaveBeenCalledWith(
+      expect.stringContaining('ZREMRANGEBYSCORE'),
+      1,
+      `rl:test:sha256:${expectedHash}`,
       expect.any(String),
       expect.any(String),
       expect.any(String),
