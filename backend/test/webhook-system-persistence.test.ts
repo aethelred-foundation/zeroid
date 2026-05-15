@@ -561,6 +561,56 @@ describe('WebhookSystem persistence', () => {
     }
   });
 
+  it('persists webhook auto-disable state after repeated failures', async () => {
+    process.env.NODE_ENV = 'production';
+    process.env.WEBHOOK_SECRET_ENCRYPTION_KEY = Buffer.alloc(32, 9).toString('base64');
+    mockWebhookFindMany.mockResolvedValue([
+      {
+        id: 'wh-auto-disable',
+        organizationId: 'org-1',
+        url: 'https://hooks.zeroid.example/private',
+        secret: encryptWebhookSecretForTest('s'.repeat(64)),
+        events: ['credential.issued'],
+        status: 'ACTIVE',
+        failureCount: 9,
+        lastDeliveredAt: null,
+        lastStatusCode: 500,
+        createdAt: new Date('2026-04-21T00:00:00.000Z'),
+        updatedAt: new Date('2026-04-21T00:00:00.000Z'),
+      },
+    ]);
+    mockWebhookDeliveryUpsert.mockResolvedValue({});
+    const dnsSpy = jest.spyOn(dns, 'lookup').mockResolvedValue([
+      { address: '127.0.0.1', family: 4 },
+    ]);
+
+    try {
+      const deliveryIds = await webhookSystem.emit('credential.issued', {
+        credentialId: 'cred-1',
+      }, 'org-1');
+
+      expect(deliveryIds).toHaveLength(1);
+      expect(mockWebhookUpdate).toHaveBeenCalledWith(expect.objectContaining({
+        where: { id: 'wh-auto-disable' },
+        data: expect.objectContaining({
+          failureCount: 10,
+          lastStatusCode: 0,
+          status: 'DISABLED',
+        }),
+      }));
+      expect(JSON.parse(redisStore['enterprise:webhook-config:wh-auto-disable'] as string)).toMatchObject({
+        health: expect.objectContaining({
+          consecutiveFailures: 10,
+          disabled: true,
+        }),
+      });
+    } finally {
+      dnsSpy.mockRestore();
+      process.env.NODE_ENV = 'test';
+      delete process.env.WEBHOOK_SECRET_ENCRYPTION_KEY;
+    }
+  });
+
   it('pins vetted DNS address during production webhook delivery', async () => {
     process.env.NODE_ENV = 'production';
     process.env.WEBHOOK_SECRET_ENCRYPTION_KEY = Buffer.alloc(32, 9).toString('base64');
@@ -698,6 +748,14 @@ describe('WebhookSystem persistence', () => {
         statusCode: 200,
         responseBody: 'ok',
         success: true,
+      }),
+    }));
+    expect(mockWebhookUpdate).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: 'wh-deliver' },
+      data: expect.objectContaining({
+        failureCount: 0,
+        lastDeliveredAt: expect.any(Date),
+        lastStatusCode: 200,
       }),
     }));
     fetchSpy.mockRestore();

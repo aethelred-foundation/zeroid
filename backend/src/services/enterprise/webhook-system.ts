@@ -849,6 +849,7 @@ export class WebhookSystem {
     }
 
     this.deliveries.set(delivery.deliveryId, delivery);
+    await this.persistWebhookHealth(webhook);
     await this.persistDelivery(delivery);
   }
 
@@ -1111,6 +1112,36 @@ export class WebhookSystem {
         webhook.active = false;
         logger.warn('webhook_auto_disabled', { webhookId: webhook.id, consecutiveFailures: health.consecutiveFailures });
       }
+    }
+  }
+
+  private async persistWebhookHealth(webhook: RegisteredWebhook): Promise<void> {
+    try {
+      await prisma.webhook.update({
+        where: { id: webhook.id },
+        data: {
+          failureCount: webhook.health.consecutiveFailures,
+          lastStatusCode: webhook.health.lastStatusCode,
+          ...(webhook.health.lastSuccessAt
+            ? { lastDeliveredAt: new Date(webhook.health.lastSuccessAt) }
+            : {}),
+          ...(webhook.health.disabled ? { status: 'DISABLED' as const } : {}),
+        },
+      });
+
+      await this.persistWebhookConfig(webhook.id, {
+        description: webhook.description,
+        metadata: webhook.metadata,
+        batchDelivery: webhook.batchDelivery,
+        batchIntervalMs: webhook.batchIntervalMs,
+        headers: webhook.headers,
+        health: webhook.health,
+      });
+    } catch (error) {
+      logger.error('webhook_health_persist_failed', {
+        webhookId: webhook.id,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
     }
   }
 
