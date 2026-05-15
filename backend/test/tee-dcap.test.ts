@@ -52,6 +52,7 @@ jest.mock('../src/index', () => {
       del: jest.fn().mockResolvedValue(1),
     },
     prisma: {
+      $transaction: jest.fn((operations) => Promise.all(operations)),
       identity: { update: jest.fn().mockResolvedValue({}) },
       auditLog: { create: jest.fn().mockResolvedValue({}) },
     },

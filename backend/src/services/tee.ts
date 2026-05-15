@@ -476,35 +476,35 @@ export class TEEAttestationService {
         certResult,
       });
 
-      // 10. Update identity record
-      await prisma.identity.update({
-        where: { id: request.identityId },
-        data: {
-          teeAttested: true,
-          teeAttestationId: attestationId,
-        },
-      });
-
-      // 11. Cache attestation result
-      await this.cacheAttestationResult(result, cacheTtlSeconds);
-
-      // 12. Durable audit ledger
-      await prisma.auditLog.create({
-        data: {
-          identityId: request.identityId,
-          action: 'TEE_ATTESTATION_VERIFIED',
-          resourceType: 'attestation',
-          resourceId: attestationId,
-          details: {
-            enclaveType: request.enclaveType,
-            mrenclave: reportBody.mrenclave,
-            mrsigner: reportBody.mrsigner,
-            tcbStatus,
-            verified: true,
-            attestationRecord: this.serializeDurableAttestationRecord(durableRecord),
+      // 10. Commit identity attestation state and durable audit ledger together.
+      await prisma.$transaction([
+        prisma.identity.update({
+          where: { id: request.identityId },
+          data: {
+            teeAttested: true,
+            teeAttestationId: attestationId,
           },
-        },
-      });
+        }),
+        prisma.auditLog.create({
+          data: {
+            identityId: request.identityId,
+            action: 'TEE_ATTESTATION_VERIFIED',
+            resourceType: 'attestation',
+            resourceId: attestationId,
+            details: {
+              enclaveType: request.enclaveType,
+              mrenclave: reportBody.mrenclave,
+              mrsigner: reportBody.mrsigner,
+              tcbStatus,
+              verified: true,
+              attestationRecord: this.serializeDurableAttestationRecord(durableRecord),
+            },
+          },
+        }),
+      ]);
+
+      // 11. Cache only after the durable state transition and audit commit.
+      await this.cacheAttestationResult(result, cacheTtlSeconds);
 
       // Record observability metrics on success
       const durationSec = Number(process.hrtime.bigint() - startTime) / 1e9;

@@ -53,6 +53,7 @@ describe('TEE production configuration', () => {
           del: jest.fn().mockResolvedValue(1),
         },
         prisma: {
+          $transaction: jest.fn((operations) => Promise.all(operations)),
           identity: {
             update: jest.fn().mockResolvedValue({}),
             findFirst: jest.fn().mockResolvedValue(null),
