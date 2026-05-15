@@ -66,6 +66,10 @@ mod tests {
         // 4. Process a credential
         let mut processor = CredentialProcessor::new([0xAA; 32]);
         processor.add_issuer("did:example:issuer");
+        let mut schema = CredentialSchema::new("id-v1", "Identity", 1);
+        schema.add_attribute("name", credential::schema::AttributeType::String, true);
+        schema.add_attribute("age", credential::schema::AttributeType::Uint, true);
+        processor.add_schema(schema);
 
         let mut attrs = AttributeSet::new();
         attrs.add("name", b"Alice".to_vec());
@@ -75,7 +79,7 @@ mod tests {
             id: "cred-1".into(),
             issuer: "did:example:issuer".into(),
             subject: "did:example:alice".into(),
-            schema_id: "any".into(),
+            schema_id: "id-v1".into(),
             issued_at: 1000,
             expires_at: 5000,
             status: CredentialStatus::Active,

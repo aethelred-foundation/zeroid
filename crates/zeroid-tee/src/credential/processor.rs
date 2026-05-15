@@ -81,6 +81,10 @@ pub struct CredentialProcessor {
     authorised_issuers: Vec<String>,
     /// Registered schemas.
     schemas: Vec<CredentialSchema>,
+    /// Explicit development escape hatch for issuerless local fixtures.
+    allow_unregistered_issuers: bool,
+    /// Explicit development escape hatch for schemaless local fixtures.
+    allow_unregistered_schemas: bool,
 }
 
 impl CredentialProcessor {
@@ -90,7 +94,25 @@ impl CredentialProcessor {
             enclave_hash,
             authorised_issuers: Vec::new(),
             schemas: Vec::new(),
+            allow_unregistered_issuers: false,
+            allow_unregistered_schemas: false,
         }
+    }
+
+    /// Permit credentials when no issuer registry has been loaded.
+    ///
+    /// Production callers should register issuer DIDs with [`add_issuer`].
+    pub fn allow_unregistered_issuers_for_dev(mut self) -> Self {
+        self.allow_unregistered_issuers = true;
+        self
+    }
+
+    /// Permit credentials when no schemas have been loaded.
+    ///
+    /// Production callers should register accepted schemas with [`add_schema`].
+    pub fn allow_unregistered_schemas_for_dev(mut self) -> Self {
+        self.allow_unregistered_schemas = true;
+        self
     }
 
     /// Register an authorised issuer.
@@ -121,8 +143,8 @@ impl CredentialProcessor {
     /// Checks:
     /// 1. Credential status is Active.
     /// 2. Credential has not expired (`now < expires_at`).
-    /// 3. Issuer is authorised (if any issuers are registered).
-    /// 4. Schema exists and attributes conform to it (if schemas are registered).
+    /// 3. Issuer is authorised by the registered issuer set.
+    /// 4. Schema exists and attributes conform to it.
     /// 5. Credential root is computable.
     pub fn verify(&self, credential: &Credential, now: u64) -> Result<VerificationResult> {
         // Check status
@@ -162,7 +184,12 @@ impl CredentialProcessor {
             });
         }
 
-        // Check issuer
+        if self.authorised_issuers.is_empty() && !self.allow_unregistered_issuers {
+            return Err(ZeroIdTeeError::UnauthorizedIssuer(
+                "no authorized issuers registered".into(),
+            ));
+        }
+
         if !self.authorised_issuers.is_empty()
             && !self.authorised_issuers.contains(&credential.issuer)
         {
@@ -178,6 +205,12 @@ impl CredentialProcessor {
             .iter()
             .map(|(n, _)| n.as_str())
             .collect();
+
+        if self.schemas.is_empty() && !self.allow_unregistered_schemas {
+            return Err(ZeroIdTeeError::InvalidSchema(
+                "no credential schemas registered".into(),
+            ));
+        }
 
         if !self.schemas.is_empty() {
             let schema = self
@@ -331,6 +364,7 @@ mod tests {
     #[test]
     fn verify_schema_not_found() {
         let mut p = CredentialProcessor::new([0; 32]);
+        p.add_issuer("did:example:issuer");
         p.add_schema(CredentialSchema::new("other", "Other", 1));
         let cred = sample_credential();
         let result = p.verify(&cred, 2000);
@@ -340,6 +374,7 @@ mod tests {
     #[test]
     fn verify_schema_missing_required() {
         let mut p = CredentialProcessor::new([0; 32]);
+        p.add_issuer("did:example:issuer");
         let mut schema = sample_schema();
         schema.add_attribute("extra", AttributeType::String, true);
         p.add_schema(schema);
@@ -349,16 +384,39 @@ mod tests {
     }
 
     #[test]
-    fn verify_no_issuers_registered_accepts_any() {
+    fn verify_no_issuers_registered_rejects_by_default() {
         let p = CredentialProcessor::new([0; 32]);
         let cred = sample_credential();
-        assert!(p.verify(&cred, 2000).is_ok());
+        let result = p.verify(&cred, 2000);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ZeroIdTeeError::UnauthorizedIssuer(msg) => {
+                assert!(msg.contains("no authorized issuers"));
+            }
+            other => panic!("expected UnauthorizedIssuer, got: {other}"),
+        }
     }
 
     #[test]
-    fn verify_no_schemas_registered_accepts_any() {
+    fn verify_no_schemas_registered_rejects_by_default() {
         let mut p = CredentialProcessor::new([0; 32]);
         p.add_issuer("did:example:issuer");
+        let cred = sample_credential();
+        let result = p.verify(&cred, 2000);
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            ZeroIdTeeError::InvalidSchema(msg) => {
+                assert!(msg.contains("no credential schemas"));
+            }
+            other => panic!("expected InvalidSchema, got: {other}"),
+        }
+    }
+
+    #[test]
+    fn verify_empty_registries_require_explicit_dev_escape_hatches() {
+        let p = CredentialProcessor::new([0; 32])
+            .allow_unregistered_issuers_for_dev()
+            .allow_unregistered_schemas_for_dev();
         let cred = sample_credential();
         assert!(p.verify(&cred, 2000).is_ok());
     }
@@ -429,7 +487,7 @@ mod tests {
 
     #[test]
     fn verify_just_before_expiry() {
-        let p = CredentialProcessor::new([0; 32]);
+        let p = processor_with_issuer_and_schema();
         let cred = sample_credential();
         assert!(p.verify(&cred, 4999).is_ok());
     }
