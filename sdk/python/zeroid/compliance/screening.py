@@ -1,7 +1,7 @@
 """Sanctions and PEP screening.
 
-Provides screening against mock sanctions/PEP watchlists for
-compliance checking.
+Callers must provide current, authoritative watchlist entries before using this
+module for compliance decisions. An unconfigured screener fails closed.
 """
 
 from __future__ import annotations
@@ -50,41 +50,15 @@ class ScreeningResult:
     matched: bool
     matches: list[ScreeningEntry] = field(default_factory=list)
     query: str = ""
+    error: str = ""
 
 
 class SanctionsScreener:
     """Screens entities against sanctions and PEP watchlists."""
 
-    def __init__(self) -> None:
-        """Initialize the screener with a default mock watchlist."""
-        self._entries: list[ScreeningEntry] = []
-        self._load_defaults()
-
-    def _load_defaults(self) -> None:
-        """Load default mock watchlist entries."""
-        self._entries = [
-            ScreeningEntry(
-                name="Lazarus Group",
-                list_type=ScreeningListType.SANCTIONS,
-                jurisdiction="KP",
-                identifiers=["0x" + "de" * 20, "lazarus.kp"],
-                reason="State-sponsored cyber operations",
-            ),
-            ScreeningEntry(
-                name="Tornado Cash",
-                list_type=ScreeningListType.SANCTIONS,
-                jurisdiction="GLOBAL",
-                identifiers=["0x" + "ca" * 20],
-                reason="OFAC SDN listing — mixer service",
-            ),
-            ScreeningEntry(
-                name="Test PEP Entity",
-                list_type=ScreeningListType.PEP,
-                jurisdiction="XX",
-                identifiers=["pep-test-001"],
-                reason="Politically exposed person — test entry",
-            ),
-        ]
+    def __init__(self, entries: list[ScreeningEntry] | None = None) -> None:
+        """Initialize the screener with caller-supplied watchlist entries."""
+        self._entries = list(entries or [])
 
     def add_entry(self, entry: ScreeningEntry) -> None:
         """Add an entry to the watchlist.
@@ -105,6 +79,9 @@ class SanctionsScreener:
         Returns:
             ScreeningResult with any matches.
         """
+        if not self._entries:
+            return self._unconfigured_result(name)
+
         matches = [
             e for e in self._entries
             if name.lower() in e.name.lower() or e.name.lower() in name.lower()
@@ -120,6 +97,9 @@ class SanctionsScreener:
         Returns:
             ScreeningResult with any matches.
         """
+        if not self._entries:
+            return self._unconfigured_result(identifier)
+
         identifier_lower = identifier.lower()
         matches = [
             e for e in self._entries
@@ -138,6 +118,9 @@ class SanctionsScreener:
         Returns:
             ScreeningResult with any matches.
         """
+        if not self._entries:
+            return self._unconfigured_result(jurisdiction_code)
+
         code_upper = jurisdiction_code.upper()
         matches = [
             e for e in self._entries
@@ -145,4 +128,12 @@ class SanctionsScreener:
         ]
         return ScreeningResult(
             matched=len(matches) > 0, matches=matches, query=jurisdiction_code
+        )
+
+    def _unconfigured_result(self, query: str) -> ScreeningResult:
+        return ScreeningResult(
+            matched=True,
+            matches=[],
+            query=query,
+            error="screening watchlist entries are not configured",
         )

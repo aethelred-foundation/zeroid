@@ -8,6 +8,32 @@ from zeroid.compliance.screening import (
 )
 
 
+def sample_entries() -> list[ScreeningEntry]:
+    return [
+        ScreeningEntry(
+            name="Lazarus Group",
+            list_type=ScreeningListType.SANCTIONS,
+            jurisdiction="KP",
+            identifiers=["0x" + "de" * 20, "lazarus.kp"],
+            reason="State-sponsored cyber operations",
+        ),
+        ScreeningEntry(
+            name="Tornado Cash",
+            list_type=ScreeningListType.SANCTIONS,
+            jurisdiction="GLOBAL",
+            identifiers=["0x" + "ca" * 20],
+            reason="OFAC SDN listing - mixer service",
+        ),
+        ScreeningEntry(
+            name="Test PEP Entity",
+            list_type=ScreeningListType.PEP,
+            jurisdiction="XX",
+            identifiers=["pep-test-001"],
+            reason="Politically exposed person - test entry",
+        ),
+    ]
+
+
 class TestScreeningListType:
     def test_values(self) -> None:
         assert ScreeningListType.SANCTIONS.value == "sanctions"
@@ -34,54 +60,55 @@ class TestScreeningResult:
 
 
 class TestSanctionsScreener:
-    def test_defaults_loaded(self) -> None:
+    def test_default_unconfigured_fails_closed(self) -> None:
         screener = SanctionsScreener()
         result = screener.screen_name("Lazarus")
         assert result.matched is True
-        assert len(result.matches) == 1
+        assert result.matches == []
+        assert result.error
 
     def test_screen_name_no_match(self) -> None:
-        screener = SanctionsScreener()
+        screener = SanctionsScreener(sample_entries())
         result = screener.screen_name("Innocent Corp")
         assert result.matched is False
 
     def test_screen_name_case_insensitive(self) -> None:
-        screener = SanctionsScreener()
+        screener = SanctionsScreener(sample_entries())
         result = screener.screen_name("lazarus group")
         assert result.matched is True
 
     def test_screen_name_substring(self) -> None:
-        screener = SanctionsScreener()
+        screener = SanctionsScreener(sample_entries())
         result = screener.screen_name("Tornado")
         assert result.matched is True
 
     def test_screen_identifier_match(self) -> None:
-        screener = SanctionsScreener()
+        screener = SanctionsScreener(sample_entries())
         result = screener.screen_identifier("0x" + "de" * 20)
         assert result.matched is True
 
     def test_screen_identifier_no_match(self) -> None:
-        screener = SanctionsScreener()
+        screener = SanctionsScreener(sample_entries())
         result = screener.screen_identifier("0x" + "00" * 20)
         assert result.matched is False
 
     def test_screen_identifier_case_insensitive(self) -> None:
-        screener = SanctionsScreener()
+        screener = SanctionsScreener(sample_entries())
         result = screener.screen_identifier("0x" + "DE" * 20)
         assert result.matched is True
 
     def test_screen_jurisdiction_match(self) -> None:
-        screener = SanctionsScreener()
+        screener = SanctionsScreener(sample_entries())
         result = screener.screen_jurisdiction("KP")
         assert result.matched is True
 
     def test_screen_jurisdiction_no_match(self) -> None:
-        screener = SanctionsScreener()
+        screener = SanctionsScreener(sample_entries())
         result = screener.screen_jurisdiction("US")
         assert result.matched is False
 
     def test_screen_jurisdiction_case_insensitive(self) -> None:
-        screener = SanctionsScreener()
+        screener = SanctionsScreener(sample_entries())
         result = screener.screen_jurisdiction("kp")
         assert result.matched is True
 
@@ -100,6 +127,6 @@ class TestSanctionsScreener:
         assert result2.matched is True
 
     def test_query_preserved(self) -> None:
-        screener = SanctionsScreener()
+        screener = SanctionsScreener(sample_entries())
         result = screener.screen_name("TestQuery")
         assert result.query == "TestQuery"

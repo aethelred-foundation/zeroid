@@ -3,6 +3,18 @@
 import pytest
 
 from zeroid.compliance.engine import ComplianceEngine, ComplianceCheckResult, CrossBorderCheckResult
+from zeroid.compliance.screening import SanctionsScreener, ScreeningEntry, ScreeningListType
+
+
+def configured_screener() -> SanctionsScreener:
+    return SanctionsScreener([
+        ScreeningEntry(
+            name="Lazarus Group",
+            list_type=ScreeningListType.SANCTIONS,
+            jurisdiction="KP",
+            identifiers=["0x" + "de" * 20],
+        ),
+    ])
 
 
 class TestComplianceEngine:
@@ -45,19 +57,25 @@ class TestComplianceEngine:
         assert any("risk" in w.lower() for w in result.warnings)
 
     def test_screen_entity_by_name(self) -> None:
-        engine = ComplianceEngine()
+        engine = ComplianceEngine(screener=configured_screener())
         result = engine.screen_entity(name="Lazarus Group")
         assert result.matched is True
 
     def test_screen_entity_by_identifier(self) -> None:
-        engine = ComplianceEngine()
+        engine = ComplianceEngine(screener=configured_screener())
         result = engine.screen_entity(identifier="0x" + "de" * 20)
         assert result.matched is True
 
     def test_screen_entity_no_match(self) -> None:
-        engine = ComplianceEngine()
+        engine = ComplianceEngine(screener=configured_screener())
         result = engine.screen_entity(name="Good Actor")
         assert result.matched is False
+
+    def test_screen_entity_default_screener_fails_closed(self) -> None:
+        engine = ComplianceEngine()
+        result = engine.screen_entity(name="Good Actor")
+        assert result.matched is True
+        assert result.error
 
     def test_screen_entity_no_args_raises(self) -> None:
         engine = ComplianceEngine()
@@ -65,7 +83,7 @@ class TestComplianceEngine:
             engine.screen_entity()
 
     def test_screen_entity_name_no_match_falls_to_identifier(self) -> None:
-        engine = ComplianceEngine()
+        engine = ComplianceEngine(screener=configured_screener())
         result = engine.screen_entity(
             name="Not Found", identifier="0x" + "de" * 20
         )
