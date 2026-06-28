@@ -32,3 +32,9 @@ export {
 
 export { getVerifyingKeyHash, resetVkeyRegistry } from "./vkeys";
 export { isCanonicalVerifyEnabled, verifyProofPreferCanonical } from "./verify";
+
+export {
+  mapTeePlatform,
+  verifyTeeAttestationCanonical,
+  type VerifyTEEResult,
+} from "./attestation";
