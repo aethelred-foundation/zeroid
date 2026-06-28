@@ -12,3 +12,9 @@ export {
   getSealsModule,
   resetAethelredClient,
 } from "./client";
+
+export {
+  verifyZkProofCanonical,
+  type ZeroIdProofInput,
+  type CanonicalVerifyResult,
+} from "./zk";
