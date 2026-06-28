@@ -22,8 +22,11 @@
     "test:changed": "jest --changedSince=main",
     "test:e2e": "playwright test",
     "circuits:compile": "circom circuits/age/age_proof.circom --r1cs --wasm --sym -o build/circuits/age && circom circuits/age/age_context_proof.circom --r1cs --wasm --sym -o build/circuits/age_context_v2 && circom circuits/residency/residency_proof.circom --r1cs --wasm --sym -o build/circuits/residency && circom circuits/credit/credit_tier_proof.circom --r1cs --wasm --sym -o build/circuits/credit",
+    "circuits:eligibility:build": "node scripts/build-eligibility-artifacts.mjs",
     "circuits:validate": "node scripts/validate-circuit-artifacts.mjs",
     "circuits:validate:artifacts": "node scripts/validate-circuit-artifacts.mjs --require-artifacts",
+    "readiness:check": "node scripts/check-production-readiness.mjs",
+    "readiness:production": "node scripts/check-production-readiness.mjs --require-live",
     "routes:validate": "node scripts/check-route-validation-targets.mjs",
     "workflows:validate": "node scripts/check-workflow-actions-pinned.mjs",
     "circuits:setup": "snarkjs groth16 setup build/circuits/age/age_proof.r1cs pot12_final.ptau build/circuits/age/age_proof_0000.zkey",
@@ -35,13 +38,13 @@
     "security:audit:all": "npm audit --audit-level=low && npm --prefix backend audit --audit-level=low && npm run routes:validate && npm run workflows:validate"
   },
   "dependencies": {
+    "@aethelred/sdk": "file:../aethelred/sdk/typescript",
     "@headlessui/react": "^1.7.0",
     "@tanstack/react-query": "^5.17.0",
-    "accounts": "^0.6.7",
     "circomlib": "^2.0.5",
     "clsx": "^2.1.0",
     "date-fns": "^3.0.0",
-    "ethers": "^6.9.0",
+    "ethers": "^6.17.0",
     "framer-motion": "^11.0.0",
     "jose": "^5.2.0",
     "lucide-react": "^0.303.0",
@@ -55,8 +58,8 @@
     "snarkjs": "^0.7.3",
     "sonner": "^1.3.0",
     "tailwind-merge": "^2.2.0",
-    "viem": "^2.48.11",
-    "wagmi": "^3.6.4",
+    "viem": "^2.53.1",
+    "wagmi": "^3.6.21",
     "zod": "^3.22.0",
     "zustand": "^4.4.0"
   },
@@ -95,10 +98,12 @@
     "fast-xml-parser": "5.7.1",
     "follow-redirects": "1.16.0",
     "handlebars": "4.7.9",
-    "hono": "4.12.18",
+    "hono": "4.12.27",
+    "js-yaml": "4.3.0",
     "postcss": "8.5.10",
     "picomatch": "4.0.4",
-    "serialize-javascript": "7.0.5"
+    "serialize-javascript": "7.0.5",
+    "ws": "8.21.0"
   },
   "engines": {
     "node": ">=20.0.0",
