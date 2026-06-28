@@ -54,3 +54,6 @@ export {
   type HybridSignature,
   type PQCProvider,
 } from "./signing";
+
+// React hooks are intentionally NOT re-exported here: they are client-only
+// (`"use client"`). Import them directly from "@/lib/aethelred/react".
