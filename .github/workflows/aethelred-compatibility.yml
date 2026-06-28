@@ -1,0 +1,61 @@
+name: Aethelred Compatibility
+
+# Verifies ZeroID stays conformant to the canonical Aethelred protocol:
+# the conformance boundary (src/lib/aethelred/) is intact, and ZeroID
+# type-checks and its boundary tests pass against the pinned protocol SDK.
+# Mirrors the ecosystem/manifest.json compatibility model.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  NODE_VERSION: "20"
+  # Pin to the protocol SHA recorded in aethelred `ecosystem/manifest.json`.
+  AETHELRED_REF: main
+
+jobs:
+  conformance:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout ZeroID
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          path: zeroid
+
+      - name: Checkout Aethelred protocol (pinned)
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          repository: aethelred-foundation/aethelred
+          ref: ${{ env.AETHELRED_REF }}
+          path: aethelred
+          token: ${{ secrets.AETHELRED_REPO_TOKEN }}
+
+      - name: Setup Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Build canonical SDK
+        working-directory: aethelred/sdk/typescript
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install ZeroID
+        working-directory: zeroid
+        run: npm ci
+
+      - name: Conformance boundary guard
+        working-directory: zeroid
+        run: npm run boundary:check
+
+      - name: Type-check
+        working-directory: zeroid
+        run: npm run type-check
+
+      - name: Boundary tests
+        working-directory: zeroid
+        run: npx jest src/lib/aethelred
