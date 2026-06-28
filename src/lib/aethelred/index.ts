@@ -44,3 +44,13 @@ export {
   verifyDigitalSeal,
   getDigitalSeal,
 } from "./seals";
+
+export {
+  isPqcSigningEnabled,
+  signHybrid,
+  configurePQCProvider,
+  hasConfiguredPQCProvider,
+  PQC_SIGNATURE_ALGORITHM,
+  type HybridSignature,
+  type PQCProvider,
+} from "./signing";
