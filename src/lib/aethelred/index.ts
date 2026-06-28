@@ -46,6 +46,14 @@ export {
 } from "./seals";
 
 export {
+  verifyLivenessProof,
+  verifyLivenessWithAttestation,
+  type LivenessProofInput,
+  type LivenessVerification,
+  type FullLivenessVerification,
+} from "./liveness";
+
+export {
   isPqcSigningEnabled,
   signHybrid,
   configurePQCProvider,
