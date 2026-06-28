@@ -14,10 +14,10 @@ import {
 } from "../chains";
 
 describe("chains config", () => {
-  it("exports correct chain IDs", () => {
-    expect(AETHELRED_MAINNET_ID).toBe(7331);
-    expect(AETHELRED_TESTNET_ID).toBe(7332);
-    expect(AETHELRED_DEVNET_ID).toBe(7333);
+  it("exports canonical chain IDs (ecosystem/manifest.json)", () => {
+    expect(AETHELRED_MAINNET_ID).toBe(8821);
+    expect(AETHELRED_TESTNET_ID).toBe(88210);
+    expect(AETHELRED_DEVNET_ID).toBe(88211);
   });
 
   it("defines mainnet chain with correct properties", () => {

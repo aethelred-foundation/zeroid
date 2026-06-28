@@ -11,9 +11,11 @@ import { defineChain } from "viem";
 // Chain IDs
 // ---------------------------------------------------------------------------
 
-export const AETHELRED_MAINNET_ID = 7331;
-export const AETHELRED_TESTNET_ID = 7332;
-export const AETHELRED_DEVNET_ID = 7333;
+// Canonical chain IDs — source of truth: aethelred `ecosystem/manifest.json`
+// (protocol chain_id 8821 / testnet_chain_id 88210).
+export const AETHELRED_MAINNET_ID = 8821;
+export const AETHELRED_TESTNET_ID = 88210;
+export const AETHELRED_DEVNET_ID = 88211;
 
 // ---------------------------------------------------------------------------
 // Chain Definitions
