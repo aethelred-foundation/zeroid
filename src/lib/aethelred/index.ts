@@ -15,6 +15,17 @@ export {
 
 export {
   verifyZkProofCanonical,
+  zkProofToVerifyRequest,
+  verifyZeroIdProofCanonical,
   type ZeroIdProofInput,
   type CanonicalVerifyResult,
+  type CanonicalVerifyRequest,
 } from "./zk";
+
+export {
+  fieldElementToBytes,
+  toBase64,
+  encodePublicInput,
+  serializeGroth16ProofUncompressed,
+  type RawGroth16Proof,
+} from "./encoding";
