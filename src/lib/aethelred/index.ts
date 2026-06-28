@@ -54,6 +54,16 @@ export {
 } from "./liveness";
 
 export {
+  createDisclosureEscrow,
+  reconstituteDisclosure,
+  shredShares,
+  type DisclosurePolicy,
+  type DisclosureEscrow,
+} from "./disclosure";
+
+export { splitSecret, combineShares, type Share } from "./shamir";
+
+export {
   isPqcSigningEnabled,
   signHybrid,
   configurePQCProvider,

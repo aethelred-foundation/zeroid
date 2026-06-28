@@ -26,5 +26,7 @@ if (typeof globalThis.Request === "undefined") {
   Object.assign(globalThis, { Request, Response, Headers });
 }
 
-// Mock scrollIntoView for jsdom
-Element.prototype.scrollIntoView = jest.fn();
+// Mock scrollIntoView for jsdom (skip under the node test environment)
+if (typeof Element !== "undefined") {
+  Element.prototype.scrollIntoView = jest.fn();
+}
