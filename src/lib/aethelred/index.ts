@@ -64,6 +64,18 @@ export {
 export { splitSecret, combineShares, type Share } from "./shamir";
 
 export {
+  conditionalDisclosureAbi,
+  commitmentToBytes32,
+  registerEscrowOnChain,
+  requestDisclosureOnChain,
+  approveDisclosureOnChain,
+  isDisclosureAuthorizedOnChain,
+  eraseEscrowOnChain,
+  type DisclosureContractRunner,
+  type RegisterEscrowParams,
+} from "./disclosure-contract";
+
+export {
   isPqcSigningEnabled,
   signHybrid,
   configurePQCProvider,
