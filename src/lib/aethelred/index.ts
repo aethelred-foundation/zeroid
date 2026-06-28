@@ -29,3 +29,6 @@ export {
   serializeGroth16ProofUncompressed,
   type RawGroth16Proof,
 } from "./encoding";
+
+export { getVerifyingKeyHash, resetVkeyRegistry } from "./vkeys";
+export { isCanonicalVerifyEnabled, verifyProofPreferCanonical } from "./verify";

@@ -28,6 +28,7 @@ import type {
 } from "@/types";
 import { generateProof, type ProofProgressCallback } from "@/lib/zk/prover";
 import { verifyProofLocally } from "@/lib/zk/verifier";
+import { verifyProofPreferCanonical } from "@/lib/aethelred";
 import { apiClient } from "@/lib/api/client";
 import { useIdentity } from "@/contexts/IdentityContext";
 
@@ -204,7 +205,10 @@ export function ProofProvider({ children }: { children: React.ReactNode }) {
   const verifyLocally = useCallback(
     async (proof: ZKProof): Promise<ProofVerification> => {
       try {
-        const result = await verifyProofLocally(proof);
+        const result = await verifyProofPreferCanonical(
+          proof,
+          verifyProofLocally,
+        );
 
         setState((prev) => ({
           ...prev,
@@ -290,8 +294,11 @@ export function ProofProvider({ children }: { children: React.ReactNode }) {
         request.publicInputs,
       );
 
-      // Verify locally first
-      const localResult = await verifyProofLocally(proof);
+      // Verify (canonical on-chain when enabled, else bespoke local)
+      const localResult = await verifyProofPreferCanonical(
+        proof,
+        verifyProofLocally,
+      );
       if (!localResult.valid) {
         throw new Error(
           `Generated proof failed local verification: ${localResult.error || "unknown reason"}`,
