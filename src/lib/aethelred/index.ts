@@ -38,3 +38,9 @@ export {
   verifyTeeAttestationCanonical,
   type VerifyTEEResult,
 } from "./attestation";
+
+export {
+  createDigitalSeal,
+  verifyDigitalSeal,
+  getDigitalSeal,
+} from "./seals";
