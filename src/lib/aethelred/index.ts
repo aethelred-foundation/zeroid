@@ -76,6 +76,11 @@ export {
 } from "./disclosure-contract";
 
 export {
+  discloseIdentityPath,
+  type IdentityDisclosureResult,
+} from "./disclose";
+
+export {
   isPqcSigningEnabled,
   signHybrid,
   configurePQCProvider,
