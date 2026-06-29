@@ -24,6 +24,13 @@ import { ServiceError, sendServiceError } from '../../services/errors';
 import { verifyPresentation, type PresentationVerifierDeps } from '../../services/oid4vp/verifier';
 import { createJoseSdJwtDeps, type IssuerKeyResolver } from '../../services/oid4vp/sd-jwt-jose';
 import { createJoseZkDeps } from '../../services/oid4vp/zk-predicate-jose';
+import { createZkProofServiceVerifier } from '../../services/oid4vp/zk-proofservice-verifier';
+import { zkProofService } from '../../services/zkproof';
+
+/** ZK eligibility deps backed by the real backend Groth16 verifier (ZKProofService). */
+function buildZkDeps() {
+  return createJoseZkDeps({ verifyGroth16: createZkProofServiceVerifier(zkProofService) });
+}
 import {
   createPresentationRequest,
   getRequestObject,
@@ -78,13 +85,13 @@ function resolveIssuerKeyFromEnv(): IssuerKeyResolver {
 }
 
 export function buildVerifierDeps(): PresentationVerifierDeps {
-  return { sdJwt: createJoseSdJwtDeps(resolveIssuerKeyFromEnv()), zk: createJoseZkDeps() };
+  return { sdJwt: createJoseSdJwtDeps(resolveIssuerKeyFromEnv()), zk: buildZkDeps() };
 }
 
 function buildCrossDeviceDeps(): CrossDeviceDeps {
   return {
     store: createPrismaOid4vpRequestStore(prisma),
-    verifier: { sdJwt: createJoseSdJwtDeps(resolveIssuerKeyFromEnv()), zk: createJoseZkDeps() },
+    verifier: { sdJwt: createJoseSdJwtDeps(resolveIssuerKeyFromEnv()), zk: buildZkDeps() },
     genId: () => randomBytes(24).toString('base64url'),
     now: () => Math.floor(Date.now() / 1000),
     baseUrl: BASE_URL,
