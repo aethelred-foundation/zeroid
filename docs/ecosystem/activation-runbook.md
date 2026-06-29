@@ -3,6 +3,26 @@
 The operational checklist to take ZeroID from "implemented & tested" to "live on
 testnet". Each step is a concrete command; nothing here needs new code.
 
+## Pilot critical path (priority order — consultant 2026-06-29)
+
+De-risk the December (ADFW) timeline by proving the **core ZK loop on-chain**
+first. Execute in this exact order; defer the esoteric tech.
+
+1. **Apply the DB migration** — §2 (`prisma migrate deploy`). *Blocked on: a
+   reachable Postgres.*
+2. **Deploy the foundational contracts** — §1 (`forge script Deploy.s.sol`),
+   then record addresses into `.env`. *Blocked on: a funded testnet key + RPC.*
+3. **Close the W2c (ZK verify) gate** — §3: produce a Groth16 proof from a
+   ZeroID circuit, verify via the chain precompile, confirm the snarkjs→arkworks
+   byte format, register vkeys, then set `NEXT_PUBLIC_CANONICAL_VERIFY=true`.
+   *Blocked on: deployed verifier + a real proof.*
+4. **Then** the conditional-disclosure path (escrow → quorum → reveal) on the
+   deployed `ConditionalDisclosure`.
+
+**Defer (keep flag-gated) until the base ZK + disclosure paths are stable:**
+W3c (TEE/DCAP), W4c (PQC), Phase 2b (zkML liveness). Stand up their real
+adapters only afterwards — they are differentiators, not the critical path.
+
 ## 0. Environment
 
 Smart-contract deploy (`script/Deploy.s.sol`):
