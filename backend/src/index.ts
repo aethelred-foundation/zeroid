@@ -3,7 +3,12 @@ import helmet from 'helmet';
 import cors from 'cors';
 import compression from 'compression';
 import { PrismaClient } from '@prisma/client';
-import { Registry, collectDefaultMetrics, Counter, Histogram } from 'prom-client';
+import {
+  Registry,
+  collectDefaultMetrics,
+  Counter,
+  Histogram,
+} from 'prom-client';
 import { createLogger, format, transports } from 'winston';
 import Redis from 'ioredis';
 
@@ -12,10 +17,16 @@ import { verificationRoutes } from './routes/verification';
 import { identityRoutes } from './routes/identity';
 import { governanceRoutes } from './routes/governance';
 import { auditRoutes } from './routes/audit';
-import enterpriseIntegrationRoutes, { oidcPublicRouter } from './routes/enterprise/integration';
+import partnersRoutes from './routes/partners';
+import enterpriseIntegrationRoutes, {
+  oidcPublicRouter,
+} from './routes/enterprise/integration';
 import enterpriseComplianceRoutes from './routes/enterprise/compliance';
 import { authMiddleware } from './middleware/auth';
-import { createRateLimiter, extractPrincipalRateLimitIdentifier } from './middleware/rateLimit';
+import {
+  createRateLimiter,
+  extractPrincipalRateLimitIdentifier,
+} from './middleware/rateLimit';
 import {
   checkedProductionSafetyControls,
   collectProductionSafetyViolations,
@@ -47,9 +58,10 @@ export const logger = createLogger({
   defaultMeta: { service: 'zeroid-api' },
   transports: [
     new transports.Console({
-      format: process.env.NODE_ENV === 'production'
-        ? format.json()
-        : format.combine(format.colorize(), format.simple()),
+      format:
+        process.env.NODE_ENV === 'production'
+          ? format.json()
+          : format.combine(format.colorize(), format.simple()),
     }),
   ],
 });
@@ -58,53 +70,61 @@ export const logger = createLogger({
 // Prisma
 // ---------------------------------------------------------------------------
 export const prisma = new PrismaClient({
-  log: process.env.NODE_ENV === 'production'
-    ? ['error']
-    : ['query', 'info', 'warn', 'error'],
+  log:
+    process.env.NODE_ENV === 'production'
+      ? ['error']
+      : ['query', 'info', 'warn', 'error'],
 });
 
-prisma.$use(async (params, next) => {
-  if (params.model === 'AuditLog' && params.action === 'create') {
-    const data = (params.args?.data ?? {}) as Record<string, unknown>;
-    if (!data.entryHash) {
-      const lastSealedAudit = await (prisma.auditLog as any).findFirst({
-        where: {
-          entryHash: { not: null },
-        },
-        orderBy: [{ timestamp: 'desc' }, { id: 'desc' }],
-        select: {
-          entryHash: true,
-        },
-      });
+if (typeof (prisma as any).$use === 'function') {
+  prisma.$use(async (params, next) => {
+    if (params.model === 'AuditLog' && params.action === 'create') {
+      const data = (params.args?.data ?? {}) as Record<string, unknown>;
+      if (!data.entryHash) {
+        const lastSealedAudit = await (prisma.auditLog as any).findFirst({
+          where: {
+            entryHash: { not: null },
+          },
+          orderBy: [{ timestamp: 'desc' }, { id: 'desc' }],
+          select: {
+            entryHash: true,
+          },
+        });
 
-      Object.assign(
-        data,
-        buildAuditIntegrityFields(
-          data as any,
-          lastSealedAudit?.entryHash ?? AUDIT_CHAIN_GENESIS,
-        ),
-      );
-      params.args.data = data;
+        Object.assign(
+          data,
+          buildAuditIntegrityFields(
+            data as any,
+            lastSealedAudit?.entryHash ?? AUDIT_CHAIN_GENESIS,
+          ),
+        );
+        params.args.data = data;
+      }
     }
-  }
 
-  return next(params);
-});
+    return next(params);
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Redis
 // ---------------------------------------------------------------------------
-export const redis = new Redis(process.env.REDIS_URL ?? 'redis://localhost:6379', {
-  maxRetriesPerRequest: 3,
-  retryStrategy(times: number) {
-    if (times > 5) return null;
-    return Math.min(times * 200, 2000);
+export const redis = new Redis(
+  process.env.REDIS_URL ?? 'redis://localhost:6379',
+  {
+    maxRetriesPerRequest: 3,
+    retryStrategy(times: number) {
+      if (times > 5) return null;
+      return Math.min(times * 200, 2000);
+    },
+    enableReadyCheck: true,
+    lazyConnect: true,
   },
-  enableReadyCheck: true,
-  lazyConnect: true,
-});
+);
 
-redis.on('error', (err) => logger.error('Redis connection error', { error: err.message }));
+redis.on('error', (err) =>
+  logger.error('Redis connection error', { error: err.message }),
+);
 redis.on('connect', () => logger.info('Redis connected'));
 
 // ---------------------------------------------------------------------------
@@ -147,8 +167,7 @@ export const verificationCounter = new Counter({
 const app = express();
 app.disable('x-powered-by');
 
-const trustedProxy = process.env.TRUSTED_PROXY
-  ?.split(',')
+const trustedProxy = process.env.TRUSTED_PROXY?.split(',')
   .map((entry) => entry.trim())
   .filter((entry) => entry.length > 0);
 
@@ -188,6 +207,8 @@ function createAuthenticatedPrincipalLimiter(
 }
 
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
+const PRIVATE_NO_STORE_CACHE_CONTROL =
+  'private, no-store, no-cache, must-revalidate, proxy-revalidate';
 
 function resolveRequestId(value: unknown): string {
   if (typeof value === 'string' && REQUEST_ID_PATTERN.test(value)) {
@@ -197,37 +218,66 @@ function resolveRequestId(value: unknown): string {
   return crypto.randomUUID();
 }
 
-// Security headers
-app.use(helmet({
-  contentSecurityPolicy: {
-    directives: {
-      defaultSrc: ["'self'"],
-      scriptSrc: ["'self'"],
-      styleSrc: ["'self'"],
-      imgSrc: ["'self'"],
+function setSensitiveApiCacheHeaders(
+  _req: Request,
+  res: Response,
+  next: NextFunction,
+): void {
+  res.setHeader('Cache-Control', PRIVATE_NO_STORE_CACHE_CONTROL);
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  res.vary('Authorization');
+  next();
+}
+
+export function buildHelmetOptions(
+  production = isProductionRuntime(),
+): Parameters<typeof helmet>[0] {
+  return {
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'"],
+        styleSrc: ["'self'"],
+        imgSrc: ["'self'"],
+      },
     },
-  },
-  hsts: { maxAge: 31536000, includeSubDomains: true, preload: true },
-  referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
-}));
+    hsts: production
+      ? { maxAge: 31536000, includeSubDomains: true, preload: true }
+      : false,
+    referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
+  };
+}
+
+// Security headers
+app.use(helmet(buildHelmetOptions()));
 
 // CORS
-app.use(cors({
-  origin: getAllowedCorsOrigins(),
-  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-Id', 'X-Zeroid-Org-Id'],
-  credentials: true,
-  maxAge: 86400,
-}));
+app.use(
+  cors({
+    origin: getAllowedCorsOrigins(),
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'X-Request-Id',
+      'X-Zeroid-Org-Id',
+    ],
+    credentials: true,
+    maxAge: 86400,
+  }),
+);
 
 // Body parsing
 app.use(express.json({ limit: '2mb' }));
-app.use(express.urlencoded({
-  extended: true,
-  limit: '2mb',
-  parameterLimit: 100,
-  depth: 5,
-} as Parameters<typeof express.urlencoded>[0] & { depth: number }));
+app.use(
+  express.urlencoded({
+    extended: true,
+    limit: '2mb',
+    parameterLimit: 100,
+    depth: 5,
+  } as Parameters<typeof express.urlencoded>[0] & { depth: number }),
+);
 
 // Compression
 app.use(compression());
@@ -284,7 +334,11 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 // Health & readiness
 // ---------------------------------------------------------------------------
 app.get('/health', publicHealthLimiter, (_req: Request, res: Response) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString(), service: 'zeroid-api' });
+  res.json({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    service: 'zeroid-api',
+  });
 });
 
 app.get('/ready', publicHealthLimiter, async (_req: Request, res: Response) => {
@@ -306,8 +360,34 @@ app.get('/ready', publicHealthLimiter, async (_req: Request, res: Response) => {
   if (isProductionRuntime()) {
     const violations = collectProductionSafetyViolations();
     checks.productionSafety = violations.length === 0 ? 'ok' : 'unavailable';
+    try {
+      const circuitReport = validateCircuitArtifacts({
+        requireArtifacts: true,
+        requireExpectedDigests: true,
+        expectedDigests: parseExpectedCircuitArtifactDigests(
+          process.env.ZK_CIRCUIT_ARTIFACT_DIGESTS_JSON,
+        ),
+      });
+      checks.circuitArtifacts = circuitReport.every(
+        (circuit) => circuit.artifactsReady,
+      )
+        ? 'ok'
+        : 'unavailable';
+    } catch {
+      checks.circuitArtifacts = 'unavailable';
+    }
   } else {
     checks.productionSafety = 'ok';
+    try {
+      const circuitReport = validateCircuitArtifacts();
+      checks.circuitArtifacts = circuitReport.every(
+        (circuit) => circuit.artifactsReady,
+      )
+        ? 'ok'
+        : 'degraded';
+    } catch {
+      checks.circuitArtifacts = 'degraded';
+    }
   }
 
   const allHealthy = Object.values(checks).every((v) => v === 'ok');
@@ -318,9 +398,15 @@ app.get('/ready', publicHealthLimiter, async (_req: Request, res: Response) => {
   });
 });
 
-function requireMetricsAccess(req: Request, res: Response, next: NextFunction): void {
+function requireMetricsAccess(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): void {
   if (isMetricsEndpointDisabled()) {
-    res.status(404).json({ error: 'Metrics endpoint disabled', code: 'METRICS_DISABLED' });
+    res
+      .status(404)
+      .json({ error: 'Metrics endpoint disabled', code: 'METRICS_DISABLED' });
     return;
   }
 
@@ -333,17 +419,27 @@ function requireMetricsAccess(req: Request, res: Response, next: NextFunction): 
   }
 
   if (!isMetricsRequestAuthorized(req.get('authorization'))) {
-    res.status(401).json({ error: 'Metrics authorization required', code: 'METRICS_AUTH_REQUIRED' });
+    res
+      .status(401)
+      .json({
+        error: 'Metrics authorization required',
+        code: 'METRICS_AUTH_REQUIRED',
+      });
     return;
   }
 
   next();
 }
 
-app.get('/metrics', metricsLimiter, requireMetricsAccess, async (_req: Request, res: Response) => {
-  res.set('Content-Type', metricsRegistry.contentType);
-  res.end(await metricsRegistry.metrics());
-});
+app.get(
+  '/metrics',
+  metricsLimiter,
+  requireMetricsAccess,
+  async (_req: Request, res: Response) => {
+    res.set('Content-Type', metricsRegistry.contentType);
+    res.end(await metricsRegistry.metrics());
+  },
+);
 
 // ---------------------------------------------------------------------------
 // Global rate limiter (per-IP)
@@ -353,21 +449,59 @@ const globalLimiter = createRateLimiter({
   maxRequests: 120,
   keyPrefix: 'rl:global',
 });
+app.use('/api', setSensitiveApiCacheHeaders);
 app.use('/api', globalLimiter);
 
 // ---------------------------------------------------------------------------
 // API routes
 // ---------------------------------------------------------------------------
-const credentialPrincipalLimiter = createAuthenticatedPrincipalLimiter('rl:principal:credentials', 30);
-const verificationPrincipalLimiter = createAuthenticatedPrincipalLimiter('rl:principal:verification', 60);
-const governancePrincipalLimiter = createAuthenticatedPrincipalLimiter('rl:principal:governance', 30);
-const auditPrincipalLimiter = createAuthenticatedPrincipalLimiter('rl:principal:audit', 30);
+const credentialPrincipalLimiter = createAuthenticatedPrincipalLimiter(
+  'rl:principal:credentials',
+  30,
+);
+const verificationPrincipalLimiter = createAuthenticatedPrincipalLimiter(
+  'rl:principal:verification',
+  60,
+);
+const governancePrincipalLimiter = createAuthenticatedPrincipalLimiter(
+  'rl:principal:governance',
+  30,
+);
+const auditPrincipalLimiter = createAuthenticatedPrincipalLimiter(
+  'rl:principal:audit',
+  30,
+);
 
 app.use('/api/v1/identity', apiRouteLimiter, identityRoutes);
-app.use('/api/v1/credentials', apiRouteLimiter, authMiddleware, credentialPrincipalLimiter, credentialRoutes);
-app.use('/api/v1/verification', apiRouteLimiter, authMiddleware, verificationPrincipalLimiter, verificationRoutes);
-app.use('/api/v1/governance', apiRouteLimiter, authMiddleware, governancePrincipalLimiter, governanceRoutes);
-app.use('/api/v1/audit', apiRouteLimiter, authMiddleware, auditPrincipalLimiter, auditRoutes);
+app.use('/api/v1/partners', apiRouteLimiter, partnersRoutes);
+app.use(
+  '/api/v1/credentials',
+  apiRouteLimiter,
+  authMiddleware,
+  credentialPrincipalLimiter,
+  credentialRoutes,
+);
+app.use(
+  '/api/v1/verification',
+  apiRouteLimiter,
+  authMiddleware,
+  verificationPrincipalLimiter,
+  verificationRoutes,
+);
+app.use(
+  '/api/v1/governance',
+  apiRouteLimiter,
+  authMiddleware,
+  governancePrincipalLimiter,
+  governanceRoutes,
+);
+app.use(
+  '/api/v1/audit',
+  apiRouteLimiter,
+  authMiddleware,
+  auditPrincipalLimiter,
+  auditRoutes,
+);
 
 // Enterprise routes — mounted behind auth + stricter rate limit
 const enterpriseLimiter = createRateLimiter({
@@ -375,7 +509,10 @@ const enterpriseLimiter = createRateLimiter({
   maxRequests: 30,
   keyPrefix: 'rl:enterprise',
 });
-const enterprisePrincipalLimiter = createAuthenticatedPrincipalLimiter('rl:principal:enterprise', 30);
+const enterprisePrincipalLimiter = createAuthenticatedPrincipalLimiter(
+  'rl:principal:enterprise',
+  30,
+);
 
 // OIDC public routes — discovery, JWKS, and token endpoints MUST be accessible
 // without a bearer token per OpenID Connect Discovery §4 and OAuth 2.0 §3.2.
@@ -388,13 +525,55 @@ const oidcPublicLimiter = createRateLimiter({
 app.use('/api/v1/enterprise', oidcPublicLimiter, oidcPublicRouter);
 
 // Auth-gated enterprise routes (registration, authorize, userinfo, webhooks, etc.)
-app.use('/api/v1/enterprise', enterpriseLimiter, authMiddleware, enterprisePrincipalLimiter, enterpriseIntegrationRoutes);
-app.use('/api/v1/enterprise/compliance', enterpriseLimiter, authMiddleware, enterprisePrincipalLimiter, enterpriseComplianceRoutes);
+app.use(
+  '/api/v1/enterprise',
+  enterpriseLimiter,
+  authMiddleware,
+  enterprisePrincipalLimiter,
+  enterpriseIntegrationRoutes,
+);
+app.use(
+  '/api/v1/enterprise/compliance',
+  enterpriseLimiter,
+  authMiddleware,
+  enterprisePrincipalLimiter,
+  enterpriseComplianceRoutes,
+);
 
-const { aiComplianceRoutes } = require('./routes/ai/compliance') as typeof import('./routes/ai/compliance');
-const { aiAgentIdentityRoutes } = require('./routes/ai/agent-identity') as typeof import('./routes/ai/agent-identity');
-app.use('/api/v1/ai/compliance', enterpriseLimiter, aiComplianceRoutes);
-app.use('/api/v1/ai/agents', enterpriseLimiter, aiAgentIdentityRoutes);
+function lazyRouter(
+  load: () => Promise<express.Router>,
+): express.RequestHandler {
+  let routerPromise: Promise<express.Router> | undefined;
+  return async (req, res, next) => {
+    try {
+      if (!routerPromise) {
+        routerPromise = load();
+      }
+      const router = await routerPromise;
+      router(req, res, next);
+    } catch (err) {
+      next(err);
+    }
+  };
+}
+
+app.use(
+  '/api/v1/ai/compliance',
+  enterpriseLimiter,
+  lazyRouter(async () => {
+    const { aiComplianceRoutes } = await import('./routes/ai/compliance');
+    return aiComplianceRoutes;
+  }),
+);
+app.use(
+  '/api/v1/ai/agents',
+  enterpriseLimiter,
+  lazyRouter(async () => {
+    const { aiAgentIdentityRoutes } =
+      await import('./routes/ai/agent-identity');
+    return aiAgentIdentityRoutes;
+  }),
+);
 
 // ---------------------------------------------------------------------------
 // 404 handler
@@ -406,24 +585,31 @@ app.use((_req: Request, res: Response) => {
 // ---------------------------------------------------------------------------
 // Global error handler
 // ---------------------------------------------------------------------------
-app.use((err: Error & { statusCode?: number; code?: string }, req: Request, res: Response, _next: NextFunction) => {
-  const requestId = req.headers['x-request-id'] as string;
-  const statusCode = err.statusCode ?? 500;
+app.use(
+  (
+    err: Error & { statusCode?: number; code?: string },
+    req: Request,
+    res: Response,
+    _next: NextFunction,
+  ) => {
+    const requestId = req.headers['x-request-id'] as string;
+    const statusCode = err.statusCode ?? 500;
 
-  logger.error('unhandled_error', {
-    requestId,
-    error: err.message,
-    stack: err.stack,
-    code: err.code,
-    path: req.path,
-  });
+    logger.error('unhandled_error', {
+      requestId,
+      error: err.message,
+      stack: err.stack,
+      code: err.code,
+      path: req.path,
+    });
 
-  res.status(statusCode).json({
-    error: statusCode >= 500 ? 'Internal server error' : err.message,
-    code: err.code ?? 'INTERNAL_ERROR',
-    requestId,
-  });
-});
+    res.status(statusCode).json({
+      error: statusCode >= 500 ? 'Internal server error' : err.message,
+      code: err.code ?? 'INTERNAL_ERROR',
+      requestId,
+    });
+  },
+);
 
 // ---------------------------------------------------------------------------
 // Start server
@@ -440,15 +626,18 @@ function validateProductionConfig(): void {
 
   if (violations.length > 0) {
     for (const v of violations) {
-      logger.error('CRITICAL_SECURITY_VIOLATION: production safety control failed', {
-        control: v.control,
-        risk: v.risk,
-      });
+      logger.error(
+        'CRITICAL_SECURITY_VIOLATION: production safety control failed',
+        {
+          control: v.control,
+          risk: v.risk,
+        },
+      );
     }
     throw new Error(
       `Production startup blocked: ${violations.length} unsafe control(s) detected: ` +
-      `${violations.map((v) => v.control).join(', ')}. ` +
-      'Fix production safety controls before deploying.',
+        `${violations.map((v) => v.control).join(', ')}. ` +
+        'Fix production safety controls before deploying.',
     );
   }
 

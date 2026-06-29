@@ -37,7 +37,7 @@ const AgentEligibilityProofSchema = z.object({
 });
 
 /** Wire the service's injected dependencies to real Prisma + eligibility. */
-function buildAgentEligibilityDeps(
+export function buildAgentEligibilityDeps(
   controllerIdentity: NonNullable<AuthenticatedRequest['identity']>,
 ): AgentEligibilityDeps {
   return {
