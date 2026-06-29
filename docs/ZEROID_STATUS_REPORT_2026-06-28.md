@@ -1,8 +1,8 @@
 # ZeroID — Engineering Status Report
 
 **Prepared for:** External strategy/architecture consultant (for review & opinion)
-**Date:** 28 June 2026
-**Subject:** ZeroID re-platforming onto the canonical Aethelred protocol, and implementation of the institutional ("20×") moat features
+**Date:** 28 June 2026 (rev. 2 — adds AI Agent Passport v1, §5.4)
+**Subject:** ZeroID re-platforming onto the canonical Aethelred protocol; implementation of the institutional ("20×") moat features; and a new "AI agent's passport" (AI Agent Identity v1) vertical
 **Status of work:** Implemented and tested on a feature branch; activation gated on testnet. Not yet merged or deployed.
 
 ---
@@ -15,7 +15,9 @@ All work is consolidated behind a single, CI-enforced integration seam (`src/lib
 
 **Headline status:** 108 test suites / 2,367 unit tests + 6 Solidity (Foundry) tests passing; type-check clean; boundary guard enforced in CI. Most canonical paths are built and **flag-gated OFF** so nothing breaks pre-testnet; activation is configuration (env flips), not code, with zero regression risk.
 
-**The one item that most needs your opinion is in §2** (a correction to an assumption in your technical specs), followed by the open questions in §9.
+**AI Agent Passport v1 (new — see §5.4):** Per your *AI Agent Identity v1* spec, ZeroID is now positioned as **"the AI agent's passport."** The flagship vertical — an AI agent requesting an eligibility proof on behalf of its KYC'd controller, tightly scoped and fully audited — is implemented end-to-end (backend policy + service + route that reuses the *exact* human eligibility logic; frontend register wizard + live list + audit attribution). It lives on its own branch (`feat/ai-agent-passport-v1`): **21 backend AI/eligibility tests + the full frontend suite (110 suites / 2,372) green**, type-check clean. Maturity is honestly bounded to "Pilot / Preview" pending the database migration.
+
+**The one item that most needs your opinion is in §2** (a correction to an assumption in your technical specs), followed by the open questions in §10.
 
 ---
 
@@ -78,6 +80,19 @@ The deeper rationale: the protocol owns the hard primitives (DCAP attestation, E
 
 The canonical SDK had a complete ML-DSA-65 implementation that **was never exported** from its public entry point, so no dApp could use it. We exported it (Aethelred branch `feat/sdk-export-pqc`) — a one-line fix that unblocks post-quantum signing **for all five dApps**.
 
+### 5.4 AI Agent Passport v1 — "the AI agent's passport"
+
+Implementing your *AI Agent Identity v1* spec. We grounded it in the real codebase first: the agent registry already existed (`AgentIdentityService`), so v1 is the **constrained agent→eligibility vertical** layered on additively — not new infrastructure, and with no destabilisation of the human workflow.
+
+- **Scopes + policy (pure, unit-tested):** a controlled read-only vocabulary (`eligibility.read` / `audit.read` / `identity.read`) and `POLICY_AGENT_ELIGIBILITY_VIEW_V1` — an agent may act only if its own credential is in good standing AND scoped AND the controller is itself eligible AND the agent's risk ceiling covers the controller's tier (the *layered trust object* from your spec), with your exact deny-codes.
+- **Agent→eligibility wrapper (dependency-injected):** scope + policy check → delegate → record an `AgentAction`. Returns your `AgentEligibilityProofResponse` (actor + proof + evaluation + evidence incl. `agentActionId`).
+- **`POST /api/v1/ai/agents/eligibility/proof`** with your full error contract (400/401/403/404/422/500).
+- **Eligibility reuse — the integration seam, now closed:** the human eligibility logic was *inline* in `routes/verification.ts` (no callable service). We extracted it **mechanically** into an exported `eligibilityProofHandler` (byte-identical; the six pre-existing eligibility route tests confirm parity), and the agent path reuses it **in-process via a response shim — no re-implementation, the human workflow untouched.**
+- **Additive schema:** `scopes`, `maxRiskTier`, `controllerDid`, `policyId`, `decision` (+`AgentActionDecision`). `prisma generate` done; the **migration is the only DB-gated step.**
+- **Frontend:** v1 API client + `useAIAgents` / `useCreateAIAgent` hooks; the agent-identity **register wizard now performs real registration** (name + scope multi-select + max risk tier) behind a "Pilot / Preview" banner with a live agent list; the **audit timeline has an "Agent actions" filter** rendering *"AI Agent X acting for Controller Y."*
+
+Maturity is bounded to **"Pilot / Preview"** pending the migration, matching your phased rollout (schema+backend → internal UI → pilot external agents). Policy details: `docs/policies/agent_identity_v1.md`.
+
 ---
 
 ## 6. Mapping to your "20× moat" pillars
@@ -108,7 +123,8 @@ Two planes: the canonical **Cosmos-REST** plane (SDK) for verification/seals/att
 - **6 Solidity (Foundry) tests** for the on-chain disclosure quorum; project compiles (solc 0.8.28).
 - TypeScript `tsc --noEmit` clean; **boundary import guard** passing (240 files scanned); GitHub Actions compatibility workflow added.
 - Developed test-first (TDD) throughout; the off-chain crypto and the Solidity contract are tested for real, while chain-integration paths are unit-tested with mocks pending the live node.
-- **Branches (not merged/pushed):** ZeroID `design/aethelred-conformance-moat` (20 commits); Aethelred `feat/sdk-export-pqc` (1 commit). Full commit list in the appendix.
+- **Branches (not merged/pushed):** ZeroID `design/aethelred-conformance-moat` (20 commits, conformance + moat); ZeroID `feat/ai-agent-passport-v1` (6 AI Agent Passport commits atop that branch); Aethelred `feat/sdk-export-pqc` (1 commit). Full commit lists in the appendix.
+- **AI Agent Passport v1:** 21 backend AI/eligibility tests + full frontend suite (110 suites / 2,372 tests) green; type-check clean. The eligibility extraction is parity-verified by the 6 pre-existing eligibility route tests.
 
 ---
 
@@ -137,6 +153,7 @@ Each activation is a config flip with no code change and no regression window �
 4. **Post-quantum** — is ML-DSA-65 hybrid signing sufficient, or do you also want ML-KEM-768 key-encapsulation surfaced for confidential channels?
 5. **Tokenomics** — is the **$0.10 / 50% burn / 50% Cruzible** flywheel still the plan, and should it live in ZeroID or at the protocol level? (Currently unbuilt; it is the main investor-narrative piece still open.)
 6. **ADFW 2027 positioning** — given the testnet-gated maturity, how would you frame "implemented, tested, activating on testnet" to institutional investors without overstating live deployment?
+7. **AI Agent Passport (v1 auth + evidence)** — the agent path currently authenticates with the controller's JWT (the controller acts on the agent's behalf). Do you want a dedicated agent-token credential signed by the agent identity for v1, or is controller-auth acceptable for the pilot? And should agent-initiated `AgentAction`s also be anchored as on-chain Digital Seals, or is the off-chain action ledger sufficient for v1?
 
 ---
 
@@ -146,6 +163,7 @@ Each activation is a config flip with no code change and no regression window �
 2. Stand up the testnet; flip the activation gates one verified circuit/flag at a time (runbook in `src/lib/aethelred/README.md`).
 3. Replicate the boundary to the other four dApps (4-step guide in the README).
 4. Decide the tokenomics design and owner.
+5. Run the AI Agent Passport schema migration on a test database (`prisma migrate`), then enable agent registration for an internal "Compliance Copilot" pilot.
 
 ---
 
@@ -177,6 +195,19 @@ e7fef3a docs: W1 conformance-boundary implementation plan (TDD)
 ```
 
 **Aethelred branch `feat/sdk-export-pqc`:** `f5a408ae feat(sdk-ts): export PQC (ML-DSA/ML-KEM) from crypto entrypoint`
+
+**ZeroID branch `feat/ai-agent-passport-v1` — AI Agent Passport commits (atop the conformance branch, newest first):**
+
+```
+09866e6 feat(ai): audit timeline agent-actions filter + attribution
+d331444 feat(ai): wire register wizard to useCreateAIAgent (real v1 registration)
+c703584 feat(ai): close eligibility integration seam — agent reuses human handler
+4baf980 feat(ai): AI Agent Passport v1 frontend — client + hooks + page wiring
+b7c19e2 feat(ai): agent eligibility route + additive schema + policy doc
+f13684b feat(ai): AI Agent Passport v1 core — scopes + policy + eligibility wrapper
+```
+
+AI Agent Passport policy doc: `docs/policies/agent_identity_v1.md`.
 
 **Design specs & plans:** `docs/superpowers/specs/` and `docs/superpowers/plans/` (design spec, per-workstream TDD plans, Phase 2 zkML-liveness and conditional-disclosure designs).
 
