@@ -67,6 +67,11 @@ interface DecodedDisclosure {
   value: unknown;
 }
 
+/** Encode an object-property disclosure: base64url([salt, name, value]). */
+export function encodeDisclosure(salt: string, name: string, value: unknown): string {
+  return Buffer.from(JSON.stringify([salt, name, value])).toString('base64url');
+}
+
 export function decodeDisclosure(disclosure: string): DecodedDisclosure {
   let arr: unknown;
   try {
