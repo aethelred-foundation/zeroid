@@ -64,12 +64,14 @@ Record the two addresses into the app `.env` (above).
 
 ```bash
 cd backend
-npx prisma migrate deploy        # applies 20260629000000_ai_agent_passport_v1
-                                 #     and 20260629010000_idempotency_v1
+npx prisma migrate deploy        # applies 20260629000000_ai_agent_passport_v1,
+                                 #         20260629010000_idempotency_v1,
+                                 #     and 20260629020000_oid4vp_oid4vci_v1
 # (or, to regenerate canonically:  npx prisma migrate dev)
 ```
-Both migrations are additive (new enum + nullable/defaulted columns; one new
-`idempotency_records` table). Tracked SQL copies live in
+All migrations are additive (new enum + nullable/defaulted columns; the
+`idempotency_records`, `oid4vp_presentation_requests`, `oid4vci_offers`,
+`oid4vci_token_sessions` tables). Tracked SQL copies live in
 `docs/ecosystem/*-migration.sql` since `prisma/migrations/` is gitignored.
 
 ## 3. Activation gates (flip only after end-to-end verification)
