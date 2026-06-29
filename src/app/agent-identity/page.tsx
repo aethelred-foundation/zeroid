@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import { useAIAgents } from "@/hooks/useAIAgents";
 import {
   Bot,
   Plus,
@@ -38,7 +39,7 @@ import {
 import AppLayout from "@/components/layout/AppLayout";
 
 // ============================================================
-// Mock Data
+// Agent Identity Operations Data
 // ============================================================
 
 const agents = [
@@ -297,6 +298,9 @@ export default function AgentIdentityPage() {
     "registry" | "capabilities" | "delegations"
   >("registry");
 
+  // AI Agent Passport v1 — live registered agents (read-only pilot).
+  const { data: liveAgents } = useAIAgents();
+
   const filteredAgents = agents.filter(
     (a) =>
       a.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -306,6 +310,19 @@ export default function AgentIdentityPage() {
   return (
     <AppLayout>
       <div className="space-y-6">
+        {/* AI Agent Passport v1 — pilot/preview banner */}
+        <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200 flex items-center gap-2">
+          <Shield className="w-4 h-4 shrink-0" />
+          <span>
+            <strong>AI Agent Passport — Pilot / Preview.</strong> Scoped,
+            read-only agent access (e.g. eligibility proofs) bound to a KYC&apos;d
+            controller; requires policy approval.
+            {liveAgents
+              ? ` ${liveAgents.length} live agent passport(s) registered.`
+              : ""}
+          </span>
+        </div>
+
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>

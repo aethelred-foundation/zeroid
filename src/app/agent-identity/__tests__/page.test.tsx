@@ -8,6 +8,11 @@ jest.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(),
 }));
 
+// AI Agent Passport v1 hook — avoids needing a QueryClientProvider in this test
+jest.mock("@/hooks/useAIAgents", () => ({
+  useAIAgents: () => ({ data: [] }),
+}));
+
 // Mock framer-motion
 jest.mock("framer-motion", () => ({
   motion: new Proxy(
