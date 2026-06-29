@@ -13,12 +13,20 @@ import {
   type PresentationPolicy,
 } from './policy-presentation';
 import { verifySdJwtVc, type SdJwtVerifyDeps, type VerifiedSdJwt } from './sd-jwt';
+import {
+  isZkEligibilityToken,
+  verifyZkPredicate,
+  ZK_ELIGIBILITY_FORMAT,
+  type ZkPredicateVerifyDeps,
+} from './zk-predicate';
 
 export interface PresentationVerifierDeps {
   /** Resolve a presentation policy (default: getPresentationPolicy). */
   getPolicy?(policyId: string): PresentationPolicy;
   /** SD-JWT VC verification dependencies (issuer/holder sig verifiers + clock). */
   sdJwt: SdJwtVerifyDeps;
+  /** ZK eligibility verification deps; required to accept `zeroid-zk-eligibility+jwt` tokens. */
+  zk?: ZkPredicateVerifyDeps;
   /**
    * Optional replay guard: returns true if the nonce was issued by us and is now
    * consumed, false if unknown/replayed. When absent, replay protection relies
@@ -57,6 +65,29 @@ export async function verifyPresentation(
   if (deps.consumeNonce) {
     const ok = await deps.consumeNonce(req.nonce);
     if (!ok) throw new ServiceError('nonce unknown or already used', 'VP_NONCE_INVALID', 401);
+  }
+
+  // Privacy-moat rung: a ZK eligibility predicate discloses nothing.
+  if (isZkEligibilityToken(req.vpToken)) {
+    if (!deps.zk) {
+      throw new ServiceError('ZK eligibility presentation not supported', 'VP_TOKEN_INVALID', 400);
+    }
+    const zk = await verifyZkPredicate(deps.zk, {
+      vpToken: req.vpToken,
+      policy,
+      expectedNonce: req.nonce,
+      expectedAudience: req.audience,
+    });
+    return {
+      status: zk.status,
+      policyId: policy.policyId,
+      vct: ZK_ELIGIBILITY_FORMAT,
+      satisfied: {},
+      reasons: zk.reasons,
+      disclosedClaims: [],
+      relyingAppId: req.relyingAppId,
+      verifiedAt: new Date(deps.zk.now() * 1000).toISOString(),
+    };
   }
 
   const verified: VerifiedSdJwt = await verifySdJwtVc(deps.sdJwt, {

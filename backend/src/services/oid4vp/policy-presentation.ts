@@ -31,11 +31,30 @@ export interface ClaimRequirement {
   rule: ClaimRule;
 }
 
+/**
+ * ZK eligibility binding (privacy-moat rung): instead of disclosing claims, the
+ * Wallet presents a Groth16 proof. These fields pin a presented proof to this
+ * policy. Mirrors `ZEROID_ELIGIBILITY_POLICY_V1.circuitManifest` in
+ * routes/verification.ts.
+ */
+export interface ZkBinding {
+  circuitId: string;
+  vkeyId: string;
+  /** Public-signal name -> expected value; pins the proof to this policy/version. */
+  expectedPublicSignals: Record<string, string>;
+  /** Residency public signal checked against an allowed set (an eligibility outcome). */
+  residency: { signal: string; allowed: string[] };
+  /** Public signal carrying the proof's context commitment (binds nonce + audience). */
+  contextSignal: string;
+}
+
 export interface PresentationPolicy {
   policyId: string;
   /** SD-JWT VC type the presented credential must declare (`vct`). */
   vct: string;
   claims: ClaimRequirement[];
+  /** Optional ZK eligibility binding; when present the policy accepts a ZK predicate. */
+  zk?: ZkBinding;
 }
 
 const REGULATED_ELIGIBILITY_V1: PresentationPolicy = {
@@ -52,6 +71,16 @@ const REGULATED_ELIGIBILITY_V1: PresentationPolicy = {
     { path: ['sanctions_status'], label: 'sanctions', rule: { kind: 'equals', value: 'CLEAR' } },
     { path: ['risk_tier'], label: 'risk tier', rule: { kind: 'oneOf', values: ['LOW', 'MEDIUM'] } },
   ],
+  zk: {
+    circuitId: 'zkc_eligibility_policy_context_v1',
+    vkeyId: 'vk_eligibility_policy_context_v1_2026_06_27',
+    expectedPublicSignals: {
+      ageThresholdYears: '21',
+      policyVersionHash: '0xc339f81323c5288c23a30a0fcbc3140bdb60f79193101cbc8ee0fc42eda45e0c',
+    },
+    residency: { signal: 'residencyCountryCode', allowed: ['AE'] },
+    contextSignal: 'contextCommitment',
+  },
 };
 
 const CATALOG: Record<string, PresentationPolicy> = {

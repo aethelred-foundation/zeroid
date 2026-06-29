@@ -39,7 +39,7 @@ export interface Oid4vpRequestStore {
 
 export interface CrossDeviceDeps {
   store: Oid4vpRequestStore;
-  verifier: Pick<PresentationVerifierDeps, 'sdJwt'>;
+  verifier: Pick<PresentationVerifierDeps, 'sdJwt' | 'zk'>;
   getPolicy?(policyId: string): PresentationPolicy;
   genId(): string;
   now(): number;
@@ -126,7 +126,12 @@ export async function handleCallback(
     throw new ServiceError('presentation request already used', 'VP_NONCE_INVALID', 401);
   }
   const decision = await verifyPresentation(
-    { sdJwt: deps.verifier.sdJwt, getPolicy: deps.getPolicy, consumeNonce: deps.store.consumeNonce },
+    {
+      sdJwt: deps.verifier.sdJwt,
+      zk: deps.verifier.zk,
+      getPolicy: deps.getPolicy,
+      consumeNonce: deps.store.consumeNonce,
+    },
     { policyId: rec.policyId, vpToken: input.vpToken, nonce: rec.nonce, audience: rec.audience },
   );
   await deps.store.saveDecision(input.state, decision);

@@ -10,6 +10,8 @@ import {
 } from "@/services/oid4vp/cross-device";
 import { createJoseSdJwtDeps } from "@/services/oid4vp/sd-jwt-jose";
 import { digestDisclosure } from "@/services/oid4vp/sd-jwt";
+import { ZK_ELIGIBILITY_FORMAT } from "@/services/oid4vp/zk-predicate";
+import { getPresentationPolicy } from "@/services/oid4vp/policy-presentation";
 
 const POLICY_ID = "zeroid://policy/regulated-digital-services/age-jurisdiction@2026.06.1";
 const VCT = "https://credentials.zeroid/regulated-eligibility/v1";
@@ -130,5 +132,41 @@ describe("cross-device round trip (real jose)", () => {
     await expect(handleCallback(deps, { state: authz.state, vpToken })).rejects.toMatchObject({
       code: "VP_NONCE_INVALID",
     });
+  });
+});
+
+describe("cross-device ZK predicate routing", () => {
+  it("forwards ZK deps so a zeroid-zk-eligibility token is ALLOWED with zero disclosure", async () => {
+    const policy = getPresentationPolicy(POLICY_ID);
+    const aud = "https://verifier.zeroid";
+    const VALID: Record<string, string> = {
+      ...policy.zk!.expectedPublicSignals,
+      [policy.zk!.residency.signal]: "AE",
+      [policy.zk!.contextSignal]: "0xctx",
+    };
+    let issuedNonce = "";
+    const zk = {
+      verifyHolderJwt: jest.fn(async () => ({
+        header: { typ: ZK_ELIGIBILITY_FORMAT },
+        payload: {
+          aud, nonce: issuedNonce, circuitId: policy.zk!.circuitId, vkeyId: policy.zk!.vkeyId,
+          proof: {}, publicSignals: VALID,
+        },
+      })),
+      verifyGroth16: jest.fn(async () => true),
+      computeContextCommitment: jest.fn(async () => "0xctx"),
+      now: () => 0,
+    };
+    const deps = makeDeps({
+      verifier: { sdJwt: { verifyIssuerJwt: jest.fn(), verifyKeyBindingJwt: jest.fn(), now: () => 0 }, zk },
+    });
+
+    const authz = await createPresentationRequest(deps, { policyId: POLICY_ID, audience: aud });
+    issuedNonce = authz.nonce;
+    const zkToken = `${b64u(JSON.stringify({ typ: ZK_ELIGIBILITY_FORMAT, alg: "ES256" }))}.${b64u("{}")}.sig`;
+
+    const decision = await handleCallback(deps, { state: authz.state, vpToken: zkToken });
+    expect(decision.status).toBe("ALLOWED");
+    expect(decision.disclosedClaims).toEqual([]);
   });
 });

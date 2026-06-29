@@ -23,6 +23,7 @@ import { validate } from '../../middleware/validation';
 import { ServiceError, sendServiceError } from '../../services/errors';
 import { verifyPresentation, type PresentationVerifierDeps } from '../../services/oid4vp/verifier';
 import { createJoseSdJwtDeps, type IssuerKeyResolver } from '../../services/oid4vp/sd-jwt-jose';
+import { createJoseZkDeps } from '../../services/oid4vp/zk-predicate-jose';
 import {
   createPresentationRequest,
   getRequestObject,
@@ -77,13 +78,13 @@ function resolveIssuerKeyFromEnv(): IssuerKeyResolver {
 }
 
 export function buildVerifierDeps(): PresentationVerifierDeps {
-  return { sdJwt: createJoseSdJwtDeps(resolveIssuerKeyFromEnv()) };
+  return { sdJwt: createJoseSdJwtDeps(resolveIssuerKeyFromEnv()), zk: createJoseZkDeps() };
 }
 
 function buildCrossDeviceDeps(): CrossDeviceDeps {
   return {
     store: createPrismaOid4vpRequestStore(prisma),
-    verifier: { sdJwt: createJoseSdJwtDeps(resolveIssuerKeyFromEnv()) },
+    verifier: { sdJwt: createJoseSdJwtDeps(resolveIssuerKeyFromEnv()), zk: createJoseZkDeps() },
     genId: () => randomBytes(24).toString('base64url'),
     now: () => Math.floor(Date.now() / 1000),
     baseUrl: BASE_URL,
