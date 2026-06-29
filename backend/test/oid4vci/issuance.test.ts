@@ -104,6 +104,39 @@ describe("issueCredential", () => {
     expect(cred.format).toBe("dc+sd-jwt");
     expect(deps.verifyKeyProof).toHaveBeenCalledWith("proof", { aud: ISSUER, nonce: tok.c_nonce });
   });
+
+  it("records a CREDENTIAL_ISSUED audit event after issuing (privacy-safe)", async () => {
+    const recordIssuance = jest.fn().mockResolvedValue(undefined);
+    const deps = unitDeps({ recordIssuance });
+    const { preAuthorizedCode } = await createCredentialOffer(deps, {
+      configId: "regulated-eligibility-v1", subjectDid: "did:z:alice",
+    });
+    const tok = await redeemPreAuthorizedCode(deps, { grantType: PRE_AUTH_GRANT_TYPE, preAuthorizedCode });
+    await issueCredential(deps, { accessToken: tok.access_token, proofJwt: "proof" });
+    expect(recordIssuance).toHaveBeenCalledWith(
+      expect.objectContaining({
+        configId: "regulated-eligibility-v1",
+        subjectDid: "did:z:alice",
+        format: "dc+sd-jwt",
+        vct: expect.any(String),
+      }),
+    );
+  });
+
+  it("fails closed and leaves the token usable when the audit write fails", async () => {
+    const stores = createInMemoryIssuanceStores();
+    const deps = unitDeps({ stores, recordIssuance: jest.fn().mockRejectedValue(new Error("audit down")) });
+    const { preAuthorizedCode } = await createCredentialOffer(deps, {
+      configId: "regulated-eligibility-v1", subjectDid: "did:z:alice",
+    });
+    const tok = await redeemPreAuthorizedCode(deps, { grantType: PRE_AUTH_GRANT_TYPE, preAuthorizedCode });
+    await expect(
+      issueCredential(deps, { accessToken: tok.access_token, proofJwt: "proof" }),
+    ).rejects.toThrow(/audit/i);
+    // token not consumed -> a retry (no audit hook) still issues
+    const retry = await issueCredential(unitDeps({ stores }), { accessToken: tok.access_token, proofJwt: "proof" });
+    expect(retry.format).toBe("dc+sd-jwt");
+  });
 });
 
 describe("full OID4VCI issue -> present -> verify (real jose crypto)", () => {

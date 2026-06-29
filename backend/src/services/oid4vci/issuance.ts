@@ -62,6 +62,20 @@ export interface IssuanceDeps {
   genId(): string;
   now(): number;
   ttl?: { offerSeconds?: number; tokenSeconds?: number; credentialSeconds?: number };
+  /**
+   * Optional audit hook, invoked after a credential is issued. Fail-closed: if
+   * it throws, issuance fails and the pre-authorized grant is left unconsumed
+   * (the holder can retry) — never issue an un-recorded credential.
+   */
+  recordIssuance?(record: IssuanceAuditRecord): Promise<void>;
+}
+
+export interface IssuanceAuditRecord {
+  configId: string;
+  vct: string;
+  subjectDid: string;
+  format: string;
+  issuedAt: string;
 }
 
 export function buildIssuerMetadata(issuer: string) {
@@ -190,6 +204,17 @@ export async function issueCredential(
     sdClaims,
     ttlSeconds: deps.ttl?.credentialSeconds,
   });
+
+  // Fail-closed audit BEFORE consuming the token, so a failed write is retryable.
+  if (deps.recordIssuance) {
+    await deps.recordIssuance({
+      configId: session.configId,
+      vct: config.vct,
+      subjectDid: session.subjectDid,
+      format: config.format,
+      issuedAt: new Date(deps.now() * 1000).toISOString(),
+    });
+  }
 
   // MVP: one credential per pre-authorized grant.
   await deps.stores.deleteToken(input.accessToken);

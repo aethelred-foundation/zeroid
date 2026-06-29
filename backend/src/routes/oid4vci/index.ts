@@ -30,6 +30,7 @@ import {
   type IssuanceDeps,
 } from '../../services/oid4vci/issuance';
 import { createPrismaIssuanceStores } from '../../services/oid4vci/issuance-stores-prisma';
+import { createPrismaIssuanceAuditRecorder } from '../../services/oid4vci/issuance-audit';
 import {
   createJoseIssuanceSignDeps,
   createJoseKeyProofVerifier,
@@ -72,6 +73,7 @@ async function buildDeps(): Promise<IssuanceDeps> {
     },
     sign: await getSignDeps(),
     verifyKeyProof: createJoseKeyProofVerifier(),
+    recordIssuance: createPrismaIssuanceAuditRecorder(prisma),
     genId: () => randomBytes(32).toString('base64url'),
     now: () => Math.floor(Date.now() / 1000),
   };
