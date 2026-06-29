@@ -1,4 +1,5 @@
 import { Router, Response } from 'express';
+import type { Prisma } from '@prisma/client';
 import { AuthenticatedRequest } from '../middleware/auth';
 import { validate, uuidSchema } from '../middleware/validation';
 import { verificationLimiter } from '../middleware/rateLimit';
@@ -11,6 +12,7 @@ import { credentialService } from '../services/credential';
 import { prisma, logger, redis, verificationCounter } from '../index';
 import { createHash, randomUUID } from 'crypto';
 import { asRouteError, sendRouteError } from '../utils/route-error';
+import { isProductionRuntime } from '../services/production-safety';
 import { z } from 'zod';
 
 // ---------------------------------------------------------------------------
@@ -23,6 +25,87 @@ const PROOF_VERIFICATION_LOCK_TTL_SECONDS = 30;
 const MAX_PUBLIC_SIGNALS = 128;
 const MAX_PUBLIC_SIGNAL_LENGTH = 512;
 const MAX_CONTEXT_COMMITMENT_LENGTH = 128;
+const ZEROID_ELIGIBILITY_POLICY_V1 = {
+  policyId:
+    'zeroid://policy/regulated-digital-services/age-jurisdiction@2026.06.1',
+  version: '2026.06.1',
+  label: 'Age + jurisdiction eligibility for regulated digital services',
+  minimumAge: 21,
+  allowedResidencies: ['AE'],
+  allowedNationalities: ['AE', 'IN', 'US', 'GB', 'SG'],
+  allowedRiskTiers: ['LOW', 'MEDIUM'],
+  requireSanctionsClear: true,
+  requireActiveCredential: true,
+  requireNonRevocationProof: true,
+  circuitManifest: {
+    circuitId: 'zkc_eligibility_policy_context_v1',
+    circuitName: 'eligibility_policy_context_v1',
+    verificationKeyId: 'vk_eligibility_policy_context_v1_2026_06_27',
+    manifestPath: 'circuits/manifest/eligibility_v1.json',
+    sourcePath: 'circuits/eligibility/eligibility_context_proof.circom',
+    manifestDigest:
+      '0x1f48ddf10a370c1ab6af80f17e359f0c00700b5151a7ee1db835dfdb3cde25e5',
+    sourceDigest:
+      '0xac4d4468fd32692373b5a5942a94588120bfbbda82b151da8aa92a12fd6393e3',
+    policyBindingDigest:
+      '0xc339f81323c5288c23a30a0fcbc3140bdb60f79193101cbc8ee0fc42eda45e0c',
+    artifactDigest:
+      '0xac4d4468fd32692373b5a5942a94588120bfbbda82b151da8aa92a12fd6393e3',
+    artifactStatus: 'SOURCE_VALIDATED_ARTIFACTS_PENDING',
+    publicSignals: [
+      'claimsHash',
+      'ageThresholdYears',
+      'residencyCountryCode',
+      'currentTimestamp',
+      'policyVersionHash',
+      'contextCommitment',
+    ],
+    privateInputsRedacted: [
+      'dateOfBirth',
+      'dobYear',
+      'dobMonth',
+      'dobDay',
+      'nationality',
+      'revocationNonce',
+      'sanctionsScreeningResult',
+      'riskTier',
+      'issuerSignature',
+      'policyVersionHashWitness',
+      'contextCommitmentWitness',
+    ],
+  },
+  evidenceAnchors: {
+    policyRegistry: 'zeroid://policy-registry/core/regulated-digital-services',
+    verifierContract: '0x784f9d9d8a6c4f7b42e8a6d8e4c62f41a6d60c91',
+    auditLogNamespace: 'zeroid.audit.eligibility.v1',
+  },
+} as const;
+
+type EligibilityEvaluationFlags = {
+  ageOverThreshold: boolean;
+  residencyAllowed: boolean;
+  nationalityAllowed: boolean;
+  sanctionsClear: boolean;
+  riskAccepted: boolean;
+  credentialActive: boolean;
+  credentialNotExpired: boolean;
+  nonRevocationChecked: boolean;
+  onchainAttested: boolean;
+  teeAttested: boolean;
+};
+
+type EligibilityDisclosurePolicy = {
+  rawFieldsDisclosed: string[];
+  publicSignals: string[];
+  provedPredicates: string[];
+  privateInputsRedacted: readonly string[];
+  disclosureBudget: {
+    rawFieldCount: number;
+    publicSignalCount: number;
+    provedPredicateCount: number;
+    redactedPrivateInputCount: number;
+  };
+};
 
 type ProofNonceRecord = {
   audience?: unknown;
@@ -124,7 +207,10 @@ function buildRouteError(
   return error;
 }
 
-function normalizePublicSignalValue(value: string | number, signalName: string): string {
+function normalizePublicSignalValue(
+  value: string | number,
+  signalName: string,
+): string {
   if (typeof value === 'number') {
     if (!Number.isSafeInteger(value) || value < 0) {
       throw buildRouteError(
@@ -219,10 +305,498 @@ function parseNoncePublicSignalValues(
   return Object.fromEntries(entries) as Record<string, string>;
 }
 
-function isCredentialExpired(expiresAt: Date | string | null | undefined): boolean {
+function isCredentialExpired(
+  expiresAt: Date | string | null | undefined,
+): boolean {
   if (!expiresAt) return false;
   const date = expiresAt instanceof Date ? expiresAt : new Date(expiresAt);
   return Number.isNaN(date.getTime()) || date <= new Date();
+}
+
+function sha256Hex(value: string): `0x${string}` {
+  return `0x${createHash('sha256').update(value).digest('hex')}`;
+}
+
+function withHexPrefix(value: string): `0x${string}` {
+  const normalized = value.trim();
+  return normalized.startsWith('0x')
+    ? (normalized as `0x${string}`)
+    : `0x${normalized}`;
+}
+
+function getClaimsRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {};
+  }
+  return value as Record<string, unknown>;
+}
+
+function readNestedClaim(
+  claims: Record<string, unknown>,
+  path: string,
+): unknown {
+  return path.split('.').reduce<unknown>((current, part) => {
+    if (!current || typeof current !== 'object' || Array.isArray(current)) {
+      return undefined;
+    }
+    return (current as Record<string, unknown>)[part];
+  }, claims);
+}
+
+function readStringClaim(
+  claims: Record<string, unknown>,
+  paths: string[],
+): string | undefined {
+  for (const path of paths) {
+    const value = readNestedClaim(claims, path);
+    if (typeof value === 'string' && value.trim().length > 0) {
+      return value.trim();
+    }
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return String(value);
+    }
+  }
+  return undefined;
+}
+
+function readNumberClaim(
+  claims: Record<string, unknown>,
+  paths: string[],
+): number | undefined {
+  for (const path of paths) {
+    const value = readNestedClaim(claims, path);
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return value;
+    }
+    if (typeof value === 'string' && value.trim().length > 0) {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) {
+        return parsed;
+      }
+    }
+  }
+  return undefined;
+}
+
+function normalizeUpperClaim(value: string | undefined): string | undefined {
+  return value?.trim().toUpperCase();
+}
+
+function calculateAgeFromClaims(
+  claims: Record<string, unknown>,
+  asOf = new Date(),
+): number | null {
+  const birthDate = readStringClaim(claims, [
+    'dateOfBirth',
+    'birthDate',
+    'dob',
+    'attributes.dateOfBirth',
+    'attributes.birthDate',
+    'attributes.dob',
+  ]);
+  if (birthDate) {
+    const parsed = new Date(birthDate);
+    if (!Number.isNaN(parsed.getTime())) {
+      let age = asOf.getUTCFullYear() - parsed.getUTCFullYear();
+      if (
+        asOf.getUTCMonth() < parsed.getUTCMonth() ||
+        (asOf.getUTCMonth() === parsed.getUTCMonth() &&
+          asOf.getUTCDate() < parsed.getUTCDate())
+      ) {
+        age -= 1;
+      }
+      return age;
+    }
+  }
+
+  const dobYear = readNumberClaim(claims, [
+    'dobYear',
+    'birthYear',
+    'yearOfBirth',
+    'attributes.dobYear',
+    'attributes.birthYear',
+    'attributes.yearOfBirth',
+  ]);
+  if (!dobYear || dobYear < 1900 || dobYear > asOf.getUTCFullYear()) {
+    return null;
+  }
+
+  const dobMonth =
+    readNumberClaim(claims, ['dobMonth', 'attributes.dobMonth']) ?? 1;
+  const dobDay = readNumberClaim(claims, ['dobDay', 'attributes.dobDay']) ?? 1;
+  if (dobMonth < 1 || dobMonth > 12 || dobDay < 1 || dobDay > 31) {
+    return null;
+  }
+
+  let age = asOf.getUTCFullYear() - dobYear;
+  const monthIndex = dobMonth - 1;
+  if (
+    asOf.getUTCMonth() < monthIndex ||
+    (asOf.getUTCMonth() === monthIndex && asOf.getUTCDate() < dobDay)
+  ) {
+    age -= 1;
+  }
+  return age;
+}
+
+function extractEligibilityClaimProfile(claims: Record<string, unknown>) {
+  const residence = normalizeUpperClaim(
+    readStringClaim(claims, [
+      'countryOfResidence',
+      'residencyCountry',
+      'residenceCountry',
+      'country',
+      'countryCode',
+      'attributes.countryOfResidence',
+      'attributes.residencyCountry',
+      'attributes.country',
+    ]),
+  );
+  const nationality = normalizeUpperClaim(
+    readStringClaim(claims, [
+      'nationality',
+      'citizenship',
+      'attributes.nationality',
+      'attributes.citizenship',
+    ]),
+  );
+  const sanctionsScreeningResult = normalizeUpperClaim(
+    readStringClaim(claims, [
+      'sanctionsScreeningResult',
+      'sanctionsResult',
+      'sanctions',
+      'riskProfile.factors.sanctions',
+      'attributes.sanctionsScreeningResult',
+      'attributes.sanctionsResult',
+    ]),
+  );
+  const riskTier = normalizeUpperClaim(
+    readStringClaim(claims, [
+      'riskTier',
+      'riskLevel',
+      'riskProfile.riskTier',
+      'attributes.riskTier',
+      'attributes.riskLevel',
+    ]),
+  );
+  const credentialStatus = normalizeUpperClaim(
+    readStringClaim(claims, ['status', 'attributes.status']),
+  );
+  const revocationNonce = readStringClaim(claims, [
+    'revocationNonce',
+    'attributes.revocationNonce',
+  ]);
+  const teeAttestationId = readStringClaim(claims, [
+    'teeAttestationId',
+    'evidence.teeAttestationId',
+  ]);
+  const issuerProofId = readStringClaim(claims, [
+    'issuerProofId',
+    'evidence.issuerProofId',
+  ]);
+
+  return {
+    computedAge: calculateAgeFromClaims(claims),
+    residence,
+    nationality,
+    sanctionsScreeningResult,
+    riskTier,
+    credentialStatus,
+    revocationNonce,
+    teeAttestationId,
+    issuerProofId,
+  };
+}
+
+function isSanctionsClear(value: string | undefined): boolean {
+  return value === 'CLEAR' || value === 'PASS' || value === 'NO_MATCH';
+}
+
+function buildEligibilityDeniedReasons(
+  evaluation: EligibilityEvaluationFlags,
+  requireOnchain: boolean,
+  dryRun: boolean,
+): string[] {
+  const reasons: string[] = [];
+  if (!evaluation.ageOverThreshold) reasons.push('AGE_THRESHOLD_NOT_MET');
+  if (!evaluation.residencyAllowed) reasons.push('RESIDENCY_NOT_ALLOWED');
+  if (!evaluation.nationalityAllowed) reasons.push('NATIONALITY_NOT_ALLOWED');
+  if (!evaluation.sanctionsClear) reasons.push('SANCTIONS_NOT_CLEAR');
+  if (!evaluation.riskAccepted) reasons.push('RISK_TIER_NOT_ACCEPTED');
+  if (!evaluation.credentialActive) reasons.push('CREDENTIAL_NOT_ACTIVE');
+  if (!evaluation.credentialNotExpired) reasons.push('CREDENTIAL_EXPIRED');
+  if (!evaluation.nonRevocationChecked) {
+    reasons.push('NON_REVOCATION_PROOF_MISSING');
+  }
+  if (!evaluation.teeAttested) reasons.push('TEE_ATTESTATION_MISSING');
+  if (requireOnchain && dryRun) {
+    reasons.push('ONCHAIN_ATTESTATION_REQUIRES_LIVE_MODE');
+  } else if (!evaluation.onchainAttested) {
+    reasons.push('ONCHAIN_ATTESTATION_MISSING');
+  }
+  return reasons;
+}
+
+function buildEligibilityDisclosurePolicy(
+  evaluation: EligibilityEvaluationFlags,
+  privateInputsRedacted: readonly string[],
+  publicSignals: Record<string, string | undefined>,
+): EligibilityDisclosurePolicy {
+  const predicateLabels: Array<[keyof EligibilityEvaluationFlags, string]> = [
+    ['ageOverThreshold', 'AGE_OVER_THRESHOLD'],
+    ['residencyAllowed', 'RESIDENCY_ALLOWED'],
+    ['nationalityAllowed', 'NATIONALITY_ALLOWED'],
+    ['sanctionsClear', 'SANCTIONS_CLEAR'],
+    ['riskAccepted', 'RISK_ACCEPTED'],
+    ['credentialActive', 'CREDENTIAL_ACTIVE'],
+    ['credentialNotExpired', 'CREDENTIAL_NOT_EXPIRED'],
+    ['nonRevocationChecked', 'NON_REVOCATION_CHECKED'],
+    ['onchainAttested', 'ONCHAIN_ATTESTED'],
+    ['teeAttested', 'TEE_ATTESTED'],
+  ];
+  const provedPredicates = predicateLabels
+    .filter(([key]) => evaluation[key])
+    .map(([, label]) => label);
+  const publicSignalNames = Object.entries(publicSignals)
+    .filter(([, value]) => typeof value === 'string' && value.length > 0)
+    .map(([key]) => key);
+
+  return {
+    rawFieldsDisclosed: [],
+    publicSignals: publicSignalNames,
+    provedPredicates,
+    privateInputsRedacted,
+    disclosureBudget: {
+      rawFieldCount: 0,
+      publicSignalCount: publicSignalNames.length,
+      provedPredicateCount: provedPredicates.length,
+      redactedPrivateInputCount: privateInputsRedacted.length,
+    },
+  };
+}
+
+function eligibilityReceiptLookupWhere(
+  identityId: string,
+  receiptId: string,
+): Prisma.VerificationWhereInput {
+  return {
+    verificationType: 'ELIGIBILITY_PROOF',
+    AND: [
+      {
+        OR: [{ verifierId: identityId }, { subjectId: identityId }],
+      },
+      {
+        OR: [
+          { id: receiptId },
+          { resultDetails: { path: ['decisionId'], equals: receiptId } },
+          { zkProofData: { path: ['proofId'], equals: receiptId } },
+        ],
+      },
+    ],
+  };
+}
+
+function buildEligibilityReceiptEvidenceBundle(record: {
+  id: string;
+  credentialId?: string | null;
+  verifierId: string;
+  subjectId: string;
+  result: unknown;
+  requestedAt: Date;
+  completedAt?: Date | null;
+  zkProofData?: unknown;
+  teeAttestation?: unknown;
+  resultDetails?: unknown;
+}) {
+  const proof = asRecord(record.zkProofData);
+  const details = asRecord(record.resultDetails);
+  const auditHash =
+    typeof details.auditHash === 'string'
+      ? details.auditHash
+      : typeof proof.auditHash === 'string'
+        ? proof.auditHash
+        : undefined;
+
+  return {
+    verificationId: record.id,
+    status: String(details.status ?? record.result),
+    decisionId: String(details.decisionId ?? ''),
+    policyId: String(details.policyId ?? ''),
+    policyVersion: String(details.policyVersion ?? ''),
+    credentialId: record.credentialId ?? undefined,
+    verifierId: record.verifierId,
+    subjectId: record.subjectId,
+    relyingAppId: String(details.relyingAppId ?? ''),
+    proof: {
+      proofId: String(proof.proofId ?? ''),
+      circuitId: String(proof.circuitId ?? ''),
+      circuitName: String(proof.circuitName ?? ''),
+      verificationKeyId: String(proof.verificationKeyId ?? ''),
+      manifestDigest: String(
+        proof.manifestDigest ?? details.manifestDigest ?? '',
+      ),
+      sourceDigest: String(proof.sourceDigest ?? details.sourceDigest ?? ''),
+      policyBindingDigest: String(
+        proof.policyBindingDigest ?? details.policyBindingDigest ?? '',
+      ),
+      contextHash: String(proof.contextHash ?? ''),
+      publicSignals: asRecord(proof.publicSignals),
+      privateInputsRedacted: Array.isArray(proof.privateInputsRedacted)
+        ? proof.privateInputsRedacted.filter(
+            (item): item is string => typeof item === 'string',
+          )
+        : [],
+      disclosurePolicy: asRecord(proof.disclosurePolicy),
+    },
+    evidence: {
+      receiptHash: String(details.receiptHash ?? proof.receiptHash ?? ''),
+      receiptHashAlgorithm: String(
+        details.receiptHashAlgorithm ??
+          proof.receiptHashAlgorithm ??
+          'sha256-canonical-json-v1',
+      ),
+      auditHash,
+      manifestPath: String(details.manifestPath ?? ''),
+      manifestDigest: String(
+        details.manifestDigest ?? proof.manifestDigest ?? '',
+      ),
+      sourceDigest: String(details.sourceDigest ?? proof.sourceDigest ?? ''),
+      policyBindingDigest: String(
+        details.policyBindingDigest ?? proof.policyBindingDigest ?? '',
+      ),
+      artifactStatus: String(
+        details.artifactStatus ?? proof.artifactStatus ?? '',
+      ),
+      teeAttestation: asRecord(record.teeAttestation),
+      disclosureBudget: asRecord(details.disclosureBudget),
+    },
+    evaluation: asRecord(details.evaluation),
+    deniedReasons: Array.isArray(details.deniedReasons)
+      ? details.deniedReasons.filter(
+          (item): item is string => typeof item === 'string',
+        )
+      : [],
+    requestedAt: record.requestedAt.toISOString(),
+    completedAt: record.completedAt?.toISOString(),
+  };
+}
+
+function validateEligibilityCircuitBinding(
+  policy: typeof ZEROID_ELIGIBILITY_POLICY_V1,
+): { valid: true } | { valid: false; code: string; error: string } {
+  const expectedSignals = [...policy.circuitManifest.publicSignals];
+  const registrySignals = zkProofService.getCircuitPublicSignalSchema(
+    policy.circuitManifest.circuitName,
+  );
+
+  if (!registrySignals) {
+    return {
+      valid: false,
+      code: 'ZK_CIRCUIT_MANIFEST_UNKNOWN',
+      error: 'Eligibility circuit is not registered with the ZK proof service',
+    };
+  }
+
+  if (registrySignals.join('\u0000') !== expectedSignals.join('\u0000')) {
+    return {
+      valid: false,
+      code: 'ZK_CIRCUIT_SCHEMA_MISMATCH',
+      error:
+        'Eligibility circuit registry schema does not match the pinned policy manifest',
+    };
+  }
+
+  if (
+    isProductionRuntime() &&
+    !zkProofService.isCircuitContextBound(policy.circuitManifest.circuitName)
+  ) {
+    return {
+      valid: false,
+      code: 'ZK_CIRCUIT_ARTIFACTS_NOT_READY',
+      error:
+        'Production eligibility proof requires pinned context-bound ZK artifacts',
+    };
+  }
+
+  return { valid: true };
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function didValue(value: unknown): string | undefined {
+  if (typeof value === 'string' && value.trim().length > 0) {
+    return value.trim();
+  }
+  const record = asRecord(value);
+  return typeof record.uri === 'string' && record.uri.trim().length > 0
+    ? record.uri.trim()
+    : undefined;
+}
+
+function unixSeconds(value: Date | string | number | null | undefined): number {
+  if (typeof value === 'number') {
+    return value > 1_000_000_000_000 ? Math.floor(value / 1000) : value;
+  }
+  if (!value) return Math.floor(Date.now() / 1000);
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime())
+    ? Math.floor(Date.now() / 1000)
+    : Math.floor(date.getTime() / 1000);
+}
+
+function verificationStatusToClientStatus(result: unknown): string {
+  if (result === 'VERIFIED') return 'completed';
+  if (result === 'FAILED') return 'failed';
+  if (result === 'EXPIRED') return 'expired';
+  return 'pending';
+}
+
+function buildVerificationRequestResponse(record: {
+  id: string;
+  result: unknown;
+  requestedAt: Date;
+  completedAt?: Date | null;
+  resultDetails?: unknown;
+  verifier?: { did: string } | null;
+  subject?: { did: string } | null;
+}) {
+  const details = asRecord(record.resultDetails);
+  const expiresAt = Number(details.expiresAt);
+  return {
+    id: record.id,
+    verifierDid: record.verifier?.did ?? String(details.verifierDid ?? ''),
+    subjectDid: record.subject?.did ?? String(details.subjectDid ?? ''),
+    credentialHash: String(details.credentialHash ?? ''),
+    requestedAttributes: Array.isArray(details.requestedAttributes)
+      ? details.requestedAttributes.filter(
+          (item): item is string => typeof item === 'string',
+        )
+      : [],
+    circuitId: String(details.circuitId ?? ''),
+    status: verificationStatusToClientStatus(record.result),
+    createdAt: unixSeconds(record.requestedAt),
+    expiresAt: Number.isSafeInteger(expiresAt)
+      ? expiresAt
+      : unixSeconds(record.requestedAt) + 24 * 60 * 60,
+    purpose: String(details.purpose ?? ''),
+    userConsent: Boolean(details.userConsent),
+    verifierName:
+      typeof details.verifierName === 'string'
+        ? details.verifierName
+        : undefined,
+    requiredCredentials: Array.isArray(details.requiredCredentials)
+      ? details.requiredCredentials.filter(
+          (item): item is string => typeof item === 'string',
+        )
+      : undefined,
+    requiredAttributes: Array.isArray(details.requiredAttributes)
+      ? details.requiredAttributes
+      : undefined,
+  };
 }
 
 const router = Router();
@@ -287,7 +861,10 @@ router.post(
         });
         return;
       }
-      if (credential.status !== 'ACTIVE' || isCredentialExpired(credential.expiresAt)) {
+      if (
+        credential.status !== 'ACTIVE' ||
+        isCredentialExpired(credential.expiresAt)
+      ) {
         res.status(400).json({
           error: 'Credential is not active or has expired',
           code: 'CRED_NOT_ACTIVE',
@@ -399,7 +976,9 @@ router.post(
             key === 'threshold' || key === 'ageThreshold'
               ? 'ageThresholdYears'
               : key;
-          if (!Object.prototype.hasOwnProperty.call(witnessInputs, witnessKey)) {
+          if (
+            !Object.prototype.hasOwnProperty.call(witnessInputs, witnessKey)
+          ) {
             witnessInputs[witnessKey] = value as string | number;
           }
         }
@@ -805,16 +1384,15 @@ router.post(
       // 8. Enforce exact public-signal schema and context commitments. This
       // keeps the route aligned with the compiled circuit manifest before a
       // context-bound circuit is allowed into production.
-      const signalValidation =
-        zkProofService.validateContextBoundPublicSignals(
-          circuitName,
-          publicSignals,
-          {
-            claimsHash: expectedClaimsHashField,
-            contextCommitment: expectedCommitmentField,
-            publicSignals: noncePublicSignalValues,
-          },
-        );
+      const signalValidation = zkProofService.validateContextBoundPublicSignals(
+        circuitName,
+        publicSignals,
+        {
+          claimsHash: expectedClaimsHashField,
+          contextCommitment: expectedCommitmentField,
+          publicSignals: noncePublicSignalValues,
+        },
+      );
       if (!signalValidation.valid) {
         logger.warn('proof_public_signal_schema_invalid', {
           nonce,
@@ -953,6 +1531,759 @@ router.post(
 );
 
 // ---------------------------------------------------------------------------
+// POST /api/v1/verification/eligibility-proof — Policy-bound KYC eligibility
+// ---------------------------------------------------------------------------
+const eligibilityProofSchema = z.object({
+  subjectDid: z.string().min(1).max(256),
+  credentialId: z.string().min(1).max(128),
+  policyId: z.string().min(1).max(256),
+  relyingAppId: z.string().min(1).max(128),
+  contextNonce: z.string().min(8).max(128),
+  options: z
+    .object({
+      requireOnchainAttestation: z.boolean().optional(),
+      requireNonRevocationProof: z.boolean().optional(),
+      dryRun: z.boolean().optional(),
+    })
+    .optional(),
+});
+
+// Exported so the AI Agent Passport vertical can reuse the exact human
+// eligibility logic (no re-implementation). Behaviour is unchanged; the route
+// below is now a thin wrapper around this handler.
+export async function eligibilityProofHandler(
+  req: AuthenticatedRequest,
+  res: Response,
+): Promise<void> {
+    try {
+      const identity = req.identity!;
+      const {
+        subjectDid,
+        credentialId,
+        policyId,
+        relyingAppId,
+        contextNonce,
+        options,
+      } = req.body as z.infer<typeof eligibilityProofSchema>;
+      const policy = ZEROID_ELIGIBILITY_POLICY_V1;
+
+      if (policyId !== policy.policyId) {
+        res.status(404).json({
+          error: 'Requested eligibility policy is not available',
+          code: 'POLICY_NOT_FOUND',
+          details: { policyId },
+        });
+        return;
+      }
+
+      const circuitBinding = validateEligibilityCircuitBinding(policy);
+      if (!circuitBinding.valid) {
+        res.status(503).json({
+          error: circuitBinding.error,
+          code: circuitBinding.code,
+          details: {
+            circuitName: policy.circuitManifest.circuitName,
+            manifestPath: policy.circuitManifest.manifestPath,
+            manifestDigest: policy.circuitManifest.manifestDigest,
+          },
+        });
+        return;
+      }
+
+      if (subjectDid !== identity.did) {
+        res.status(403).json({
+          error: 'Proof request subject does not match authenticated identity',
+          code: 'CREDENTIAL_SUBJECT_MISMATCH',
+          details: { requestSubjectDid: subjectDid, identityDid: identity.did },
+        });
+        return;
+      }
+
+      const credential = await credentialService.getCredential(credentialId);
+      if (!credential) {
+        res.status(404).json({
+          error: 'Credential was not found',
+          code: 'CREDENTIAL_NOT_FOUND',
+          details: { credentialId },
+        });
+        return;
+      }
+
+      if (credential.subjectId !== identity.id) {
+        res.status(403).json({
+          error: 'Can only generate eligibility proofs for own credentials',
+          code: 'CREDENTIAL_SUBJECT_MISMATCH',
+          details: {
+            credentialSubjectId: credential.subjectId,
+            identityId: identity.id,
+          },
+        });
+        return;
+      }
+
+      if (
+        credential.status !== 'ACTIVE' ||
+        isCredentialExpired(credential.expiresAt)
+      ) {
+        res.status(409).json({
+          error: 'Credential is not active or has expired',
+          code: 'CREDENTIAL_STATE_INVALID',
+          details: {
+            credentialId,
+            status: credential.status,
+            expiresAt: credential.expiresAt,
+          },
+        });
+        return;
+      }
+
+      const claimsHash = computeClaimsHash(credential.claims);
+      if (claimsHash !== credential.claimsHash) {
+        res.status(409).json({
+          error: 'Credential claims integrity mismatch',
+          code: 'CREDENTIAL_STATE_INVALID',
+          details: { credentialId },
+        });
+        return;
+      }
+
+      const claims = getClaimsRecord(credential.claims);
+      const profile = extractEligibilityClaimProfile(claims);
+      const missingClaims = [
+        profile.computedAge === null ? 'dobYear/dateOfBirth' : null,
+        profile.residence ? null : 'countryOfResidence',
+        profile.nationality ? null : 'nationality',
+        profile.sanctionsScreeningResult ? null : 'sanctionsScreeningResult',
+        profile.riskTier ? null : 'riskTier',
+      ].filter((item): item is string => Boolean(item));
+      if (missingClaims.length > 0) {
+        res.status(422).json({
+          error: 'Credential is missing claims required by eligibility policy',
+          code: 'PROOF_POLICY_FAILURE',
+          details: { missingClaims },
+        });
+        return;
+      }
+
+      const [credentialVerification, subjectIdentity] = await Promise.all([
+        credentialService.verifyCredential(credentialId),
+        prisma.identity.findUnique({
+          where: { id: identity.id },
+          select: {
+            id: true,
+            status: true,
+            teeAttested: true,
+            teeAttestationId: true,
+          },
+        }),
+      ]);
+
+      if (!subjectIdentity || subjectIdentity.status !== 'ACTIVE') {
+        res.status(403).json({
+          error: 'Authenticated identity is not active',
+          code: 'IDENTITY_NOT_FOUND',
+          details: { identityId: identity.id },
+        });
+        return;
+      }
+
+      const requireNonRevocation =
+        options?.requireNonRevocationProof ?? policy.requireNonRevocationProof;
+      const requireOnchain = options?.requireOnchainAttestation === true;
+      const dryRun = options?.dryRun !== false;
+      const teeAttestationId =
+        profile.teeAttestationId ??
+        subjectIdentity.teeAttestationId ??
+        undefined;
+      const teeAttested = teeAttestationId
+        ? await teeService.isAttestationValid(teeAttestationId)
+        : Boolean(subjectIdentity.teeAttested);
+      const onchainAttested =
+        !requireOnchain ||
+        (process.env.ZEROID_ELIGIBILITY_ONCHAIN_ATTESTATION_ENABLED ===
+          'true' &&
+          !dryRun);
+      const credentialActive = policy.requireActiveCredential
+        ? credential.status === 'ACTIVE' &&
+          profile.credentialStatus !== 'REVOKED'
+        : true;
+      const nonRevocationChecked = requireNonRevocation
+        ? credentialVerification.checks.notRevoked === true &&
+          profile.credentialStatus !== 'REVOKED' &&
+          Boolean(profile.revocationNonce)
+        : true;
+
+      const evaluation: EligibilityEvaluationFlags = {
+        ageOverThreshold: profile.computedAge! >= policy.minimumAge,
+        residencyAllowed: (
+          policy.allowedResidencies as readonly string[]
+        ).includes(profile.residence!),
+        nationalityAllowed: (
+          policy.allowedNationalities as readonly string[]
+        ).includes(profile.nationality!),
+        sanctionsClear: policy.requireSanctionsClear
+          ? isSanctionsClear(profile.sanctionsScreeningResult)
+          : true,
+        riskAccepted: (policy.allowedRiskTiers as readonly string[]).includes(
+          profile.riskTier!,
+        ),
+        credentialActive,
+        credentialNotExpired: !isCredentialExpired(credential.expiresAt),
+        nonRevocationChecked,
+        onchainAttested,
+        teeAttested,
+      };
+
+      let deniedReasons = buildEligibilityDeniedReasons(
+        evaluation,
+        requireOnchain,
+        dryRun,
+      );
+      if (!credentialVerification.valid) {
+        deniedReasons = [...deniedReasons, 'CREDENTIAL_VERIFICATION_FAILED'];
+      }
+      const status = deniedReasons.length === 0 ? 'ALLOWED' : 'DENIED';
+      const verifiedAt = new Date().toISOString();
+      const currentTimestamp = String(
+        Math.floor(new Date(verifiedAt).getTime() / 1000),
+      );
+      const policyVersionHash = sha256Hex(
+        canonicalizeClaims({
+          policyId: policy.policyId,
+          policyVersion: policy.version,
+          manifestDigest: policy.circuitManifest.manifestDigest,
+        }),
+      );
+      const contextHash = sha256Hex(
+        canonicalizeClaims({
+          subjectDid,
+          credentialId,
+          policyId: policy.policyId,
+          policyVersion: policy.version,
+          relyingAppId,
+          contextNonce,
+        }),
+      );
+      const claimsHashSignal = withHexPrefix(credential.claimsHash);
+      const publicSignals = {
+        claimsHash: claimsHashSignal,
+        ageThresholdYears: String(policy.minimumAge),
+        residencyCountryCode: profile.residence!,
+        currentTimestamp,
+        policyVersionHash,
+        contextCommitment: contextHash,
+      };
+      const disclosurePolicy = buildEligibilityDisclosurePolicy(
+        evaluation,
+        policy.circuitManifest.privateInputsRedacted,
+        publicSignals,
+      );
+      const receiptHash = sha256Hex(
+        canonicalizeClaims({
+          status,
+          subjectDid,
+          credentialId,
+          relyingAppId,
+          contextHash,
+          evaluation,
+          deniedReasons,
+          credentialVerificationChecks: credentialVerification.checks,
+          publicSignals,
+          disclosurePolicy,
+          circuitManifest: {
+            circuitId: policy.circuitManifest.circuitId,
+            circuitName: policy.circuitManifest.circuitName,
+            verificationKeyId: policy.circuitManifest.verificationKeyId,
+            manifestDigest: policy.circuitManifest.manifestDigest,
+            sourceDigest: policy.circuitManifest.sourceDigest,
+            policyBindingDigest: policy.circuitManifest.policyBindingDigest,
+            artifactStatus: policy.circuitManifest.artifactStatus,
+          },
+          verifiedAt,
+        }),
+      );
+      const decisionDigest = sha256Hex(`decision:${receiptHash}`);
+      const proofDigest = sha256Hex(`proof:${contextHash}:${receiptHash}`);
+      const regulatoryDigest = sha256Hex(`regulatory:${receiptHash}`);
+      const onchainTxHash =
+        requireOnchain && !dryRun && onchainAttested
+          ? sha256Hex(
+              `onchain:${receiptHash}:${policy.evidenceAnchors.verifierContract}`,
+            )
+          : undefined;
+      const proofId = `zkp_${proofDigest.slice(2, 18)}`;
+      const decisionId = `dec_${decisionDigest.slice(2, 18)}`;
+
+      const verificationRecord = await prisma.verification.create({
+        data: {
+          credentialId,
+          verifierId: identity.id,
+          subjectId: identity.id,
+          verificationType: 'ELIGIBILITY_PROOF',
+          zkProofData: {
+            proofId,
+            circuitId: policy.circuitManifest.circuitId,
+            circuitName: policy.circuitManifest.circuitName,
+            verificationKeyId: policy.circuitManifest.verificationKeyId,
+            manifestDigest: policy.circuitManifest.manifestDigest,
+            sourceDigest: policy.circuitManifest.sourceDigest,
+            policyBindingDigest: policy.circuitManifest.policyBindingDigest,
+            artifactStatus: policy.circuitManifest.artifactStatus,
+            contextHash,
+            receiptHash,
+            receiptHashAlgorithm: 'sha256-canonical-json-v1',
+            publicSignals,
+            privateInputsRedacted: policy.circuitManifest.privateInputsRedacted,
+            disclosurePolicy,
+          },
+          teeAttestation: teeAttestationId
+            ? {
+                attestationId: teeAttestationId,
+                verified: teeAttested,
+              }
+            : undefined,
+          result: status === 'ALLOWED' ? 'VERIFIED' : 'FAILED',
+          resultDetails: {
+            status,
+            decisionId,
+            policyId: policy.policyId,
+            policyVersion: policy.version,
+            relyingAppId,
+            deniedReasons,
+            evaluation,
+            credentialVerificationChecks: credentialVerification.checks,
+            receiptHash,
+            receiptHashAlgorithm: 'sha256-canonical-json-v1',
+            manifestPath: policy.circuitManifest.manifestPath,
+            manifestDigest: policy.circuitManifest.manifestDigest,
+            sourceDigest: policy.circuitManifest.sourceDigest,
+            policyBindingDigest: policy.circuitManifest.policyBindingDigest,
+            artifactStatus: policy.circuitManifest.artifactStatus,
+            disclosureBudget: disclosurePolicy.disclosureBudget,
+          },
+          completedAt: new Date(),
+        },
+      });
+
+      const auditLog = await prisma.auditLog.create({
+        data: {
+          identityId: identity.id,
+          action:
+            status === 'ALLOWED'
+              ? 'VERIFICATION_COMPLETED'
+              : 'VERIFICATION_FAILED',
+          resourceType: 'eligibility_proof',
+          resourceId: verificationRecord.id,
+          details: {
+            decisionId,
+            proofId,
+            policyId: policy.policyId,
+            policyVersion: policy.version,
+            relyingAppId,
+            status,
+            deniedReasons,
+            receiptHash,
+            receiptHashAlgorithm: 'sha256-canonical-json-v1',
+            contextHash,
+            circuitId: policy.circuitManifest.circuitId,
+            circuitName: policy.circuitManifest.circuitName,
+            verificationKeyId: policy.circuitManifest.verificationKeyId,
+            manifestPath: policy.circuitManifest.manifestPath,
+            manifestDigest: policy.circuitManifest.manifestDigest,
+            sourceDigest: policy.circuitManifest.sourceDigest,
+            policyBindingDigest: policy.circuitManifest.policyBindingDigest,
+            artifactStatus: policy.circuitManifest.artifactStatus,
+            disclosureBudget: disclosurePolicy.disclosureBudget,
+          },
+        },
+      });
+      const sealedAuditLog = auditLog as {
+        id: string;
+        entryHash?: string | null;
+      };
+      const auditHash = withHexPrefix(
+        sealedAuditLog.entryHash ??
+          sha256Hex(
+            canonicalizeClaims({
+              auditLogId: sealedAuditLog.id,
+              namespace: policy.evidenceAnchors.auditLogNamespace,
+              receiptHash,
+              claimsHash: claimsHashSignal,
+            }),
+          ),
+      );
+
+      verificationCounter.inc({
+        result: status === 'ALLOWED' ? 'success' : 'failed',
+      });
+
+      res.status(201).json({
+        data: {
+          status,
+          decisionId,
+          policyId: policy.policyId,
+          policyVersion: policy.version,
+          subjectDid,
+          credentialId,
+          relyingAppId,
+          proof: {
+            proofId,
+            circuitId: policy.circuitManifest.circuitId,
+            circuitName: policy.circuitManifest.circuitName,
+            verificationKeyId: policy.circuitManifest.verificationKeyId,
+            manifestDigest: policy.circuitManifest.manifestDigest,
+            policyBindingDigest: policy.circuitManifest.policyBindingDigest,
+            contextHash,
+            verifiedAt,
+            onchainTxHash,
+            publicSignals,
+            privateInputsRedacted: policy.circuitManifest.privateInputsRedacted,
+            disclosurePolicy,
+          },
+          evaluation: {
+            ...evaluation,
+            minimumAge: policy.minimumAge,
+            computedAge: profile.computedAge,
+            allowedResidencies: policy.allowedResidencies,
+            deniedReasons,
+          },
+          evidence: {
+            auditLogId: auditLog.id,
+            auditHash,
+            regulatoryReportId: `reg_${regulatoryDigest.slice(2, 14)}`,
+            teeAttestationId,
+            receiptHash,
+            receiptHashAlgorithm: 'sha256-canonical-json-v1',
+            policyRegistry: policy.evidenceAnchors.policyRegistry,
+            artifactDigest: policy.circuitManifest.artifactDigest,
+            manifestPath: policy.circuitManifest.manifestPath,
+            manifestDigest: policy.circuitManifest.manifestDigest,
+            sourceDigest: policy.circuitManifest.sourceDigest,
+            policyBindingDigest: policy.circuitManifest.policyBindingDigest,
+            artifactStatus: policy.circuitManifest.artifactStatus,
+            evidenceChain: [
+              profile.issuerProofId ?? `credential:${credential.id}`,
+              teeAttestationId ?? 'tee_attestation_not_present',
+              policy.circuitManifest.manifestDigest,
+              policy.circuitManifest.verificationKeyId,
+              policy.evidenceAnchors.auditLogNamespace,
+            ],
+          },
+          issuedAt: verifiedAt,
+        },
+        message: 'Eligibility proof evaluated successfully',
+      });
+    } catch (err) {
+      verificationCounter.inc({ result: 'error' });
+      const error = asRouteError(err);
+      logger.error('eligibility_proof_error', { error: error.message });
+      sendRouteError(res, error, 'ELIGIBILITY_PROOF_FAILED');
+    }
+}
+
+router.post(
+  '/eligibility-proof',
+  verificationLimiter,
+  validate({ body: eligibilityProofSchema }),
+  eligibilityProofHandler,
+);
+
+// ---------------------------------------------------------------------------
+// GET /api/v1/verification/eligibility-proof/:receiptId — Retrieve receipt
+// ---------------------------------------------------------------------------
+const eligibilityReceiptParamsSchema = z.object({
+  receiptId: z
+    .string()
+    .min(3)
+    .max(128)
+    .regex(/^[A-Za-z0-9._:-]+$/, "Invalid eligibility receipt id"),
+});
+
+router.get(
+  '/eligibility-proof/:receiptId',
+  validate({ params: eligibilityReceiptParamsSchema }),
+  async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    try {
+      const identity = req.identity!;
+      const { receiptId } = req.params as z.infer<
+        typeof eligibilityReceiptParamsSchema
+      >;
+
+      const verification = await prisma.verification.findFirst({
+        where: eligibilityReceiptLookupWhere(identity.id, receiptId),
+        orderBy: { completedAt: 'desc' },
+        select: {
+          id: true,
+          credentialId: true,
+          verifierId: true,
+          subjectId: true,
+          result: true,
+          requestedAt: true,
+          completedAt: true,
+          zkProofData: true,
+          teeAttestation: true,
+          resultDetails: true,
+        },
+      });
+
+      if (!verification) {
+        res.status(404).json({
+          error: 'Eligibility proof receipt was not found',
+          code: 'ELIGIBILITY_RECEIPT_NOT_FOUND',
+          details: { receiptId },
+        });
+        return;
+      }
+
+      const auditLog = await prisma.auditLog.findFirst({
+        where: {
+          resourceType: 'eligibility_proof',
+          resourceId: verification.id,
+        },
+        orderBy: { timestamp: 'desc' },
+        select: {
+          id: true,
+          timestamp: true,
+          details: true,
+        },
+      });
+      const bundle = buildEligibilityReceiptEvidenceBundle(verification);
+      const auditDetails = asRecord(auditLog?.details);
+      const auditDetailHash =
+        typeof auditDetails.auditHash === 'string'
+          ? auditDetails.auditHash
+          : typeof auditDetails.entryHash === 'string'
+            ? auditDetails.entryHash
+            : undefined;
+      const fallbackAuditHash =
+        auditLog?.id && bundle.evidence.receiptHash
+          ? sha256Hex(
+              canonicalizeClaims({
+                auditLogId: auditLog.id,
+                namespace:
+                  ZEROID_ELIGIBILITY_POLICY_V1.evidenceAnchors
+                    .auditLogNamespace,
+                receiptHash: bundle.evidence.receiptHash,
+              }),
+            )
+          : undefined;
+
+      res.json({
+        data: {
+          ...bundle,
+          evidence: {
+            ...bundle.evidence,
+            auditLogId: auditLog?.id,
+            auditHash:
+              bundle.evidence.auditHash ??
+              (auditDetailHash
+                ? withHexPrefix(auditDetailHash)
+                : fallbackAuditHash),
+            auditTimestamp: auditLog?.timestamp.toISOString(),
+            auditDetails,
+          },
+        },
+        message: 'Eligibility proof receipt loaded successfully',
+      });
+    } catch (err) {
+      const error = asRouteError(err);
+      logger.error('eligibility_receipt_get_error', { error: error.message });
+      sendRouteError(res, error, 'ELIGIBILITY_RECEIPT_GET_FAILED');
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// POST /api/v1/verification/requests — Create a verifier proof request
+// ---------------------------------------------------------------------------
+const createVerificationRequestSchema = z.object({
+  subjectDid: z.union([z.string(), z.object({ uri: z.string() })]),
+  credentialHash: z.string().min(1).max(256),
+  requestedAttributes: z.array(z.string().min(1).max(128)).default([]),
+  circuitId: z.string().min(1).max(128),
+  expiresAt: z.number().int().positive(),
+  purpose: z.string().min(1).max(1000),
+  verifierName: z.string().min(1).max(160).optional(),
+  requiredCredentials: z.array(z.string().min(1).max(160)).optional(),
+  requiredAttributes: z.array(z.unknown()).optional(),
+});
+
+router.post(
+  '/requests',
+  verificationLimiter,
+  validate({ body: createVerificationRequestSchema }),
+  async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    try {
+      const verifier = req.identity!;
+      const subjectDid = didValue(req.body.subjectDid);
+      if (!subjectDid) {
+        res.status(400).json({
+          error: 'subjectDid must be a DID string or { uri } object',
+          code: 'VERIFICATION_REQUEST_SUBJECT_INVALID',
+        });
+        return;
+      }
+
+      const subject = await prisma.identity.findUnique({
+        where: { did: subjectDid },
+        select: { id: true, did: true, status: true },
+      });
+      if (!subject || subject.status !== 'ACTIVE') {
+        res.status(404).json({
+          error: 'Verification subject was not found or is not active',
+          code: 'VERIFICATION_SUBJECT_NOT_FOUND',
+          details: { subjectDid },
+        });
+        return;
+      }
+
+      const {
+        credentialHash,
+        requestedAttributes,
+        circuitId,
+        expiresAt,
+        purpose,
+        verifierName,
+        requiredCredentials,
+        requiredAttributes,
+      } = req.body as z.infer<typeof createVerificationRequestSchema>;
+      const nowSeconds = Math.floor(Date.now() / 1000);
+      if (expiresAt <= nowSeconds) {
+        res.status(400).json({
+          error: 'Verification request expiry must be in the future',
+          code: 'VERIFICATION_REQUEST_EXPIRY_INVALID',
+        });
+        return;
+      }
+      const requestDetails: Prisma.InputJsonObject = {
+        verifierDid: verifier.did,
+        subjectDid,
+        credentialHash,
+        requestedAttributes,
+        circuitId,
+        expiresAt,
+        purpose,
+        userConsent: false,
+        ...(verifierName ? { verifierName } : {}),
+        ...(requiredCredentials ? { requiredCredentials } : {}),
+        ...(requiredAttributes
+          ? {
+              requiredAttributes: requiredAttributes as Prisma.InputJsonArray,
+            }
+          : {}),
+      };
+
+      const verification = await prisma.verification.create({
+        data: {
+          verifierId: verifier.id,
+          subjectId: subject.id,
+          verificationType: 'PROOF_REQUEST',
+          result: 'PENDING',
+          resultDetails: requestDetails,
+        },
+        include: {
+          verifier: { select: { did: true } },
+          subject: { select: { did: true } },
+        },
+      });
+
+      await prisma.auditLog.create({
+        data: {
+          identityId: verifier.id,
+          action: 'VERIFICATION_REQUESTED',
+          resourceType: 'verification_request',
+          resourceId: verification.id,
+          details: {
+            subjectDid,
+            credentialHash,
+            requestedAttributes,
+            circuitId,
+            expiresAt,
+            purpose,
+          },
+        },
+      });
+
+      res.status(201).json({
+        data: buildVerificationRequestResponse(verification),
+        message: 'Verification request created successfully',
+      });
+    } catch (err) {
+      const error = asRouteError(err);
+      logger.error('verification_request_create_error', {
+        error: error.message,
+      });
+      sendRouteError(res, error, 'VERIFICATION_REQUEST_CREATE_FAILED');
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// GET /api/v1/verification/requests — List durable proof requests
+// ---------------------------------------------------------------------------
+const listVerificationRequestsQuery = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+  role: z.enum(['subject', 'verifier', 'all']).default('subject'),
+  result: z.enum(['PENDING', 'VERIFIED', 'FAILED', 'EXPIRED']).optional(),
+});
+
+router.get(
+  '/requests',
+  validate({ query: listVerificationRequestsQuery }),
+  async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    try {
+      const identity = req.identity!;
+      const { page, limit, role, result } = req.query as unknown as z.infer<
+        typeof listVerificationRequestsQuery
+      >;
+
+      const where: Record<string, unknown> = {
+        verificationType: 'PROOF_REQUEST',
+        result: result ?? 'PENDING',
+      };
+      if (role === 'subject') {
+        where.subjectId = identity.id;
+      } else if (role === 'verifier') {
+        where.verifierId = identity.id;
+      } else {
+        where.OR = [{ subjectId: identity.id }, { verifierId: identity.id }];
+      }
+
+      const [requests, total] = await Promise.all([
+        prisma.verification.findMany({
+          where,
+          orderBy: { requestedAt: 'desc' },
+          skip: (page - 1) * limit,
+          take: limit,
+          include: {
+            verifier: { select: { did: true } },
+            subject: { select: { did: true } },
+          },
+        }),
+        prisma.verification.count({ where }),
+      ]);
+
+      res.json({
+        data: requests.map(buildVerificationRequestResponse),
+        pagination: {
+          page,
+          limit,
+          total,
+          totalPages: Math.ceil(total / limit),
+        },
+      });
+    } catch (err) {
+      sendRouteError(
+        res,
+        asRouteError(err),
+        'VERIFICATION_REQUEST_LIST_FAILED',
+      );
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
 // GET /api/v1/verification/circuits — List available ZK circuits
 // ---------------------------------------------------------------------------
 router.get('/circuits', (_req: AuthenticatedRequest, res: Response): void => {
@@ -966,7 +2297,15 @@ router.get('/circuits', (_req: AuthenticatedRequest, res: Response): void => {
 const historyQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
-  type: z.enum(['ZK_PROOF', 'TEE_ATTESTATION', 'CREDENTIAL_CHECK']).optional(),
+  type: z
+    .enum([
+      'ZK_PROOF',
+      'TEE_ATTESTATION',
+      'CREDENTIAL_CHECK',
+      'ELIGIBILITY_PROOF',
+      'PROOF_REQUEST',
+    ])
+    .optional(),
   result: z.enum(['PENDING', 'VERIFIED', 'FAILED', 'EXPIRED']).optional(),
 });
 

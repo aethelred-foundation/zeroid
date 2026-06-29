@@ -17,6 +17,10 @@ jest.mock('../../src/middleware/rateLimit', () => ({
   apiRateLimiter: (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
 
+jest.mock('../../src/routes/verification', () => ({
+  eligibilityProofHandler: jest.fn(),
+}));
+
 const mockProof = jest.fn();
 jest.mock('../../src/services/ai/agent-eligibility', () => ({
   agentEligibilityProof: (...args: unknown[]) => mockProof(...args),

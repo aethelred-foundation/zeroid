@@ -17,12 +17,14 @@ import {
   agentEligibilityProof,
   AgentEligibilityError,
   type AgentEligibilityDeps,
+  type EligibilityResult,
 } from '../../services/ai/agent-eligibility';
 import type {
   AgentStatus,
   CredentialStatus,
   RiskTier,
 } from '../../services/ai/agent-passport';
+import { eligibilityProofHandler } from '../verification';
 
 const AgentEligibilityProofSchema = z.object({
   agentDid: z.string().min(1),
@@ -35,7 +37,9 @@ const AgentEligibilityProofSchema = z.object({
 });
 
 /** Wire the service's injected dependencies to real Prisma + eligibility. */
-function buildAgentEligibilityDeps(): AgentEligibilityDeps {
+function buildAgentEligibilityDeps(
+  controllerIdentity: NonNullable<AuthenticatedRequest['identity']>,
+): AgentEligibilityDeps {
   return {
     async loadAgent(agentDid) {
       const agent = await prisma.aIAgent.findUnique({
@@ -72,16 +76,48 @@ function buildAgentEligibilityDeps(): AgentEligibilityDeps {
       };
     },
 
-    async runEligibility() {
-      // INTEGRATION SEAM: the human eligibility logic currently lives inline in
-      // routes/verification.ts. Extracting it into a callable service (without
-      // destabilising the human workflow) is the one integration task needed for
-      // this endpoint to go fully live. See docs/policies/agent_identity_v1.md.
-      throw new AgentEligibilityError(
-        'eligibility delegation pending service extraction',
-        'INTERNAL_ERROR',
-        500,
-      );
+    async runEligibility(input) {
+      // Reuse the EXACT human eligibility handler (no re-implementation) via an
+      // in-process response shim. `eligibilityProofHandler` is the extracted,
+      // behaviour-identical handler from routes/verification.ts.
+      const fakeReq = {
+        identity: controllerIdentity,
+        body: {
+          subjectDid: input.subjectDid,
+          credentialId: input.credentialId,
+          policyId: input.policyId,
+          relyingAppId: input.relyingAppId,
+          contextNonce:
+            input.contextNonce ??
+            `agent-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`,
+        },
+      } as unknown as AuthenticatedRequest;
+
+      let httpStatus = 200;
+      let payload:
+        | { data?: EligibilityResult; error?: string; code?: string }
+        | undefined;
+      const fakeRes = {
+        status(code: number) {
+          httpStatus = code;
+          return fakeRes;
+        },
+        json(value: unknown) {
+          payload = value as typeof payload;
+          return fakeRes;
+        },
+      } as unknown as Response;
+
+      await eligibilityProofHandler(fakeReq, fakeRes);
+
+      if (httpStatus !== 201 || !payload?.data) {
+        throw new AgentEligibilityError(
+          payload?.error ?? 'eligibility evaluation failed',
+          payload?.code ?? 'ELIGIBILITY_FAILED',
+          httpStatus >= 400 ? httpStatus : 502,
+        );
+      }
+      return payload.data;
     },
 
     async recordAgentAction(action) {
@@ -116,7 +152,10 @@ router.post(
   validate({ body: AgentEligibilityProofSchema }),
   async (req: AuthenticatedRequest, res: Response) => {
     try {
-      const result = await agentEligibilityProof(buildAgentEligibilityDeps(), req.body);
+      const result = await agentEligibilityProof(
+        buildAgentEligibilityDeps(req.identity!),
+        req.body,
+      );
       res.status(200).json(result);
     } catch (error) {
       if (error instanceof AgentEligibilityError) {
