@@ -46,4 +46,36 @@ describe("Shamir GF(256) secret sharing", () => {
     expect(() => splitSecret(new Uint8Array([1]), 4, 3)).toThrow();
     expect(() => splitSecret(new Uint8Array([1]), 2, 256)).toThrow();
   });
+
+  it("rejects an empty secret", () => {
+    expect(() => splitSecret(new Uint8Array([]), 2, 3)).toThrow(/empty/);
+  });
+
+  it("combineShares rejects no shares, duplicate/invalid indices, and length mismatch", () => {
+    const shares = splitSecret(new Uint8Array([1, 2, 3]), 2, 4);
+    expect(() => combineShares([])).toThrow(/no shares/);
+    expect(() => combineShares([shares[0], shares[0]])).toThrow(/duplicate/);
+    expect(() => combineShares([{ x: 0, y: new Uint8Array(3) }, shares[1]])).toThrow(/invalid share index/);
+    expect(() =>
+      combineShares([shares[0], { x: 9, y: new Uint8Array(2) }]),
+    ).toThrow(/inconsistent share length/);
+  });
+
+  it("property: reconstructs across many random secrets/thresholds/subsets", () => {
+    for (let iter = 0; iter < 60; iter++) {
+      const n = 2 + Math.floor(Math.random() * 8); // 2..9 shares
+      const t = 2 + Math.floor(Math.random() * (n - 1)); // 2..n threshold
+      const len = 1 + Math.floor(Math.random() * 48);
+      const secret = randomBytes(len);
+      const shares = splitSecret(secret, t, n);
+
+      // a random subset of exactly t distinct shares reconstructs
+      const pool = [...shares];
+      const subset: typeof shares = [];
+      for (let k = 0; k < t; k++) {
+        subset.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
+      }
+      expect(Array.from(combineShares(subset))).toEqual(Array.from(secret));
+    }
+  });
 });

@@ -49,6 +49,9 @@ export function splitSecret(
   if (threshold < 2 || shares < threshold || shares > 255) {
     throw new Error("invalid threshold/shares (need 2<=threshold<=shares<=255)");
   }
+  if (secret.length === 0) {
+    throw new Error("splitSecret: empty secret");
+  }
   const out: Share[] = [];
   for (let x = 1; x <= shares; x++) {
     out.push({ x, y: new Uint8Array(secret.length) });
@@ -72,7 +75,24 @@ export function splitSecret(
 
 /** Reconstruct the secret from `threshold` (or more) shares via Lagrange at 0. */
 export function combineShares(shares: Share[]): Uint8Array {
+  if (shares.length === 0) {
+    throw new Error("combineShares: no shares provided");
+  }
   const len = shares[0].y.length;
+  const seenX = new Set<number>();
+  for (const share of shares) {
+    if (!Number.isInteger(share.x) || share.x < 1 || share.x > 255) {
+      throw new Error(`combineShares: invalid share index ${share.x} (must be 1..255)`);
+    }
+    if (seenX.has(share.x)) {
+      // Duplicate x-coordinates make the Lagrange denominator (x_j ^ x_m) zero.
+      throw new Error(`combineShares: duplicate share index ${share.x}`);
+    }
+    seenX.add(share.x);
+    if (share.y.length !== len) {
+      throw new Error("combineShares: inconsistent share length");
+    }
+  }
   const secret = new Uint8Array(len);
   for (let i = 0; i < len; i++) {
     let acc = 0;
