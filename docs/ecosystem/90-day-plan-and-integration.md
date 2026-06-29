@@ -20,14 +20,14 @@
 
 ### Integration 1 — Wallet (custody) ↔ ZeroID
 ZeroID-side contract (reuses existing eligibility + conditional-disclosure orchestrators):
-- `POST /api/v1/partners/wallet/eligibility` → eligibility decision for an account owner (wraps the human `eligibilityProofHandler`). **[buildable]**
-- `POST /api/v1/partners/wallet/disclosure` → orchestrate conditional disclosure under `warrantHash` (wraps `discloseIdentityPath` + on-chain quorum). **[buildable]**
-- `GET /api/v1/partners/wallet/evidence/:decisionId` → evidence bundle (Digital Seal). **[buildable]**
+- `POST /api/v1/partners/wallet/eligibility` → eligibility decision for an account owner (wraps the human `eligibilityProofHandler`). **[done — ZeroID-side]**
+- `POST /api/v1/partners/wallet/disclosure` → orchestrate conditional disclosure under `warrantHash` (wraps `discloseIdentityPath` + on-chain quorum). **[done — ZeroID-side]**
+- `GET /api/v1/partners/wallet/evidence/:decisionId` → evidence bundle (Digital Seal). **[done — ZeroID-side]**
 - Wallet stores only references (commitments, seal ids, decision ids) — **never raw PII**. **[gated]** (Wallet repo)
 
 ### Integration 2 — Cruzible (staking) ↔ ZeroID
-- `POST /api/v1/partners/cruzible/pools/:poolId/eligibility` → check staker against the pool's `PolicyDefinition` (accreditation/jurisdiction/sanctions). **[buildable]**
-- `POST /api/v1/partners/cruzible/pools/:poolId/agent-scan` → trigger an AI-agent compliance scan (scopes `eligibility.read`/`audit.read`), recording `AgentAction`s + optional Digital Seals. **[buildable]** (reuses AI Agent Passport v1)
+- `POST /api/v1/partners/cruzible/pools/:poolId/eligibility` → check staker against the pool's `PolicyDefinition` (accreditation/jurisdiction/sanctions). **[done — ZeroID-side]**
+- `POST /api/v1/partners/cruzible/pools/:poolId/agent-scan` → trigger an AI-agent compliance scan (scopes `eligibility.read`/`audit.read`), recording `AgentAction`s + optional Digital Seals. **[done — ZeroID-side]** (reuses AI Agent Passport v1)
 - Route a share of pool fees through `FeeRouter`. **[gated]** (Cruzible repo)
 
 ### Integration 3 — shared conformance boundary
@@ -41,7 +41,7 @@ Replicate `src/lib/aethelred/` (+ the `boundary:check` CI guard) into Cruzible a
 
 ## What's built here vs. what needs infra
 
-- **Built + tested now:** conformance boundary (W1–W6), moat features (zkML liveness, conditional disclosure on/off-chain, PQC adapter), AI Agent Passport v1 (backend+frontend), **FeeRouter economic flywheel**, regulatory memo, integration API contract design.
+- **Built + tested now:** conformance boundary (W1–W6), moat features (zkML liveness, conditional disclosure on/off-chain, PQC adapter), AI Agent Passport v1 (backend+frontend), **FeeRouter economic flywheel**, **ZeroID-side partner endpoints** (`/partners/wallet/*`, `/partners/cruzible/*`) reusing the eligibility + AI-agent orchestrators (mounted at `/api/v1/partners`, 17 partner tests), regulatory memo, integration API contracts.
 - **Needs the live testnet / TEE-EZKL-PQC infra:** W2c/W3c/W4c/Phase 2b activation; contract deployment; evidence pack.
 - **Needs the Cruzible & Wallet repos:** the partner integrations + boundary replication (ZeroID-side endpoints are buildable independently and listed above).
 - **Decisions outstanding:** fee price + level (protocol vs app); conditional-disclosure escrow v1 (Shamir) vs v2 (MPC) — see the memo.
