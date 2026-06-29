@@ -2,7 +2,12 @@
 
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { useAIAgents } from "@/hooks/useAIAgents";
+import { useAIAgents, useCreateAIAgent } from "@/hooks/useAIAgents";
+import {
+  AGENT_SCOPES,
+  type AgentScope,
+  type RiskTier,
+} from "@/lib/api/agent-passport-client";
 import {
   Bot,
   Plus,
@@ -300,6 +305,32 @@ export default function AgentIdentityPage() {
 
   // AI Agent Passport v1 — live registered agents (read-only pilot).
   const { data: liveAgents } = useAIAgents();
+  const createAgent = useCreateAIAgent();
+  const [agentForm, setAgentForm] = useState<{
+    displayName: string;
+    scopes: AgentScope[];
+    maxRiskTier: RiskTier;
+  }>({ displayName: "", scopes: ["eligibility.read"], maxRiskTier: "MEDIUM" });
+
+  const handleRegisterAgent = async () => {
+    if (!agentForm.displayName.trim() || createAgent.isPending) return;
+    try {
+      await createAgent.mutateAsync({
+        displayName: agentForm.displayName.trim(),
+        scopes: agentForm.scopes,
+        maxRiskTier: agentForm.maxRiskTier,
+      });
+      setShowWizard(false);
+      setWizardStep(0);
+      setAgentForm({
+        displayName: "",
+        scopes: ["eligibility.read"],
+        maxRiskTier: "MEDIUM",
+      });
+    } catch {
+      // keep the wizard open so the user can retry
+    }
+  };
 
   const filteredAgents = agents.filter(
     (a) =>
@@ -955,6 +986,13 @@ export default function AgentIdentityPage() {
                         <input
                           className="w-full px-3 py-2.5 bg-zero-800 border border-zero-700 rounded-xl text-sm focus:outline-none focus:border-brand-500"
                           placeholder="e.g., ComplianceBot-v2"
+                          value={agentForm.displayName}
+                          onChange={(e) =>
+                            setAgentForm((f) => ({
+                              ...f,
+                              displayName: e.target.value,
+                            }))
+                          }
                         />
                       </div>
                       <div>
@@ -978,6 +1016,53 @@ export default function AgentIdentityPage() {
                           className="w-full px-3 py-2.5 bg-zero-800 border border-zero-700 rounded-xl text-sm focus:outline-none focus:border-brand-500 min-h-[80px]"
                           placeholder="Describe what this agent does..."
                         />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium mb-1.5">
+                          Passport Scopes (read-only v1)
+                        </label>
+                        <div className="flex flex-wrap gap-2">
+                          {AGENT_SCOPES.map((scope) => {
+                            const on = agentForm.scopes.includes(scope);
+                            return (
+                              <button
+                                key={scope}
+                                type="button"
+                                onClick={() =>
+                                  setAgentForm((f) => ({
+                                    ...f,
+                                    scopes: on
+                                      ? f.scopes.filter((s) => s !== scope)
+                                      : [...f.scopes, scope],
+                                  }))
+                                }
+                                className={`px-2.5 py-1 rounded-lg text-xs border ${on ? "bg-brand-600 border-brand-500 text-white" : "bg-zero-800 border-zero-700 text-zero-400"}`}
+                              >
+                                {scope}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium mb-1.5">
+                          Max Risk Tier
+                        </label>
+                        <select
+                          value={agentForm.maxRiskTier}
+                          onChange={(e) =>
+                            setAgentForm((f) => ({
+                              ...f,
+                              maxRiskTier: e.target.value as RiskTier,
+                            }))
+                          }
+                          className="w-full px-3 py-2.5 bg-zero-800 border border-zero-700 rounded-xl text-sm focus:outline-none focus:border-brand-500"
+                        >
+                          <option value="LOW">LOW</option>
+                          <option value="MEDIUM">MEDIUM</option>
+                          <option value="HIGH">HIGH</option>
+                          <option value="CRITICAL">CRITICAL</option>
+                        </select>
                       </div>
                     </div>
                   )}
@@ -1098,11 +1183,19 @@ export default function AgentIdentityPage() {
                       onClick={() =>
                         wizardStep < 3
                           ? setWizardStep(wizardStep + 1)
-                          : setShowWizard(false)
+                          : handleRegisterAgent()
                       }
-                      className="btn-primary text-sm"
+                      disabled={
+                        wizardStep === 3 &&
+                        (createAgent.isPending || !agentForm.displayName.trim())
+                      }
+                      className="btn-primary text-sm disabled:opacity-50"
                     >
-                      {wizardStep === 3 ? "Register Agent" : "Next"}
+                      {wizardStep === 3
+                        ? createAgent.isPending
+                          ? "Registering…"
+                          : "Register Agent"
+                        : "Next"}
                       <ArrowRight className="w-4 h-4" />
                     </button>
                   </div>

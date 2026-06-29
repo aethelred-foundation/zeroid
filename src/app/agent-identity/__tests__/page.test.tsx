@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 
 // Mock next/navigation
 jest.mock("next/navigation", () => ({
@@ -8,9 +8,14 @@ jest.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(),
 }));
 
-// AI Agent Passport v1 hook — avoids needing a QueryClientProvider in this test
+// AI Agent Passport v1 hooks — avoid needing a QueryClientProvider in this test
+const mockCreateAgentMutate = jest.fn().mockResolvedValue({});
 jest.mock("@/hooks/useAIAgents", () => ({
   useAIAgents: () => ({ data: [] }),
+  useCreateAIAgent: () => ({
+    mutateAsync: mockCreateAgentMutate,
+    isPending: false,
+  }),
 }));
 
 // Mock framer-motion
@@ -269,20 +274,28 @@ describe("AgentIdentityPage", () => {
     expect(screen.queryByText("Register New Agent")).not.toBeInTheDocument();
   });
 
-  it("completes wizard by clicking Register Agent on final step", () => {
+  it("completes wizard by clicking Register Agent on final step", async () => {
     render(<AgentIdentityPage />);
     fireEvent.click(screen.getByText("Register Agent"));
+    // Fill the v1 passport name (step 0) before navigating
+    fireEvent.change(screen.getByPlaceholderText("e.g., ComplianceBot-v2"), {
+      target: { value: "Compliance Copilot v1" },
+    });
     // Navigate to final step
     fireEvent.click(screen.getByText("Next"));
     fireEvent.click(screen.getByText("Next"));
     fireEvent.click(screen.getByText("Next"));
     expect(screen.getByText("Step 4 of 4")).toBeInTheDocument();
-    // Click the Register Agent button in the wizard (not the page button)
+    // Click the wizard's Register Agent button (last match)
     const registerButtons = screen.getAllByText("Register Agent");
-    // The last one is the wizard's Register Agent button
     fireEvent.click(registerButtons[registerButtons.length - 1]);
-    // Wizard should close
-    expect(screen.queryByText("Register New Agent")).not.toBeInTheDocument();
+    // Registers via the v1 hook, then closes the wizard
+    await waitFor(() =>
+      expect(screen.queryByText("Register New Agent")).not.toBeInTheDocument(),
+    );
+    expect(mockCreateAgentMutate).toHaveBeenCalledWith(
+      expect.objectContaining({ displayName: "Compliance Copilot v1" }),
+    );
   });
 
   it("shows agents with different statuses and capabilities in grid", () => {
