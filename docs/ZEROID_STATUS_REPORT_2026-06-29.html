@@ -1,0 +1,506 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang xml:lang>
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>ZeroID — Engineering Status Report (2026-06-29)</title>
+  <style>
+    html {
+      line-height: 1.5;
+      font-family: Georgia, serif;
+      font-size: 20px;
+      color: #1a1a1a;
+      background-color: #fdfdfd;
+    }
+    body {
+      margin: 0 auto;
+      max-width: 36em;
+      padding-left: 50px;
+      padding-right: 50px;
+      padding-top: 50px;
+      padding-bottom: 50px;
+      hyphens: auto;
+      word-wrap: break-word;
+      text-rendering: optimizeLegibility;
+      font-kerning: normal;
+    }
+    @media (max-width: 600px) {
+      body {
+        font-size: 0.9em;
+        padding: 1em;
+      }
+    }
+    @media print {
+      body {
+        background-color: transparent;
+        color: black;
+        font-size: 12pt;
+      }
+      p, h2, h3 {
+        orphans: 3;
+        widows: 3;
+      }
+      h2, h3, h4 {
+        page-break-after: avoid;
+      }
+    }
+    p {
+      margin: 1em 0;
+    }
+    a {
+      color: #1a1a1a;
+    }
+    a:visited {
+      color: #1a1a1a;
+    }
+    img {
+      max-width: 100%;
+    }
+    h1, h2, h3, h4, h5, h6 {
+      margin-top: 1.4em;
+    }
+    h5, h6 {
+      font-size: 1em;
+      font-style: italic;
+    }
+    h6 {
+      font-weight: normal;
+    }
+    ol, ul {
+      padding-left: 1.7em;
+      margin-top: 1em;
+    }
+    li > ol, li > ul {
+      margin-top: 0;
+    }
+    blockquote {
+      margin: 1em 0 1em 1.7em;
+      padding-left: 1em;
+      border-left: 2px solid #e6e6e6;
+      color: #606060;
+    }
+    code {
+      font-family: Menlo, Monaco, 'Lucida Console', Consolas, monospace;
+      font-size: 85%;
+      margin: 0;
+    }
+    pre {
+      margin: 1em 0;
+      overflow: auto;
+    }
+    pre code {
+      padding: 0;
+      overflow: visible;
+    }
+    .sourceCode {
+     background-color: transparent;
+     overflow: visible;
+    }
+    hr {
+      background-color: #1a1a1a;
+      border: none;
+      height: 1px;
+      margin: 1em 0;
+    }
+    table {
+      margin: 1em 0;
+      border-collapse: collapse;
+      width: 100%;
+      overflow-x: auto;
+      display: block;
+      font-variant-numeric: lining-nums tabular-nums;
+    }
+    table caption {
+      margin-bottom: 0.75em;
+    }
+    tbody {
+      margin-top: 0.5em;
+      border-top: 1px solid #1a1a1a;
+      border-bottom: 1px solid #1a1a1a;
+    }
+    th {
+      border-top: 1px solid #1a1a1a;
+      padding: 0.25em 0.5em 0.25em 0.5em;
+    }
+    td {
+      padding: 0.125em 0.5em 0.25em 0.5em;
+    }
+    header {
+      margin-bottom: 4em;
+      text-align: center;
+    }
+    #TOC li {
+      list-style: none;
+    }
+    #TOC a:not(:hover) {
+      text-decoration: none;
+    }
+    code{white-space: pre-wrap;}
+    span.smallcaps{font-variant: small-caps;}
+    span.underline{text-decoration: underline;}
+    div.column{display: inline-block; vertical-align: top; width: 50%;}
+    div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+    ul.task-list{list-style: none;}
+    .display.math{display: block; text-align: center; margin: 0.5rem auto;}
+  </style>
+  <!--[if lt IE 9]>
+    <script src="//cdnjs.cloudflare.com/ajax/libs/html5shiv/3.7.3/html5shiv-printshiv.min.js"></script>
+  <![endif]-->
+</head>
+<body>
+<header id="title-block-header">
+<h1 class="title">ZeroID — Engineering Status Report (2026-06-29)</h1>
+</header>
+<nav id="TOC" role="doc-toc">
+<ul>
+<li><a href="#zeroid-engineering-status-report">ZeroID — Engineering Status Report</a>
+<ul>
+<li><a href="#executive-summary">1. Executive summary</a></li>
+<li><a href="#what-zeroid-is-positioning">2. What ZeroID is (positioning)</a></li>
+<li><a href="#architecture-overview">3. Architecture overview</a></li>
+<li><a href="#technology-stack">4. Technology stack</a></li>
+<li><a href="#whats-built-by-domain">5. What’s built — by domain</a>
+<ul>
+<li><a href="#aethelred-conformance-boundary-w1w6-srclibaethelred-16-modules-15-test-suites">5.1 Aethelred conformance boundary (W1–W6) — <code>src/lib/aethelred/</code> (16 modules, 15 test suites)</a></li>
+<li><a href="#phase-2-the-moat">5.2 Phase 2 — the moat</a></li>
+<li><a href="#ai-agent-passport-v1-flagship">5.3 AI Agent Passport v1 (flagship)</a></li>
+<li><a href="#smart-contracts-14-contracts-foundry-tests-in-testfoundry">5.4 Smart contracts (14) — <code>contracts/</code>, Foundry tests in <code>test/foundry/</code></a></li>
+<li><a href="#economic-flywheel-feerouter.sol">5.5 Economic flywheel — <code>FeeRouter.sol</code></a></li>
+<li><a href="#partner-integration-surface-apiv1partners">5.6 Partner integration surface — <code>/api/v1/partners/*</code></a></li>
+<li><a href="#backend-platform-the-rest-of-the-38-services">5.7 Backend platform (the rest of the 38 services)</a></li>
+<li><a href="#cross-cutting-hardening-most-recent-work">5.8 Cross-cutting hardening (most recent work)</a></li>
+<li><a href="#frontend-19-pages">5.9 Frontend (19 pages)</a></li>
+</ul></li>
+<li><a href="#testing-quality">6. Testing &amp; quality</a></li>
+<li><a href="#security-compliance-posture">7. Security &amp; compliance posture</a></li>
+<li><a href="#honest-gaps-what-is-not-done-and-why">8. Honest gaps — what is NOT done (and why)</a>
+<ul>
+<li><a href="#infra-gated-code-complete-behind-flagsadapters-flip-after-end-to-end-verification">Infra-gated (code-complete behind flags/adapters; flip after end-to-end verification)</a></li>
+<li><a href="#genuine-work-remaining">Genuine work remaining</a></li>
+<li><a href="#repo-integration-hygiene-recommend-a-decision">Repo / integration hygiene (recommend a decision)</a></li>
+</ul></li>
+<li><a href="#suggested-questions-for-the-consultant">9. Suggested questions for the consultant</a></li>
+</ul></li>
+</ul>
+</nav>
+<h1 id="zeroid-engineering-status-report">ZeroID — Engineering Status Report</h1>
+<p><strong>Date:</strong> 2026-06-29 <strong>Audience:</strong> External consultant review <strong>Repo:</strong> <code>zeroid</code> (local: <code>~/Downloads/zeroid</code>) <strong>Active branch:</strong> <code>feat/economic-flywheel</code> (latest; stacked on <code>feat/ai-agent-passport-v1</code> → <code>design/aethelred-conformance-moat</code>)</p>
+<blockquote>
+<p>Purpose: a complete, honest picture of what ZeroID is today — architecture, technology, codebase, test posture, security/compliance, and the gaps that are genuinely blocked on infrastructure vs. those that are code-complete. Intended to let you advise on <strong>where to focus next and what to fix</strong>.</p>
+</blockquote>
+<hr />
+<h2 id="executive-summary">1. Executive summary</h2>
+<p>ZeroID is a <strong>privacy-preserving decentralized identity (DID/VC) platform</strong> positioned as:</p>
+<ol type="1">
+<li><strong>“The AI agent’s passport”</strong> — the flagship v1 scenario: an AI agent proves, in zero-knowledge, that <em>its human controller</em> is eligible for a regulated action, under a named policy, with a full audit trail — without exposing the controller’s PII.</li>
+<li><strong>The identity spine of the Aethelred ecosystem</strong> — Wallet (custody) and Cruzible (staking) call ZeroID for eligibility, agent compliance scans, and warrant-bound conditional disclosure.</li>
+</ol>
+<p>It is built to <strong>conform to the Aethelred L1</strong> canonical stack (not a generic EVM): ZK precompiles, TEE attestation, post-quantum signing, and EVM-compatible Solidity, isolated behind a single conformance boundary.</p>
+<p><strong>Maturity at a glance:</strong></p>
+<table>
+<colgroup>
+<col style="width: 46%" />
+<col style="width: 53%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>Area</th>
+<th>State</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>Core platform (identity, credentials, verification, policy governance, compliance)</td>
+<td><strong>Built &amp; tested</strong></td>
+</tr>
+<tr class="even">
+<td>AI Agent Passport v1 (backend + frontend, end-to-end)</td>
+<td><strong>Built &amp; tested</strong></td>
+</tr>
+<tr class="odd">
+<td>Smart contracts (14) + economic flywheel + conditional disclosure quorum</td>
+<td><strong>Built &amp; tested</strong> (incl. fuzz + invariant)</td>
+</tr>
+<tr class="even">
+<td>Aethelred conformance boundary (ZK / TEE / PQC / hooks)</td>
+<td><strong>Built &amp; tested</strong> behind adapters; real providers are flag-gated</td>
+</tr>
+<tr class="odd">
+<td>Partner surface (Wallet / Cruzible endpoints)</td>
+<td><strong>Built &amp; tested</strong> (DI; idempotent)</td>
+</tr>
+<tr class="even">
+<td>Cross-cutting hardening (idempotency, unified errors, security docs)</td>
+<td><strong>Built &amp; tested</strong></td>
+</tr>
+<tr class="odd">
+<td>Testnet activation, DB apply, deployed addresses, real TEE/EZKL/PQC backends</td>
+<td><strong>Infra-gated — not done</strong> (see §8)</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Code volume (excl. dependencies):</strong> backend <code>~54k</code> LOC · frontend <code>~88k</code> LOC (incl. conformance lib <code>~2k</code>) · Solidity contracts <code>~9.4k</code> LOC.</p>
+<hr />
+<h2 id="what-zeroid-is-positioning">2. What ZeroID is (positioning)</h2>
+<ul>
+<li><strong>Subject of trust:</strong> a human (or organization) holds a DID and verifiable credentials; an AI agent is a <em>delegated</em> actor bound to a controller DID with scoped capabilities and a risk ceiling.</li>
+<li><strong>The unit of value:</strong> an <strong>eligibility proof</strong> — “this subject satisfies policy P (age / jurisdiction / sanctions / risk / credential validity / non-revocation)” — produced as a zero-knowledge proof and recorded as a tamper-evident decision receipt.</li>
+<li><strong>The differentiator vs. incumbents:</strong> ZK + TEE + post-quantum + on-chain conditional disclosure (regulator-grade, warrant-bound, quorum-gated reveal) on a sovereign L1 — rather than a centralized KYC API.</li>
+</ul>
+<hr />
+<h2 id="architecture-overview">3. Architecture overview</h2>
+<p>Four layers, with the Aethelred dependency isolated to one seam:</p>
+<pre><code>+---------------------------------------------------------------+
+| FRONTEND  - Next.js 14 / React / React Query / viem + wagmi   |
+|   19 pages: identity, credentials, verification,              |
+|   agent-identity, eligibility, compliance, governance,        |
+|   marketplace, ...                                            |
++-------------------------------+-------------------------------+
+                                |  REST  /api/v1/*
++-------------------------------v-------------------------------+
+| BACKEND  - Express + TypeScript + Prisma (Postgres)          |
+|   38 service modules | 11 route groups | 32 Prisma models    |
+|   identity | credential | verification (eligibility) |       |
+|   policy governance | compliance | AI (risk/fraud/bio) |     |
+|   enterprise (OIDC, issuer-trust, SLA, webhooks) | partners  |
++-------------------------------+-------------------------------+
+                                |  single conformance seam
++-------------------------------v-------------------------------+
+| src/lib/aethelred/  - Aethelred conformance boundary (16)    |
+|   zk | verify | encoding | vkeys | attestation (TEE/DCAP) |  |
+|   seals | signing (PQC hybrid) | liveness (EZKL) |           |
+|   disclosure | shamir | client | react hooks                 |
+|   [CI guard: no Aethelred SDK imports anywhere else]         |
++-------------------------------+-------------------------------+
+                                |  EVM + precompiles
++-------------------------------v-------------------------------+
+| CONTRACTS  (Foundry / Solidity ^0.8.20)  - 14 contracts      |
+|   ZeroID | CredentialRegistry | ZKCredentialVerifier |       |
+|   SelectiveDisclosure | AccumulatorRevocation | BBSPlus |    |
+|   ThresholdCredential | TEEAttestationRegistry | AIAgentReg |
+|   CrossChainIdentityBridge | GovernanceModule |              |
+|   RegulatoryCompliance | ConditionalDisclosure | FeeRouter   |
++---------------------------------------------------------------+
+                      deployed to -&gt; Aethelred L1</code></pre>
+<p><strong>The strangler-fig boundary (<code>src/lib/aethelred/</code>)</strong> is the most important architectural decision: every Aethelred-specific concern (proof byte formats, vkey registry, TEE quote verification, PQC signing, React hooks) lives behind this one directory. A <strong>CI guard</strong> forbids importing the Aethelred SDK anywhere else, so the rest of ZeroID is insulated from chain-side churn and the integration can be activated gate-by-gate.</p>
+<hr />
+<h2 id="technology-stack">4. Technology stack</h2>
+<table>
+<colgroup>
+<col style="width: 38%" />
+<col style="width: 61%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>Layer</th>
+<th>Technology</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><strong>Frontend</strong></td>
+<td>Next.js 14 (App Router), React, TanStack React Query, viem + wagmi, TypeScript</td>
+</tr>
+<tr class="even">
+<td><strong>Backend</strong></td>
+<td>Node + Express, TypeScript, Prisma ORM → PostgreSQL, Zod validation, JWT auth + RBAC</td>
+</tr>
+<tr class="odd">
+<td><strong>Contracts</strong></td>
+<td>Solidity <code>^0.8.20</code>, Foundry (forge), OpenZeppelin (AccessControl, Pausable, ReentrancyGuard)</td>
+</tr>
+<tr class="even">
+<td><strong>Crypto</strong></td>
+<td>Groth16 (BN254), Shamir Secret Sharing over GF(256), AES-256-GCM, SHA-256 commitments; PQC hybrid ML-DSA-65 + ECDSA (ML-KEM-768 KEM) — via adapters</td>
+</tr>
+<tr class="odd">
+<td><strong>Testing</strong></td>
+<td>Jest (backend + frontend), Foundry (unit + fuzz + invariant), TDD throughout</td>
+</tr>
+<tr class="even">
+<td><strong>Target L1 (Aethelred)</strong></td>
+<td>Cosmos-SDK v0.50 / CometBFT; Rust VM with ZK precompiles (Groth16 / PLONK / EZKL over BN254 / BLS12-381); DCAP TEE attestation; PQC (ML-DSA-65 hybrid, ML-KEM-768); EVM-compatible; chain IDs 8821 / 88210</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="whats-built-by-domain">5. What’s built — by domain</h2>
+<h3 id="aethelred-conformance-boundary-w1w6-srclibaethelred-16-modules-15-test-suites">5.1 Aethelred conformance boundary (W1–W6) — <code>src/lib/aethelred/</code> (16 modules, 15 test suites)</h3>
+<p>Delivered as six increments behind the single seam:</p>
+<ul>
+<li><strong>W1 — boundary scaffold + CI guard:</strong> <code>index.ts</code>, <code>client.ts</code>; guard enforcing no <code>@aethelred/sdk</code> imports outside the boundary.</li>
+<li><strong>W2 — ZK verification cutover:</strong> <code>zk.ts</code> (Groth16 verify), <code>verify.ts</code> (verification strategy), <code>encoding.ts</code> (snarkjs→arkworks byte format: G2 limb order / compression), <code>vkeys.ts</code> (verification-key registry by circuit id). Gated by <code>NEXT_PUBLIC_CANONICAL_VERIFY</code>.</li>
+<li><strong>W3 — TEE → DCAP attestation + Digital Seals:</strong> <code>attestation.ts</code> (DCAP quote verification), <code>seals.ts</code> (Digital Seals binding).</li>
+<li><strong>W4 — PQC hybrid signing:</strong> <code>signing.ts</code> (ML-DSA-65 + ECDSA hybrid). Gated by <code>NEXT_PUBLIC_PQC_SIGNING</code>.</li>
+<li><strong>W5 — React hooks:</strong> <code>react.ts</code> (<code>@aethelred/sdk/react</code>-style hooks for the frontend).</li>
+<li><strong>W6 — ecosystem compatibility CI:</strong> boundary guard + workflow.</li>
+</ul>
+<h3 id="phase-2-the-moat">5.2 Phase 2 — the moat</h3>
+<ul>
+<li><strong>EZKL zkML liveness</strong> (<code>liveness.ts</code>): verifiable on-device liveness via an EZKL circuit (model→ONNX→circuit pipeline pending; verifier path built).</li>
+<li><strong>Conditional disclosure</strong> (<code>disclosure.ts</code>, <code>disclose.ts</code>, <code>disclosure-contract.ts</code>, <code>shamir.ts</code>): regulator-grade, warrant-bound reveal. Shamir key-split escrow over GF(256), AES-256-GCM payload, SHA-256 commitment, key-shred erasure (right-to-be-forgotten). On-chain quorum via <code>ConditionalDisclosure.sol</code> with a <strong>governance-race fix</strong> (threshold snapshotted at request time) and <code>pause()</code>.</li>
+</ul>
+<h3 id="ai-agent-passport-v1-flagship">5.3 AI Agent Passport v1 (flagship)</h3>
+<ul>
+<li><strong>Backend:</strong> <code>agent-passport.ts</code> (scope vocabulary <code>eligibility.read</code> / <code>audit.read</code> / <code>identity.read</code>; pure policy <code>POLICY_AGENT_ELIGIBILITY_VIEW_V1</code> with 6 conditions and explicit deny codes); <code>agent-eligibility.ts</code> (DI orchestration; agent→controller binding, scope + risk-tier checks, recorded <code>AgentAction</code>); route <code>POST /api/v1/ai/agents/eligibility/proof</code>.</li>
+<li><strong>Key design:</strong> the agent path <strong>reuses the exact human eligibility handler</strong> (<code>eligibilityProofHandler</code>, extracted from <code>verification.ts</code>) in-process — no re-implementation, behaviour-identical.</li>
+<li><strong>Frontend:</strong> agent registry client + hooks + <code>agent-identity</code> page (register wizard wired to real v1 registration: name + scopes + risk tier); audit timeline filter + “AI Agent X acting for Y” attribution.</li>
+<li><strong>Schema:</strong> additive (AIAgent + controllerDid/riskTier; AgentCredential + scopes/maxRiskTier/controllerDid/revocationNonce; AgentAction + controllerDid/policyId/decision).</li>
+</ul>
+<h3 id="smart-contracts-14-contracts-foundry-tests-in-testfoundry">5.4 Smart contracts (14) — <code>contracts/</code>, Foundry tests in <code>test/foundry/</code></h3>
+<p><code>ZeroID</code>, <code>CredentialRegistry</code>, <code>ZKCredentialVerifier</code>, <code>SelectiveDisclosure</code>, <code>AccumulatorRevocation</code>, <code>BBSPlusCredential</code>, <code>ThresholdCredential</code>, <code>TEEAttestationRegistry</code>, <code>AIAgentRegistry</code>, <code>CrossChainIdentityBridge</code>, <code>GovernanceModule</code>, <code>RegulatoryCompliance</code>, <code>ConditionalDisclosure</code>, <code>FeeRouter</code> (+ <code>BN254</code> library + interfaces/verifiers).</p>
+<p>Production hardening on the economic + disclosure contracts: OpenZeppelin AccessControl / Pausable / ReentrancyGuard, CEI ordering, custom errors. <strong>Fuzz + invariant</strong> suites for <code>FeeRouter</code>, <code>ConditionalDisclosure</code>, and <code>AccumulatorRevocation</code> (e.g. value-conservation invariant on the fee router; quorum-authorization invariant on disclosure).</p>
+<h3 id="economic-flywheel-feerouter.sol">5.5 Economic flywheel — <code>FeeRouter.sol</code></h3>
+<p>Per-operation fee → configurable <strong>burn</strong> + <strong>Cruzible</strong> staking-sink split (CEI, pausable, role-gated, with <code>totalBurned/totalToCruzible/totalRouted</code> accounting). Deployed via <code>script/Deploy.s.sol</code> (env-driven; testnet + mainnet from one script).</p>
+<h3 id="partner-integration-surface-apiv1partners">5.6 Partner integration surface — <code>/api/v1/partners/*</code></h3>
+<p>DI orchestrators (<code>partner-service.ts</code>) that <strong>reuse</strong> existing ZeroID logic: - <code>POST /partners/wallet/eligibility</code> · <code>POST /partners/wallet/disclosure</code> · <code>GET /partners/wallet/evidence/:id</code> - <code>POST /partners/cruzible/pools/:id/eligibility</code> · <code>POST /partners/cruzible/pools/:id/agent-scan</code></p>
+<p>All POSTs are <strong>idempotent</strong> (<code>Idempotency-Key</code> header) and use the unified error taxonomy.</p>
+<h3 id="backend-platform-the-rest-of-the-38-services">5.7 Backend platform (the rest of the 38 services)</h3>
+<ul>
+<li><strong>Identity &amp; credentials:</strong> <code>identity.ts</code>, <code>credential.ts</code>, DID lifecycle, credential issuance/verification, revocation.</li>
+<li><strong>Verification / eligibility:</strong> <code>verification.ts</code> — the rich eligibility-proof engine (ZK proof verification with replay/nonce/context-binding checks, ~30 typed failure codes, audience/expiry/claims-hash validation). This is the platform’s core.</li>
+<li><strong>Enterprise policy governance:</strong> a full policy decision system — <code>policy-registry-service</code>, <code>policy-definition</code> / <code>policy-execution</code> / <code>policy-exception</code> / <code>policy-receipt</code> / <code>policy-governance</code> / <code>policy-context</code> services, backed by a <code>PolicyDecisionLedger</code> with integrity hashing and approval trails.</li>
+<li><strong>Compliance:</strong> <code>jurisdiction-engine</code>, <code>sanctions-screening</code>, <code>regulatory-reporting</code>, <code>data-sovereignty</code>.</li>
+<li><strong>AI:</strong> <code>risk-scoring</code>, <code>fraud-detection</code>, <code>behavioral-biometrics</code>, <code>compliance-advisor</code>.</li>
+<li><strong>Enterprise integration:</strong> <code>oidc-bridge</code> + <code>oidc-claims</code>, <code>issuer-trust-service</code>, <code>organization-service</code>, <code>sla-monitor</code>, <code>webhook-system</code>, <code>api-gateway</code>, <code>enterprise-key-signer</code>, <code>regulatory-submission-signing</code>.</li>
+<li><strong>Infrastructure:</strong> <code>tee.ts</code>, <code>zkproof.ts</code>, <code>government-api.ts</code>, <code>audit-integrity.ts</code>, <code>circuit-artifacts.ts</code>, <code>production-safety.ts</code>, <code>idempotency.ts</code>, <code>errors.ts</code>.</li>
+</ul>
+<h3 id="cross-cutting-hardening-most-recent-work">5.8 Cross-cutting hardening (most recent work)</h3>
+<ul>
+<li><strong>Idempotency</strong> (<code>services/idempotency.ts</code>): generic <code>IdempotencyStore&lt;T&gt;</code> + Prisma store + <code>withIdempotency</code> helper + <code>Idempotency-Key</code> normalizer; backs the agent + all partner POSTs (operation-scoped keys, first-write-wins, <code>idempotency_records</code> table). Documented as memoization for sequential retries (not a distributed lock).</li>
+<li><strong>Unified error taxonomy</strong> (<code>services/errors.ts</code>): one <code>ServiceError</code> base, one <code>sendServiceError</code> mapper, stable <code>{ error, message }</code> envelope, documented <code>ServiceErrorCode</code> vocabulary with passthrough for the eligibility handler’s own codes. <code>AgentEligibilityError</code> + <code>PartnerError</code> extend it.</li>
+</ul>
+<h3 id="frontend-19-pages">5.9 Frontend (19 pages)</h3>
+<p><code>identity</code>, <code>credentials</code>, <code>verification</code>, <code>agent-identity</code>, <code>eligibility</code>, <code>ai-compliance</code>, <code>analytics</code>, <code>audit</code>, <code>cross-chain</code>, <code>enterprise</code>, <code>governance</code>, <code>integrations</code>, <code>marketplace</code>, <code>regulatory</code>, <code>revocation</code>, <code>settings</code>, <code>admin</code>, <code>identity/uae-pass/callback</code>, home.</p>
+<hr />
+<h2 id="testing-quality">6. Testing &amp; quality</h2>
+<table>
+<colgroup>
+<col style="width: 24%" />
+<col style="width: 24%" />
+<col style="width: 24%" />
+<col style="width: 27%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>Suite</th>
+<th>Files</th>
+<th>Tests</th>
+<th>Status</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>Backend (Jest)</td>
+<td>70</td>
+<td><strong>746</strong> (~729 <code>it</code> blocks)</td>
+<td>743 pass / <strong>3 fail in 2 pre-existing suites</strong> (see §8)</td>
+</tr>
+<tr class="even">
+<td>Frontend (Jest)</td>
+<td>116</td>
+<td>~<strong>2,384</strong> <code>it</code> blocks</td>
+<td>green (last full run)</td>
+</tr>
+<tr class="odd">
+<td>Conformance boundary</td>
+<td>15</td>
+<td>~62 <code>it</code> blocks</td>
+<td>green</td>
+</tr>
+<tr class="even">
+<td>Contracts (Foundry)</td>
+<td>19 suites</td>
+<td><strong>511</strong> test fns (incl. <strong>7 fuzz + 4 invariant</strong>)</td>
+<td>green at last full run</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>Discipline:</strong> TDD throughout; dependency injection so services are unit-testable without a DB (route tests mock the service layer).</li>
+<li><strong>Contract rigor:</strong> beyond unit tests, <strong>property-based fuzz</strong> and <strong>stateful invariant</strong> suites on the value-bearing contracts.</li>
+<li><strong>Boundary guard:</strong> CI fails if the Aethelred SDK leaks outside <code>src/lib/aethelred/</code>.</li>
+<li><strong>Type safety:</strong> <code>tsc --noEmit</code> clean across backend.</li>
+</ul>
+<hr />
+<h2 id="security-compliance-posture">7. Security &amp; compliance posture</h2>
+<p>Documented under <code>docs/</code>:</p>
+<ul>
+<li><strong>Threat model v1</strong> (<code>docs/security/threat-model-v1.md</code>), <strong>key custody</strong> (<code>docs/security/key-custody.md</code>), <strong>incident-response runbook</strong> (<code>docs/security/incident-response-runbook.md</code>).</li>
+<li><strong>DPIA v1</strong> (<code>docs/compliance/dpia-v1.md</code>) and <strong>conditional-disclosure regulatory memo</strong> mapping to <strong>FATF / ADGM / GDPR</strong> (warrant-bound reveal, key-shred erasure for right-to-be-forgotten).</li>
+<li><strong>v1 readiness gate</strong> (<code>docs/production/zeroid-v1-readiness-gate.md</code>), <strong>activation runbook</strong> (<code>docs/ecosystem/activation-runbook.md</code>), <strong>90-day ecosystem plan</strong> (<code>docs/ecosystem/90-day-plan-and-integration.md</code>).</li>
+<li><strong>Policies:</strong> <code>eligibility_v1.md</code>, <code>agent_identity_v1.md</code>; <strong>ZK ceremony:</strong> <code>docs/zk/eligibility-artifact-ceremony.md</code>.</li>
+<li><strong>Contract incident response:</strong> every value/disclosure contract ships <code>pause()</code>.</li>
+</ul>
+<hr />
+<h2 id="honest-gaps-what-is-not-done-and-why">8. Honest gaps — what is NOT done (and why)</h2>
+<p>These are deliberately separated into <strong>infra-gated</strong> (code is ready; needs infrastructure to activate) vs <strong>genuine work remaining</strong>.</p>
+<h3 id="infra-gated-code-complete-behind-flagsadapters-flip-after-end-to-end-verification">Infra-gated (code-complete behind flags/adapters; flip after end-to-end verification)</h3>
+<table>
+<colgroup>
+<col style="width: 28%" />
+<col style="width: 71%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>Gate</th>
+<th>What’s needed</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><strong>W2c — ZK verify</strong></td>
+<td>Produce a Groth16 proof from a ZeroID circuit, verify via the chain precompile, confirm snarkjs→arkworks byte format; register vkeys; set <code>NEXT_PUBLIC_CANONICAL_VERIFY=true</code>.</td>
+</tr>
+<tr class="even">
+<td><strong>W3c — DCAP TEE</strong></td>
+<td>A TEE worker emitting a real quote; wire <code>attestation.ts</code> call sites.</td>
+</tr>
+<tr class="odd">
+<td><strong>W4c — PQC</strong></td>
+<td>Inject a real ML-DSA-65 provider; set <code>NEXT_PUBLIC_PQC_SIGNING=true</code>.</td>
+</tr>
+<tr class="even">
+<td><strong>Phase 2b — zkML</strong></td>
+<td>Train liveness model → ONNX → EZKL circuit/keys; register the circuit.</td>
+</tr>
+<tr class="odd">
+<td><strong>DB migration apply</strong></td>
+<td>Schema is additive and <code>prisma generate</code> is done; <code>prisma migrate deploy</code> not yet run (needs Postgres). Two additive migrations: AI Agent Passport v1, idempotency v1 (tracked SQL copies in <code>docs/ecosystem/</code>).</td>
+</tr>
+<tr class="even">
+<td><strong>Deployed addresses</strong></td>
+<td><code>Deploy.s.sol</code> compiles; not broadcast to testnet → no <code>FeeRouter</code>/<code>ConditionalDisclosure</code> addresses in env yet.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="genuine-work-remaining">Genuine work remaining</h3>
+<ul>
+<li><strong>Real TEE / EZKL / PQC backends</strong> — currently adapters + interfaces + flags; the real provider implementations are pending (these need the chain-side infra to exist).</li>
+<li><strong>Cruzible / Wallet repo-side wiring</strong> — ZeroID exposes the partner endpoints; the counterpart services and boundary replication into those repos are not built here.</li>
+<li><strong>Agent-token auth</strong> — v1 uses the controller’s JWT (sufficient for pilot); a dedicated agent credential/token flow is a follow-up.</li>
+<li><strong>Two pre-existing failing backend suites</strong> (independent of recent work, verified by stash isolation):
+<ul>
+<li><code>circuit-artifacts.test.ts</code> — fails on a missing <code>circuits/manifest</code> directory (path/env).</li>
+<li><code>enterprise-compliance-receipts.test.ts</code> — suite fails to load at <code>src/routes/enterprise/compliance.ts:114</code>. These should be triaged: fix or quarantine.</li>
+</ul></li>
+</ul>
+<h3 id="repo-integration-hygiene-recommend-a-decision">Repo / integration hygiene (recommend a decision)</h3>
+<ul>
+<li>The build is spread across <strong>stacked feature branches</strong> not yet merged: <code>feat/economic-flywheel</code> → <code>feat/ai-agent-passport-v1</code> → <code>design/aethelred-conformance-moat</code>, plus several <code>fix/*</code> branches; <code>main</code> is <strong>~223 commits behind</strong>. There is also a large uncommitted WIP working tree on the active branch. <strong>A consolidation / merge-to-main strategy is needed</strong> before this is reviewable as a single artifact or deployable.</li>
+</ul>
+<hr />
+<h2 id="suggested-questions-for-the-consultant">9. Suggested questions for the consultant</h2>
+<ol type="1">
+<li><strong>Branch consolidation:</strong> what’s the right path to a single integratable <code>main</code> given the stacked feature branches and the WIP working tree?</li>
+<li><strong>Pilot critical path:</strong> to get one <em>real</em> end-to-end eligibility proof on testnet, is the right order: apply DB migration → deploy contracts → close <strong>W2c</strong> (ZK verify) first, deferring TEE/PQC/zkML?</li>
+<li><strong>Adapter vs. real backends:</strong> stand up real TEE/EZKL/PQC providers now, or keep them flag-gated for the pilot and prove the ZK + audit + disclosure path first?</li>
+<li><strong>Partner sequencing:</strong> Wallet or Cruzible integration first, and do you want ZeroID to own the boundary replication into those repos?</li>
+<li><strong>The two failing suites:</strong> fix now or quarantine with a tracked issue?</li>
+<li><strong>Security review depth:</strong> what level of external audit (contracts + crypto + key custody) do you want before any mainnet exposure?</li>
+</ol>
+<hr />
+<p><em>Generated 2026-06-29. Numbers are from the live codebase on <code>feat/economic-flywheel</code>; test counts are from the most recent local runs (backend full run: 743/746 passing, the 3 failures isolated to the two pre-existing suites above).</em></p>
+</body>
+</html>
