@@ -39,6 +39,7 @@ import {
   type CrossDeviceDeps,
 } from '../../services/oid4vp/cross-device';
 import { createPrismaOid4vpRequestStore } from '../../services/oid4vp/request-store-prisma';
+import { createPrismaPresentationAuditRecorder } from '../../services/oid4vp/presentation-audit';
 
 const BASE_URL = process.env.OID4VP_BASE_URL ?? 'https://verifier.zeroid';
 
@@ -85,13 +86,13 @@ function resolveIssuerKeyFromEnv(): IssuerKeyResolver {
 }
 
 export function buildVerifierDeps(): PresentationVerifierDeps {
-  return { sdJwt: createJoseSdJwtDeps(resolveIssuerKeyFromEnv()), zk: buildZkDeps() };
+  return { sdJwt: createJoseSdJwtDeps(resolveIssuerKeyFromEnv()), zk: buildZkDeps(), recordDecision: createPrismaPresentationAuditRecorder(prisma) };
 }
 
 function buildCrossDeviceDeps(): CrossDeviceDeps {
   return {
     store: createPrismaOid4vpRequestStore(prisma),
-    verifier: { sdJwt: createJoseSdJwtDeps(resolveIssuerKeyFromEnv()), zk: buildZkDeps() },
+    verifier: { sdJwt: createJoseSdJwtDeps(resolveIssuerKeyFromEnv()), zk: buildZkDeps(), recordDecision: createPrismaPresentationAuditRecorder(prisma) },
     genId: () => randomBytes(24).toString('base64url'),
     now: () => Math.floor(Date.now() / 1000),
     baseUrl: BASE_URL,

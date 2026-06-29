@@ -28,6 +28,12 @@ export interface PresentationVerifierDeps {
   /** ZK eligibility verification deps; required to accept `zeroid-zk-eligibility+jwt` tokens. */
   zk?: ZkPredicateVerifyDeps;
   /**
+   * Optional audit hook, invoked with the (privacy-safe) decision after a
+   * verification. Fail-closed: if it throws, the verification fails — an
+   * identity verifier must not return an un-recorded decision.
+   */
+  recordDecision?(decision: PresentationDecision): Promise<void>;
+  /**
    * Optional replay guard: returns true if the nonce was issued by us and is now
    * consumed, false if unknown/replayed. When absent, replay protection relies
    * on the KB-JWT nonce binding (acceptable for the same-device MVP; the
@@ -67,6 +73,8 @@ export async function verifyPresentation(
     if (!ok) throw new ServiceError('nonce unknown or already used', 'VP_NONCE_INVALID', 401);
   }
 
+  let decision: PresentationDecision;
+
   // Privacy-moat rung: a ZK eligibility predicate discloses nothing.
   if (isZkEligibilityToken(req.vpToken)) {
     if (!deps.zk) {
@@ -78,7 +86,7 @@ export async function verifyPresentation(
       expectedNonce: req.nonce,
       expectedAudience: req.audience,
     });
-    return {
+    decision = {
       status: zk.status,
       policyId: policy.policyId,
       vct: ZK_ELIGIBILITY_FORMAT,
@@ -88,25 +96,27 @@ export async function verifyPresentation(
       relyingAppId: req.relyingAppId,
       verifiedAt: new Date(deps.zk.now() * 1000).toISOString(),
     };
+  } else {
+    const verified: VerifiedSdJwt = await verifySdJwtVc(deps.sdJwt, {
+      compact: req.vpToken,
+      expectedNonce: req.nonce,
+      expectedAudience: req.audience,
+      expectedVct: policy.vct,
+    });
+    const evaluation = evaluatePresentationPolicy(policy, verified.claims);
+    decision = {
+      status: evaluation.status,
+      policyId: policy.policyId,
+      vct: verified.vct,
+      satisfied: evaluation.satisfied,
+      reasons: evaluation.reasons,
+      disclosedClaims: Object.keys(verified.claims),
+      relyingAppId: req.relyingAppId,
+      verifiedAt: new Date(deps.sdJwt.now() * 1000).toISOString(),
+    };
   }
 
-  const verified: VerifiedSdJwt = await verifySdJwtVc(deps.sdJwt, {
-    compact: req.vpToken,
-    expectedNonce: req.nonce,
-    expectedAudience: req.audience,
-    expectedVct: policy.vct,
-  });
-
-  const evaluation = evaluatePresentationPolicy(policy, verified.claims);
-
-  return {
-    status: evaluation.status,
-    policyId: policy.policyId,
-    vct: verified.vct,
-    satisfied: evaluation.satisfied,
-    reasons: evaluation.reasons,
-    disclosedClaims: Object.keys(verified.claims),
-    relyingAppId: req.relyingAppId,
-    verifiedAt: new Date(deps.sdJwt.now() * 1000).toISOString(),
-  };
+  // Fail-closed audit: never return a decision we couldn't record.
+  if (deps.recordDecision) await deps.recordDecision(decision);
+  return decision;
 }

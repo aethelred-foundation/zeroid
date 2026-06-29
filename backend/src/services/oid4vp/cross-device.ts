@@ -39,7 +39,7 @@ export interface Oid4vpRequestStore {
 
 export interface CrossDeviceDeps {
   store: Oid4vpRequestStore;
-  verifier: Pick<PresentationVerifierDeps, 'sdJwt' | 'zk'>;
+  verifier: Pick<PresentationVerifierDeps, 'sdJwt' | 'zk' | 'recordDecision'>;
   getPolicy?(policyId: string): PresentationPolicy;
   genId(): string;
   now(): number;
@@ -129,6 +129,7 @@ export async function handleCallback(
     {
       sdJwt: deps.verifier.sdJwt,
       zk: deps.verifier.zk,
+      recordDecision: deps.verifier.recordDecision,
       getPolicy: deps.getPolicy,
       consumeNonce: deps.store.consumeNonce,
     },

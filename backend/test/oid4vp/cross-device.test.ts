@@ -157,8 +157,13 @@ describe("cross-device ZK predicate routing", () => {
       computeContextCommitment: jest.fn(async () => "0xctx"),
       now: () => 0,
     };
+    const recordDecision = jest.fn().mockResolvedValue(undefined);
     const deps = makeDeps({
-      verifier: { sdJwt: { verifyIssuerJwt: jest.fn(), verifyKeyBindingJwt: jest.fn(), now: () => 0 }, zk },
+      verifier: {
+        sdJwt: { verifyIssuerJwt: jest.fn(), verifyKeyBindingJwt: jest.fn(), now: () => 0 },
+        zk,
+        recordDecision,
+      },
     });
 
     const authz = await createPresentationRequest(deps, { policyId: POLICY_ID, audience: aud });
@@ -168,5 +173,7 @@ describe("cross-device ZK predicate routing", () => {
     const decision = await handleCallback(deps, { state: authz.state, vpToken: zkToken });
     expect(decision.status).toBe("ALLOWED");
     expect(decision.disclosedClaims).toEqual([]);
+    // the cross-device callback must forward the audit hook to the verifier
+    expect(recordDecision).toHaveBeenCalledWith(decision);
   });
 });
