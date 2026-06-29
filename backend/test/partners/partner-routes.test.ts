@@ -1,8 +1,14 @@
 import express from 'express';
 import request from 'supertest';
 
+const mockIdem = { findUnique: jest.fn(), upsert: jest.fn() };
 jest.mock('../../src/index', () => ({
-  prisma: {},
+  prisma: {
+    idempotencyRecord: {
+      findUnique: (...a: unknown[]) => mockIdem.findUnique(...a),
+      upsert: (...a: unknown[]) => mockIdem.upsert(...a),
+    },
+  },
   logger: { error: jest.fn(), info: jest.fn(), warn: jest.fn() },
 }));
 jest.mock('../../src/middleware/auth', () => ({
@@ -46,7 +52,11 @@ function makeApp() {
   return app;
 }
 
-beforeEach(() => Object.values(mockSvc).forEach((f) => f.mockReset()));
+beforeEach(() => {
+  Object.values(mockSvc).forEach((f) => f.mockReset());
+  mockIdem.findUnique.mockReset();
+  mockIdem.upsert.mockReset().mockResolvedValue(undefined);
+});
 
 describe('partner routes', () => {
   it('POST /wallet/eligibility → 200', async () => {
@@ -117,5 +127,47 @@ describe('partner routes', () => {
     const r = await request(makeApp()).get('/api/v1/partners/wallet/evidence/dec1');
     expect(r.status).toBe(200);
     expect(r.body.auditLogId).toBe('a1');
+  });
+
+  describe('idempotency', () => {
+    it('returns the cached body on a repeated Idempotency-Key without re-running the service', async () => {
+      const cached = { eligible: true, decision: { status: 'ALLOWED' } };
+      mockIdem.findUnique.mockResolvedValue({ response: cached });
+      const r = await request(makeApp())
+        .post('/api/v1/partners/wallet/eligibility')
+        .set('Idempotency-Key', 'k1')
+        .send({ ownerDid: 'did:o', credentialId: 'c', policyId: 'P', relyingAppId: 'w' });
+      expect(r.status).toBe(200);
+      expect(r.body.eligible).toBe(true);
+      expect(mockIdem.findUnique).toHaveBeenCalledWith({
+        where: { key: 'partner.wallet.eligibility:k1' },
+      });
+      expect(mockSvc.walletEligibility).not.toHaveBeenCalled();
+    });
+
+    it('runs the service and records the result on a fresh Idempotency-Key', async () => {
+      mockIdem.findUnique.mockResolvedValue(null);
+      mockSvc.walletEligibility.mockResolvedValue({ eligible: true, decision: {} });
+      const r = await request(makeApp())
+        .post('/api/v1/partners/wallet/eligibility')
+        .set('Idempotency-Key', 'k2')
+        .send({ ownerDid: 'did:o', credentialId: 'c', policyId: 'P', relyingAppId: 'w' });
+      expect(r.status).toBe(200);
+      expect(mockSvc.walletEligibility).toHaveBeenCalledTimes(1);
+      expect(mockIdem.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { key: 'partner.wallet.eligibility:k2' } }),
+      );
+    });
+
+    it('rejects a malformed Idempotency-Key with 400 before running the service', async () => {
+      const r = await request(makeApp())
+        .post('/api/v1/partners/wallet/eligibility')
+        .set('Idempotency-Key', 'x'.repeat(300))
+        .send({ ownerDid: 'did:o', credentialId: 'c', policyId: 'P', relyingAppId: 'w' });
+      expect(r.status).toBe(400);
+      expect(r.body.error).toBe('INVALID_IDEMPOTENCY_KEY');
+      expect(mockSvc.walletEligibility).not.toHaveBeenCalled();
+      expect(mockIdem.findUnique).not.toHaveBeenCalled();
+    });
   });
 });

@@ -72,7 +72,26 @@ forge test
 cd .. && npm run boundary:check
 # partner endpoints (once DB + contracts live)
 curl -XPOST $API/api/v1/partners/wallet/eligibility -H "authorization: Bearer $JWT" -d '{...}'
+# idempotent retry: same Idempotency-Key returns the prior result, no double side effect
+curl -XPOST $API/api/v1/partners/wallet/eligibility \
+  -H "authorization: Bearer $JWT" -H "Idempotency-Key: $(uuidgen)" -d '{...}'
 ```
 
 Each gate is independent and reversible (flip the flag back). The contracts ship
 with `pause()` for incident response.
+
+## 5. Integrator notes
+
+- **Idempotency** (opt-in): the write-bearing endpoints — `ai/agents/eligibility/proof`
+  and the partner POSTs (`partners/wallet/eligibility`, `partners/wallet/disclosure`,
+  `partners/cruzible/pools/:id/{eligibility,agent-scan}`) — accept an
+  `Idempotency-Key` header (1–255 chars). A retry with the same key returns the
+  prior terminal response instead of recording a second `AgentAction` /
+  re-running eligibility / re-deriving an escrow. Keys are namespaced per
+  operation; backed by the `idempotency_records` table. Memoization for
+  sequential retries — not a distributed lock (see `services/idempotency.ts`).
+- **Errors**: every service maps to a stable `{ "error": <CODE>, "message": ... }`
+  envelope via the shared taxonomy in `services/errors.ts`. Canonical codes
+  (e.g. `AGENT_NOT_AUTHORIZED` 403, `POLICY_CONDITIONS_NOT_MET` 422,
+  `INVALID_IDEMPOTENCY_KEY` 400, `*_NOT_FOUND` 404); unexpected errors are an
+  opaque `INTERNAL_ERROR` 500 with no internal details leaked.

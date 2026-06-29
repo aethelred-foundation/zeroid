@@ -16,6 +16,7 @@ import type {
   AgentEligibilityProofRequest,
   AgentEligibilityProofResponse,
 } from '../ai/agent-eligibility';
+import { ServiceError, type AnyServiceErrorCode } from '../errors';
 
 export interface PartnerIdentity {
   id: string;
@@ -79,13 +80,9 @@ export interface PartnerDeps {
   getEvidence(decisionId: string): Promise<unknown | null>;
 }
 
-export class PartnerError extends Error {
-  constructor(
-    message: string,
-    public code: string,
-    public statusCode: number,
-  ) {
-    super(message);
+export class PartnerError extends ServiceError {
+  constructor(message: string, code: AnyServiceErrorCode, statusCode: number) {
+    super(message, code, statusCode);
     this.name = 'PartnerError';
   }
 }

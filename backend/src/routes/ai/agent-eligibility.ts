@@ -17,10 +17,15 @@ import {
   agentEligibilityProof,
   AgentEligibilityError,
   type AgentEligibilityDeps,
+  type AgentEligibilityProofResponse,
   type EligibilityResult,
-  type IdempotencyStore,
 } from '../../services/ai/agent-eligibility';
-import { createPrismaIdempotencyStore } from '../../services/ai/idempotency-store';
+import {
+  createPrismaIdempotencyStore,
+  readIdempotencyKey,
+  type IdempotencyStore,
+} from '../../services/idempotency';
+import { sendServiceError } from '../../services/errors';
 import type {
   AgentStatus,
   CredentialStatus,
@@ -30,24 +35,6 @@ import { eligibilityProofHandler } from '../verification';
 
 /** Operation namespace for idempotency keys on this endpoint. */
 const ELIGIBILITY_IDEMPOTENCY_SCOPE = 'agent.eligibility.proof';
-
-/**
- * Normalize the optional `Idempotency-Key` header. Returns `undefined` when the
- * client did not send one (idempotency is opt-in), or throws a 400 when the
- * header is present but malformed.
- */
-function readIdempotencyKey(raw: string | string[] | undefined): string | undefined {
-  if (raw === undefined) return undefined;
-  const value = (Array.isArray(raw) ? raw[0] : raw).trim();
-  if (value.length === 0 || value.length > 255) {
-    throw new AgentEligibilityError(
-      'Idempotency-Key must be 1–255 characters',
-      'INVALID_IDEMPOTENCY_KEY',
-      400,
-    );
-  }
-  return value;
-}
 
 const AgentEligibilityProofSchema = z.object({
   agentDid: z.string().min(1),
@@ -62,7 +49,7 @@ const AgentEligibilityProofSchema = z.object({
 /** Wire the service's injected dependencies to real Prisma + eligibility. */
 export function buildAgentEligibilityDeps(
   controllerIdentity: NonNullable<AuthenticatedRequest['identity']>,
-  idempotencyStore?: IdempotencyStore,
+  idempotencyStore?: IdempotencyStore<AgentEligibilityProofResponse>,
 ): AgentEligibilityDeps {
   return {
     idempotencyStore,
@@ -178,19 +165,17 @@ router.post(
   async (req: AuthenticatedRequest, res: Response) => {
     try {
       const idempotencyKey = readIdempotencyKey(req.headers['idempotency-key']);
-      const store = createPrismaIdempotencyStore(prisma, ELIGIBILITY_IDEMPOTENCY_SCOPE);
+      const store = createPrismaIdempotencyStore<AgentEligibilityProofResponse>(
+        prisma,
+        ELIGIBILITY_IDEMPOTENCY_SCOPE,
+      );
       const result = await agentEligibilityProof(
         buildAgentEligibilityDeps(req.identity!, store),
         { ...req.body, idempotencyKey },
       );
       res.status(200).json(result);
     } catch (error) {
-      if (error instanceof AgentEligibilityError) {
-        res.status(error.statusCode).json({ error: error.code, message: error.message });
-        return;
-      }
-      logger.error('agent eligibility proof failed', { error });
-      res.status(500).json({ error: 'INTERNAL_ERROR', message: 'Internal error' });
+      sendServiceError(res, error, logger);
     }
   },
 );

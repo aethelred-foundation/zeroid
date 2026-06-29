@@ -15,6 +15,8 @@ import {
   type AgentStatus,
   type CredentialStatus,
 } from "./agent-passport";
+import { ServiceError, type AnyServiceErrorCode } from "../errors";
+import { withIdempotency, type IdempotencyStore } from "../idempotency";
 
 export interface AgentEligibilityProofRequest {
   agentDid: string;
@@ -26,12 +28,6 @@ export interface AgentEligibilityProofRequest {
   contextNonce?: string;
   /** Optional idempotency key — a repeated request returns the cached result. */
   idempotencyKey?: string;
-}
-
-/** Optional idempotency store; when present, a repeated key short-circuits. */
-export interface IdempotencyStore {
-  get(key: string): Promise<AgentEligibilityProofResponse | null>;
-  set(key: string, value: AgentEligibilityProofResponse): Promise<void>;
 }
 
 export interface AgentPassportRecord {
@@ -100,7 +96,7 @@ export interface AgentEligibilityDeps {
     contextNonce?: string;
   }): Promise<EligibilityResult>;
   recordAgentAction(action: RecordedAgentAction): Promise<string>;
-  idempotencyStore?: IdempotencyStore;
+  idempotencyStore?: IdempotencyStore<AgentEligibilityProofResponse>;
 }
 
 export interface AgentEligibilityProofResponse {
@@ -115,13 +111,9 @@ export interface AgentEligibilityProofResponse {
   issuedAt: string;
 }
 
-export class AgentEligibilityError extends Error {
-  constructor(
-    message: string,
-    public code: string,
-    public statusCode: number,
-  ) {
-    super(message);
+export class AgentEligibilityError extends ServiceError {
+  constructor(message: string, code: AnyServiceErrorCode, statusCode: number) {
+    super(message, code, statusCode);
     this.name = "AgentEligibilityError";
   }
 }
@@ -132,101 +124,93 @@ export async function agentEligibilityProof(
   deps: AgentEligibilityDeps,
   req: AgentEligibilityProofRequest,
 ): Promise<AgentEligibilityProofResponse> {
-  // Idempotency: a repeated key returns the prior result without re-recording
-  // an AgentAction or re-running eligibility.
-  if (req.idempotencyKey && deps.idempotencyStore) {
-    const cached = await deps.idempotencyStore.get(req.idempotencyKey);
-    if (cached) return cached;
-  }
+  // Idempotency: a repeated key returns the prior result without re-running
+  // eligibility or re-recording an AgentAction. Errors thrown inside propagate
+  // un-cached, so a transient failure stays retryable.
+  return withIdempotency(deps.idempotencyStore, req.idempotencyKey, async () => {
+    const agent = await deps.loadAgent(req.agentDid);
+    if (!agent) {
+      throw new AgentEligibilityError("agent not found", "AGENT_NOT_FOUND", 404);
+    }
 
-  const agent = await deps.loadAgent(req.agentDid);
-  if (!agent) {
-    throw new AgentEligibilityError("agent not found", "AGENT_NOT_FOUND", 404);
-  }
+    // Controller binding — the agent may only act for its registered controller.
+    if (agent.controllerDid !== req.controllerDid) {
+      await deps.recordAgentAction({
+        agentDid: req.agentDid,
+        controllerDid: req.controllerDid,
+        actionType: ACTION_TYPE,
+        policyId: POLICY_AGENT_ELIGIBILITY_VIEW_V1,
+        status: "DENIED",
+      });
+      throw new AgentEligibilityError(
+        "agent not registered for this controller",
+        "CONTROLLER_MISMATCH",
+        403,
+      );
+    }
 
-  // Controller binding — the agent may only act for its registered controller.
-  if (agent.controllerDid !== req.controllerDid) {
-    await deps.recordAgentAction({
-      agentDid: req.agentDid,
-      controllerDid: req.controllerDid,
-      actionType: ACTION_TYPE,
-      policyId: POLICY_AGENT_ELIGIBILITY_VIEW_V1,
-      status: "DENIED",
+    const controller = await deps.loadController(req.controllerDid);
+    if (!controller) {
+      throw new AgentEligibilityError("controller not found", "CREDENTIAL_NOT_FOUND", 404);
+    }
+
+    const decision = evaluateAgentEligibilityPolicy({
+      agentStatus: agent.agentStatus,
+      credentialStatus: agent.credentialStatus,
+      scopes: agent.scopes,
+      agentMaxRiskTier: agent.agentMaxRiskTier,
+      controllerStatus: controller.controllerStatus,
+      controllerKycValid: controller.controllerKycValid,
+      controllerRiskTier: controller.controllerRiskTier,
     });
-    throw new AgentEligibilityError(
-      "agent not registered for this controller",
-      "CONTROLLER_MISMATCH",
-      403,
-    );
-  }
 
-  const controller = await deps.loadController(req.controllerDid);
-  if (!controller) {
-    throw new AgentEligibilityError("controller not found", "CREDENTIAL_NOT_FOUND", 404);
-  }
+    if (!decision.allowed) {
+      await deps.recordAgentAction({
+        agentDid: req.agentDid,
+        controllerDid: req.controllerDid,
+        actionType: ACTION_TYPE,
+        policyId: decision.policyId,
+        status: "DENIED",
+      });
+      const statusCode = decision.denyCode === "POLICY_CONDITIONS_NOT_MET" ? 422 : 403;
+      throw new AgentEligibilityError(
+        decision.reason ?? "denied",
+        decision.denyCode ?? "AGENT_NOT_AUTHORIZED",
+        statusCode,
+      );
+    }
 
-  const decision = evaluateAgentEligibilityPolicy({
-    agentStatus: agent.agentStatus,
-    credentialStatus: agent.credentialStatus,
-    scopes: agent.scopes,
-    agentMaxRiskTier: agent.agentMaxRiskTier,
-    controllerStatus: controller.controllerStatus,
-    controllerKycValid: controller.controllerKycValid,
-    controllerRiskTier: controller.controllerRiskTier,
-  });
+    const result = await deps.runEligibility({
+      subjectDid: req.subjectDid,
+      credentialId: req.credentialId,
+      policyId: req.policyId,
+      relyingAppId: req.relyingAppId,
+      contextNonce: req.contextNonce,
+    });
 
-  if (!decision.allowed) {
-    await deps.recordAgentAction({
+    const agentActionId = await deps.recordAgentAction({
       agentDid: req.agentDid,
       controllerDid: req.controllerDid,
       actionType: ACTION_TYPE,
+      resourceId: result.decisionId,
       policyId: decision.policyId,
-      status: "DENIED",
+      status: result.status === "ALLOWED" ? "ALLOWED" : "DENIED",
     });
-    const statusCode = decision.denyCode === "POLICY_CONDITIONS_NOT_MET" ? 422 : 403;
-    throw new AgentEligibilityError(
-      decision.reason ?? "denied",
-      decision.denyCode ?? "AGENT_NOT_AUTHORIZED",
-      statusCode,
-    );
-  }
 
-  const result = await deps.runEligibility({
-    subjectDid: req.subjectDid,
-    credentialId: req.credentialId,
-    policyId: req.policyId,
-    relyingAppId: req.relyingAppId,
-    contextNonce: req.contextNonce,
+    return {
+      status: result.status,
+      decisionId: result.decisionId,
+      policyId: result.policyId,
+      policyVersion: result.policyVersion,
+      actor: {
+        agentDid: agent.agentDid,
+        controllerDid: agent.controllerDid,
+        agentScopes: agent.scopes,
+      },
+      proof: result.proof,
+      evaluation: result.evaluation,
+      evidence: { ...result.evidence, agentActionId },
+      issuedAt: result.issuedAt,
+    };
   });
-
-  const agentActionId = await deps.recordAgentAction({
-    agentDid: req.agentDid,
-    controllerDid: req.controllerDid,
-    actionType: ACTION_TYPE,
-    resourceId: result.decisionId,
-    policyId: decision.policyId,
-    status: result.status === "ALLOWED" ? "ALLOWED" : "DENIED",
-  });
-
-  const response: AgentEligibilityProofResponse = {
-    status: result.status,
-    decisionId: result.decisionId,
-    policyId: result.policyId,
-    policyVersion: result.policyVersion,
-    actor: {
-      agentDid: agent.agentDid,
-      controllerDid: agent.controllerDid,
-      agentScopes: agent.scopes,
-    },
-    proof: result.proof,
-    evaluation: result.evaluation,
-    evidence: { ...result.evidence, agentActionId },
-    issuedAt: result.issuedAt,
-  };
-
-  if (req.idempotencyKey && deps.idempotencyStore) {
-    await deps.idempotencyStore.set(req.idempotencyKey, response);
-  }
-
-  return response;
 }

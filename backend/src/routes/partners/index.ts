@@ -28,6 +28,12 @@ import {
   AgentEligibilityError,
 } from '../../services/ai/agent-eligibility';
 import { buildAgentEligibilityDeps } from '../ai/agent-eligibility';
+import {
+  createPrismaIdempotencyStore,
+  readIdempotencyKey,
+  withIdempotency,
+} from '../../services/idempotency';
+import { sendServiceError } from '../../services/errors';
 
 // ── Validation schemas ────────────────────────────────────────────────────
 
@@ -112,14 +118,25 @@ function buildPartnerDeps(): PartnerDeps {
   };
 }
 
+/**
+ * Run a partner write idempotently: read/validate the optional `Idempotency-Key`
+ * header, then memoize the terminal response under an operation-scoped key so a
+ * client retry returns the prior result instead of repeating the side effect.
+ * With no header it simply runs the work (idempotency is opt-in).
+ */
+function runIdempotent<T>(
+  req: AuthenticatedRequest,
+  scope: string,
+  work: () => Promise<T>,
+): Promise<T> {
+  const key = readIdempotencyKey(req.headers['idempotency-key']);
+  const store = createPrismaIdempotencyStore<T>(prisma, scope);
+  return withIdempotency(store, key, work);
+}
+
+/** Unified error→HTTP mapping (shared taxonomy); `logger` captures 500s only. */
 function sendError(res: Response, error: unknown): void {
-  const e = error as { statusCode?: number; code?: string; message?: string };
-  if (typeof e.statusCode === 'number' && typeof e.code === 'string') {
-    res.status(e.statusCode).json({ error: e.code, message: e.message });
-    return;
-  }
-  logger.error('partner_route_error', { error: e.message });
-  res.status(500).json({ error: 'INTERNAL_ERROR', message: 'Internal error' });
+  sendServiceError(res, error, logger);
 }
 
 // ── Routes ─────────────────────────────────────────────────────────────────
@@ -132,7 +149,10 @@ router.post(
   validate({ body: WalletEligibilitySchema }),
   async (req: AuthenticatedRequest, res: Response) => {
     try {
-      res.status(200).json(await walletEligibility(buildPartnerDeps(), req.body));
+      const result = await runIdempotent(req, 'partner.wallet.eligibility', () =>
+        walletEligibility(buildPartnerDeps(), req.body),
+      );
+      res.status(200).json(result);
     } catch (error) {
       sendError(res, error);
     }
@@ -144,7 +164,10 @@ router.post(
   validate({ body: WalletDisclosureSchema }),
   async (req: AuthenticatedRequest, res: Response) => {
     try {
-      res.status(202).json(await initiateWalletDisclosure(buildPartnerDeps(), req.body));
+      const result = await runIdempotent(req, 'partner.wallet.disclosure', () =>
+        initiateWalletDisclosure(buildPartnerDeps(), req.body),
+      );
+      res.status(202).json(result);
     } catch (error) {
       sendError(res, error);
     }
@@ -170,9 +193,10 @@ router.post(
   validate({ params: PoolParamsSchema, body: PoolEligibilitySchema }),
   async (req: AuthenticatedRequest, res: Response) => {
     try {
-      res.status(200).json(
-        await poolEligibility(buildPartnerDeps(), { poolId: req.params.poolId, ...req.body }),
+      const result = await runIdempotent(req, 'partner.cruzible.pool.eligibility', () =>
+        poolEligibility(buildPartnerDeps(), { poolId: req.params.poolId, ...req.body }),
       );
+      res.status(200).json(result);
     } catch (error) {
       sendError(res, error);
     }
@@ -184,9 +208,10 @@ router.post(
   validate({ params: PoolParamsSchema, body: PoolAgentScanSchema }),
   async (req: AuthenticatedRequest, res: Response) => {
     try {
-      res.status(200).json(
-        await poolAgentScan(buildPartnerDeps(), { poolId: req.params.poolId, ...req.body }),
+      const result = await runIdempotent(req, 'partner.cruzible.pool.agent-scan', () =>
+        poolAgentScan(buildPartnerDeps(), { poolId: req.params.poolId, ...req.body }),
       );
+      res.status(200).json(result);
     } catch (error) {
       sendError(res, error);
     }
