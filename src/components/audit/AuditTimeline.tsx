@@ -82,16 +82,35 @@ function formatTimestamp(ts: string | number): { date: string; time: string } {
   };
 }
 
+/** An audit event attributable to an AI agent passport (v1). */
+function isAgentAction(event: AuditEvent): boolean {
+  const e = event as AuditEvent & {
+    agentDid?: string;
+    agentActionId?: string;
+    actionType?: string;
+  };
+  return Boolean(
+    e.agentDid || e.agentActionId || e.actionType === "ELIGIBILITY_PROOF_REQUEST",
+  );
+}
+
 export default function AuditTimeline({ did, limit = 50 }: AuditTimelineProps) {
   const { events, isLoading, error } = useAudit(did, limit);
   const [filterType, setFilterType] = useState<AuditEventType | "all">("all");
   const [showFilter, setShowFilter] = useState(false);
+  const [agentOnly, setAgentOnly] = useState(false);
 
   const filteredEvents = useMemo(() => {
     if (!events) return [];
-    if (filterType === "all") return events;
-    return events.filter((e: AuditEvent) => e.type === filterType);
-  }, [events, filterType]);
+    let result: AuditEvent[] = events;
+    if (filterType !== "all") {
+      result = result.filter((e: AuditEvent) => e.type === filterType);
+    }
+    if (agentOnly) {
+      result = result.filter((e: AuditEvent) => isAgentAction(e));
+    }
+    return result;
+  }, [events, filterType, agentOnly]);
 
   if (isLoading) {
     return (
@@ -123,11 +142,20 @@ export default function AuditTimeline({ did, limit = 50 }: AuditTimelineProps) {
           <Clock className="w-4 h-4 text-brand-500" />
           Audit Timeline
         </h3>
-        <div className="relative">
+        <div className="flex items-center gap-2">
           <button
-            onClick={() => setShowFilter(!showFilter)}
-            className="btn-ghost btn-sm"
+            onClick={() => setAgentOnly((v) => !v)}
+            className={`btn-sm ${agentOnly ? "btn-primary" : "btn-ghost"}`}
+            aria-pressed={agentOnly}
           >
+            <UserCheck className="w-3.5 h-3.5" />
+            Agent actions
+          </button>
+          <div className="relative">
+            <button
+              onClick={() => setShowFilter(!showFilter)}
+              className="btn-ghost btn-sm"
+            >
             <Filter className="w-3.5 h-3.5" />
             {filterType === "all"
               ? "All Events"
@@ -176,6 +204,7 @@ export default function AuditTimeline({ did, limit = 50 }: AuditTimelineProps) {
               </motion.div>
             )}
           </AnimatePresence>
+          </div>
         </div>
       </div>
 
@@ -223,6 +252,16 @@ export default function AuditTimeline({ did, limit = 50 }: AuditTimelineProps) {
                         <p className={`text-sm font-medium ${config.color}`}>
                           {config.label}
                         </p>
+                        {isAgentAction(event) && (
+                          <p className="text-[11px] text-status-pending mt-0.5 flex items-center gap-1">
+                            <UserCheck className="w-3 h-3" />
+                            AI Agent{" "}
+                            {(event as { agentDid?: string }).agentDid ?? "agent"}{" "}
+                            acting for{" "}
+                            {(event as { controllerDid?: string })
+                              .controllerDid ?? "controller"}
+                          </p>
+                        )}
                         {event.description && (
                           <p className="text-xs text-[var(--text-secondary)] mt-0.5">
                             {event.description}
