@@ -24,6 +24,14 @@ export interface AgentEligibilityProofRequest {
   policyId: string;
   relyingAppId: string;
   contextNonce?: string;
+  /** Optional idempotency key — a repeated request returns the cached result. */
+  idempotencyKey?: string;
+}
+
+/** Optional idempotency store; when present, a repeated key short-circuits. */
+export interface IdempotencyStore {
+  get(key: string): Promise<AgentEligibilityProofResponse | null>;
+  set(key: string, value: AgentEligibilityProofResponse): Promise<void>;
 }
 
 export interface AgentPassportRecord {
@@ -92,6 +100,7 @@ export interface AgentEligibilityDeps {
     contextNonce?: string;
   }): Promise<EligibilityResult>;
   recordAgentAction(action: RecordedAgentAction): Promise<string>;
+  idempotencyStore?: IdempotencyStore;
 }
 
 export interface AgentEligibilityProofResponse {
@@ -123,6 +132,13 @@ export async function agentEligibilityProof(
   deps: AgentEligibilityDeps,
   req: AgentEligibilityProofRequest,
 ): Promise<AgentEligibilityProofResponse> {
+  // Idempotency: a repeated key returns the prior result without re-recording
+  // an AgentAction or re-running eligibility.
+  if (req.idempotencyKey && deps.idempotencyStore) {
+    const cached = await deps.idempotencyStore.get(req.idempotencyKey);
+    if (cached) return cached;
+  }
+
   const agent = await deps.loadAgent(req.agentDid);
   if (!agent) {
     throw new AgentEligibilityError("agent not found", "AGENT_NOT_FOUND", 404);
@@ -192,7 +208,7 @@ export async function agentEligibilityProof(
     status: result.status === "ALLOWED" ? "ALLOWED" : "DENIED",
   });
 
-  return {
+  const response: AgentEligibilityProofResponse = {
     status: result.status,
     decisionId: result.decisionId,
     policyId: result.policyId,
@@ -207,4 +223,10 @@ export async function agentEligibilityProof(
     evidence: { ...result.evidence, agentActionId },
     issuedAt: result.issuedAt,
   };
+
+  if (req.idempotencyKey && deps.idempotencyStore) {
+    await deps.idempotencyStore.set(req.idempotencyKey, response);
+  }
+
+  return response;
 }

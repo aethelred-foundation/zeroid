@@ -952,3 +952,18 @@ model MarketplaceListing {
   @@index([isActive])
   @@map("marketplace_listings")
 }
+
+// ── Idempotency ───────────────────────────────────────────────
+// Memoizes the terminal response of a write-bearing request so a client retry
+// with the same Idempotency-Key returns the prior result instead of recording
+// a duplicate AgentAction / re-running eligibility. `scope` namespaces keys by
+// operation so the same key in two different endpoints never collides.
+model IdempotencyRecord {
+  key       String   @id // "<scope>:<client idempotency key>"
+  scope     String
+  response  Json
+  createdAt DateTime @default(now())
+
+  @@index([scope, createdAt])
+  @@map("idempotency_records")
+}

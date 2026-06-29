@@ -3,6 +3,7 @@ import {
   AgentEligibilityError,
   type AgentEligibilityDeps,
   type AgentEligibilityProofRequest,
+  type AgentEligibilityProofResponse,
 } from "@/services/ai/agent-eligibility";
 
 function makeDeps(over: Partial<AgentEligibilityDeps> = {}): AgentEligibilityDeps {
@@ -115,5 +116,61 @@ describe("agentEligibilityProof", () => {
     const e = new AgentEligibilityError("x", "AGENT_NOT_FOUND", 404);
     expect(e.code).toBe("AGENT_NOT_FOUND");
     expect(e.statusCode).toBe(404);
+  });
+
+  describe("idempotency", () => {
+    function makeStore() {
+      const cache = new Map<string, AgentEligibilityProofResponse>();
+      return {
+        cache,
+        get: jest.fn(async (key: string) => cache.get(key) ?? null),
+        set: jest.fn(async (key: string, value: AgentEligibilityProofResponse) => {
+          cache.set(key, value);
+        }),
+      };
+    }
+
+    it("returns the cached response on a repeated key without re-running or re-recording", async () => {
+      const store = makeStore();
+      const deps = makeDeps({ idempotencyStore: store });
+      const keyed = { ...req, idempotencyKey: "idem-1" };
+
+      const first = await agentEligibilityProof(deps, keyed);
+      expect(store.set).toHaveBeenCalledWith("idem-1", first);
+      expect(deps.runEligibility).toHaveBeenCalledTimes(1);
+      expect(deps.recordAgentAction).toHaveBeenCalledTimes(1);
+
+      const second = await agentEligibilityProof(deps, keyed);
+      expect(second).toEqual(first);
+      // The cached hit short-circuits before any side effect runs a second time:
+      // no duplicate AgentAction is recorded and eligibility is not re-evaluated.
+      expect(store.get).toHaveBeenCalledWith("idem-1");
+      expect(deps.runEligibility).toHaveBeenCalledTimes(1);
+      expect(deps.recordAgentAction).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not consult the store when no idempotencyKey is supplied", async () => {
+      const store = makeStore();
+      const deps = makeDeps({ idempotencyStore: store });
+
+      await agentEligibilityProof(deps, req);
+      await agentEligibilityProof(deps, req);
+
+      expect(store.get).not.toHaveBeenCalled();
+      expect(store.set).not.toHaveBeenCalled();
+      expect(deps.runEligibility).toHaveBeenCalledTimes(2);
+    });
+
+    it("does not cache thrown attempts, so a later valid retry with the same key still runs", async () => {
+      const store = makeStore();
+      const deps = makeDeps({
+        loadAgent: jest.fn().mockResolvedValue(null),
+        idempotencyStore: store,
+      });
+      const keyed = { ...req, idempotencyKey: "idem-err" };
+
+      await expect(agentEligibilityProof(deps, keyed)).rejects.toMatchObject({ code: "AGENT_NOT_FOUND" });
+      expect(store.set).not.toHaveBeenCalled();
+    });
   });
 });

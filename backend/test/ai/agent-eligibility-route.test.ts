@@ -94,4 +94,35 @@ describe('POST /api/v1/ai/agents/eligibility/proof', () => {
     expect(res.status).toBe(400);
     expect(mockProof).not.toHaveBeenCalled();
   });
+
+  it('forwards the Idempotency-Key header into the service request', async () => {
+    mockProof.mockResolvedValue({ status: 'ALLOWED', decisionId: 'd1' });
+    await request(makeApp())
+      .post('/api/v1/ai/agents/eligibility/proof')
+      .set('Idempotency-Key', 'idem-xyz')
+      .send(body);
+    expect(mockProof).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ idempotencyKey: 'idem-xyz' }),
+    );
+  });
+
+  it('leaves idempotencyKey undefined when the header is absent (opt-in)', async () => {
+    mockProof.mockResolvedValue({ status: 'ALLOWED', decisionId: 'd1' });
+    await request(makeApp())
+      .post('/api/v1/ai/agents/eligibility/proof')
+      .send(body);
+    const [, reqArg] = mockProof.mock.calls[0] as [unknown, { idempotencyKey?: string }];
+    expect(reqArg.idempotencyKey).toBeUndefined();
+  });
+
+  it('rejects a malformed Idempotency-Key with 400 before calling the service', async () => {
+    const res = await request(makeApp())
+      .post('/api/v1/ai/agents/eligibility/proof')
+      .set('Idempotency-Key', 'x'.repeat(300))
+      .send(body);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('INVALID_IDEMPOTENCY_KEY');
+    expect(mockProof).not.toHaveBeenCalled();
+  });
 });
