@@ -94,4 +94,55 @@ contract ConditionalDisclosureTest is Test {
         vm.expectRevert(ConditionalDisclosure.EscrowIsErased.selector);
         cd.requestDisclosure(ESCROW_ID, WARRANT);
     }
+
+    function test_thresholdSnapshotPreventsRace() public {
+        _register();
+        vm.prank(alice);
+        cd.requestDisclosure(ESCROW_ID, WARRANT);
+        (, , uint256 required, ) = cd.getDisclosure(ESCROW_ID);
+        assertEq(required, 2, "threshold snapshotted at request time");
+
+        // Admin lowers the GLOBAL threshold mid-flight.
+        vm.prank(admin);
+        cd.setDisclosureThreshold(1);
+
+        // One approval must NOT authorize: the in-flight request keeps its snapshot.
+        vm.prank(alice);
+        cd.approveDisclosure(ESCROW_ID);
+        assertFalse(
+            cd.isDisclosureAuthorized(ESCROW_ID),
+            "in-flight request bound to its snapshot quorum, not the lowered global one"
+        );
+
+        // Reaching the snapshot quorum authorizes.
+        vm.prank(bob);
+        cd.approveDisclosure(ESCROW_ID);
+        assertTrue(cd.isDisclosureAuthorized(ESCROW_ID));
+    }
+
+    function test_pausedBlocksDisclosureFlow() public {
+        _register();
+        vm.prank(admin);
+        cd.pause();
+        vm.prank(alice);
+        vm.expectRevert(); // OZ Pausable: EnforcedPause
+        cd.requestDisclosure(ESCROW_ID, WARRANT);
+    }
+
+    function test_eraseAllowedWhilePaused() public {
+        _register();
+        vm.prank(admin);
+        cd.pause();
+        // Right-to-be-forgotten must remain available even while paused.
+        vm.prank(admin);
+        cd.eraseEscrow(ESCROW_ID);
+        (, , , bool erased) = cd.getEscrow(ESCROW_ID);
+        assertTrue(erased);
+    }
+
+    function test_onlyPauserCanPause() public {
+        vm.prank(dave);
+        vm.expectRevert();
+        cd.pause();
+    }
 }

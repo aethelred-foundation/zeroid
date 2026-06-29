@@ -2,6 +2,8 @@
 pragma solidity ^0.8.20;
 
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
+import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 /**
  * @title FeeRouter
@@ -15,12 +17,25 @@ import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
  *         system: identity/compliance traffic feeds token burn AND staking
  *         liquidity.
  *
- * @dev Native-value routing. Burn is delegated to the configured `burnSink`
- *      (the protocol's burn address); actual supply reduction is the protocol's
- *      responsibility. `FeeRouted` events carry per-operation accounting so the
- *      flywheel is auditable (and embeddable in Digital Seals).
+ * @dev Security posture:
+ *      - Checks-Effects-Interactions: all accounting is updated before any
+ *        external value transfer.
+ *      - `nonReentrant`: routing performs external calls to admin-configured
+ *        sinks; the guard blocks reentrancy through a malicious sink.
+ *      - `Pausable`: routing can be halted in an incident without touching
+ *        configuration.
+ *      - Failed transfers revert (no silent fund loss); a sink that rejects
+ *        value is an operational (admin) concern, mitigated by `setSinks` +
+ *        pause.
+ *      - Burn is delegated to the configured `burnSink` (the protocol's burn
+ *        address); actual supply reduction is the protocol's responsibility.
  */
-contract FeeRouter is AccessControl {
+contract FeeRouter is AccessControl, Pausable, ReentrancyGuard {
+    /// @notice Role permitted to pause/unpause routing in an incident.
+    bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
+
+    uint256 internal constant BPS_DENOMINATOR = 10_000;
+
     /// @notice Basis points of each fee routed to the burn sink (e.g. 5000 = 50%).
     uint256 public burnBps;
     /// @notice Protocol burn address.
@@ -30,6 +45,7 @@ contract FeeRouter is AccessControl {
 
     uint256 public totalBurned;
     uint256 public totalToCruzible;
+    uint256 public totalRouted;
 
     event FeeRouted(
         bytes32 indexed operationId,
@@ -51,11 +67,13 @@ contract FeeRouter is AccessControl {
         address cruzibleSink_,
         uint256 burnBps_
     ) {
-        if (burnBps_ > 10000) revert InvalidBps();
+        if (admin == address(0)) revert ZeroAddress();
+        if (burnBps_ > BPS_DENOMINATOR) revert InvalidBps();
         if (burnSink_ == address(0) || cruzibleSink_ == address(0)) {
             revert ZeroAddress();
         }
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
+        _grantRole(PAUSER_ROLE, admin);
         burnSink = burnSink_;
         cruzibleSink = cruzibleSink_;
         burnBps = burnBps_;
@@ -66,29 +84,39 @@ contract FeeRouter is AccessControl {
     function routeFee(bytes32 operationId, string calldata operationType)
         external
         payable
+        whenNotPaused
+        nonReentrant
     {
-        if (msg.value == 0) revert ZeroFee();
-        uint256 burned = (msg.value * burnBps) / 10000;
-        uint256 toCruzible = msg.value - burned; // remainder avoids dust loss
+        uint256 total = msg.value;
+        if (total == 0) revert ZeroFee();
 
+        uint256 burned = (total * burnBps) / BPS_DENOMINATOR;
+        uint256 toCruzible = total - burned; // remainder avoids dust loss
+
+        // Effects before interactions.
         totalBurned += burned;
         totalToCruzible += toCruzible;
+        totalRouted += total;
+
+        // Cache sinks so reads are consistent within the call.
+        address burnTo = burnSink;
+        address cruzibleTo = cruzibleSink;
 
         if (burned > 0) {
-            (bool okBurn, ) = burnSink.call{value: burned}("");
+            (bool okBurn, ) = burnTo.call{value: burned}("");
             if (!okBurn) revert TransferFailed();
         }
         if (toCruzible > 0) {
-            (bool okCruzible, ) = cruzibleSink.call{value: toCruzible}("");
+            (bool okCruzible, ) = cruzibleTo.call{value: toCruzible}("");
             if (!okCruzible) revert TransferFailed();
         }
 
-        emit FeeRouted(operationId, operationType, msg.value, burned, toCruzible);
+        emit FeeRouted(operationId, operationType, total, burned, toCruzible);
     }
 
     /// @notice Update the burn/Cruzible split.
     function setBurnBps(uint256 bps) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        if (bps > 10000) revert InvalidBps();
+        if (bps > BPS_DENOMINATOR) revert InvalidBps();
         burnBps = bps;
         emit ConfigUpdated(bps, burnSink, cruzibleSink);
     }
@@ -104,5 +132,15 @@ contract FeeRouter is AccessControl {
         burnSink = burnSink_;
         cruzibleSink = cruzibleSink_;
         emit ConfigUpdated(burnBps, burnSink_, cruzibleSink_);
+    }
+
+    /// @notice Halt fee routing (incident response). Does not change config.
+    function pause() external onlyRole(PAUSER_ROLE) {
+        _pause();
+    }
+
+    /// @notice Resume fee routing.
+    function unpause() external onlyRole(PAUSER_ROLE) {
+        _unpause();
     }
 }
