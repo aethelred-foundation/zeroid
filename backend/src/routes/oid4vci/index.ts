@@ -17,7 +17,7 @@ import { Router, Response } from 'express';
 import { z } from 'zod';
 import { randomBytes } from 'node:crypto';
 import { generateKeyPair, importJWK, type KeyLike } from 'jose';
-import { logger } from '../../index';
+import { prisma, logger } from '../../index';
 import { AuthenticatedRequest, authMiddleware } from '../../middleware/auth';
 import { apiRateLimiter } from '../../middleware/rateLimit';
 import { validate } from '../../middleware/validation';
@@ -27,9 +27,9 @@ import {
   createCredentialOffer,
   redeemPreAuthorizedCode,
   issueCredential,
-  createInMemoryIssuanceStores,
   type IssuanceDeps,
 } from '../../services/oid4vci/issuance';
+import { createPrismaIssuanceStores } from '../../services/oid4vci/issuance-stores-prisma';
 import {
   createJoseIssuanceSignDeps,
   createJoseKeyProofVerifier,
@@ -37,7 +37,7 @@ import {
 import type { SdJwtIssueDeps } from '../../services/oid4vci/sd-jwt-issuer';
 
 const ISSUER = process.env.OID4VCI_ISSUER ?? 'https://issuer.zeroid';
-const stores = createInMemoryIssuanceStores(); // single-instance/dev; swap for Prisma/Redis
+const stores = createPrismaIssuanceStores(prisma);
 
 let signDepsPromise: Promise<SdJwtIssueDeps> | null = null;
 function getSignDeps(): Promise<SdJwtIssueDeps> {

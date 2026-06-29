@@ -14,6 +14,7 @@ jest.mock("../../src/services/oid4vci/issuance", () => {
   };
 });
 jest.mock("../../src/index", () => ({
+  prisma: {},
   logger: { error: jest.fn(), warn: jest.fn(), info: jest.fn() },
 }));
 jest.mock("../../src/middleware/auth", () => ({

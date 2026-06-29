@@ -967,3 +967,42 @@ model IdempotencyRecord {
   @@index([scope, createdAt])
   @@map("idempotency_records")
 }
+
+// ── OpenID4VP / OpenID4VCI persistence ─────────────────────────
+// Cross-device presentation requests (state + one-time nonce for replay
+// protection) and the OpenID4VCI pre-authorized-code / token sessions.
+model Oid4vpPresentationRequest {
+  state     String   @id // opaque request id (also the callback lookup key)
+  nonce     String   @unique // issued once; consumed atomically on callback
+  policyId  String
+  audience  String
+  status    String   @default("PENDING") // PENDING | CONSUMED | COMPLETED
+  decision  Json?
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+
+  @@index([status, expiresAt])
+  @@map("oid4vp_presentation_requests")
+}
+
+model Oid4vciOffer {
+  preAuthCode String   @id
+  configId    String
+  subjectDid  String
+  txCode      String?
+  createdAt   DateTime @default(now())
+  expiresAt   DateTime
+
+  @@map("oid4vci_offers")
+}
+
+model Oid4vciTokenSession {
+  accessToken String   @id
+  configId    String
+  subjectDid  String
+  cNonce      String
+  createdAt   DateTime @default(now())
+  expiresAt   DateTime
+
+  @@map("oid4vci_token_sessions")
+}

@@ -18,6 +18,8 @@ import { identityRoutes } from './routes/identity';
 import { governanceRoutes } from './routes/governance';
 import { auditRoutes } from './routes/audit';
 import partnersRoutes from './routes/partners';
+import oid4vpRoutes from './routes/oid4vp';
+import oid4vciRoutes from './routes/oid4vci';
 import enterpriseIntegrationRoutes, {
   oidcPublicRouter,
 } from './routes/enterprise/integration';
@@ -474,6 +476,8 @@ const auditPrincipalLimiter = createAuthenticatedPrincipalLimiter(
 
 app.use('/api/v1/identity', apiRouteLimiter, identityRoutes);
 app.use('/api/v1/partners', apiRouteLimiter, partnersRoutes);
+app.use('/api/v1/oid4vp', oid4vpRoutes); // OpenID4VP verifier (self-limited; per-route auth)
+app.use('/api/v1/oid4vci', oid4vciRoutes); // OpenID4VCI issuer (self-limited)
 app.use(
   '/api/v1/credentials',
   apiRouteLimiter,
