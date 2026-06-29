@@ -262,6 +262,12 @@ enum AgentStatus {
   PENDING_APPROVAL
 }
 
+enum AgentActionDecision {
+  ALLOWED
+  DENIED
+  FAILED
+}
+
 enum ComplianceScreeningResult {
   CLEAR
   POTENTIAL_MATCH
@@ -332,6 +338,8 @@ model AIAgent {
   name            String
   description     String?
   operatorId      String
+  controllerDid   String?      // v1 passport: denormalized DID of controlling Identity
+  riskTier        RiskLevel    @default(LOW)
   agentType       String       // llm, autonomous, bot, iot
   capabilities    Json         // array of capability objects
   delegationChain Json?        // parent agent chain
@@ -361,6 +369,9 @@ model AgentAction {
   agentId         String
   actionType      String    // verify, issue, delegate, transfer
   targetResource  String?
+  controllerDid   String?
+  policyId        String?
+  decision        AgentActionDecision?
   parameters      Json?
   riskScore       Float     @default(0)
   requiresApproval Boolean  @default(false)
@@ -384,6 +395,10 @@ model AgentCredential {
   agentId         String
   credentialType  String
   capabilities    String[]
+  scopes          String[]  @default([])  // v1 controlled scope vocabulary
+  maxRiskTier     RiskLevel @default(LOW)
+  controllerDid   String?
+  revocationNonce String?
   issuedAt        DateTime  @default(now())
   expiresAt       DateTime
   status          CredentialStatus @default(ACTIVE)
