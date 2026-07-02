@@ -11,11 +11,26 @@ import { defineChain } from "viem";
 // Chain IDs
 // ---------------------------------------------------------------------------
 
-// Canonical chain IDs — source of truth: aethelred `ecosystem/manifest.json`
-// (protocol chain_id 8821 / testnet_chain_id 88210).
-export const AETHELRED_MAINNET_ID = 8821;
-export const AETHELRED_TESTNET_ID = 88210;
-export const AETHELRED_DEVNET_ID = 88211;
+// Canonical EVM chain IDs. 7332 is the CONFIRMED live Aethelred EVM EIP-155 id
+// baked into the x/vm chain config (`eth_chainId` returns 0x1ca4) — the value
+// wallets and dApps must use. Testnet and devnet are the SAME chain (7332)
+// reached via different endpoints (hosted RPC vs a local
+// `aethelredd start --json-rpc.enable` node) and deliberately share the id;
+// mainnet keeps a distinct placeholder until a production network exists.
+// (Source of truth: aethelred `ecosystem/manifest.json` → protocol.evm_chain_id.
+// The prior 8821/88210 values were never-deployed placeholders.)
+export const AETHELRED_MAINNET_ID = 7331;
+export const AETHELRED_TESTNET_ID = 7332;
+export const AETHELRED_DEVNET_ID = 7332;
+
+/**
+ * Resolve an RPC endpoint with an optional env override, so an operator can
+ * point ZeroID at their own aethelredd node without editing source.
+ */
+function rpcEndpoint(envVar: string, fallback: string): string {
+  const override = process.env[envVar]?.trim();
+  return override && override.length > 0 ? override : fallback;
+}
 
 // ---------------------------------------------------------------------------
 // Chain Definitions
@@ -58,12 +73,20 @@ export const aethelredTestnet = defineChain({
   },
   rpcUrls: {
     default: {
-      http: ["https://evm-rpc-testnet.aethelred.network"],
-      webSocket: ["wss://evm-ws-testnet.aethelred.network"],
+      http: [
+        rpcEndpoint(
+          "NEXT_PUBLIC_AETHELRED_TESTNET_RPC_URL",
+          "https://evm-rpc-testnet.aethelred.network",
+        ),
+      ],
     },
     public: {
-      http: ["https://evm-rpc-testnet.aethelred.network"],
-      webSocket: ["wss://evm-ws-testnet.aethelred.network"],
+      http: [
+        rpcEndpoint(
+          "NEXT_PUBLIC_AETHELRED_TESTNET_RPC_URL",
+          "https://evm-rpc-testnet.aethelred.network",
+        ),
+      ],
     },
   },
   blockExplorers: {
@@ -84,13 +107,23 @@ export const aethelredDevnet = defineChain({
     decimals: 18,
   },
   rpcUrls: {
+    // Defaults to a local `aethelredd start --json-rpc.enable` node (which
+    // returns chain id 7332); override with the env var for a remote node.
     default: {
-      http: ["http://localhost:8545"],
-      webSocket: ["ws://localhost:8546"],
+      http: [
+        rpcEndpoint(
+          "NEXT_PUBLIC_AETHELRED_DEVNET_RPC_URL",
+          "http://127.0.0.1:8545",
+        ),
+      ],
     },
     public: {
-      http: ["http://localhost:8545"],
-      webSocket: ["ws://localhost:8546"],
+      http: [
+        rpcEndpoint(
+          "NEXT_PUBLIC_AETHELRED_DEVNET_RPC_URL",
+          "http://127.0.0.1:8545",
+        ),
+      ],
     },
   },
   testnet: true,

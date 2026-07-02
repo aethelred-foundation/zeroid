@@ -8,10 +8,12 @@ jest.mock("wagmi", () => ({
   createStorage: jest.fn((opts: any) => ({ ...opts, _type: "storage" })),
 }));
 
-jest.mock("wagmi/connectors", () => ({
+// Production wagmi.ts imports the narrow `wagmi/connectors/injected` subpath so
+// the bundle never pulls the optional Coinbase/WalletConnect peer SDKs. Mock
+// that exact subpath (not the barrel `wagmi/connectors`) or the real ESM module
+// loads and jest fails to transform it.
+jest.mock("wagmi/connectors/injected", () => ({
   injected: jest.fn(() => "injected-connector"),
-  walletConnect: jest.fn(() => "walletconnect-connector"),
-  coinbaseWallet: jest.fn(() => "coinbase-connector"),
 }));
 
 import {
@@ -36,38 +38,22 @@ describe("wagmi config", () => {
     expect(activeChain).toHaveProperty("name");
   });
 
-  it("includes all three Aethelred chains", () => {
+  it("registers deduped chains (mainnet + shared testnet/devnet 7332)", () => {
     const config = wagmiConfig as any;
-    if (config.chains) {
-      expect(config.chains).toHaveLength(3);
-    }
+    // Testnet and devnet share EVM id 7332, so wagmi's chain registry collapses
+    // to two entries: mainnet (7331) and the single 7332 chain.
+    expect(config.chains).toHaveLength(2);
+    const ids = config.chains.map((c: any) => c.id).sort();
+    expect(ids).toEqual([7331, 7332]);
   });
 
-  it("createFallbackConfig is exercised (function coverage)", () => {
+  it("wires only the audited injected connector (no unaudited peer SDKs)", () => {
+    const config = wagmiConfig as any;
+    expect(config.connectors).toEqual(["injected-connector"]);
+  });
+
+  it("createZeroIdWalletConfig is exercised (function coverage)", () => {
     expect((wagmiConfig as any)._type).toBe("fallback");
-  });
-});
-
-describe("wagmi config — WalletConnect connector", () => {
-  const origEnv = process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID;
-
-  afterEach(() => {
-    if (origEnv === undefined) {
-      delete process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID;
-    } else {
-      process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID = origEnv;
-    }
-  });
-
-  it("includes WalletConnect when WALLETCONNECT_PROJECT_ID is set", () => {
-    process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID = "test-project-id";
-    jest.isolateModules(() => {
-      const { wagmiConfig: walletConnectConfig } = require("../wagmi");
-      expect(walletConnectConfig).toBeDefined();
-      expect((walletConnectConfig as any).connectors).toContain(
-        "walletconnect-connector",
-      );
-    });
   });
 });
 
