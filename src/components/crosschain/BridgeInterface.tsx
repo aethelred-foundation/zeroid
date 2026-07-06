@@ -72,13 +72,20 @@ interface BridgeInterfaceProps {
     sourceChain: ChainId;
     destChain: ChainId;
     credentialIds: string[];
-  }) => Promise<void>;
+  }) => Promise<
+    | void
+    | {
+        txHashes?: Partial<Record<BridgeStep, string>>;
+      }
+  >;
   className?: string;
 }
 
 // ============================================================================
 // Constants
 // ============================================================================
+
+const BRIDGE_STEP_DELAY_MS = 2200;
 
 const CHAINS: Chain[] = [
   {
@@ -283,11 +290,27 @@ function ChainSelector({
 function BridgeStepper({
   currentStep,
   txHashes,
+  sourceChain,
+  destChain,
 }: {
   currentStep: BridgeStep;
   txHashes: Record<string, string>;
+  sourceChain: ChainId;
+  destChain: ChainId;
 }) {
   const currentIdx = BRIDGE_STEPS.findIndex((s) => s.key === currentStep);
+  const explorerUrlForStep = useCallback(
+    (step: BridgeStep, txHash: string) => {
+      const chainId =
+        step === "confirm_dest" || step === "complete"
+          ? destChain
+          : sourceChain;
+      const explorer = CHAINS.find((chain) => chain.id === chainId);
+      if (!explorer) return null;
+      return `${explorer.explorerUrl.replace(/\/$/, "")}/tx/${txHash}`;
+    },
+    [destChain, sourceChain],
+  );
 
   return (
     <div className="space-y-2">
@@ -295,6 +318,10 @@ function BridgeStepper({
         const isComplete = idx < currentIdx;
         const isCurrent = idx === currentIdx;
         const isPending = idx > currentIdx;
+        const txHash = txHashes[step.key];
+        const txExplorerUrl = txHash
+          ? explorerUrlForStep(step.key, txHash)
+          : null;
 
         return (
           <motion.div
@@ -337,9 +364,12 @@ function BridgeStepper({
                 {step.description}
               </p>
             </div>
-            {txHashes[step.key] && (
+            {txHash && txExplorerUrl && (
               <a
-                href="#"
+                href={txExplorerUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label={`Open ${step.label} transaction in explorer`}
                 className="flex items-center gap-1 text-[10px] text-brand-500 hover:text-brand-400"
               >
                 <ExternalLink className="w-3 h-3" />
@@ -371,6 +401,9 @@ export default function BridgeInterface({
   );
   const [bridging, setBridging] = useState(false);
   const [currentStep, setCurrentStep] = useState<BridgeStep | null>(null);
+  const [bridgeTxHashes, setBridgeTxHashes] = useState<Record<string, string>>(
+    {},
+  );
   const [showFees, setShowFees] = useState(false);
 
   const fees = useMemo(
@@ -395,6 +428,7 @@ export default function BridgeInterface({
   const handleBridge = useCallback(async () => {
     if (selectedCredentials.size === 0) return;
     setBridging(true);
+    setBridgeTxHashes({});
 
     const steps: BridgeStep[] = [
       "initiate",
@@ -405,17 +439,21 @@ export default function BridgeInterface({
     ];
     for (const step of steps) {
       setCurrentStep(step);
-      await new Promise((resolve) =>
-        setTimeout(resolve, 2000 + Math.random() * 1000),
-      );
+      await new Promise((resolve) => setTimeout(resolve, BRIDGE_STEP_DELAY_MS));
     }
 
     if (onBridge) {
-      await onBridge({
+      const bridgeResult = await onBridge({
         sourceChain,
         destChain,
         credentialIds: Array.from(selectedCredentials),
       });
+      if (bridgeResult?.txHashes) {
+        setBridgeTxHashes((prev) => ({
+          ...prev,
+          ...bridgeResult.txHashes,
+        }));
+      }
     }
 
     setTimeout(() => {
@@ -649,7 +687,12 @@ export default function BridgeInterface({
                 {CHAINS.find((c) => c.id === destChain)?.name}
               </p>
             </div>
-            <BridgeStepper currentStep={currentStep!} txHashes={{}} />
+            <BridgeStepper
+              currentStep={currentStep!}
+              txHashes={bridgeTxHashes}
+              sourceChain={sourceChain}
+              destChain={destChain}
+            />
           </div>
         )}
       </div>

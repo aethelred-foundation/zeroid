@@ -33,6 +33,7 @@ import type {
 import { apiClient } from "@/lib/api/client";
 import {
   buildRegistrationMessage,
+  clearIdentityAuthToken,
   normalizeRecoveryHash,
   recoverRegistrationPublicKey,
   storeIdentityAuthToken,
@@ -166,6 +167,7 @@ export function IdentityProvider({ children }: { children: React.ReactNode }) {
       // Wallet disconnected — clear state
       if (lastFetchedAddress.current) {
         setState(DEFAULT_IDENTITY_STATE);
+        clearIdentityAuthToken();
         lastFetchedAddress.current = null;
       }
       return;
@@ -342,6 +344,7 @@ export function IdentityProvider({ children }: { children: React.ReactNode }) {
 
   const clearIdentity = useCallback(() => {
     setState(DEFAULT_IDENTITY_STATE);
+    clearIdentityAuthToken();
     lastFetchedAddress.current = null;
   }, []);
 

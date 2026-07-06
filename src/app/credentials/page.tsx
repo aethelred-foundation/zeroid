@@ -3,18 +3,24 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
 import {
+  BadgeCheck,
+  BarChart3,
+  Briefcase,
+  Cake,
   ShieldCheck,
   Plus,
   Search,
-  Filter,
   Grid3X3,
   List,
-  Download,
-  ChevronDown,
   Clock,
   XCircle,
   CheckCircle2,
   AlertTriangle,
+  CreditCard,
+  GraduationCap,
+  Globe,
+  Home,
+  type LucideIcon,
 } from "lucide-react";
 import AppLayout from "@/components/layout/AppLayout";
 import CredentialCard from "@/components/credentials/CredentialCard";
@@ -26,15 +32,15 @@ import { useCredentials } from "@/hooks/useCredentials";
 type FilterStatus = "all" | "active" | "pending" | "expired" | "revoked";
 
 const schemaTypes = [
-  { id: "age", label: "Age Verification", icon: "🎂" },
-  { id: "residency", label: "Residency Proof", icon: "🏠" },
-  { id: "nationality", label: "Nationality", icon: "🌍" },
-  { id: "credit", label: "Credit Tier", icon: "💳" },
-  { id: "employment", label: "Employment Status", icon: "💼" },
-  { id: "education", label: "Education", icon: "🎓" },
-  { id: "accredited", label: "Accredited Investor", icon: "📊" },
-  { id: "kyc", label: "KYC Verification", icon: "✅" },
-];
+  { id: "age", label: "Age Verification", icon: Cake },
+  { id: "residency", label: "Residency Proof", icon: Home },
+  { id: "nationality", label: "Nationality", icon: Globe },
+  { id: "credit", label: "Credit Tier", icon: CreditCard },
+  { id: "employment", label: "Employment Status", icon: Briefcase },
+  { id: "education", label: "Education", icon: GraduationCap },
+  { id: "accredited", label: "Accredited Investor", icon: BarChart3 },
+  { id: "kyc", label: "KYC Verification", icon: BadgeCheck },
+] satisfies Array<{ id: string; label: string; icon: LucideIcon }>;
 
 export default function CredentialsPage() {
   const credentialsQuery = useCredentials();
@@ -236,7 +242,12 @@ export default function CredentialsPage() {
                 onClick={() => setShowRequestModal(true)}
                 className="p-4 rounded-xl border border-[var(--border-primary)] hover:border-brand-500/50 hover:bg-brand-500/5 transition-all text-left group"
               >
-                <div className="text-2xl mb-2">{schema.icon}</div>
+                <div
+                  className="mb-3 flex h-10 w-10 items-center justify-center rounded-xl border border-chrome-300/10 bg-chrome-300/6 text-chrome-300 transition-colors group-hover:border-brand-400/20 group-hover:text-brand-300"
+                  aria-hidden="true"
+                >
+                  <schema.icon className="h-5 w-5" />
+                </div>
                 <div className="text-sm font-medium group-hover:text-brand-400 transition-colors">
                   {schema.label}
                 </div>

@@ -161,7 +161,7 @@ export interface RegulatoryChangeImpact {
 }
 
 // ---------------------------------------------------------------------------
-// Sanctions lists (simulated production data sources)
+// Embedded screening reference data for offline evaluation.
 // ---------------------------------------------------------------------------
 
 interface SanctionsEntry {
@@ -284,7 +284,7 @@ export class ComplianceAdvisorService {
       }
     }
 
-    // Adverse media check (simulated)
+    // Adverse media signal evaluation.
     const adverseMedia = await this.checkAdverseMedia(request.fullName);
 
     // Determine overall result
@@ -797,16 +797,16 @@ export class ComplianceAdvisorService {
   }
 
   // -------------------------------------------------------------------------
-  // Regulatory change impact simulation
+  // Regulatory change impact assessment
   // -------------------------------------------------------------------------
-  async simulateRegulatoryChange(
+  async assessRegulatoryChangeImpact(
     regulation: string,
     changes: string,
     jurisdiction: string,
   ): Promise<RegulatoryChangeImpact> {
     const changeId = `rci-${crypto.randomUUID()}`;
 
-    logger.info('regulatory_change_simulation', {
+    logger.info('regulatory_change_impact_assessment', {
       changeId,
       regulation,
       jurisdiction,
@@ -883,7 +883,7 @@ export class ComplianceAdvisorService {
       automationPossible: effort !== 'critical',
     };
 
-    logger.info('regulatory_change_simulation_complete', {
+    logger.info('regulatory_change_impact_assessment_complete', {
       changeId,
       impactedEntities: impact.impactedEntities,
       requiredActions: requiredActions.length,
@@ -891,6 +891,15 @@ export class ComplianceAdvisorService {
     });
 
     return impact;
+  }
+
+  async simulateRegulatoryChange(
+    regulation: string,
+    changes: string,
+    jurisdiction: string,
+  ): Promise<RegulatoryChangeImpact> {
+    // Backward-compatible alias for older callers.
+    return this.assessRegulatoryChangeImpact(regulation, changes, jurisdiction);
   }
 
   // -------------------------------------------------------------------------

@@ -704,6 +704,61 @@ export class WebhookSystem {
     return deliveryIds;
   }
 
+  async testDelivery(
+    webhookId: string,
+    clientId: string,
+  ): Promise<{
+    deliveryId: string;
+    delivered: boolean;
+    statusCode: number;
+    responseTimeMs: number;
+    error?: string;
+  }> {
+    const scopedClientId = this.normalizeClientId(clientId);
+    const webhook = await this.getWebhookForClient(webhookId, scopedClientId);
+    if (!webhook) {
+      throw new WebhookError('Webhook not found', 'WEBHOOK_NOT_FOUND', 404);
+    }
+    if (!webhook.active || webhook.health.disabled) {
+      throw new WebhookError(
+        webhook.health.disabledReason ?? 'Webhook is not active',
+        'WEBHOOK_DISABLED',
+        409,
+      );
+    }
+
+    const event: WebhookEvent = {
+      eventId: crypto.randomUUID(),
+      clientId: scopedClientId,
+      eventType: webhook.events[0],
+      timestamp: new Date().toISOString(),
+      source: 'zeroid:test',
+      data: {
+        test: true,
+        webhookId,
+        generatedAt: new Date().toISOString(),
+      },
+    };
+    const deliveryId = await this.deliver(webhook, event);
+    const delivery = this.deliveries.get(deliveryId);
+    const statusCode = delivery?.response?.statusCode ?? 0;
+
+    return {
+      deliveryId,
+      delivered: delivery?.status === 'delivered',
+      statusCode,
+      responseTimeMs: delivery?.response?.latencyMs ?? 0,
+      ...(delivery?.status !== 'delivered'
+        ? {
+            error:
+              delivery?.response?.body ??
+              delivery?.status ??
+              'Webhook delivery did not complete',
+          }
+        : {}),
+    };
+  }
+
   // -------------------------------------------------------------------------
   // Deliver payload
   // -------------------------------------------------------------------------

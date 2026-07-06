@@ -4,6 +4,10 @@ import type { Address, Bytes32 } from "@/types";
 const DID_PATTERN = /^did:aethelred:[A-Za-z0-9._-]+(?::[A-Za-z0-9._-]+)*$/;
 const BASE64_PATTERN = /^[A-Za-z0-9+/=]+$/;
 const IDENTITY_AUTH_TOKEN_STORAGE_KEY = "zeroid.identity.authToken";
+const ALLOW_BROWSER_TOKEN_STORAGE_FLAG =
+  "NEXT_PUBLIC_ZEROID_ALLOW_BROWSER_TOKEN_STORAGE";
+
+let inMemoryIdentityAuthToken: string | undefined;
 
 type RegistrationPublicKeyRecord = Record<string, unknown>;
 
@@ -22,15 +26,32 @@ export interface BackendIdentityRegistrationResult {
 }
 
 export function getIdentityAuthToken(): string | undefined {
-  if (typeof window === "undefined") return undefined;
+  if (inMemoryIdentityAuthToken) return inMemoryIdentityAuthToken;
+  if (!isBrowserSessionAuthStorageAllowed()) return undefined;
   return (
     window.sessionStorage.getItem(IDENTITY_AUTH_TOKEN_STORAGE_KEY) ?? undefined
   );
 }
 
 export function storeIdentityAuthToken(token: string | undefined): void {
-  if (!token || typeof window === "undefined") return;
+  inMemoryIdentityAuthToken = token;
+  if (!token || !isBrowserSessionAuthStorageAllowed()) return;
   window.sessionStorage.setItem(IDENTITY_AUTH_TOKEN_STORAGE_KEY, token);
+}
+
+export function clearIdentityAuthToken(): void {
+  inMemoryIdentityAuthToken = undefined;
+  if (typeof window === "undefined") return;
+  window.sessionStorage.removeItem(IDENTITY_AUTH_TOKEN_STORAGE_KEY);
+}
+
+function isBrowserSessionAuthStorageAllowed(): boolean {
+  if (typeof window === "undefined") return false;
+  if (process.env[ALLOW_BROWSER_TOKEN_STORAGE_FLAG] !== "true") return false;
+  return (
+    process.env.NODE_ENV !== "production" &&
+    process.env.NEXT_PUBLIC_ZEROID_ENV !== "production"
+  );
 }
 
 export function getRegistrationDid(

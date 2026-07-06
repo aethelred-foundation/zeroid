@@ -8,7 +8,7 @@
 import { useAccount } from "wagmi";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { apiClient, ZeroIDApiError } from "@/lib/api/client";
+import { apiClient } from "@/lib/api/client";
 import type {
   AuditLogEntry,
   AuditFilter,
@@ -70,6 +70,92 @@ function defaultExportWindow(): { from: string; to: string } {
   const to = new Date();
   const from = new Date(to.getTime() - 30 * 24 * 3600_000);
   return { from: from.toISOString(), to: to.toISOString() };
+}
+
+type ExportableAuditData = AuditExport & {
+  records?: BackendAuditLogEntry[];
+  totalRecords?: number;
+};
+
+function recordMatchesFilters(
+  record: BackendAuditLogEntry,
+  filters: AuditFilter,
+): boolean {
+  if (filters.action && record.action !== filters.action) return false;
+  if (
+    filters.entityType &&
+    (record.entityType ?? record.resourceType) !== filters.entityType
+  ) {
+    return false;
+  }
+  if (
+    filters.entityId &&
+    (record.entityId ?? record.resourceId) !== filters.entityId
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function filteredExportData(
+  data: ExportableAuditData,
+  filters: AuditFilter,
+): ExportableAuditData {
+  const records = (data.records ?? data.entries ?? []).filter((record) =>
+    recordMatchesFilters(record as BackendAuditLogEntry, filters),
+  ) as BackendAuditLogEntry[];
+  return {
+    ...data,
+    records,
+    entries: records.map(toAuditLogEntry),
+    totalRecords: records.length,
+    total: records.length,
+  };
+}
+
+function csvCell(value: unknown): string {
+  if (value === undefined || value === null) return "";
+  const text =
+    typeof value === "object" ? JSON.stringify(value) : String(value);
+  return `"${text.replace(/"/g, '""')}"`;
+}
+
+function auditExportToCsv(data: ExportableAuditData): string {
+  const rows = data.records ?? [];
+  const headers = [
+    "id",
+    "timestamp",
+    "action",
+    "actor",
+    "entityType",
+    "entityId",
+    "resourceType",
+    "resourceId",
+    "details",
+  ];
+  return [
+    headers.join(","),
+    ...rows.map((row) =>
+      headers
+        .map((header) => csvCell((row as Record<string, unknown>)[header]))
+        .join(","),
+    ),
+  ].join("\n");
+}
+
+function downloadAuditExport(
+  payload: string,
+  format: "json" | "csv",
+): void {
+  const blob = new Blob([payload], {
+    type: format === "json" ? "application/json" : "text/csv",
+  });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `zeroid-audit-${Date.now()}.${format}`;
+  link.click();
+  URL.revokeObjectURL(url);
 }
 
 // ---------------------------------------------------------------------------
@@ -197,41 +283,22 @@ export async function exportAuditLog(
   format: "json" | "csv" = "json",
 ): Promise<void> {
   try {
-    if (format !== "json") {
-      throw new ZeroIDApiError(
-        "Audit CSV export is not exposed by the backend API.",
-        "AUDIT_CSV_EXPORT_UNAVAILABLE",
-        501,
-      );
-    }
-    if (filters.action || filters.entityType || filters.entityId) {
-      throw new ZeroIDApiError(
-        "Filtered audit export by action or resource is not exposed by the backend API.",
-        "AUDIT_FILTERED_EXPORT_UNAVAILABLE",
-        501,
-      );
-    }
-
     const params = new URLSearchParams();
     const exportWindow = defaultExportWindow();
     params.set("from", filters.startDate ?? exportWindow.from);
     params.set("to", filters.endDate ?? exportWindow.to);
     params.set("format", "json");
 
-    const data = await apiClient.get<AuditExport>(
+    const data = await apiClient.get<ExportableAuditData>(
       `/api/v1/audit/export/download?${params.toString()}`,
     );
+    const exportData = filteredExportData(data, filters);
+    const payload =
+      format === "json"
+        ? JSON.stringify(exportData, null, 2)
+        : auditExportToCsv(exportData);
 
-    const blob = new Blob([JSON.stringify(data, null, 2)], {
-      type: "application/json",
-    });
-
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `zeroid-audit-${Date.now()}.${format}`;
-    link.click();
-    URL.revokeObjectURL(url);
+    downloadAuditExport(payload, format);
 
     toast.success("Audit log exported");
   } catch (err: any) {

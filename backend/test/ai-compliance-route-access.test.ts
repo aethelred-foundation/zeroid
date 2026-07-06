@@ -9,6 +9,7 @@ const mockComputeComplianceScore = jest.fn();
 const mockGetActiveAlerts = jest.fn();
 const mockGetAlert = jest.fn();
 const mockAssessRisk = jest.fn();
+const mockAssessRegulatoryChangeImpact = jest.fn();
 const mockFraudGetActiveAlerts = jest.fn();
 const mockOrganizationMemberFindUnique = jest.fn();
 const mockOrganizationMemberFindFirst = jest.fn();
@@ -86,6 +87,7 @@ jest.mock('../src/services/ai/compliance-advisor', () => ({
     getActiveAlerts: mockGetActiveAlerts,
     getAlert: mockGetAlert,
     acknowledgeAlert: mockAcknowledgeAlert,
+    assessRegulatoryChangeImpact: mockAssessRegulatoryChangeImpact,
     simulateRegulatoryChange: jest.fn(),
   },
 }));
@@ -162,6 +164,17 @@ describe('AI compliance route enterprise access control', () => {
       regulation: 'FATF',
       actionRequired: 'Review',
       createdAt: new Date('2026-05-03T00:00:00.000Z'),
+    });
+    mockAssessRegulatoryChangeImpact.mockResolvedValue({
+      changeId: 'rci-1',
+      regulation: 'VARA Rulebook',
+      jurisdiction: 'AE',
+      impactedEntities: 3,
+      impactedCredentialTypes: ['KYC_LEVEL_2'],
+      requiredActions: ['Review policy thresholds'],
+      estimatedEffort: 'medium',
+      deadline: new Date('2026-07-01T00:00:00.000Z'),
+      recommendations: ['Schedule compliance review'],
     });
   });
 
@@ -386,5 +399,50 @@ describe('AI compliance route enterprise access control', () => {
       .expect(404);
 
     expect(mockAcknowledgeAlert).not.toHaveBeenCalled();
+  });
+
+  it('runs regulatory impact assessment through the production-facing route', async () => {
+    const response = await request(createApp())
+      .post('/ai/compliance/impact-assessment')
+      .send({
+        regulation: 'VARA Rulebook',
+        changes: 'Raise KYC evidence retention expectations for regulated entities.',
+        jurisdiction: 'AE',
+      })
+      .expect(200);
+
+    expect(response.body.success).toBe(true);
+    expect(response.body.data.changeId).toBe('rci-1');
+    expect(response.headers.deprecation).toBeUndefined();
+    expect(mockResolveContext).toHaveBeenCalledWith(
+      '550e8400-e29b-41d4-a716-446655440001',
+      undefined,
+      ['operator', 'admin', 'compliance_officer'],
+    );
+    expect(mockAssessRegulatoryChangeImpact).toHaveBeenCalledWith(
+      'VARA Rulebook',
+      'Raise KYC evidence retention expectations for regulated entities.',
+      'AE',
+    );
+  });
+
+  it('keeps simulate as a deprecated compatibility alias', async () => {
+    const response = await request(createApp())
+      .post('/ai/compliance/simulate')
+      .send({
+        regulation: 'VARA Rulebook',
+        changes: 'Raise KYC evidence retention expectations for regulated entities.',
+        jurisdiction: 'AE',
+      })
+      .expect(200);
+
+    expect(response.body.success).toBe(true);
+    expect(response.headers.deprecation).toBe('true');
+    expect(response.headers.link).toContain('/api/v1/ai/compliance/impact-assessment');
+    expect(mockAssessRegulatoryChangeImpact).toHaveBeenCalledWith(
+      'VARA Rulebook',
+      'Raise KYC evidence retention expectations for regulated entities.',
+      'AE',
+    );
   });
 });

@@ -120,6 +120,156 @@ const TYPE_CONFIG: Record<ThreatType, { label: string; icon: typeof Shield }> =
     network_attack: { label: "Network Attack", icon: Globe },
   };
 
+const REFERENCE_THREAT_EVENTS: Array<
+  Pick<
+    ThreatEvent,
+    | "type"
+    | "severity"
+    | "description"
+    | "source"
+    | "reviewed"
+    | "affectedDid"
+    | "metadata"
+  > & {
+    offsetMs: number;
+    relatedEvents: number;
+    playbook: string;
+  }
+> = [
+  {
+    type: "unauthorized_access",
+    severity: "critical",
+    description:
+      "Privileged verification API call blocked after mTLS fingerprint drift",
+    source: "API Gateway",
+    reviewed: false,
+    affectedDid: "did:aethelred:mainnet:0x9f41c2a8...",
+    offsetMs: 4 * 60 * 1000,
+    relatedEvents: 4,
+    playbook: "EDGE-P1 API containment",
+    metadata: {
+      confidence: "98%",
+      region: "AE-Central",
+      control: "mTLS device binding",
+    },
+  },
+  {
+    type: "sanctions_match",
+    severity: "error",
+    description:
+      "Sanctions oracle surfaced a potential match during credential presentation",
+    source: "Sanctions Oracle",
+    reviewed: false,
+    affectedDid: "did:aethelred:mainnet:0x71cbb03e...",
+    offsetMs: 11 * 60 * 1000,
+    relatedEvents: 2,
+    playbook: "Presight AML analyst review",
+    metadata: {
+      confidence: "91%",
+      list: "UAE-FIU consolidated",
+      action: "manual adjudication",
+    },
+  },
+  {
+    type: "network_attack",
+    severity: "warning",
+    description:
+      "TEE attestation endpoint absorbed a traffic spike and held latency budget",
+    source: "TEE Monitor",
+    reviewed: true,
+    offsetMs: 24 * 60 * 1000,
+    relatedEvents: 5,
+    playbook: "Sovereign enclave protection",
+    metadata: {
+      confidence: "87%",
+      p95: "142 ms",
+      mitigation: "rate-limit tier elevated",
+    },
+  },
+  {
+    type: "credential_fraud",
+    severity: "error",
+    description:
+      "Duplicate credential presentation detected across two relying applications",
+    source: "ZK Verifier",
+    reviewed: false,
+    affectedDid: "did:aethelred:mainnet:0x31a044d2...",
+    offsetMs: 38 * 60 * 1000,
+    relatedEvents: 3,
+    playbook: "Credential replay investigation",
+    metadata: {
+      confidence: "94%",
+      circuit: "eligibility_v2",
+      signal: "context commitment reuse",
+    },
+  },
+  {
+    type: "identity_compromise",
+    severity: "warning",
+    description:
+      "Recovery request volume crossed baseline for a high-trust identity cohort",
+    source: "Identity Risk Engine",
+    reviewed: true,
+    offsetMs: 52 * 60 * 1000,
+    relatedEvents: 2,
+    playbook: "Step-up recovery controls",
+    metadata: {
+      confidence: "82%",
+      cohort: "enterprise administrators",
+      action: "hardware re-attestation",
+    },
+  },
+  {
+    type: "anomalous_behavior",
+    severity: "info",
+    description:
+      "Issuer activity profile shifted after schema update and stayed within guardrails",
+    source: "Governance Monitor",
+    reviewed: true,
+    offsetMs: 76 * 60 * 1000,
+    relatedEvents: 1,
+    playbook: "Issuer telemetry review",
+    metadata: {
+      confidence: "79%",
+      schema: "KYC level 2",
+      outcome: "no escalation",
+    },
+  },
+  {
+    type: "unauthorized_access",
+    severity: "warning",
+    description:
+      "Console session challenged after impossible-travel signal from operator account",
+    source: "Session Monitor",
+    reviewed: false,
+    affectedDid: "did:aethelred:mainnet:0x6a829d10...",
+    offsetMs: 91 * 60 * 1000,
+    relatedEvents: 2,
+    playbook: "Operator access step-up",
+    metadata: {
+      confidence: "89%",
+      factor: "geo-velocity",
+      result: "session locked",
+    },
+  },
+  {
+    type: "credential_fraud",
+    severity: "info",
+    description:
+      "Low-risk credential anomaly resolved by issuer revocation accumulator update",
+    source: "Chain Indexer",
+    reviewed: true,
+    offsetMs: 118 * 60 * 1000,
+    relatedEvents: 1,
+    playbook: "Accumulator witness refresh",
+    metadata: {
+      confidence: "84%",
+      epoch: "revocation-1842",
+      result: "witness refreshed",
+    },
+  },
+];
+
 // ============================================================================
 // Helpers
 // ============================================================================
@@ -135,48 +285,34 @@ function formatRelativeTime(ts: number): string {
   return `${days}d ago`;
 }
 
-function generateMockEvent(): ThreatEvent {
-  const types = Object.keys(TYPE_CONFIG) as ThreatType[];
-  const severities: ThreatSeverity[] = ["info", "warning", "error", "critical"];
-  const type = types[Math.floor(Math.random() * types.length)];
-  const severity = severities[Math.floor(Math.random() * severities.length)];
-
-  const descriptions: Record<ThreatType, string> = {
-    identity_compromise:
-      "Potential identity takeover attempt detected on DID endpoint",
-    credential_fraud:
-      "Fraudulent credential presentation intercepted during verification",
-    unauthorized_access:
-      "Unauthorized API access attempt from unregistered IP range",
-    sanctions_match:
-      "New sanctions list entry matches existing identity in the system",
-    anomalous_behavior:
-      "Unusual credential request pattern detected from verified issuer",
-    network_attack:
-      "DDoS mitigation triggered on TEE attestation service endpoint",
-  };
+function buildReferenceThreatEvent(
+  sequence: number,
+  observedAt = Date.now(),
+): ThreatEvent {
+  const template =
+    REFERENCE_THREAT_EVENTS[sequence % REFERENCE_THREAT_EVENTS.length];
+  const cycle = Math.floor(sequence / REFERENCE_THREAT_EVENTS.length);
+  const typeConfig = TYPE_CONFIG[template.type];
 
   return {
-    id: `threat_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-    type,
-    severity,
-    title: TYPE_CONFIG[type].label,
-    description: descriptions[type],
-    details: `Full analysis available. Event originated from monitoring subsystem. Automated correlation with ${Math.floor(Math.random() * 5) + 1} related events in the last 24 hours.`,
-    source: [
-      "TEE Monitor",
-      "ZK Verifier",
-      "API Gateway",
-      "Chain Indexer",
-      "Sanctions Oracle",
-    ][Math.floor(Math.random() * 5)],
-    timestamp: Date.now() - Math.floor(Math.random() * 3600000),
-    reviewed: Math.random() > 0.6,
-    affectedDid:
-      Math.random() > 0.5
-        ? `did:aethelred:mainnet:0x${Math.random().toString(16).slice(2, 10)}...`
-        : undefined,
+    id: `threat_ref_${String(sequence).padStart(3, "0")}`,
+    type: template.type,
+    severity: template.severity,
+    title: typeConfig.label,
+    description: template.description,
+    details: `Analysis packet ${template.playbook}. Correlated with ${template.relatedEvents} related event${template.relatedEvents === 1 ? "" : "s"} in the last 24 hours.`,
+    source: template.source,
+    timestamp: observedAt - template.offsetMs - cycle * 15 * 60 * 1000,
+    reviewed: template.reviewed,
+    affectedDid: template.affectedDid,
+    metadata: template.metadata,
   };
+}
+
+function buildInitialReferenceThreatEvents(now = Date.now()): ThreatEvent[] {
+  return Array.from({ length: REFERENCE_THREAT_EVENTS.length }, (_, index) =>
+    buildReferenceThreatEvent(index, now),
+  ).sort((a, b) => b.timestamp - a.timestamp);
 }
 
 // ============================================================================
@@ -363,12 +499,9 @@ export default function ThreatFeed({
   className = "",
 }: ThreatFeedProps) {
   const [internalEvents, setInternalEvents] = useState<ThreatEvent[]>(
-    () =>
-      externalEvents ??
-      Array.from({ length: 8 }, () => generateMockEvent()).sort(
-        (a, b) => b.timestamp - a.timestamp,
-      ),
+    () => externalEvents ?? buildInitialReferenceThreatEvents(),
   );
+  const nextReferenceEvent = useRef(REFERENCE_THREAT_EVENTS.length);
   const [newEventIds, setNewEventIds] = useState<Set<string>>(new Set());
   const [severityFilter, setSeverityFilter] = useState<ThreatSeverity | "all">(
     "all",
@@ -380,13 +513,16 @@ export default function ThreatFeed({
 
   const events = externalEvents ?? internalEvents;
 
-  // Auto-refresh with new mock events
+  // Auto-refresh with deterministic reference events
   useEffect(() => {
     if (!autoRefresh || externalEvents) return;
 
     const interval = setInterval(() => {
-      const newEvent = generateMockEvent();
-      newEvent.timestamp = Date.now();
+      const newEvent = buildReferenceThreatEvent(
+        nextReferenceEvent.current,
+        Date.now(),
+      );
+      nextReferenceEvent.current += 1;
       setInternalEvents((prev) => [newEvent, ...prev].slice(0, 50));
       setNewEventIds((prev) => {
         const next = new Set(prev);

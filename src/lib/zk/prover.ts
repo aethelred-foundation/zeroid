@@ -185,7 +185,7 @@ export async function generateProof(
   const now = Math.floor(Date.now() / 1000);
 
   const zkProof: ZKProof = {
-    id: `proof-${now}-${Math.random().toString(36).slice(2, 10)}`,
+    id: `proof-${now}-${proofHash.slice(2, 14)}`,
     circuitId,
     circuitName: circuit.name,
     proofSystem: "groth16" as ProofSystem,

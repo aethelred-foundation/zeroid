@@ -3,20 +3,23 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
 import {
+  Badge,
+  Banknote,
+  CircleDollarSign,
+  Fingerprint,
+  Flame,
   Puzzle,
   Search,
-  ExternalLink,
   Check,
   Plus,
   Shield,
   Globe,
-  Wallet,
-  Building2,
   Code,
   ArrowRight,
-  Star,
-  Zap,
-  Lock,
+  HeartPulse,
+  Landmark,
+  Palette,
+  type LucideIcon,
 } from "lucide-react";
 import AppLayout from "@/components/layout/AppLayout";
 
@@ -27,7 +30,7 @@ interface Integration {
   category: "defi" | "dao" | "nft" | "enterprise" | "government";
   connected: boolean;
   verificationsCount: number;
-  icon: string;
+  icon: LucideIcon;
   requiredCredentials: string[];
 }
 
@@ -39,7 +42,7 @@ const integrations: Integration[] = [
     category: "defi",
     connected: true,
     verificationsCount: 45,
-    icon: "🔥",
+    icon: Flame,
     requiredCredentials: ["Age Verification", "KYC"],
   },
   {
@@ -49,7 +52,7 @@ const integrations: Integration[] = [
     category: "enterprise",
     connected: true,
     verificationsCount: 128,
-    icon: "💰",
+    icon: Banknote,
     requiredCredentials: ["KYC", "Residency", "Credit Tier"],
   },
   {
@@ -59,7 +62,7 @@ const integrations: Integration[] = [
     category: "enterprise",
     connected: false,
     verificationsCount: 0,
-    icon: "🏥",
+    icon: HeartPulse,
     requiredCredentials: ["Age Verification", "Nationality"],
   },
   {
@@ -69,7 +72,7 @@ const integrations: Integration[] = [
     category: "dao",
     connected: true,
     verificationsCount: 23,
-    icon: "🏛️",
+    icon: Landmark,
     requiredCredentials: ["KYC", "Accredited Investor"],
   },
   {
@@ -79,7 +82,7 @@ const integrations: Integration[] = [
     category: "government",
     connected: true,
     verificationsCount: 312,
-    icon: "🇦🇪",
+    icon: Fingerprint,
     requiredCredentials: [],
   },
   {
@@ -89,7 +92,7 @@ const integrations: Integration[] = [
     category: "government",
     connected: true,
     verificationsCount: 198,
-    icon: "🪪",
+    icon: Badge,
     requiredCredentials: [],
   },
   {
@@ -99,7 +102,7 @@ const integrations: Integration[] = [
     category: "defi",
     connected: false,
     verificationsCount: 0,
-    icon: "👻",
+    icon: CircleDollarSign,
     requiredCredentials: ["Credit Tier", "KYC"],
   },
   {
@@ -109,7 +112,7 @@ const integrations: Integration[] = [
     category: "nft",
     connected: false,
     verificationsCount: 0,
-    icon: "🎨",
+    icon: Palette,
     requiredCredentials: ["Age Verification"],
   },
 ];
@@ -141,10 +144,15 @@ export default function IntegrationsPage() {
               {connectedCount} connected dApps using your ZeroID credentials
             </p>
           </div>
-          <button className="btn-secondary">
+          <a
+            href="https://docs.zeroid.aethelred.network/developers"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="btn-secondary"
+          >
             <Code className="w-4 h-4" />
             Developer Docs
-          </button>
+          </a>
         </div>
 
         {/* Stats Bar */}
@@ -219,7 +227,12 @@ export default function IntegrationsPage() {
             >
               <div className="flex items-start justify-between">
                 <div className="flex items-start gap-3">
-                  <div className="text-3xl">{integration.icon}</div>
+                  <div
+                    className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-chrome-300/10 bg-chrome-300/6 text-chrome-300"
+                    aria-hidden="true"
+                  >
+                    <integration.icon className="h-5 w-5" />
+                  </div>
                   <div>
                     <div className="flex items-center gap-2">
                       <h3 className="font-semibold">{integration.name}</h3>
@@ -285,14 +298,24 @@ export default function IntegrationsPage() {
             our SDK. One line of code to verify credentials.
           </p>
           <div className="flex justify-center gap-3">
-            <button className="btn-primary">
+            <a
+              href="https://docs.zeroid.aethelred.network/sdk"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="btn-primary"
+            >
               <Code className="w-4 h-4" />
               View SDK Docs
-            </button>
-            <button className="btn-secondary">
+            </a>
+            <a
+              href="https://docs.zeroid.aethelred.network/api"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="btn-secondary"
+            >
               <Globe className="w-4 h-4" />
               API Reference
-            </button>
+            </a>
           </div>
         </div>
       </div>

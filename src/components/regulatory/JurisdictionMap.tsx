@@ -187,30 +187,72 @@ const REGION_PATHS: Record<
   },
 };
 
+const REGULATION_CATALOG = [
+  "KYC/AML",
+  "Data Privacy",
+  "Cross-border Transfer",
+  "Credential Recognition",
+];
+const REQUIREMENT_CATALOG = [
+  "KYC Verification",
+  "AML Screening",
+  "Data Localization",
+  "Credential Recognition",
+];
+const REVIEW_ANCHOR_MS = Date.UTC(2026, 5, 25, 8, 0, 0);
+
 const DEFAULT_JURISDICTIONS: JurisdictionDetail[] = Object.keys(
   REGION_PATHS,
-).map((id) => ({
-  id,
-  name: REGION_PATHS[id].label,
-  region: id,
-  status: (
-    ["compliant", "partial", "non_compliant", "pending"] as ComplianceStatus[]
-  )[Math.floor(Math.random() * 4)],
-  score: Math.floor(Math.random() * 40) + 60,
-  regulations: ["KYC/AML", "Data Privacy", "Cross-border Transfer"].slice(
-    0,
-    Math.floor(Math.random() * 3) + 1,
-  ),
-  lastReview: new Date(Date.now() - Math.random() * 90 * 86400000)
-    .toISOString()
-    .split("T")[0],
-  requirements: [
-    { name: "KYC Verification", met: Math.random() > 0.3 },
-    { name: "AML Screening", met: Math.random() > 0.3 },
-    { name: "Data Localization", met: Math.random() > 0.5 },
-    { name: "Credential Recognition", met: Math.random() > 0.4 },
-  ],
-}));
+).map((id) => {
+  const score = 60 + stableJurisdictionValue(`${id}:score`, 0, 39);
+  const status = getReferenceComplianceStatus(id, score);
+  const regulationCount = stableJurisdictionValue(`${id}:regulations`, 2, 4);
+
+  return {
+    id,
+    name: REGION_PATHS[id].label,
+    region: id,
+    status,
+    score,
+    regulations: REGULATION_CATALOG.slice(0, regulationCount),
+    lastReview: new Date(
+      REVIEW_ANCHOR_MS -
+        stableJurisdictionValue(`${id}:review`, 7, 90) * 86400000,
+    )
+      .toISOString()
+      .split("T")[0],
+    requirements: REQUIREMENT_CATALOG.map((name, index) => ({
+      name,
+      met: score >= 72 || stableJurisdictionValue(`${id}:${name}`, 0, 100) > 35 + index * 8,
+    })),
+  };
+});
+
+function getReferenceComplianceStatus(
+  jurisdictionId: string,
+  score: number,
+): ComplianceStatus {
+  if (["AE", "EU", "SG", "CH"].includes(jurisdictionId) && score >= 72) {
+    return "compliant";
+  }
+  if (score >= 85) return "compliant";
+  if (score >= 72) return "partial";
+  if (score >= 64) return "pending";
+  return "non_compliant";
+}
+
+function stableJurisdictionValue(
+  key: string,
+  min: number,
+  max: number,
+): number {
+  let hash = 5381;
+  for (let index = 0; index < key.length; index++) {
+    hash = (hash * 33) ^ key.charCodeAt(index);
+  }
+
+  return min + (Math.abs(hash) % (max - min + 1));
+}
 
 const DEFAULT_ROUTES: CrossBorderRoute[] = [
   {

@@ -1,133 +1,141 @@
 /**
  * useTEE — Unit Tests
  *
- * Tests for the TEE node status and enclave verification hook.
+ * Tests for live-backed TEE node status and attestation verification.
  */
 
-import { renderHook, act } from "@testing-library/react";
+import { renderHook, waitFor, act } from "@testing-library/react";
 import { useTEE } from "@/hooks/useTEE";
 
-jest.mock("@/types", () => ({}));
+jest.mock("@/lib/api/client", () => ({
+  apiClient: {
+    getAttestation: jest.fn(),
+    listTEENodes: jest.fn(),
+  },
+}));
+const mockApiClient = jest.requireMock("@/lib/api/client").apiClient;
 
-// ---------------------------------------------------------------------------
-// Setup
-// ---------------------------------------------------------------------------
+jest.mock("@/lib/tee/attestation", () => ({
+  getPlatformLabel: jest.fn((platform: number) =>
+    platform === 1 ? "Intel SGX" : "Unknown",
+  ),
+  selectBestNode: jest.fn((nodes: any[]) =>
+    nodes.find((node) => node.isOnline && node.attestation.isValid) ?? null,
+  ),
+}));
+
+const enclaveHash = `0x${"a".repeat(64)}` as `0x${string}`;
+
+function makeNode(overrides: Record<string, any> = {}) {
+  const expiresAt = Math.floor(Date.now() / 1000) + 3_600;
+  return {
+    id: "sgx-1",
+    operator: "0x0000000000000000000000000000000000000001",
+    platform: 1,
+    name: "SGX UAE Primary",
+    region: "UAE-AbuDhabi",
+    isOnline: true,
+    uptimePercent: 99.98,
+    verificationsProcessed: 500,
+    avgLatencyMs: 88,
+    attestation: {
+      enclaveHash,
+      platform: 1,
+      attestedAt: expiresAt - 600,
+      expiresAt,
+      reportDataHash: `0x${"b".repeat(64)}`,
+      nodeOperator: "0x0000000000000000000000000000000000000001",
+      isValid: true,
+      attestationType: "remote",
+    },
+    ...overrides,
+  };
+}
 
 beforeEach(() => {
-  jest.useFakeTimers();
+  jest.clearAllMocks();
+  const node = makeNode();
+  mockApiClient.listTEENodes.mockResolvedValue([node]);
+  mockApiClient.getAttestation.mockResolvedValue(node.attestation);
 });
-
-afterEach(() => {
-  jest.useRealTimers();
-});
-
-// ===========================================================================
-// useTEE
-// ===========================================================================
 
 describe("useTEE", () => {
-  it("returns initial nodes list with 5 nodes", () => {
+  it("loads discovered TEE nodes from the API client", async () => {
     const { result } = renderHook(() => useTEE());
 
-    expect(result.current.nodes).toHaveLength(5);
-    expect(result.current.nodes[0]).toEqual(
-      expect.objectContaining({ id: "sgx-1", type: "SGX", status: "active" }),
-    );
-  });
+    await waitFor(() => expect(result.current.nodes).toHaveLength(1));
 
-  it("returns initial attestation info", () => {
-    const { result } = renderHook(() => useTEE());
-
-    expect(result.current.attestation).not.toBeNull();
-    expect(result.current.attestation?.valid).toBe(true);
-  });
-
-  it("reports healthy enclave status when all nodes are active", () => {
-    const { result } = renderHook(() => useTEE());
-
-    expect(result.current.enclaveStatus).toBe("healthy");
-  });
-
-  it("starts with isLoading=false and error=null", () => {
-    const { result } = renderHook(() => useTEE());
-
-    expect(result.current.isLoading).toBe(false);
-    expect(result.current.error).toBeNull();
-  });
-
-  it("refreshStatus sets isLoading then resets it", async () => {
-    const { result } = renderHook(() => useTEE());
-
-    act(() => {
-      result.current.refreshStatus();
+    expect(result.current.nodes[0]).toMatchObject({
+      id: "sgx-1",
+      type: "Intel SGX",
+      status: "active",
+      health: "healthy",
+      uptime: 99.98,
+      region: "UAE-AbuDhabi",
     });
+  });
 
-    expect(result.current.isLoading).toBe(true);
+  it("returns attestation info for the selected live node", async () => {
+    const { result } = renderHook(() => useTEE());
+
+    await waitFor(() => expect(result.current.attestation).not.toBeNull());
+
+    expect(result.current.attestation).toMatchObject({
+      valid: true,
+      enclaveHash,
+      status: "verified",
+      enclaveId: enclaveHash,
+    });
+  });
+
+  it("reports healthy enclave status when every discovered node is active", async () => {
+    const { result } = renderHook(() => useTEE());
+
+    await waitFor(() => expect(result.current.enclaveStatus).toBe("healthy"));
+  });
+
+  it("refreshStatus reloads the discovered fleet", async () => {
+    const { result } = renderHook(() => useTEE());
+    await waitFor(() => expect(result.current.nodes).toHaveLength(1));
+
+    mockApiClient.listTEENodes.mockResolvedValueOnce([
+      makeNode({ id: "sgx-2", name: "SGX UAE Secondary" }),
+    ]);
 
     await act(async () => {
-      jest.advanceTimersByTime(1000);
+      await result.current.refreshStatus();
     });
 
-    expect(result.current.isLoading).toBe(false);
+    expect(result.current.nodes[0].id).toBe("sgx-2");
   });
 
-  it("verifyInEnclave returns verified=true after delay", async () => {
+  it("verifyInEnclave checks the selected node attestation", async () => {
     const { result } = renderHook(() => useTEE());
+    await waitFor(() => expect(result.current.nodes).toHaveLength(1));
 
-    let verifyResult: { verified: boolean; attestation: string } | undefined;
+    let verifyResult:
+      | { verified: boolean; attestation: string; payloadHash: string }
+      | undefined;
 
-    const promise = act(async () => {
-      const p = result.current.verifyInEnclave({ data: "test" });
-      jest.advanceTimersByTime(2000);
-      verifyResult = await p;
+    await act(async () => {
+      verifyResult = await result.current.verifyInEnclave({ data: "test" });
     });
 
-    await promise;
-
-    expect(verifyResult?.verified).toBe(true);
-    expect(verifyResult?.attestation).toMatch(/^0x/);
-  });
-
-  it("refreshStatus is stable across renders (useCallback)", () => {
-    const { result, rerender } = renderHook(() => useTEE());
-    const first = result.current.refreshStatus;
-    rerender();
-    expect(result.current.refreshStatus).toBe(first);
-  });
-
-  it("verifyInEnclave is stable across renders (useCallback)", () => {
-    const { result, rerender } = renderHook(() => useTEE());
-    const first = result.current.verifyInEnclave;
-    rerender();
-    expect(result.current.verifyInEnclave).toBe(first);
-  });
-
-  it("reports degraded enclave status when a node is not active", () => {
-    const React = require("react");
-    const originalUseState = React.useState;
-
-    // Override useState to inject a degraded node for the first call (the TEEState)
-    let callCount = 0;
-    jest.spyOn(React, "useState").mockImplementation((init: any) => {
-      callCount++;
-      if (callCount === 1 && init && init.nodes) {
-        // Modify one node to have 'degraded' status
-        const modifiedInit = {
-          ...init,
-          nodes: init.nodes.map((n: any, i: number) =>
-            i === 0 ? { ...n, status: "degraded" } : n,
-          ),
-        };
-        return originalUseState(modifiedInit);
-      }
-      return originalUseState(init);
+    expect(mockApiClient.getAttestation).toHaveBeenCalledWith(enclaveHash);
+    expect(verifyResult).toMatchObject({
+      verified: true,
+      attestation: enclaveHash,
     });
+    expect(verifyResult?.payloadHash).toMatch(/^0x[0-9a-f]{64}$/);
+  });
+
+  it("surfaces API errors instead of using seeded fallback nodes", async () => {
+    mockApiClient.listTEENodes.mockRejectedValueOnce(new Error("TEE offline"));
 
     const { result } = renderHook(() => useTEE());
 
-    expect(result.current.enclaveStatus).toBe("degraded");
-    expect(result.current.nodes[0].status).toBe("degraded");
-
-    jest.restoreAllMocks();
+    await waitFor(() => expect(result.current.error).toBe("TEE offline"));
+    expect(result.current.nodes).toEqual([]);
+    expect(result.current.enclaveStatus).toBe("offline");
   });
 });

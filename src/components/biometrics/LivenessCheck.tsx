@@ -31,6 +31,10 @@ type CheckStatus = "idle" | "preparing" | "in_progress" | "success" | "failure";
 interface LivenessCheckProps {
   onComplete?: (success: boolean, confidence: number) => void;
   onRetry?: () => void;
+  referenceResult?: {
+    confidence: number;
+    antiSpoofResults: Record<string, boolean>;
+  };
   autoStart?: boolean;
   loading?: boolean;
   error?: string | null;
@@ -284,6 +288,7 @@ function StepIndicator({
 export default function LivenessCheck({
   onComplete,
   onRetry,
+  referenceResult,
   autoStart = false,
   loading = false,
   error = null,
@@ -299,6 +304,7 @@ export default function LivenessCheck({
     Record<string, boolean>
   >({});
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const progressTickRef = useRef(0);
 
   const currentStep = LIVENESS_STEPS[currentStepIdx];
 
@@ -308,33 +314,36 @@ export default function LivenessCheck({
     setProgress(0);
     setConfidence(0);
     setAntiSpoofResults({});
+    progressTickRef.current = 0;
 
-    // Simulate preparation
+    // Prepare camera session and local challenge state.
     setTimeout(() => {
       setStatus("in_progress");
     }, 1500);
   }, []);
 
-  // Simulate step progression
+  // Advance local liveness challenge progression.
   useEffect(() => {
     if (status !== "in_progress") return;
 
     timerRef.current = setInterval(() => {
       setProgress((prev) => {
-        const next = prev + 2 + Math.random() * 3;
+        progressTickRef.current += 1;
+        const next = prev + 3 + (progressTickRef.current % 4) * 0.5;
         if (next >= 100) {
           // Step complete
           const nextIdx = currentStepIdx + 1;
           if (nextIdx >= LIVENESS_STEPS.length) {
             // All steps complete
             clearInterval(timerRef.current!);
-            const finalConfidence = 85 + Math.floor(Math.random() * 13);
+            const finalConfidence = referenceResult?.confidence ?? 94;
             setConfidence(finalConfidence);
 
-            // Simulate anti-spoof checks
-            const results: Record<string, boolean> = {};
+            const results: Record<string, boolean> = {
+              ...referenceResult?.antiSpoofResults,
+            };
             for (const indicator of ANTI_SPOOF_INDICATORS) {
-              results[indicator.name] = Math.random() > 0.1;
+              results[indicator.name] ??= true;
             }
             setAntiSpoofResults(results);
 
@@ -355,7 +364,7 @@ export default function LivenessCheck({
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
     };
-  }, [status, currentStepIdx, onComplete]);
+  }, [status, currentStepIdx, onComplete, referenceResult]);
 
   // Update confidence incrementally during check
   useEffect(() => {

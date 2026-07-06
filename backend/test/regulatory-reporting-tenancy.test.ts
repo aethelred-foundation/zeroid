@@ -151,6 +151,34 @@ describe('RegulatoryReportingService tenant scoping', () => {
     expect(service.listReports({ organizationId: 'org-a' })).toHaveLength(0);
   });
 
+  it('uses deterministic local DSAR collection metadata in development', async () => {
+    const service = new RegulatoryReportingService();
+    const first = await service.fulfillDSAR(dsarRequest('subject-dev'), 'org-a');
+    const second = await service.fulfillDSAR(dsarRequest('subject-dev'), 'org-a');
+
+    const firstData = first.content.collectedData as Record<
+      string,
+      { collectionMode: string; recordCount: number; evidenceHash: string }
+    >;
+    const secondData = second.content.collectedData as Record<
+      string,
+      { collectionMode: string; recordCount: number; evidenceHash: string }
+    >;
+
+    expect(firstData.personal_data.collectionMode).toBe(
+      'local_deterministic_connector',
+    );
+    expect(firstData.personal_data.recordCount).toBeGreaterThanOrEqual(1);
+    expect(firstData.personal_data.recordCount).toBeLessThanOrEqual(50);
+    expect(firstData.personal_data.recordCount).toBe(
+      secondData.personal_data.recordCount,
+    );
+    expect(firstData.personal_data.evidenceHash).toBe(
+      secondData.personal_data.evidenceHash,
+    );
+    expect(firstData.personal_data.evidenceHash).toMatch(/^0x[0-9a-f]{64}$/);
+  });
+
   it('recovers reports, amendments, and submissions from durable storage after restart', async () => {
     const storeDir = createTempReportStore();
     const firstService = new RegulatoryReportingService({ storeDir });

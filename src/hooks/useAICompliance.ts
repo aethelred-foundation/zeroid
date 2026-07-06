@@ -3,7 +3,7 @@
  *
  * Provides sanctions/PEP screening, risk assessment, advisor queries,
  * compliance alert management, report generation, and regulatory change
- * simulation. All mutations surface feedback via sonner toasts.
+ * impact assessment. All mutations surface feedback via sonner toasts.
  */
 
 import { useCallback } from "react";
@@ -201,7 +201,7 @@ export interface ComplianceGap {
   deadline?: ISODateString;
 }
 
-export interface RegulationSimulation {
+export interface RegulationImpactAssessment {
   changeId: string;
   regulation: string;
   effectiveDate: ISODateString;
@@ -212,6 +212,8 @@ export interface RegulationSimulation {
   estimatedEffort: "low" | "medium" | "high" | "critical";
   automationPossible: boolean;
 }
+
+export type RegulationSimulation = RegulationImpactAssessment;
 
 // ---------------------------------------------------------------------------
 // Query Keys
@@ -398,35 +400,41 @@ export function useGenerateReport() {
 }
 
 // ---------------------------------------------------------------------------
-// Regulatory Change Simulation
+// Regulatory Change Impact Assessment
 // ---------------------------------------------------------------------------
 
-export function useSimulateRegChange() {
+export function useAssessRegChangeImpact() {
   return useMutation({
     mutationFn: async (params: {
       regulation: string;
       changes: string;
       jurisdiction: string;
-    }): Promise<RegulationSimulation> => {
-      return apiClient.post<RegulationSimulation>(
-        `${AI_COMPLIANCE_BASE}/simulate`,
+    }): Promise<RegulationImpactAssessment> => {
+      return apiClient.post<RegulationImpactAssessment>(
+        `${AI_COMPLIANCE_BASE}/impact-assessment`,
         params,
-      ) as unknown as RegulationSimulation;
+      ) as unknown as RegulationImpactAssessment;
     },
     onSuccess: (data) => {
       if (
         data.estimatedEffort === "high" ||
         data.estimatedEffort === "critical"
       ) {
-        toast.warning("Simulation complete", {
+        toast.warning("Impact assessment complete", {
           description: `${data.impactedEntities} impacted entity(ies); ${data.requiredActions.length} action(s) required`,
         });
       } else {
-        toast.success("Simulation complete — no new gaps detected");
+        toast.success("Impact assessment complete — no new gaps detected");
       }
     },
     onError: (err: Error) => {
-      toast.error("Simulation failed", { description: err.message });
+      toast.error("Impact assessment failed", { description: err.message });
     },
   });
+}
+
+export function useSimulateRegChange() {
+  // Backward-compatible alias for older callers; new code should use
+  // useAssessRegChangeImpact.
+  return useAssessRegChangeImpact();
 }

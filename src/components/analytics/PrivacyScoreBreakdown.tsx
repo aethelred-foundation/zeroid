@@ -165,10 +165,14 @@ const DEFAULT_RECOMMENDATIONS: Recommendation[] = [
   },
 ];
 
-const DEFAULT_HISTORY: HistoryPoint[] = Array.from({ length: 12 }, (_, i) => ({
-  date: new Date(2026, i - 11, 1).toISOString().slice(0, 7),
-  score: 65 + Math.floor(Math.random() * 15) + i * 1.5,
-}));
+const DEFAULT_HISTORY_SCORES = [66, 68, 69, 71, 73, 72, 75, 77, 78, 80, 82, 84];
+
+const DEFAULT_HISTORY: HistoryPoint[] = DEFAULT_HISTORY_SCORES.map(
+  (score, index) => ({
+    date: new Date(2026, index - 11, 1).toISOString().slice(0, 7),
+    score,
+  }),
+);
 
 const DEFAULT_EXPOSURES: DataExposure[] = [
   {

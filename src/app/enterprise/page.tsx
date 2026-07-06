@@ -1,10 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState, type FormEvent } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Key,
-  Webhook,
+  Webhook as WebhookIcon,
   Activity,
   BarChart3,
   Settings,
@@ -38,9 +38,23 @@ import {
   ArrowRight,
 } from "lucide-react";
 import AppLayout from "@/components/layout/AppLayout";
+import {
+  useAPIKeys,
+  useCreateAPIKey,
+  useRevokeAPIKey,
+  useRegisterWebhook,
+  useSLAReport,
+  useTestWebhook,
+  useUsageMetrics,
+  useWebhooks,
+  type APIKey as EnterpriseAPIKey,
+  type APIScope,
+  type Webhook as EnterpriseWebhook,
+  type WebhookEvent,
+} from "@/hooks/useEnterprise";
 
 // ============================================================
-// Mock Data
+// Enterprise Operations Data
 // ============================================================
 
 const apiKeys = [
@@ -268,14 +282,181 @@ result, err := client.Credentials.Verify(ctx, &zeroid.VerifyRequest{
 })`,
 };
 
+type EnterpriseTab = "api" | "webhooks" | "sla" | "usage" | "team" | "sdk";
+
+type APIKeyRow = {
+  id: string;
+  name: string;
+  key: string | null;
+  prefix: string;
+  created: string;
+  lastUsed: string;
+  status: "active" | "revoked";
+  scope: APIScope[];
+  calls: number;
+};
+
+type WebhookRow = {
+  id: string;
+  url: string;
+  events: WebhookEvent[];
+  status: "active" | "failing" | "inactive";
+  successRate: number;
+  lastDelivery: string;
+};
+
+type SLAViewMetrics = {
+  uptime: number;
+  uptimeTarget: number;
+  latencyP50: number;
+  latencyP95: number;
+  latencyP99: number;
+  errorRate: number;
+  throughput: number;
+};
+
+const DEFAULT_API_KEY_SCOPES: APIScope[] = [
+  "credentials:read",
+  "verification:write",
+  "identity:read",
+];
+
+const DEFAULT_WEBHOOK_EVENTS: WebhookEvent[] = [
+  "credential.issued",
+  "verification.completed",
+  "compliance.status_changed",
+];
+
+const WEBHOOK_EVENT_OPTIONS: WebhookEvent[] = [
+  ...DEFAULT_WEBHOOK_EVENTS,
+  "identity.registered",
+  "enterprise.sla_violation",
+];
+
+function formatDate(value?: string | null): string {
+  if (!value) return "Not recorded";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Not recorded";
+  return date.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+function formatRelativeTime(value?: string | null): string {
+  if (!value) return "Never";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Never";
+
+  const diffMs = Date.now() - date.getTime();
+  const minutes = Math.max(0, Math.round(diffMs / 60_000));
+  if (minutes < 1) return "Just now";
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.round(hours / 24);
+  return `${days}d ago`;
+}
+
+function mapAPIKeyRow(
+  key: EnterpriseAPIKey,
+  createdSecrets: Record<string, string>,
+): APIKeyRow {
+  return {
+    id: key.id,
+    name: key.name,
+    key: createdSecrets[key.id] ?? null,
+    prefix: key.keyPrefix,
+    created: formatDate(key.createdAt),
+    lastUsed: formatRelativeTime(key.lastUsedAt),
+    status: key.active && !key.revokedAt ? "active" : "revoked",
+    scope: key.scopes,
+    calls: Number(key.metadata?.calls ?? key.metadata?.requestCount ?? 0),
+  };
+}
+
+function mapWebhookRow(webhook: EnterpriseWebhook): WebhookRow {
+  const healthStatus = webhook.health?.status?.toLowerCase() ?? "";
+  const active = webhook.active ?? webhook.enabled ?? true;
+  const failing =
+    healthStatus.includes("fail") ||
+    healthStatus.includes("error") ||
+    healthStatus.includes("degrad");
+
+  return {
+    id: webhook.id,
+    url: webhook.url,
+    events: webhook.events,
+    status: !active ? "inactive" : failing ? "failing" : "active",
+    successRate: Number(webhook.health?.successRate ?? (active ? 100 : 0)),
+    lastDelivery: formatRelativeTime(webhook.health?.lastDeliveryAt),
+  };
+}
+
+function buildSLAViewMetrics(
+  report?: ReturnType<typeof useSLAReport>["data"],
+): SLAViewMetrics {
+  const p99 = Math.round(report?.p99ResponseTimeMs ?? 0);
+  const p50 = Math.round(report?.avgResponseTimeMs ?? Math.max(0, p99 * 0.45));
+  const p95 = Math.round(Math.max(p50, p99 * 0.75));
+  const periodDays =
+    report?.period === "day" ? 1 : report?.period === "week" ? 7 : 30;
+  const throughput =
+    report && periodDays > 0
+      ? Math.round(report.totalRequests / periodDays / 24 / 60)
+      : 0;
+
+  return {
+    uptime: Number((report?.uptimePercent ?? 0).toFixed(2)),
+    uptimeTarget: report?.uptimeTarget ?? 99.95,
+    latencyP50: p50,
+    latencyP95: p95,
+    latencyP99: p99,
+    errorRate: Number((report?.errorRate ?? 0).toFixed(3)),
+    throughput,
+  };
+}
+
+function buildUsageBars(metrics?: ReturnType<typeof useUsageMetrics>["data"]) {
+  return (metrics?.breakdownByDay ?? []).map((day) => ({
+    day: new Date(day.date).toLocaleDateString("en-US", { weekday: "short" }),
+    calls: day.requests,
+  }));
+}
+
+function buildEndpointRows(
+  metrics?: ReturnType<typeof useUsageMetrics>["data"],
+) {
+  return (metrics?.breakdownByEndpoint ?? []).map((endpoint) => ({
+    endpoint: `${endpoint.method} ${endpoint.endpoint}`,
+    calls: endpoint.requestCount,
+    avgLatency: `${Math.round(endpoint.avgResponseTimeMs)}ms`,
+    errorRate:
+      endpoint.requestCount > 0
+        ? `${((endpoint.errorCount / endpoint.requestCount) * 100).toFixed(2)}%`
+        : "0.00%",
+  }));
+}
+
+function downloadJson(filename: string, payload: unknown): void {
+  const blob = new Blob([JSON.stringify(payload, null, 2)], {
+    type: "application/json",
+  });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
 // ============================================================
 // Component
 // ============================================================
 
 export default function EnterprisePage() {
-  const [activeTab, setActiveTab] = useState<
-    "api" | "webhooks" | "sla" | "usage" | "team" | "sdk"
-  >("api");
+  const [activeTab, setActiveTab] = useState<EnterpriseTab>("api");
   const [environment, setEnvironment] = useState<"production" | "sandbox">(
     "production",
   );
@@ -283,11 +464,57 @@ export default function EnterprisePage() {
     "typescript" | "python" | "rust" | "go"
   >("typescript");
   const [showKeyModal, setShowKeyModal] = useState(false);
+  const [showWebhookModal, setShowWebhookModal] = useState(false);
+  const [newKeyName, setNewKeyName] = useState("");
+  const [newWebhookUrl, setNewWebhookUrl] = useState("");
+  const [selectedWebhookEvents, setSelectedWebhookEvents] = useState<
+    WebhookEvent[]
+  >(DEFAULT_WEBHOOK_EVENTS);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [revealedKeys, setRevealedKeys] = useState<Set<string>>(new Set());
+  const [createdSecrets, setCreatedSecrets] = useState<Record<string, string>>(
+    {},
+  );
+
+  const apiKeysQuery = useAPIKeys();
+  const webhooksQuery = useWebhooks();
+  const slaReportQuery = useSLAReport("month");
+  const usageMetricsQuery = useUsageMetrics("week");
+  const createAPIKey = useCreateAPIKey();
+  const revokeAPIKey = useRevokeAPIKey();
+  const registerWebhook = useRegisterWebhook();
+  const testWebhook = useTestWebhook();
+
+  const apiKeyRows = useMemo(
+    () =>
+      (apiKeysQuery.data ?? [])
+        .filter((key) => key.environment === environment)
+        .map((key) => mapAPIKeyRow(key, createdSecrets)),
+    [apiKeysQuery.data, createdSecrets, environment],
+  );
+
+  const webhookRows = useMemo(
+    () => (webhooksQuery.data ?? []).map(mapWebhookRow),
+    [webhooksQuery.data],
+  );
+
+  const slaViewMetrics = useMemo(
+    () => buildSLAViewMetrics(slaReportQuery.data),
+    [slaReportQuery.data],
+  );
+
+  const liveUsageData = useMemo(
+    () => buildUsageBars(usageMetricsQuery.data),
+    [usageMetricsQuery.data],
+  );
+
+  const liveTopEndpoints = useMemo(
+    () => buildEndpointRows(usageMetricsQuery.data),
+    [usageMetricsQuery.data],
+  );
 
   const handleCopy = (text: string, id: string) => {
-    navigator.clipboard.writeText(text);
+    void navigator.clipboard?.writeText(text);
     setCopiedKey(id);
     setTimeout(() => setCopiedKey(null), 2000);
   };
@@ -301,7 +528,53 @@ export default function EnterprisePage() {
     });
   };
 
-  const maxCalls = Math.max(...usageData.map((d) => d.calls));
+  const handleCreateKey = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const created = await createAPIKey.mutateAsync({
+      name: newKeyName.trim() || `${environment} integration key`,
+      environment,
+      scopes: DEFAULT_API_KEY_SCOPES,
+      dailyQuota: environment === "production" ? 100_000 : 10_000,
+      monthlyQuota: environment === "production" ? 3_000_000 : 100_000,
+      rateLimit: {
+        requestsPerSecond: environment === "production" ? 200 : 50,
+        burstSize: environment === "production" ? 500 : 100,
+      },
+      metadata: { createdFrom: "enterprise-console" },
+    });
+    setCreatedSecrets((prev) => ({ ...prev, [created.id]: created.secret }));
+    setRevealedKeys((prev) => new Set(prev).add(created.id));
+    setNewKeyName("");
+    setShowKeyModal(false);
+  };
+
+  const handleRegisterWebhook = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    await registerWebhook.mutateAsync({
+      url: newWebhookUrl.trim(),
+      events: selectedWebhookEvents,
+      active: true,
+      metadata: { createdFrom: "enterprise-console" },
+    });
+    setNewWebhookUrl("");
+    setSelectedWebhookEvents(DEFAULT_WEBHOOK_EVENTS);
+    setShowWebhookModal(false);
+  };
+
+  const toggleWebhookEvent = (event: WebhookEvent) => {
+    setSelectedWebhookEvents((prev) =>
+      prev.includes(event)
+        ? prev.filter((candidate) => candidate !== event)
+        : [...prev, event],
+    );
+  };
+
+  const maxCalls = Math.max(1, ...liveUsageData.map((d) => d.calls));
+  const queryError =
+    apiKeysQuery.error ??
+    webhooksQuery.error ??
+    slaReportQuery.error ??
+    usageMetricsQuery.error;
 
   return (
     <AppLayout>
@@ -346,31 +619,31 @@ export default function EnterprisePage() {
           {[
             {
               label: "Uptime",
-              value: `${slaMetrics.uptime}%`,
+              value: `${slaViewMetrics.uptime}%`,
               icon: Activity,
               color: "text-emerald-400",
               trend: "Last 30 days",
             },
             {
               label: "P95 Latency",
-              value: `${slaMetrics.latencyP95}ms`,
+              value: `${slaViewMetrics.latencyP95}ms`,
               icon: Gauge,
               color: "text-brand-400",
               trend: "Target: <200ms",
             },
             {
               label: "Error Rate",
-              value: `${slaMetrics.errorRate}%`,
+              value: `${slaViewMetrics.errorRate}%`,
               icon: AlertTriangle,
               color: "text-emerald-400",
               trend: "Below SLA",
             },
             {
               label: "API Calls/min",
-              value: slaMetrics.throughput.toLocaleString(),
+              value: slaViewMetrics.throughput.toLocaleString(),
               icon: Zap,
               color: "text-identity-chrome",
-              trend: "+23% this week",
+              trend: "SLA window",
             },
             {
               label: "Team Members",
@@ -397,11 +670,30 @@ export default function EnterprisePage() {
           ))}
         </div>
 
+        {(apiKeysQuery.isLoading ||
+          webhooksQuery.isLoading ||
+          slaReportQuery.isLoading ||
+          usageMetricsQuery.isLoading ||
+          queryError) && (
+          <div className="flex items-center gap-3 rounded-xl border border-zero-800 bg-zero-900 px-4 py-3 text-sm">
+            <Server className="h-4 w-4 text-brand-400" />
+            <span className="text-zero-400">
+              {queryError
+                ? `Enterprise backend issue: ${
+                    queryError instanceof Error
+                      ? queryError.message
+                      : "service unavailable"
+                  }`
+                : "Loading enterprise control-plane data from backend..."}
+            </span>
+          </div>
+        )}
+
         {/* Tabs */}
         <div className="flex items-center gap-2 overflow-x-auto pb-1">
           {[
             { id: "api" as const, label: "API Keys", icon: Key },
-            { id: "webhooks" as const, label: "Webhooks", icon: Webhook },
+            { id: "webhooks" as const, label: "Webhooks", icon: WebhookIcon },
             { id: "sla" as const, label: "SLA Monitor", icon: Gauge },
             { id: "usage" as const, label: "Usage Analytics", icon: BarChart3 },
             { id: "team" as const, label: "Team (RBAC)", icon: Users },
@@ -443,7 +735,7 @@ export default function EnterprisePage() {
                 </button>
               </div>
               <div className="card divide-y divide-zero-800/50">
-                {apiKeys.map((key) => (
+                {apiKeyRows.map((key) => (
                   <div key={key.id} className="p-4 flex items-center gap-4">
                     <div
                       className={`w-10 h-10 rounded-xl flex items-center justify-center ${key.status === "active" ? "bg-emerald-500/10" : "bg-red-500/10"}`}
@@ -503,19 +795,35 @@ export default function EnterprisePage() {
                       </div>
                     </div>
                     <div className="text-right text-xs text-zero-500">
-                      <div>{key.calls.toLocaleString()} calls</div>
+                      <div>{key.calls.toLocaleString()} tracked calls</div>
                       <div className="mt-0.5">Last: {key.lastUsed}</div>
                     </div>
                     <div className="flex items-center gap-1">
-                      <button className="p-1.5 rounded-lg hover:bg-zero-800 text-zero-500 hover:text-white">
+                      <button
+                        onClick={() => void apiKeysQuery.refetch()}
+                        className="p-1.5 rounded-lg hover:bg-zero-800 text-zero-500 hover:text-white"
+                        title="Refresh key inventory"
+                      >
                         <RefreshCw className="w-3.5 h-3.5" />
                       </button>
-                      <button className="p-1.5 rounded-lg hover:bg-zero-800 text-zero-500 hover:text-red-400">
+                      <button
+                        onClick={() => revokeAPIKey.mutate(key.id)}
+                        disabled={
+                          key.status !== "active" || revokeAPIKey.isPending
+                        }
+                        className="p-1.5 rounded-lg hover:bg-zero-800 text-zero-500 hover:text-red-400 disabled:cursor-not-allowed disabled:opacity-40"
+                        title="Revoke API key"
+                      >
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
                     </div>
                   </div>
                 ))}
+                {apiKeyRows.length === 0 && (
+                  <div className="p-6 text-sm text-zero-500">
+                    No {environment} API keys returned by the enterprise API.
+                  </div>
+                )}
               </div>
             </motion.div>
           )}
@@ -531,15 +839,18 @@ export default function EnterprisePage() {
             >
               <div className="flex items-center justify-between">
                 <h2 className="font-semibold">Webhook Endpoints</h2>
-                <button className="btn-primary text-sm">
+                <button
+                  onClick={() => setShowWebhookModal(true)}
+                  className="btn-primary text-sm"
+                >
                   <Plus className="w-4 h-4" /> Add Endpoint
                 </button>
               </div>
               <div className="card divide-y divide-zero-800/50">
-                {webhooks.map((wh) => (
+                {webhookRows.map((wh) => (
                   <div key={wh.id} className="p-4">
                     <div className="flex items-center gap-3 mb-2">
-                      <Webhook
+                      <WebhookIcon
                         className={`w-5 h-5 ${wh.status === "active" ? "text-emerald-400" : "text-red-400"}`}
                       />
                       <code className="text-sm text-zero-300 font-mono truncate flex-1">
@@ -568,9 +879,21 @@ export default function EnterprisePage() {
                       <span className="text-xs text-zero-600">
                         Last: {wh.lastDelivery}
                       </span>
+                      <button
+                        onClick={() => testWebhook.mutate(wh.id)}
+                        disabled={testWebhook.isPending}
+                        className="ml-2 rounded-lg border border-zero-800 px-2 py-1 text-xs text-zero-400 hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        Test
+                      </button>
                     </div>
                   </div>
                 ))}
+                {webhookRows.length === 0 && (
+                  <div className="p-6 text-sm text-zero-500">
+                    No webhook endpoints returned by the enterprise API.
+                  </div>
+                )}
               </div>
             </motion.div>
           )}
@@ -607,16 +930,18 @@ export default function EnterprisePage() {
                         strokeWidth="8"
                         strokeLinecap="round"
                         strokeDasharray={`${2 * Math.PI * 42}`}
-                        strokeDashoffset={`${2 * Math.PI * 42 * (1 - slaMetrics.uptime / 100)}`}
+                        strokeDashoffset={`${2 * Math.PI * 42 * (1 - slaViewMetrics.uptime / 100)}`}
                       />
                     </svg>
                     <div className="absolute inset-0 flex items-center justify-center">
                       <span className="text-2xl font-bold text-emerald-400">
-                        {slaMetrics.uptime}%
+                        {slaViewMetrics.uptime}%
                       </span>
                     </div>
                   </div>
-                  <div className="text-xs text-zero-500 mt-2">SLA: 99.95%</div>
+                  <div className="text-xs text-zero-500 mt-2">
+                    SLA: {slaViewMetrics.uptimeTarget}%
+                  </div>
                 </div>
 
                 {/* Latency */}
@@ -626,9 +951,21 @@ export default function EnterprisePage() {
                   </h3>
                   <div className="space-y-4">
                     {[
-                      { label: "P50", value: slaMetrics.latencyP50, max: 500 },
-                      { label: "P95", value: slaMetrics.latencyP95, max: 500 },
-                      { label: "P99", value: slaMetrics.latencyP99, max: 500 },
+                      {
+                        label: "P50",
+                        value: slaViewMetrics.latencyP50,
+                        max: 500,
+                      },
+                      {
+                        label: "P95",
+                        value: slaViewMetrics.latencyP95,
+                        max: 500,
+                      },
+                      {
+                        label: "P99",
+                        value: slaViewMetrics.latencyP99,
+                        max: 500,
+                      },
                     ].map((p) => (
                       <div key={p.label}>
                         <div className="flex justify-between text-sm mb-1">
@@ -656,7 +993,7 @@ export default function EnterprisePage() {
                 <div className="card p-6 text-center">
                   <h3 className="text-sm text-zero-500 mb-4">Error Rate</h3>
                   <div className="text-4xl font-bold text-emerald-400">
-                    {slaMetrics.errorRate}%
+                    {slaViewMetrics.errorRate}%
                   </div>
                   <div className="text-xs text-zero-500 mt-2">
                     SLA: &lt;0.1%
@@ -679,9 +1016,23 @@ export default function EnterprisePage() {
               className="space-y-4"
             >
               <div className="card p-6">
-                <h2 className="font-semibold mb-4">API Calls This Week</h2>
+                <div className="mb-4 flex items-center justify-between">
+                  <h2 className="font-semibold">API Calls This Week</h2>
+                  <button
+                    onClick={() =>
+                      downloadJson("zeroid-enterprise-usage.json", {
+                        usage: usageMetricsQuery.data,
+                        endpoints: liveTopEndpoints,
+                      })
+                    }
+                    className="rounded-lg border border-zero-800 px-3 py-1.5 text-xs text-zero-400 hover:text-white"
+                  >
+                    <Download className="mr-1 inline h-3.5 w-3.5" />
+                    Export
+                  </button>
+                </div>
                 <div className="flex items-end gap-3 h-48">
-                  {usageData.map((d, i) => (
+                  {liveUsageData.map((d, i) => (
                     <div
                       key={d.day}
                       className="flex-1 flex flex-col items-center gap-1"
@@ -698,6 +1049,11 @@ export default function EnterprisePage() {
                       <span className="text-[10px] text-zero-500">{d.day}</span>
                     </div>
                   ))}
+                  {liveUsageData.length === 0 && (
+                    <div className="flex h-full w-full items-center justify-center text-sm text-zero-500">
+                      No usage samples returned for this period.
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -706,7 +1062,7 @@ export default function EnterprisePage() {
                   <h2 className="font-semibold">Top Endpoints</h2>
                 </div>
                 <div className="divide-y divide-zero-800/50">
-                  {topEndpoints.map((ep) => (
+                  {liveTopEndpoints.map((ep) => (
                     <div
                       key={ep.endpoint}
                       className="p-4 flex items-center gap-4"
@@ -725,6 +1081,11 @@ export default function EnterprisePage() {
                       </span>
                     </div>
                   ))}
+                  {liveTopEndpoints.length === 0 && (
+                    <div className="p-6 text-sm text-zero-500">
+                      No endpoint breakdown returned for this period.
+                    </div>
+                  )}
                 </div>
               </div>
             </motion.div>
@@ -1007,6 +1368,173 @@ export default function EnterprisePage() {
             </motion.div>
           )}
         </AnimatePresence>
+
+        {showKeyModal && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Create API key"
+          >
+            <form
+              onSubmit={handleCreateKey}
+              className="w-full max-w-lg rounded-2xl border border-zero-800 bg-zero-950 p-6 shadow-2xl"
+            >
+              <div className="mb-5 flex items-start justify-between gap-4">
+                <div>
+                  <h2 className="text-lg font-semibold">Create API Key</h2>
+                  <p className="mt-1 text-sm text-zero-500">
+                    Generates a backend-issued enterprise key. The full secret
+                    is shown once after creation.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowKeyModal(false)}
+                  className="rounded-lg p-1.5 text-zero-500 hover:bg-zero-900 hover:text-white"
+                >
+                  <XCircle className="h-4 w-4" />
+                </button>
+              </div>
+
+              <label className="block text-sm">
+                <span className="text-zero-400">Key name</span>
+                <input
+                  value={newKeyName}
+                  onChange={(event) => setNewKeyName(event.target.value)}
+                  placeholder={`${environment} identity verification`}
+                  className="mt-2 w-full rounded-xl border border-zero-800 bg-zero-900 px-3 py-2 text-white outline-none focus:border-brand-500"
+                />
+              </label>
+
+              <div className="mt-4">
+                <div className="mb-2 text-sm text-zero-400">Scopes</div>
+                <div className="flex flex-wrap gap-2">
+                  {DEFAULT_API_KEY_SCOPES.map((scope) => (
+                    <span
+                      key={scope}
+                      className="rounded-lg bg-zero-900 px-2 py-1 text-xs text-zero-300"
+                    >
+                      {scope}
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              <div className="mt-6 flex justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => setShowKeyModal(false)}
+                  className="btn-secondary text-sm"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={createAPIKey.isPending}
+                  className="btn-primary text-sm disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {createAPIKey.isPending ? (
+                    <RefreshCw className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Plus className="h-4 w-4" />
+                  )}
+                  Create Key
+                </button>
+              </div>
+            </form>
+          </div>
+        )}
+
+        {showWebhookModal && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Add webhook endpoint"
+          >
+            <form
+              onSubmit={handleRegisterWebhook}
+              className="w-full max-w-xl rounded-2xl border border-zero-800 bg-zero-950 p-6 shadow-2xl"
+            >
+              <div className="mb-5 flex items-start justify-between gap-4">
+                <div>
+                  <h2 className="text-lg font-semibold">
+                    Add Webhook Endpoint
+                  </h2>
+                  <p className="mt-1 text-sm text-zero-500">
+                    Registers the endpoint through the enterprise webhook API
+                    and signs deliveries with the backend-managed secret.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowWebhookModal(false)}
+                  className="rounded-lg p-1.5 text-zero-500 hover:bg-zero-900 hover:text-white"
+                >
+                  <XCircle className="h-4 w-4" />
+                </button>
+              </div>
+
+              <label className="block text-sm">
+                <span className="text-zero-400">Endpoint URL</span>
+                <input
+                  value={newWebhookUrl}
+                  onChange={(event) => setNewWebhookUrl(event.target.value)}
+                  placeholder="https://enterprise.example/hooks/zeroid"
+                  type="url"
+                  required
+                  className="mt-2 w-full rounded-xl border border-zero-800 bg-zero-900 px-3 py-2 text-white outline-none focus:border-brand-500"
+                />
+              </label>
+
+              <div className="mt-4">
+                <div className="mb-2 text-sm text-zero-400">Events</div>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {WEBHOOK_EVENT_OPTIONS.map((event) => (
+                    <label
+                      key={event}
+                      className="flex items-center gap-2 rounded-lg border border-zero-800 bg-zero-900 px-3 py-2 text-xs text-zero-300"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedWebhookEvents.includes(event)}
+                        onChange={() => toggleWebhookEvent(event)}
+                        className="rounded border-zero-700 bg-zero-950"
+                      />
+                      {event}
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              <div className="mt-6 flex justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => setShowWebhookModal(false)}
+                  className="btn-secondary text-sm"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={
+                    registerWebhook.isPending ||
+                    selectedWebhookEvents.length === 0
+                  }
+                  className="btn-primary text-sm disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {registerWebhook.isPending ? (
+                    <RefreshCw className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <WebhookIcon className="h-4 w-4" />
+                  )}
+                  Register Endpoint
+                </button>
+              </div>
+            </form>
+          </div>
+        )}
       </div>
     </AppLayout>
   );

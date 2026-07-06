@@ -113,9 +113,40 @@ export interface BatchUpdateResult {
   processingTimeMs: number;
 }
 
+export interface AccumulatorPairingVerificationInput {
+  witness: NonMembershipWitness;
+  accumulatorState: AccumulatorState;
+  elementG2Commitment: FieldElement;
+}
+
+export interface AccumulatorPairingVerificationResult {
+  valid: boolean;
+  detail: string;
+}
+
+export interface AccumulatorPairingVerifier {
+  verifierId: string;
+  verifyNonMembership(
+    input: AccumulatorPairingVerificationInput,
+  ): Promise<AccumulatorPairingVerificationResult>;
+}
+
+export interface WitnessVerificationOptions {
+  pairingVerifier?: AccumulatorPairingVerifier;
+  allowDevelopmentVerifier?: boolean;
+}
+
 // ============================================================================
 // Helpers
 // ============================================================================
+
+let configuredPairingVerifier: AccumulatorPairingVerifier | null = null;
+
+export function configureAccumulatorPairingVerifier(
+  verifier: AccumulatorPairingVerifier | null,
+): void {
+  configuredPairingVerifier = verifier;
+}
 
 /** Hash inputs to a field element using SHA-256 */
 async function hashToField(...inputs: string[]): Promise<FieldElement> {
@@ -131,19 +162,96 @@ async function hashToField(...inputs: string[]): Promise<FieldElement> {
   );
 }
 
-/** Compute a mock pairing check (structural placeholder for WASM pairing) */
-async function computePairingCheck(
-  a: CurvePoint,
-  b: CurvePoint,
-  c: CurvePoint,
-  d: CurvePoint,
-): Promise<boolean> {
-  // In production, this delegates to a WASM BLS12-381 pairing library.
-  // Here we verify structural consistency.
-  const lhs = await hashToField("PAIRING_LHS", a, b);
-  const rhs = await hashToField("PAIRING_RHS", c, d);
-  // Structural check — actual pairing equality is done in WASM
-  return lhs.length === rhs.length && lhs.length > 0;
+const developmentPairingVerifier: AccumulatorPairingVerifier = {
+  verifierId: "deterministic-development-transcript-v1",
+  async verifyNonMembership({
+    witness,
+    accumulatorState,
+    elementG2Commitment,
+  }: AccumulatorPairingVerificationInput) {
+    const transcriptDigest = await hashToField(
+      "ACCUMULATOR_NON_MEMBERSHIP_TRANSCRIPT_V1",
+      witness.c,
+      witness.d,
+      witness.element,
+      elementG2Commitment,
+      accumulatorState.value,
+      accumulatorState.publicParams.g1,
+      accumulatorState.publicParams.g2,
+      accumulatorState.publicParams.z,
+      String(accumulatorState.version),
+      accumulatorState.stateHash,
+    );
+    const transcriptComplete = [
+      witness.c,
+      witness.d,
+      elementG2Commitment,
+      accumulatorState.value,
+      accumulatorState.publicParams.g1,
+      accumulatorState.publicParams.g2,
+      accumulatorState.publicParams.z,
+      accumulatorState.stateHash,
+    ].every(isHexLike);
+
+    return {
+      valid: transcriptComplete && transcriptDigest.length === 66,
+      detail: transcriptComplete
+        ? "Development transcript verifier accepted accumulator witness binding"
+        : "Accumulator transcript contains malformed hex-encoded inputs",
+    };
+  },
+};
+
+function resolvePairingVerifier(
+  options?: WitnessVerificationOptions,
+): AccumulatorPairingVerifier | null {
+  if (options?.pairingVerifier) return options.pairingVerifier;
+  if (configuredPairingVerifier) return configuredPairingVerifier;
+  if (
+    options?.allowDevelopmentVerifier !== false &&
+    !isAccumulatorProductionRuntime()
+  ) {
+    return developmentPairingVerifier;
+  }
+  return null;
+}
+
+async function verifyPairingEquation(
+  witness: NonMembershipWitness,
+  accumulatorState: AccumulatorState,
+  options?: WitnessVerificationOptions,
+): Promise<AccumulatorPairingVerificationResult> {
+  const elementG2Commitment = await hashToField(
+    "ACC_ELEM_G2",
+    witness.element,
+    accumulatorState.publicParams.g2,
+  );
+  const verifier = resolvePairingVerifier(options);
+  if (!verifier) {
+    return {
+      valid: false,
+      detail: "No production accumulator pairing verifier configured",
+    };
+  }
+
+  return verifier.verifyNonMembership({
+    witness,
+    accumulatorState,
+    elementG2Commitment,
+  });
+}
+
+function isAccumulatorProductionRuntime(): boolean {
+  const env = process.env;
+  return (
+    env.NODE_ENV === "production" ||
+    env.ZEROID_ENV === "production" ||
+    env.NEXT_PUBLIC_ZEROID_ENV === "production"
+  );
+}
+
+function isHexLike(value: string): boolean {
+  return /^0x[0-9a-f]+$/i.test(value);
 }
 
 // ============================================================================
@@ -163,6 +271,7 @@ async function computePairingCheck(
 export async function verifyNonMembershipWitness(
   witness: NonMembershipWitness,
   accumulatorState: AccumulatorState,
+  options?: WitnessVerificationOptions,
 ): Promise<WitnessVerificationResult> {
   const checks: { name: string; passed: boolean; detail?: string }[] = [];
 
@@ -187,18 +296,15 @@ export async function verifyNonMembershipWitness(
       : `Witness matches accumulator version v${accumulatorState.version}`,
   });
 
-  // Check 3: Pairing verification (structural — actual pairing delegated to WASM)
-  const { g1, g2, z } = accumulatorState.publicParams;
-  const pairingValid = await computePairingCheck(
-    witness.c,
-    await hashToField("ACC_ELEM_G2", witness.element, g2),
-    accumulatorState.value,
-    g2,
+  const pairingResult = await verifyPairingEquation(
+    witness,
+    accumulatorState,
+    options,
   );
   checks.push({
     name: "pairing_check",
-    passed: pairingValid,
-    detail: "Pairing equation satisfied",
+    passed: pairingResult.valid,
+    detail: pairingResult.detail,
   });
 
   // Check 4: Element field validity (not zero, not identity)

@@ -52,6 +52,7 @@
     "fast-xml-builder": "1.2.0",
     "fast-xml-parser": "5.7.1",
     "handlebars": "4.7.9",
+    "js-yaml": "4.3.0",
     "path-to-regexp": "0.1.13",
     "picomatch": "4.0.4"
   },

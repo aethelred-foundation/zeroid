@@ -1,5 +1,5 @@
 import { createHash } from 'crypto';
-import { existsSync, readFileSync, statSync } from 'fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'fs';
 import path from 'path';
 
 export interface CircuitArtifactValidationOptions {
@@ -17,7 +17,14 @@ export interface CircuitArtifactFileReport {
 
 export interface CircuitArtifactReport {
   name: string;
+  version: string;
+  policyId: string;
+  circuitId: string;
+  circuitName: string;
+  verificationKeyId: string;
   publicSignals: string[];
+  privateInputsRedacted: string[];
+  manifest: CircuitArtifactFileReport;
   source: CircuitArtifactFileReport;
   artifactsReady: boolean;
   artifacts: Record<string, CircuitArtifactFileReport>;
@@ -25,36 +32,23 @@ export interface CircuitArtifactReport {
 }
 
 interface CircuitManifest {
+  schema: 'zeroid.circuit_manifest.v1';
   name: string;
+  version: string;
+  policyId: string;
+  circuitId: string;
+  circuitName: string;
+  verificationKeyId: string;
   source: string;
   publicSignals: string[];
+  privateInputsRedacted: string[];
   noPublicOutputs: boolean;
   artifacts: Record<string, string>;
+  manifestPath: string;
 }
 
 const SHA256_HEX_PATTERN = /^[0-9a-f]{64}$/i;
-
-const CIRCUIT_MANIFESTS: CircuitManifest[] = [
-  {
-    name: 'age_verification_context_v2',
-    source: 'circuits/age/age_context_proof.circom',
-    publicSignals: [
-      'claimsHash',
-      'ageThresholdYears',
-      'currentTimestamp',
-      'contextCommitment',
-    ],
-    noPublicOutputs: true,
-    artifacts: {
-      r1cs: 'build/circuits/age_context_v2/age_context_proof.r1cs',
-      sym: 'build/circuits/age_context_v2/age_context_proof.sym',
-      wasm:
-        'build/circuits/age_context_v2/age_context_proof_js/age_context_proof.wasm',
-      zkey: 'build/circuits/age_context_v2/age_context_proof_final.zkey',
-      vkey: 'build/circuits/age_context_v2/verification_key.json',
-    },
-  },
-];
+const CIRCUIT_MANIFEST_DIR = 'circuits/manifest';
 
 export class CircuitArtifactValidationError extends Error {
   constructor(message: string) {
@@ -64,9 +58,13 @@ export class CircuitArtifactValidationError extends Error {
 }
 
 export function circuitArtifactDigestKeys(): string[] {
-  return CIRCUIT_MANIFESTS.flatMap((manifest) => [
+  const repoRoot = findRepoRoot();
+  return readCircuitManifests(repoRoot).flatMap((manifest) => [
+    digestKey(manifest.name, 'manifest'),
     digestKey(manifest.name, 'source'),
-    ...Object.keys(manifest.artifacts).map((label) => digestKey(manifest.name, label)),
+    ...Object.keys(manifest.artifacts).map((label) =>
+      digestKey(manifest.name, label),
+    ),
   ]);
 }
 
@@ -101,13 +99,29 @@ export function validateCircuitArtifacts(
 ): CircuitArtifactReport[] {
   const repoRoot = options.repoRoot ?? findRepoRoot();
   const expectedDigests = options.expectedDigests ?? {};
+  const manifests = readCircuitManifests(repoRoot);
   const report: CircuitArtifactReport[] = [];
 
-  for (const manifest of CIRCUIT_MANIFESTS) {
+  for (const manifest of manifests) {
+    const manifestFile = validateArtifactFile(
+      repoRoot,
+      manifest,
+      'manifest',
+      manifest.manifestPath,
+      expectedDigests,
+      options,
+    );
     const source = validateSource(repoRoot, manifest, expectedDigests, options);
     const entry: CircuitArtifactReport = {
       name: manifest.name,
+      version: manifest.version,
+      policyId: manifest.policyId,
+      circuitId: manifest.circuitId,
+      circuitName: manifest.circuitName,
+      verificationKeyId: manifest.verificationKeyId,
       publicSignals: manifest.publicSignals,
+      privateInputsRedacted: manifest.privateInputsRedacted,
+      manifest: manifestFile,
       source,
       artifactsReady: false,
       artifacts: {},
@@ -126,10 +140,12 @@ export function validateCircuitArtifacts(
             .join(', ')}`,
         );
       }
-      entry.missingArtifacts = missingArtifacts.map(([label, relativePath]) => ({
-        label,
-        path: relativePath,
-      }));
+      entry.missingArtifacts = missingArtifacts.map(
+        ([label, relativePath]) => ({
+          label,
+          path: relativePath,
+        }),
+      );
       report.push(entry);
       continue;
     }
@@ -137,14 +153,164 @@ export function validateCircuitArtifacts(
     for (const [label, relativePath] of artifactEntries) {
       entry.artifacts[label] =
         label === 'vkey'
-          ? validateVerificationKey(repoRoot, manifest, label, relativePath, expectedDigests, options)
-          : validateArtifactFile(repoRoot, manifest, label, relativePath, expectedDigests, options);
+          ? validateVerificationKey(
+              repoRoot,
+              manifest,
+              label,
+              relativePath,
+              expectedDigests,
+              options,
+            )
+          : validateArtifactFile(
+              repoRoot,
+              manifest,
+              label,
+              relativePath,
+              expectedDigests,
+              options,
+            );
     }
     entry.artifactsReady = true;
     report.push(entry);
   }
 
   return report;
+}
+
+function readCircuitManifests(repoRoot: string): CircuitManifest[] {
+  const manifestRoot = absolute(repoRoot, CIRCUIT_MANIFEST_DIR);
+  assert(
+    existsSync(manifestRoot),
+    `Circuit manifest directory missing at ${CIRCUIT_MANIFEST_DIR}`,
+  );
+
+  const manifestFiles = readdirSync(manifestRoot)
+    .filter((file) => file.endsWith('.json'))
+    .sort();
+
+  assert(
+    manifestFiles.length > 0,
+    `No circuit manifest JSON files found in ${CIRCUIT_MANIFEST_DIR}`,
+  );
+
+  return manifestFiles.map((file) => {
+    const manifestPath = path.join(CIRCUIT_MANIFEST_DIR, file);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(
+        readFileSync(absolute(repoRoot, manifestPath), 'utf8'),
+      ) as unknown;
+    } catch (error) {
+      throw new CircuitArtifactValidationError(
+        `${manifestPath}: manifest JSON is invalid: ${(error as Error).message}`,
+      );
+    }
+
+    return validateManifestShape(manifestPath, parsed);
+  });
+}
+
+function validateManifestShape(
+  manifestPath: string,
+  value: unknown,
+): CircuitManifest {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new CircuitArtifactValidationError(
+      `${manifestPath}: manifest must be a JSON object`,
+    );
+  }
+
+  const record = value as Record<string, unknown>;
+  const requiredStringFields = [
+    'name',
+    'version',
+    'policyId',
+    'circuitId',
+    'circuitName',
+    'verificationKeyId',
+    'source',
+  ];
+
+  for (const field of requiredStringFields) {
+    if (
+      typeof record[field] !== 'string' ||
+      record[field].trim().length === 0
+    ) {
+      throw new CircuitArtifactValidationError(
+        `${manifestPath}: ${field} must be a non-empty string`,
+      );
+    }
+  }
+
+  if (record.schema !== 'zeroid.circuit_manifest.v1') {
+    throw new CircuitArtifactValidationError(
+      `${manifestPath}: unsupported schema ${String(record.schema)}`,
+    );
+  }
+
+  if (!isStringArray(record.publicSignals) || record.publicSignals.length < 2) {
+    throw new CircuitArtifactValidationError(
+      `${manifestPath}: publicSignals must be a non-empty string array`,
+    );
+  }
+
+  if (
+    record.publicSignals[0] !== 'claimsHash' ||
+    record.publicSignals[record.publicSignals.length - 1] !==
+      'contextCommitment'
+  ) {
+    throw new CircuitArtifactValidationError(
+      `${manifestPath}: context-bound public signals must start with claimsHash and end with contextCommitment`,
+    );
+  }
+
+  if (!isStringArray(record.privateInputsRedacted)) {
+    throw new CircuitArtifactValidationError(
+      `${manifestPath}: privateInputsRedacted must be a string array`,
+    );
+  }
+
+  if (
+    !record.artifacts ||
+    typeof record.artifacts !== 'object' ||
+    Array.isArray(record.artifacts)
+  ) {
+    throw new CircuitArtifactValidationError(
+      `${manifestPath}: artifacts must be a JSON object`,
+    );
+  }
+
+  const artifacts = record.artifacts as Record<string, unknown>;
+  if (
+    Object.keys(artifacts).length === 0 ||
+    Object.values(artifacts).some((artifact) => typeof artifact !== 'string')
+  ) {
+    throw new CircuitArtifactValidationError(
+      `${manifestPath}: artifacts must map labels to relative paths`,
+    );
+  }
+
+  return {
+    schema: 'zeroid.circuit_manifest.v1',
+    name: record.name as string,
+    version: record.version as string,
+    policyId: record.policyId as string,
+    circuitId: record.circuitId as string,
+    circuitName: record.circuitName as string,
+    verificationKeyId: record.verificationKeyId as string,
+    source: record.source as string,
+    publicSignals: [...record.publicSignals],
+    privateInputsRedacted: [...record.privateInputsRedacted],
+    noPublicOutputs: record.noPublicOutputs === true,
+    artifacts: artifacts as Record<string, string>,
+    manifestPath,
+  };
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return (
+    Array.isArray(value) && value.every((item) => typeof item === 'string')
+  );
 }
 
 function validateSource(
@@ -154,7 +320,10 @@ function validateSource(
   options: CircuitArtifactValidationOptions,
 ): CircuitArtifactFileReport {
   const sourcePath = absolute(repoRoot, manifest.source);
-  assert(existsSync(sourcePath), `${manifest.name}: source missing at ${manifest.source}`);
+  assert(
+    existsSync(sourcePath),
+    `${manifest.name}: source missing at ${manifest.source}`,
+  );
 
   const source = readFileSync(sourcePath, 'utf8');
   const expectedPublicDeclaration = `component main {public [${manifest.publicSignals.join(
@@ -201,7 +370,9 @@ function validateVerificationKey(
   );
   let parsed: { nPublic?: unknown };
   try {
-    parsed = JSON.parse(readFileSync(absolute(repoRoot, relativePath), 'utf8')) as {
+    parsed = JSON.parse(
+      readFileSync(absolute(repoRoot, relativePath), 'utf8'),
+    ) as {
       nPublic?: unknown;
     };
   } catch (error) {
@@ -227,7 +398,10 @@ function validateArtifactFile(
   options: CircuitArtifactValidationOptions,
 ): CircuitArtifactFileReport {
   const artifactPath = absolute(repoRoot, relativePath);
-  assert(existsSync(artifactPath), `${manifest.name}: ${label} artifact missing at ${relativePath}`);
+  assert(
+    existsSync(artifactPath),
+    `${manifest.name}: ${label} artifact missing at ${relativePath}`,
+  );
 
   const stat = statSync(artifactPath);
   assert(stat.size > 0, `${manifest.name}: ${label} artifact is empty`);
@@ -259,7 +433,9 @@ function findRepoRoot(): string {
   let current = process.cwd();
   for (let i = 0; i < 8; i++) {
     if (
-      existsSync(path.join(current, 'scripts', 'validate-circuit-artifacts.mjs')) &&
+      existsSync(
+        path.join(current, 'scripts', 'validate-circuit-artifacts.mjs'),
+      ) &&
       existsSync(path.join(current, 'circuits'))
     ) {
       return current;
@@ -272,7 +448,9 @@ function findRepoRoot(): string {
   current = __dirname;
   for (let i = 0; i < 8; i++) {
     if (
-      existsSync(path.join(current, 'scripts', 'validate-circuit-artifacts.mjs')) &&
+      existsSync(
+        path.join(current, 'scripts', 'validate-circuit-artifacts.mjs'),
+      ) &&
       existsSync(path.join(current, 'circuits'))
     ) {
       return current;
@@ -282,7 +460,9 @@ function findRepoRoot(): string {
     current = parent;
   }
 
-  throw new CircuitArtifactValidationError('Unable to locate ZeroID repository root');
+  throw new CircuitArtifactValidationError(
+    'Unable to locate ZeroID repository root',
+  );
 }
 
 function absolute(repoRoot: string, relativePath: string): string {

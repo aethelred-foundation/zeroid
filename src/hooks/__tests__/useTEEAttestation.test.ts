@@ -29,6 +29,8 @@ const mockToast = jest.requireMock("sonner").toast;
 jest.mock("@/lib/api/client", () => ({
   apiClient: {
     get: jest.fn(),
+    getAttestation: jest.fn(),
+    listTEENodes: jest.fn(),
     post: jest.fn(),
     put: jest.fn(),
     del: jest.fn(),
@@ -39,6 +41,15 @@ const mockApiClient = jest.requireMock("@/lib/api/client").apiClient;
 jest.mock("@/config/constants", () => ({
   TEE_REGISTRY_ADDRESS: "0xTEERegistry",
   TEE_REGISTRY_ABI: [],
+}));
+
+jest.mock("@/lib/tee/attestation", () => ({
+  getPlatformLabel: jest.fn((platform: number) =>
+    platform === 1 ? "Intel SGX" : "Unknown",
+  ),
+  selectBestNode: jest.fn((nodes: any[]) =>
+    nodes.find((node) => node.isOnline && node.attestation.isValid) ?? null,
+  ),
 }));
 
 import { useReadContract } from "wagmi";
@@ -62,6 +73,35 @@ function createWrapper() {
     React.createElement(QueryClientProvider, { client: queryClient }, children);
 }
 
+const enclaveHash =
+  `0x${"a".repeat(64)}` as `0x${string}`;
+
+function makeNode(overrides: Record<string, any> = {}) {
+  const expiresAt = Math.floor(Date.now() / 1000) + 3_600;
+  return {
+    id: "n-1",
+    operator: "0x0000000000000000000000000000000000000001",
+    platform: 1,
+    name: "SGX UAE Primary",
+    region: "UAE-AbuDhabi",
+    isOnline: true,
+    uptimePercent: 99.98,
+    verificationsProcessed: 1200,
+    avgLatencyMs: 84,
+    attestation: {
+      enclaveHash,
+      platform: 1,
+      attestedAt: expiresAt - 600,
+      expiresAt,
+      reportDataHash: `0x${"b".repeat(64)}`,
+      nodeOperator: "0x0000000000000000000000000000000000000001",
+      isValid: true,
+      attestationType: "remote",
+    },
+    ...overrides,
+  };
+}
+
 beforeEach(() => {
   jest.clearAllMocks();
   (useReadContract as jest.Mock).mockReturnValue({
@@ -75,13 +115,19 @@ beforeEach(() => {
 // ===========================================================================
 
 describe("useAttestationStatus", () => {
-  it("does not call an unsupported attestation lookup API", () => {
-    const { result } = renderHook(() => useAttestationStatus("enc-1"), {
+  it("enriches valid enclave hashes from the TEE attestation service", async () => {
+    mockApiClient.getAttestation.mockResolvedValue({
+      ...makeNode().attestation,
+      isValid: true,
+    });
+
+    const { result } = renderHook(() => useAttestationStatus(enclaveHash), {
       wrapper: createWrapper(),
     });
 
-    expect(result.current.fetchStatus).toBe("idle");
-    expect(mockApiClient.get).not.toHaveBeenCalled();
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(mockApiClient.getAttestation).toHaveBeenCalledWith(enclaveHash);
+    expect(result.current.isAttested).toBe(true);
   });
 
   it("returns isAttested=true when on-chain status is verified", () => {
@@ -127,6 +173,7 @@ describe("useAttestationStatus", () => {
       wrapper: createWrapper(),
     });
     expect(result.current.fetchStatus).toBe("idle");
+    expect(mockApiClient.getAttestation).not.toHaveBeenCalled();
   });
 });
 
@@ -236,23 +283,42 @@ describe("useVerifyAttestation", () => {
 // ===========================================================================
 
 describe("useTEENodes", () => {
-  it("fails closed because node discovery is not exposed", async () => {
+  it("loads active attested TEE nodes through the API client", async () => {
+    const expiredNode = makeNode({
+      id: "expired",
+      attestation: {
+        ...makeNode().attestation,
+        expiresAt: Math.floor(Date.now() / 1000) - 60,
+      },
+    });
+    mockApiClient.listTEENodes.mockResolvedValue([
+      makeNode(),
+      makeNode({ id: "offline", isOnline: false }),
+      expiredNode,
+    ]);
+
     const { result } = renderHook(() => useTEENodes(), {
       wrapper: createWrapper(),
     });
 
-    await waitFor(() => expect(result.current.isError).toBe(true));
-    expect(String(result.current.error)).toContain("node discovery");
-    expect(mockApiClient.get).not.toHaveBeenCalled();
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toHaveLength(1);
+    expect(result.current.data?.[0].id).toBe("n-1");
+    expect(mockApiClient.listTEENodes).toHaveBeenCalledTimes(1);
   });
 
-  it("uses a distinct query key when activeOnly=false", async () => {
+  it("returns the full discovered fleet when activeOnly=false", async () => {
+    mockApiClient.listTEENodes.mockResolvedValue([
+      makeNode(),
+      makeNode({ id: "offline", isOnline: false }),
+    ]);
+
     const { result } = renderHook(() => useTEENodes(false), {
       wrapper: createWrapper(),
     });
 
-    await waitFor(() => expect(result.current.isError).toBe(true));
-    expect(mockApiClient.get).not.toHaveBeenCalled();
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toHaveLength(2);
   });
 });
 
@@ -261,14 +327,22 @@ describe("useTEENodes", () => {
 // ===========================================================================
 
 describe("useNodeHealth", () => {
-  it("fails closed because node health is not exposed", async () => {
+  it("derives node health from live TEE discovery", async () => {
+    mockApiClient.listTEENodes.mockResolvedValue([makeNode()]);
+
     const { result } = renderHook(() => useNodeHealth("n-1"), {
       wrapper: createWrapper(),
     });
 
-    await waitFor(() => expect(result.current.isError).toBe(true));
-    expect(String(result.current.error)).toContain("node health");
-    expect(mockApiClient.get).not.toHaveBeenCalled();
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toMatchObject({
+      id: "n-1",
+      type: "Intel SGX",
+      status: "active",
+      health: "healthy",
+      uptime: 99.98,
+      region: "UAE-AbuDhabi",
+    });
   });
 
   it("is disabled when nodeId is undefined", () => {
@@ -284,13 +358,26 @@ describe("useNodeHealth", () => {
 // ===========================================================================
 
 describe("useTEENetworkStatus", () => {
-  it("fails closed because network status is not exposed", async () => {
+  it("summarizes the discovered TEE network", async () => {
+    mockApiClient.listTEENodes.mockResolvedValue([
+      makeNode(),
+      makeNode({ id: "degraded", uptimePercent: 91 }),
+      makeNode({ id: "offline", isOnline: false }),
+    ]);
+
     const { result } = renderHook(() => useTEENetworkStatus(), {
       wrapper: createWrapper(),
     });
 
-    await waitFor(() => expect(result.current.isError).toBe(true));
-    expect(String(result.current.error)).toContain("network status");
-    expect(mockApiClient.get).not.toHaveBeenCalled();
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toMatchObject({
+      status: "degraded",
+      totalNodes: 3,
+      onlineNodes: 2,
+      healthyNodes: 1,
+      degradedNodes: 1,
+      offlineNodes: 1,
+      totalVerificationsProcessed: 3600,
+    });
   });
 });

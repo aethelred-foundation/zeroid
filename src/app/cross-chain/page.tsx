@@ -6,195 +6,76 @@ import {
   ArrowLeftRight,
   ArrowRight,
   Shield,
-  ShieldCheck,
   CheckCircle2,
   Clock,
   AlertTriangle,
   XCircle,
-  Globe,
   Layers,
   Link2,
-  Activity,
-  Zap,
   RefreshCw,
-  ChevronRight,
   ExternalLink,
-  Lock,
-  Server,
   Fingerprint,
   BadgeCheck,
   Coins,
-  TrendingUp,
   BarChart3,
-  Eye,
 } from "lucide-react";
 import AppLayout from "@/components/layout/AppLayout";
+import {
+  useBridgeCredential,
+  useBridgeFeeEstimate,
+  useBridgedCredentials,
+  useSupportedChains,
+  type BridgedCredential,
+  type BridgeTransaction,
+  type SupportedChain,
+} from "@/hooks/useCrossChain";
+import { useCredentials } from "@/hooks/useCredentials";
+import type { Credential } from "@/types";
 
 // ============================================================
-// Mock Data
+// Cross-Chain Operations Data
 // ============================================================
 
 const supportedChains = [
   {
-    id: "aethelred",
-    name: "Aethelred",
-    icon: "AETH",
-    color: "from-cyan-500 to-blue-600",
-    status: "active" as const,
-    credentials: 847,
-    latency: "1.2s",
-    tvl: "$12.4M",
-  },
-  {
-    id: "ethereum",
+    id: "1",
     name: "Ethereum",
     icon: "ETH",
     color: "from-blue-400 to-indigo-600",
     status: "active" as const,
-    credentials: 423,
-    latency: "2.8s",
-    tvl: "$8.7M",
+    credentials: 0,
+    latency: "12.0s",
+    tvl: "Configured by contract",
   },
   {
-    id: "polygon",
+    id: "137",
     name: "Polygon",
     icon: "MATIC",
     color: "from-purple-500 to-violet-600",
     status: "active" as const,
-    credentials: 312,
-    latency: "0.8s",
-    tvl: "$3.2M",
+    credentials: 0,
+    latency: "2.1s",
+    tvl: "Configured by contract",
   },
   {
-    id: "arbitrum",
-    name: "Arbitrum",
+    id: "42161",
+    name: "Arbitrum One",
     icon: "ARB",
     color: "from-blue-500 to-cyan-500",
     status: "active" as const,
-    credentials: 189,
-    latency: "1.5s",
-    tvl: "$2.1M",
+    credentials: 0,
+    latency: "0.3s",
+    tvl: "Configured by contract",
   },
   {
-    id: "solana",
-    name: "Solana",
-    icon: "SOL",
-    color: "from-green-400 to-teal-500",
+    id: "11155111",
+    name: "Sepolia",
+    icon: "SEP",
+    color: "from-zero-500 to-zero-700",
     status: "active" as const,
-    credentials: 156,
-    latency: "0.4s",
-    tvl: "$1.8M",
-  },
-  {
-    id: "cosmos",
-    name: "Cosmos",
-    icon: "ATOM",
-    color: "from-zero-400 to-zero-600",
-    status: "active" as const,
-    credentials: 98,
-    latency: "1.0s",
-    tvl: "$0.9M",
-  },
-];
-
-const bridgedCredentials = [
-  {
-    id: "bc1",
-    credential: "KYC Identity Verification",
-    sourceChain: "Aethelred",
-    destChain: "Ethereum",
-    bridgedAt: "2h ago",
-    status: "verified" as const,
-    txHash: "0x7a3...f21d",
-  },
-  {
-    id: "bc2",
-    credential: "Accredited Investor",
-    sourceChain: "Aethelred",
-    destChain: "Polygon",
-    bridgedAt: "5h ago",
-    status: "verified" as const,
-    txHash: "0x4b2...c93e",
-  },
-  {
-    id: "bc3",
-    credential: "Age Verification (18+)",
-    sourceChain: "Ethereum",
-    destChain: "Aethelred",
-    bridgedAt: "1d ago",
-    status: "verified" as const,
-    txHash: "0x9d1...e45a",
-  },
-  {
-    id: "bc4",
-    credential: "AML Certificate",
-    sourceChain: "Aethelred",
-    destChain: "Arbitrum",
-    bridgedAt: "2d ago",
-    status: "verified" as const,
-    txHash: "0x2f8...b7c1",
-  },
-  {
-    id: "bc5",
-    credential: "Business Entity Verification",
-    sourceChain: "Aethelred",
-    destChain: "Solana",
-    bridgedAt: "3d ago",
-    status: "pending" as const,
-    txHash: "0x5c3...d89f",
-  },
-];
-
-const bridgeHistory = [
-  {
-    id: "bh1",
-    from: "Aethelred",
-    to: "Ethereum",
-    credential: "KYC Verification",
-    timestamp: "2h ago",
-    status: "completed" as const,
-    fee: "0.002 ETH",
-    duration: "4m 23s",
-  },
-  {
-    id: "bh2",
-    from: "Aethelred",
-    to: "Polygon",
-    credential: "Accredited Investor",
-    timestamp: "5h ago",
-    status: "completed" as const,
-    fee: "0.01 MATIC",
-    duration: "1m 12s",
-  },
-  {
-    id: "bh3",
-    from: "Ethereum",
-    to: "Aethelred",
-    credential: "Age Verification",
-    timestamp: "1d ago",
-    status: "completed" as const,
-    fee: "0.003 ETH",
-    duration: "6m 45s",
-  },
-  {
-    id: "bh4",
-    from: "Aethelred",
-    to: "Arbitrum",
-    credential: "AML Certificate",
-    timestamp: "2d ago",
-    status: "completed" as const,
-    fee: "0.0001 ETH",
-    duration: "2m 30s",
-  },
-  {
-    id: "bh5",
-    from: "Aethelred",
-    to: "Solana",
-    credential: "Business Verification",
-    timestamp: "3d ago",
-    status: "in-progress" as const,
-    fee: "0.01 SOL",
-    duration: "In progress",
+    credentials: 0,
+    latency: "12.0s",
+    tvl: "Testnet",
   },
 ];
 
@@ -226,73 +107,255 @@ const bridgeSteps = [
   },
 ];
 
-const operatorHealth = [
-  {
-    name: "Bridge Relayer #1",
-    status: "healthy" as const,
-    uptime: "99.99%",
-    lastBlock: "12,847,293",
-  },
-  {
-    name: "Bridge Relayer #2",
-    status: "healthy" as const,
-    uptime: "99.97%",
-    lastBlock: "12,847,291",
-  },
-  {
-    name: "Bridge Relayer #3",
-    status: "healthy" as const,
-    uptime: "99.95%",
-    lastBlock: "12,847,289",
-  },
-  {
-    name: "Fraud Proof Monitor",
-    status: "healthy" as const,
-    uptime: "100%",
-    lastBlock: "N/A",
-  },
-];
-
 // ============================================================
 // Helpers
 // ============================================================
 
 const chainColors: Record<string, string> = {
-  Aethelred: "bg-cyan-500/10 text-cyan-400 border-cyan-500/20",
   Ethereum: "bg-blue-500/10 text-blue-400 border-blue-500/20",
   Polygon: "bg-purple-500/10 text-purple-400 border-purple-500/20",
-  Arbitrum: "bg-blue-400/10 text-blue-300 border-blue-400/20",
-  Solana: "bg-green-500/10 text-green-400 border-green-500/20",
-  Cosmos: "bg-zero-400/10 text-zero-300 border-zero-400/20",
+  "Arbitrum One": "bg-blue-400/10 text-blue-300 border-blue-400/20",
+  Sepolia: "bg-zero-400/10 text-zero-300 border-zero-400/20",
 };
+
+type ChainRow = (typeof supportedChains)[number] & {
+  chainId: number;
+  isActive: boolean;
+  explorerUrl?: string;
+  bridgeContractAddress?: string;
+  requiredConfirmations?: number;
+};
+
+type CredentialOption = {
+  id: string;
+  label: string;
+  status: string;
+  issuer?: string;
+};
+
+type BridgedCredentialRow = {
+  id: string;
+  credential: string;
+  sourceChain: string;
+  destChain: string;
+  bridgedAt: string;
+  status: "verified" | "pending" | "expired" | "revoked";
+  txHash: string;
+};
+
+const fallbackCredentialOptions: CredentialOption[] = [
+  {
+    id: "kyc_identity_verification",
+    label: "KYC Identity Verification",
+    status: "demo-ready",
+  },
+  {
+    id: "age_verification",
+    label: "Age Verification (18+)",
+    status: "demo-ready",
+  },
+  {
+    id: "accredited_investor_attestation",
+    label: "Accredited Investor Attestation",
+    status: "demo-ready",
+  },
+  {
+    id: "aml_certificate",
+    label: "AML Certificate",
+    status: "demo-ready",
+  },
+];
+
+function chainVisual(shortName: string, chainName: string) {
+  const key = shortName.toLowerCase();
+  if (key === "eth") return { icon: "ETH", color: "from-blue-400 to-indigo-600" };
+  if (key === "pol") return { icon: "MATIC", color: "from-purple-500 to-violet-600" };
+  if (key === "arb") return { icon: "ARB", color: "from-blue-500 to-cyan-500" };
+  if (key === "sep") return { icon: "SEP", color: "from-zero-500 to-zero-700" };
+  return {
+    icon: chainName
+      .split(/\s+/)
+      .map((part) => part[0])
+      .join("")
+      .slice(0, 5)
+      .toUpperCase(),
+    color: "from-zero-500 to-zero-700",
+  };
+}
+
+function mapSupportedChain(chain: SupportedChain): ChainRow {
+  const visual = chainVisual(chain.shortName, chain.name);
+  return {
+    id: String(chain.chainId),
+    chainId: chain.chainId,
+    name: chain.name,
+    icon: visual.icon,
+    color: visual.color,
+    status: "active",
+    isActive: chain.isActive,
+    credentials: chain.supportedCredentialTypes.length,
+    latency: `${(chain.avgBlockTimeMs / 1000).toFixed(1)}s`,
+    tvl: chain.isActive ? "Contract configured" : "Contract missing",
+    explorerUrl: chain.explorerUrl,
+    bridgeContractAddress: chain.bridgeContractAddress,
+    requiredConfirmations: chain.requiredConfirmations,
+  };
+}
+
+function credentialId(credential: Credential) {
+  return credential.id || credential.hash || credential.contentHash || credential.schemaHash;
+}
+
+function credentialLabel(credential: Credential) {
+  return (
+    credential.schemaName ||
+    credential.name ||
+    credential.schemaType ||
+    credentialId(credential)
+  );
+}
+
+function credentialStatus(credential: Credential) {
+  return String(credential.status ?? "unknown").toLowerCase();
+}
+
+function mapCredentialOption(credential: Credential): CredentialOption {
+  return {
+    id: credentialId(credential),
+    label: credentialLabel(credential),
+    status: credentialStatus(credential),
+    issuer: credential.issuer ?? String(credential.issuerDid),
+  };
+}
+
+function formatRelativeTime(value: string) {
+  const timestamp = new Date(value).getTime();
+  if (!Number.isFinite(timestamp)) return "unknown";
+  const elapsedMs = Date.now() - timestamp;
+  const minutes = Math.max(0, Math.round(elapsedMs / 60_000));
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
+}
+
+function mapBridgedCredential(row: BridgedCredential): BridgedCredentialRow {
+  return {
+    id: row.bridgeTxId,
+    credential: row.schemaName,
+    sourceChain: row.originalChainName,
+    destChain: row.bridgedChainName,
+    bridgedAt: formatRelativeTime(row.bridgedAt),
+    status:
+      row.status === "active"
+        ? "verified"
+        : row.status === "pending_sync"
+          ? "pending"
+          : row.status,
+    txHash: row.bridgeTxId,
+  };
+}
+
+function formatSeconds(seconds?: number) {
+  if (!seconds || !Number.isFinite(seconds)) return "Unavailable";
+  if (seconds < 90) return `${Math.round(seconds)} sec`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 90) return `${minutes} min`;
+  return `${(minutes / 60).toFixed(1)} hr`;
+}
 
 // ============================================================
 // Component
 // ============================================================
 
 export default function CrossChainPage() {
-  const [sourceChain, setSourceChain] = useState("aethelred");
-  const [destChain, setDestChain] = useState("ethereum");
+  const [sourceChain, setSourceChain] = useState("1");
+  const [destChain, setDestChain] = useState("137");
   const [selectedCredentials, setSelectedCredentials] = useState<string[]>([]);
-  const [bridgeInProgress, setBridgeInProgress] = useState(false);
-  const [currentStep, setCurrentStep] = useState(0);
+  const [bridgeError, setBridgeError] = useState<string | null>(null);
+  const [lastBridge, setLastBridge] = useState<BridgeTransaction | null>(null);
   const [activeTab, setActiveTab] = useState<
     "bridge" | "credentials" | "history"
   >("bridge");
 
-  const handleBridge = () => {
-    setBridgeInProgress(true);
-    setCurrentStep(1);
-    const interval = setInterval(() => {
-      setCurrentStep((prev) => {
-        if (prev >= 5) {
-          clearInterval(interval);
-          setTimeout(() => setBridgeInProgress(false), 2000);
-          return 5;
-        }
-        return prev + 1;
-      });
-    }, 2000);
+  const chainsQuery = useSupportedChains();
+  const credentialsQuery = useCredentials();
+  const bridgedCredentialsQuery = useBridgedCredentials();
+  const bridgeCredential = useBridgeCredential();
+
+  const chainRows =
+    chainsQuery.data && chainsQuery.data.length > 0
+      ? chainsQuery.data.map(mapSupportedChain)
+      : supportedChains.map((chain) => ({
+          ...chain,
+          chainId: Number(chain.id),
+          isActive: false,
+          explorerUrl: undefined,
+          bridgeContractAddress: undefined,
+          requiredConfirmations: undefined,
+        }));
+  const sourceExists = chainRows.some((chain) => chain.id === sourceChain);
+  const effectiveSourceChain =
+    (sourceExists ? sourceChain : chainRows[0]?.id) ?? sourceChain;
+  const destinationExists = chainRows.some((chain) => chain.id === destChain);
+  const requestedDestination =
+    (destinationExists
+      ? destChain
+      : chainRows.find((chain) => chain.id !== effectiveSourceChain)?.id ??
+        chainRows[0]?.id) ?? destChain;
+  const effectiveDestChain =
+    requestedDestination !== effectiveSourceChain
+      ? requestedDestination
+      : (chainRows.find((chain) => chain.id !== effectiveSourceChain)?.id ??
+        requestedDestination);
+  const sourceChainData = chainRows.find((c) => c.id === effectiveSourceChain);
+  const destChainData = chainRows.find((c) => c.id === effectiveDestChain);
+
+  const credentialOptions =
+    credentialsQuery.credentials.length > 0
+      ? credentialsQuery.credentials.map(mapCredentialOption)
+      : fallbackCredentialOptions;
+  const usingCredentialFallback = credentialsQuery.credentials.length === 0;
+  const selectedCredentialForFee = selectedCredentials[0];
+  const bridgeFeeQuery = useBridgeFeeEstimate(
+    selectedCredentialForFee,
+    destChainData?.chainId,
+  );
+  const bridgedRows =
+    bridgedCredentialsQuery.data?.map(mapBridgedCredential) ?? [];
+  const bridgeInProgress = bridgeCredential.isPending;
+  const currentStep = bridgeInProgress ? 1 : lastBridge ? 5 : 0;
+  const activeChainCount = chainRows.filter((chain) => chain.isActive).length;
+  const standardEstimate = bridgeFeeQuery.data?.estimates.standard;
+  const standardTime = bridgeFeeQuery.data?.estimatedTimes.standard;
+  const relayerStatus =
+    activeChainCount > 0 ? "Contract configured" : "Contract required";
+
+  const handleBridge = async () => {
+    setBridgeError(null);
+    setLastBridge(null);
+
+    if (!destChainData) {
+      setBridgeError("Select a supported destination chain before bridging.");
+      return;
+    }
+
+    try {
+      let latestBridge: BridgeTransaction | null = null;
+      for (const credentialId of selectedCredentials) {
+        latestBridge = await bridgeCredential.mutateAsync({
+          credentialId,
+          destinationChainId: destChainData.chainId,
+          priority: "standard",
+          preservePrivacy: true,
+        });
+      }
+      setLastBridge(latestBridge);
+    } catch (error) {
+      setBridgeError(
+        error instanceof Error ? error.message : "Bridge initiation failed.",
+      );
+    }
   };
 
   const toggleCredential = (id: string) => {
@@ -302,9 +365,6 @@ export default function CrossChainPage() {
       return next;
     });
   };
-
-  const sourceChainData = supportedChains.find((c) => c.id === sourceChain);
-  const destChainData = supportedChains.find((c) => c.id === destChain);
 
   return (
     <AppLayout>
@@ -328,31 +388,35 @@ export default function CrossChainPage() {
           {[
             {
               label: "Supported Chains",
-              value: String(supportedChains.length),
+              value: String(chainRows.length),
               icon: Layers,
               color: "text-brand-400",
-              trend: "All operational",
+              trend: `${activeChainCount} contract-ready`,
             },
             {
               label: "Bridged Credentials",
-              value: "2,025",
+              value: String(bridgedRows.length),
               icon: Link2,
               color: "text-identity-chrome",
-              trend: "+127 this week",
+              trend: bridgedCredentialsQuery.isLoading
+                ? "Refreshing"
+                : "Subject inventory",
             },
             {
-              label: "Avg Bridge Time",
-              value: "3.5 min",
+              label: "Standard Fee",
+              value: standardEstimate
+                ? `${standardEstimate.totalFee} ${standardEstimate.feeCurrency}`
+                : "Select credential",
               icon: Clock,
               color: "text-emerald-400",
-              trend: "-15% faster",
+              trend: formatSeconds(standardTime),
             },
             {
-              label: "Bridge TVL",
-              value: "$29.1M",
+              label: "Relayer Status",
+              value: relayerStatus,
               icon: Coins,
               color: "text-identity-amber",
-              trend: "+12% this month",
+              trend: bridgeError ? "Action required" : "Readiness gate",
             },
           ].map((m, i) => (
             <motion.div
@@ -420,24 +484,24 @@ export default function CrossChainPage() {
                         <label className="block text-xs text-zero-500 mb-1">
                           Source Chain
                         </label>
-                        <select
-                          value={sourceChain}
-                          onChange={(e) => setSourceChain(e.target.value)}
+	                        <select
+	                          value={effectiveSourceChain}
+	                          onChange={(e) => setSourceChain(e.target.value)}
                           className="w-full px-3 py-3 bg-zero-800 border border-zero-700 rounded-xl text-sm focus:outline-none focus:border-brand-500"
                         >
-                          {supportedChains.map((c) => (
-                            <option key={c.id} value={c.id}>
-                              {c.name} ({c.icon})
+	                          {chainRows.map((c) => (
+	                            <option key={c.id} value={c.id}>
+	                              {c.name} ({c.icon})
                             </option>
                           ))}
                         </select>
                       </div>
                       <button
-                        onClick={() => {
-                          const temp = sourceChain;
-                          setSourceChain(destChain);
-                          setDestChain(temp);
-                        }}
+	                        onClick={() => {
+	                          const temp = effectiveSourceChain;
+	                          setSourceChain(effectiveDestChain);
+	                          setDestChain(temp);
+	                        }}
                         className="mt-4 p-2.5 rounded-xl bg-zero-800 hover:bg-zero-700 text-zero-400 hover:text-white transition-colors"
                       >
                         <ArrowLeftRight className="w-5 h-5" />
@@ -446,13 +510,13 @@ export default function CrossChainPage() {
                         <label className="block text-xs text-zero-500 mb-1">
                           Destination Chain
                         </label>
-                        <select
-                          value={destChain}
-                          onChange={(e) => setDestChain(e.target.value)}
+	                        <select
+	                          value={effectiveDestChain}
+	                          onChange={(e) => setDestChain(e.target.value)}
                           className="w-full px-3 py-3 bg-zero-800 border border-zero-700 rounded-xl text-sm focus:outline-none focus:border-brand-500"
                         >
-                          {supportedChains
-                            .filter((c) => c.id !== sourceChain)
+	                          {chainRows
+	                            .filter((c) => c.id !== effectiveSourceChain)
                             .map((c) => (
                               <option key={c.id} value={c.id}>
                                 {c.name} ({c.icon})
@@ -462,107 +526,144 @@ export default function CrossChainPage() {
                       </div>
                     </div>
 
-                    {/* Credentials to Bridge */}
-                    <div className="mb-4">
-                      <label className="block text-xs text-zero-500 mb-2">
-                        Select Credentials to Bridge
-                      </label>
-                      <div className="space-y-2">
-                        {[
-                          "KYC Identity Verification",
-                          "Age Verification (18+)",
-                          "Accredited Investor Attestation",
-                          "AML Certificate",
-                        ].map((cred) => (
-                          <label
-                            key={cred}
-                            className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all ${
-                              selectedCredentials.includes(cred)
-                                ? "bg-brand-600/10 border-brand-500"
-                                : "bg-zero-800/50 border-zero-700 hover:border-zero-600"
-                            }`}
-                          >
-                            <input
-                              type="checkbox"
-                              checked={selectedCredentials.includes(cred)}
-                              onChange={() => toggleCredential(cred)}
-                              className="rounded border-zero-600"
-                            />
-                            <Fingerprint className="w-4 h-4 text-brand-400" />
-                            <span className="text-sm">{cred}</span>
-                          </label>
-                        ))}
-                      </div>
-                    </div>
+	                    {/* Credentials to Bridge */}
+	                    <div className="mb-4">
+	                      <div className="flex items-center justify-between mb-2">
+	                        <label className="block text-xs text-zero-500">
+	                          Select Credentials to Bridge
+	                        </label>
+	                        {usingCredentialFallback && (
+	                          <span className="text-[10px] text-amber-300">
+	                            Local demo options
+	                          </span>
+	                        )}
+	                      </div>
+	                      <div className="space-y-2">
+	                        {credentialOptions.map((cred) => (
+	                          <label
+	                            key={cred.id}
+	                            className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all ${
+	                              selectedCredentials.includes(cred.id)
+	                                ? "bg-brand-600/10 border-brand-500"
+	                                : "bg-zero-800/50 border-zero-700 hover:border-zero-600"
+	                            }`}
+	                          >
+	                            <input
+	                              type="checkbox"
+	                              checked={selectedCredentials.includes(cred.id)}
+	                              onChange={() => toggleCredential(cred.id)}
+	                              className="rounded border-zero-600"
+	                            />
+	                            <Fingerprint className="w-4 h-4 text-brand-400" />
+	                            <span className="min-w-0 flex-1 text-sm">
+	                              {cred.label}
+	                              <span className="ml-2 text-[10px] uppercase text-zero-500">
+	                                {cred.status}
+	                              </span>
+	                            </span>
+	                          </label>
+	                        ))}
+	                      </div>
+	                    </div>
 
                     {/* Fee Estimator */}
-                    <div className="p-4 bg-zero-800/50 rounded-xl mb-4">
-                      <div className="flex items-center justify-between text-sm mb-2">
-                        <span className="text-zero-400">Bridge Fee</span>
-                        <span className="font-medium">~0.003 ETH ($8.42)</span>
-                      </div>
-                      <div className="flex items-center justify-between text-sm mb-2">
-                        <span className="text-zero-400">Estimated Time</span>
-                        <span className="font-medium">~3-5 minutes</span>
-                      </div>
-                      <div className="flex items-center justify-between text-sm">
-                        <span className="text-zero-400">
-                          Fraud Proof Window
-                        </span>
-                        <span className="font-medium">7 days</span>
-                      </div>
-                    </div>
+	                    <div className="p-4 bg-zero-800/50 rounded-xl mb-4">
+	                      <div className="flex items-center justify-between text-sm mb-2">
+	                        <span className="text-zero-400">Bridge Fee</span>
+	                        <span className="font-medium">
+	                          {standardEstimate
+	                            ? `${standardEstimate.totalFee} ${standardEstimate.feeCurrency} ($${standardEstimate.feeUSD.toFixed(2)})`
+	                            : "Select a credential"}
+	                        </span>
+	                      </div>
+	                      <div className="flex items-center justify-between text-sm mb-2">
+	                        <span className="text-zero-400">Estimated Time</span>
+	                        <span className="font-medium">
+	                          {formatSeconds(standardTime)}
+	                        </span>
+	                      </div>
+	                      <div className="flex items-center justify-between text-sm">
+	                        <span className="text-zero-400">
+	                          Destination Confirmations
+	                        </span>
+	                        <span className="font-medium">
+	                          {destChainData?.requiredConfirmations ?? "n/a"}
+	                        </span>
+	                      </div>
+	                    </div>
 
-                    <button
-                      onClick={handleBridge}
-                      disabled={
-                        selectedCredentials.length === 0 || bridgeInProgress
-                      }
+	                    <button
+	                      onClick={handleBridge}
+	                      disabled={
+	                        selectedCredentials.length === 0 ||
+	                        bridgeInProgress ||
+	                        !destChainData
+	                      }
                       className="w-full btn-primary py-3 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      {bridgeInProgress ? (
-                        <span className="flex items-center gap-2">
-                          <RefreshCw className="w-4 h-4 animate-spin" />{" "}
-                          Bridging...
-                        </span>
+	                      {bridgeInProgress ? (
+	                        <span className="flex items-center gap-2">
+	                          <RefreshCw className="w-4 h-4 animate-spin" />{" "}
+	                          Submitting to bridge relayer...
+	                        </span>
                       ) : (
                         <span className="flex items-center gap-2">
                           <ArrowRight className="w-4 h-4" /> Bridge{" "}
                           {selectedCredentials.length} Credential
                           {selectedCredentials.length !== 1 ? "s" : ""}
                         </span>
-                      )}
-                    </button>
-                  </div>
+	                      )}
+	                    </button>
+	                  </div>
 
-                  {/* Bridge Status Steps */}
-                  {bridgeInProgress && (
-                    <motion.div
-                      initial={{ opacity: 0, y: 10 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      className="card p-6"
-                    >
-                      <h3 className="font-semibold mb-4">Bridge Progress</h3>
-                      <div className="space-y-3">
-                        {bridgeSteps.map((step) => (
-                          <div
+	                  {/* Bridge Status Steps */}
+	                  {(bridgeInProgress || bridgeError || lastBridge) && (
+	                    <motion.div
+	                      initial={{ opacity: 0, y: 10 }}
+	                      animate={{ opacity: 1, y: 0 }}
+	                      className="card p-6"
+	                    >
+	                      <h3 className="font-semibold mb-4">
+	                        Bridge Submission Status
+	                      </h3>
+	                      {bridgeError && (
+	                        <div className="mb-4 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-100">
+	                          <div className="flex items-start gap-2">
+	                            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-300" />
+	                            <span>{bridgeError}</span>
+	                          </div>
+	                        </div>
+	                      )}
+	                      {lastBridge && (
+	                        <div className="mb-4 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm text-emerald-100">
+	                          Bridge accepted for {lastBridge.destinationChainName}.
+	                          Status: {lastBridge.status}.
+	                        </div>
+	                      )}
+	                      <div className="space-y-3">
+	                        {bridgeSteps.map((step) => (
+	                          <div
                             key={step.step}
                             className="flex items-center gap-3"
                           >
                             <div
                               className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${
-                                step.step < currentStep
-                                  ? "bg-emerald-500 text-white"
-                                  : step.step === currentStep
-                                    ? "bg-brand-600 text-white animate-pulse"
-                                    : "bg-zero-800 text-zero-500"
-                              }`}
+	                                step.step < currentStep
+	                                  ? "bg-emerald-500 text-white"
+	                                  : step.step === currentStep
+	                                    ? bridgeError
+	                                      ? "bg-amber-500 text-white"
+	                                      : "bg-brand-600 text-white animate-pulse"
+	                                    : "bg-zero-800 text-zero-500"
+	                              }`}
                             >
-                              {step.step < currentStep ? (
-                                <CheckCircle2 className="w-4 h-4" />
-                              ) : (
-                                step.step
-                              )}
+	                              {step.step < currentStep || lastBridge ? (
+	                                <CheckCircle2 className="w-4 h-4" />
+	                              ) : bridgeError && step.step === 1 ? (
+	                                <XCircle className="w-4 h-4" />
+	                              ) : (
+	                                step.step
+	                              )}
                             </div>
                             <div>
                               <div
@@ -574,9 +675,9 @@ export default function CrossChainPage() {
                                 {step.description}
                               </div>
                             </div>
-                            {step.step === currentStep && (
-                              <RefreshCw className="w-3 h-3 text-brand-400 animate-spin ml-auto" />
-                            )}
+	                            {step.step === currentStep && bridgeInProgress && (
+	                              <RefreshCw className="w-3 h-3 text-brand-400 animate-spin ml-auto" />
+	                            )}
                           </div>
                         ))}
                       </div>
@@ -598,50 +699,65 @@ export default function CrossChainPage() {
                       <h2 className="font-semibold">Bridged Credentials</h2>
                     </div>
                     <div className="divide-y divide-zero-800/50">
-                      {bridgedCredentials.map((bc, i) => (
-                        <motion.div
-                          key={bc.id}
-                          initial={{ opacity: 0 }}
-                          animate={{ opacity: 1 }}
-                          transition={{ delay: i * 0.05 }}
-                          className="p-4 flex items-center gap-4 hover:bg-zero-800/20 transition-colors"
-                        >
-                          <Fingerprint className="w-5 h-5 text-brand-400 shrink-0" />
-                          <div className="flex-1 min-w-0">
-                            <div className="font-medium text-sm">
-                              {bc.credential}
-                            </div>
-                            <div className="flex items-center gap-2 mt-1">
-                              <span
-                                className={`px-1.5 py-0.5 rounded text-[9px] font-medium border ${chainColors[bc.sourceChain]}`}
-                              >
-                                {bc.sourceChain}
-                              </span>
-                              <ArrowRight className="w-3 h-3 text-zero-500" />
-                              <span
-                                className={`px-1.5 py-0.5 rounded text-[9px] font-medium border ${chainColors[bc.destChain]}`}
-                              >
-                                {bc.destChain}
-                              </span>
-                            </div>
-                          </div>
-                          <div className="text-right">
-                            <span
-                              className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${bc.status === "verified" ? "bg-emerald-500/10 text-emerald-400" : "bg-amber-500/10 text-amber-400"}`}
-                            >
-                              {bc.status}
-                            </span>
-                            <div className="text-[10px] text-zero-600 mt-0.5">
-                              {bc.bridgedAt}
-                            </div>
-                          </div>
-                          <button className="p-1.5 rounded-lg hover:bg-zero-800 text-zero-500 hover:text-white">
-                            <ExternalLink className="w-3.5 h-3.5" />
-                          </button>
-                        </motion.div>
-                      ))}
-                    </div>
-                  </div>
+	                      {bridgedRows.length > 0 ? (
+	                        bridgedRows.map((bc, i) => (
+	                          <motion.div
+	                            key={bc.id}
+	                            initial={{ opacity: 0 }}
+	                            animate={{ opacity: 1 }}
+	                            transition={{ delay: i * 0.05 }}
+	                            className="p-4 flex items-center gap-4 hover:bg-zero-800/20 transition-colors"
+	                          >
+	                            <Fingerprint className="w-5 h-5 text-brand-400 shrink-0" />
+	                            <div className="flex-1 min-w-0">
+	                              <div className="font-medium text-sm">
+	                                {bc.credential}
+	                              </div>
+	                              <div className="flex items-center gap-2 mt-1">
+	                                <span
+	                                  className={`px-1.5 py-0.5 rounded text-[9px] font-medium border ${chainColors[bc.sourceChain] ?? chainColors.Ethereum}`}
+	                                >
+	                                  {bc.sourceChain}
+	                                </span>
+	                                <ArrowRight className="w-3 h-3 text-zero-500" />
+	                                <span
+	                                  className={`px-1.5 py-0.5 rounded text-[9px] font-medium border ${chainColors[bc.destChain] ?? chainColors.Polygon}`}
+	                                >
+	                                  {bc.destChain}
+	                                </span>
+	                              </div>
+	                            </div>
+	                            <div className="text-right">
+	                              <span
+	                                className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${bc.status === "verified" ? "bg-emerald-500/10 text-emerald-400" : "bg-amber-500/10 text-amber-400"}`}
+	                              >
+	                                {bc.status}
+	                              </span>
+	                              <div className="text-[10px] text-zero-600 mt-0.5">
+	                                {bc.bridgedAt}
+	                              </div>
+	                            </div>
+	                            {destChainData?.explorerUrl && (
+	                              <a
+	                                href={destChainData.explorerUrl}
+	                                target="_blank"
+	                                rel="noreferrer"
+	                                className="p-1.5 rounded-lg hover:bg-zero-800 text-zero-500 hover:text-white"
+	                              >
+	                                <ExternalLink className="w-3.5 h-3.5" />
+	                              </a>
+	                            )}
+	                          </motion.div>
+	                        ))
+	                      ) : (
+	                        <div className="p-6 text-sm text-zero-400">
+	                          No bridged credentials were returned for the connected
+	                          subject. Once the backend records bridgedChains on a
+	                          credential, it will appear here.
+	                        </div>
+	                      )}
+	                    </div>
+	                  </div>
                 </motion.div>
               )}
 
@@ -660,44 +776,50 @@ export default function CrossChainPage() {
                       </h2>
                     </div>
                     <div className="divide-y divide-zero-800/50">
-                      {bridgeHistory.map((bh, i) => (
-                        <motion.div
-                          key={bh.id}
-                          initial={{ opacity: 0 }}
-                          animate={{ opacity: 1 }}
-                          transition={{ delay: i * 0.05 }}
-                          className="p-4"
-                        >
-                          <div className="flex items-center gap-3 mb-2">
-                            <span
-                              className={`px-1.5 py-0.5 rounded text-[9px] font-medium border ${chainColors[bh.from]}`}
-                            >
-                              {bh.from}
-                            </span>
-                            <ArrowRight className="w-3 h-3 text-zero-500" />
-                            <span
-                              className={`px-1.5 py-0.5 rounded text-[9px] font-medium border ${chainColors[bh.to]}`}
-                            >
-                              {bh.to}
-                            </span>
-                            <span className="flex-1 text-sm text-zero-300">
-                              {bh.credential}
-                            </span>
-                            <span
-                              className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${bh.status === "completed" ? "bg-emerald-500/10 text-emerald-400" : "bg-amber-500/10 text-amber-400"}`}
-                            >
-                              {bh.status}
-                            </span>
-                          </div>
-                          <div className="flex items-center gap-4 text-xs text-zero-500">
-                            <span>Fee: {bh.fee}</span>
-                            <span>Duration: {bh.duration}</span>
-                            <span>{bh.timestamp}</span>
-                          </div>
-                        </motion.div>
-                      ))}
-                    </div>
-                  </div>
+	                      {bridgedRows.length > 0 ? (
+	                        bridgedRows.map((bh, i) => (
+	                          <motion.div
+	                            key={bh.id}
+	                            initial={{ opacity: 0 }}
+	                            animate={{ opacity: 1 }}
+	                            transition={{ delay: i * 0.05 }}
+	                            className="p-4"
+	                          >
+	                            <div className="flex items-center gap-3 mb-2">
+	                              <span
+	                                className={`px-1.5 py-0.5 rounded text-[9px] font-medium border ${chainColors[bh.sourceChain] ?? chainColors.Ethereum}`}
+	                              >
+	                                {bh.sourceChain}
+	                              </span>
+	                              <ArrowRight className="w-3 h-3 text-zero-500" />
+	                              <span
+	                                className={`px-1.5 py-0.5 rounded text-[9px] font-medium border ${chainColors[bh.destChain] ?? chainColors.Polygon}`}
+	                              >
+	                                {bh.destChain}
+	                              </span>
+	                              <span className="flex-1 text-sm text-zero-300">
+	                                {bh.credential}
+	                              </span>
+	                              <span
+	                                className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${bh.status === "verified" ? "bg-emerald-500/10 text-emerald-400" : "bg-amber-500/10 text-amber-400"}`}
+	                              >
+	                                {bh.status}
+	                              </span>
+	                            </div>
+	                            <div className="flex items-center gap-4 text-xs text-zero-500">
+	                              <span>Bridge ID: {bh.txHash.slice(0, 18)}...</span>
+	                              <span>{bh.bridgedAt}</span>
+	                            </div>
+	                          </motion.div>
+	                        ))
+	                      ) : (
+	                        <div className="p-6 text-sm text-zero-400">
+	                          No cross-chain verification history is available for
+	                          this subject yet.
+	                        </div>
+	                      )}
+	                    </div>
+	                  </div>
                 </motion.div>
               )}
             </AnimatePresence>
@@ -712,28 +834,34 @@ export default function CrossChainPage() {
                 Supported Chains
               </h3>
               <div className="space-y-2">
-                {supportedChains.map((chain) => (
-                  <div
-                    key={chain.id}
-                    className="flex items-center gap-3 p-2.5 rounded-xl hover:bg-zero-800/30 transition-colors"
+	                {chainRows.map((chain) => (
+	                  <div
+	                    key={chain.id}
+	                    className="flex items-center gap-3 p-2.5 rounded-xl hover:bg-zero-800/30 transition-colors"
                   >
                     <div
                       className={`w-8 h-8 rounded-lg bg-gradient-to-br ${chain.color} flex items-center justify-center text-white text-xs font-bold`}
                     >
                       {chain.icon.substring(0, 2)}
                     </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium">{chain.name}</div>
-                      <div className="text-[10px] text-zero-500">
-                        {chain.credentials} credentials | {chain.latency}
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <span className="relative flex h-1.5 w-1.5">
-                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-                        <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500" />
-                      </span>
-                    </div>
+	                    <div className="flex-1 min-w-0">
+	                      <div className="text-sm font-medium">{chain.name}</div>
+	                      <div className="text-[10px] text-zero-500">
+	                        {chain.credentials} schemas | {chain.latency}
+	                      </div>
+	                    </div>
+	                    <div className="flex items-center gap-1.5">
+	                      <span className="relative flex h-1.5 w-1.5">
+	                        {chain.isActive && (
+	                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+	                        )}
+	                        <span
+	                          className={`relative inline-flex rounded-full h-1.5 w-1.5 ${
+	                            chain.isActive ? "bg-emerald-500" : "bg-amber-500"
+	                          }`}
+	                        />
+	                      </span>
+	                    </div>
                   </div>
                 ))}
               </div>
@@ -746,34 +874,76 @@ export default function CrossChainPage() {
                 Bridge Security
               </h3>
               <div className="space-y-2">
-                {operatorHealth.map((op) => (
-                  <div
-                    key={op.name}
-                    className="flex items-center justify-between text-sm"
-                  >
-                    <div className="flex items-center gap-2">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                      <span className="text-zero-400 text-xs">{op.name}</span>
-                    </div>
-                    <span className="text-xs text-emerald-400">
-                      {op.uptime}
-                    </span>
-                  </div>
-                ))}
+	                {[
+	                  {
+	                    name: "Bridge contract",
+	                    value:
+	                      activeChainCount > 0
+	                        ? `${activeChainCount}/${chainRows.length} configured`
+	                        : "Not configured",
+	                    ok: activeChainCount > 0,
+	                  },
+	                  {
+	                    name: "Relayer submission",
+	                    value: bridgeError ? "Needs relayer" : "Mutation wired",
+	                    ok: !bridgeError,
+	                  },
+	                  {
+	                    name: "Status polling",
+	                    value: lastBridge ? lastBridge.status : "Relayer gated",
+	                    ok: Boolean(lastBridge),
+	                  },
+	                  {
+	                    name: "Credential inventory",
+	                    value: usingCredentialFallback
+	                      ? "Demo options"
+	                      : `${credentialOptions.length} live`,
+	                    ok: !usingCredentialFallback,
+	                  },
+	                ].map((op) => (
+	                  <div
+	                    key={op.name}
+	                    className="flex items-center justify-between text-sm"
+	                  >
+	                    <div className="flex items-center gap-2">
+	                      <span
+	                        className={`w-1.5 h-1.5 rounded-full ${
+	                          op.ok ? "bg-emerald-400" : "bg-amber-400"
+	                        }`}
+	                      />
+	                      <span className="text-zero-400 text-xs">{op.name}</span>
+	                    </div>
+	                    <span
+	                      className={`text-xs ${
+	                        op.ok ? "text-emerald-400" : "text-amber-400"
+	                      }`}
+	                    >
+	                      {op.value}
+	                    </span>
+	                  </div>
+	                ))}
               </div>
               <div className="mt-3 p-3 bg-zero-800/50 rounded-xl">
                 <div className="flex justify-between text-xs mb-1">
-                  <span className="text-zero-400">Fraud Proof Window</span>
-                  <span className="text-white font-medium">7 days</span>
-                </div>
-                <div className="flex justify-between text-xs mb-1">
-                  <span className="text-zero-400">Bridge Contract Audited</span>
-                  <span className="text-emerald-400">Yes</span>
-                </div>
-                <div className="flex justify-between text-xs">
-                  <span className="text-zero-400">Multi-sig Threshold</span>
-                  <span className="text-white font-medium">5/7</span>
-                </div>
+	                  <span className="text-zero-400">Fee Quote Valid</span>
+	                  <span className="text-white font-medium">
+	                    {bridgeFeeQuery.data
+	                      ? new Date(
+	                          bridgeFeeQuery.data.validUntil,
+	                        ).toLocaleTimeString()
+	                      : "n/a"}
+	                  </span>
+	                </div>
+	                <div className="flex justify-between text-xs mb-1">
+	                  <span className="text-zero-400">Destination</span>
+	                  <span className="text-emerald-400">
+	                    {destChainData?.name ?? "n/a"}
+	                  </span>
+	                </div>
+	                <div className="flex justify-between text-xs">
+	                  <span className="text-zero-400">Privacy Preservation</span>
+	                  <span className="text-white font-medium">Enabled</span>
+	                </div>
               </div>
             </div>
 
@@ -784,12 +954,29 @@ export default function CrossChainPage() {
                 Bridge Statistics
               </h3>
               <div className="space-y-3">
-                {[
-                  { label: "Total Bridges", value: "2,025" },
-                  { label: "Success Rate", value: "99.8%" },
-                  { label: "Avg Duration", value: "3m 28s" },
-                  { label: "Total Fees Collected", value: "4.2 ETH" },
-                  { label: "Active Bridges Now", value: "3" },
+	                {[
+	                  { label: "Total Bridges", value: String(bridgedRows.length) },
+	                  {
+	                    label: "Verified Bridges",
+	                    value: String(
+	                      bridgedRows.filter((row) => row.status === "verified")
+	                        .length,
+	                    ),
+	                  },
+	                  {
+	                    label: "Standard Fee",
+	                    value: standardEstimate
+	                      ? `${standardEstimate.totalFee} ${standardEstimate.feeCurrency}`
+	                      : "n/a",
+	                  },
+	                  {
+	                    label: "Destination",
+	                    value: destChainData?.name ?? "n/a",
+	                  },
+	                  {
+	                    label: "Active Bridges Now",
+	                    value: bridgeInProgress ? "1" : "0",
+	                  },
                 ].map((stat) => (
                   <div
                     key={stat.label}

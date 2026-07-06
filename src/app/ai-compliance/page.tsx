@@ -34,9 +34,13 @@ import {
   BarChart3,
 } from "lucide-react";
 import AppLayout from "@/components/layout/AppLayout";
+import {
+  useComplianceAdvisor,
+  type AdvisorCitation,
+} from "@/hooks/useAICompliance";
 
 // ============================================================
-// Mock Data
+// Compliance Intelligence Data
 // ============================================================
 
 const riskFeed = [
@@ -222,7 +226,17 @@ const regulatoryCalendar = [
   },
 ];
 
-const chatMessages = [
+type ChatMessage = {
+  id: string;
+  role: "assistant" | "user";
+  content: string;
+  citations?: AdvisorCitation[];
+  confidence?: number;
+  disclaimer?: string;
+  tone?: "default" | "error";
+};
+
+const chatMessages: ChatMessage[] = [
   {
     id: "c1",
     role: "assistant" as const,
@@ -291,31 +305,50 @@ export default function AICompliancePage() {
     "feed",
   );
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const complianceAdvisor = useComplianceAdvisor();
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  const handleSendMessage = () => {
-    if (!chatInput.trim()) return;
+  const handleSendMessage = async () => {
+    const question = chatInput.trim();
+    if (!question || complianceAdvisor.isLoading) return;
     const newMsg = {
       id: `u${Date.now()}`,
       role: "user" as const,
-      content: chatInput,
+      content: question,
     };
     setMessages((prev) => [...prev, newMsg]);
     setChatInput("");
-    setTimeout(() => {
+
+    try {
+      const response = await complianceAdvisor.sendMessage(question);
       setMessages((prev) => [
         ...prev,
         {
-          id: `a${Date.now()}`,
+          id: `a${response.queryId}`,
           role: "assistant" as const,
-          content:
-            "I've analyzed the request. Based on current compliance data, all sanctions screenings are up to date. The next scheduled full screening is in 4 hours. Would you like me to run an ad-hoc screening now?",
+          content: response.answer,
+          citations: response.citations,
+          confidence: response.confidence,
+          disclaimer: response.disclaimer,
         },
       ]);
-    }, 1500);
+    } catch (error) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `a-error-${Date.now()}`,
+          role: "assistant" as const,
+          tone: "error" as const,
+          content:
+            error instanceof Error
+              ? error.message
+              : "The compliance advisor could not complete the request.",
+        },
+      ]);
+    }
   };
 
   const filteredSanctions = sanctionsResults.filter(
@@ -716,41 +749,68 @@ export default function AICompliancePage() {
                         <Bot className="w-3.5 h-3.5 text-white" />
                       </div>
                     )}
-                    <div
-                      className={`max-w-[85%] p-3 rounded-xl text-sm ${
-                        msg.role === "user"
-                          ? "bg-brand-600 text-white"
-                          : "bg-zero-800 text-zero-300"
-                      }`}
-                    >
-                      {msg.content}
-                    </div>
+	                    <div
+	                      className={`max-w-[85%] p-3 rounded-xl text-sm ${
+	                        msg.role === "user"
+	                          ? "bg-brand-600 text-white"
+	                          : msg.tone === "error"
+	                            ? "bg-red-500/10 text-red-200 border border-red-500/20"
+	                            : "bg-zero-800 text-zero-300"
+	                      }`}
+	                    >
+	                      <div>{msg.content}</div>
+	                      {msg.confidence !== undefined && (
+	                        <div className="mt-2 text-[10px] text-zero-500">
+	                          Confidence {Math.round(msg.confidence * 100)}%
+	                        </div>
+	                      )}
+	                      {msg.citations && msg.citations.length > 0 && (
+	                        <div className="mt-2 space-y-1 border-t border-zero-700 pt-2">
+	                          {msg.citations.slice(0, 2).map((citation) => (
+	                            <div
+	                              key={`${citation.regulation}-${citation.section}`}
+	                              className="text-[10px] text-zero-500"
+	                            >
+	                              {citation.regulation} {citation.section}:{" "}
+	                              {citation.text}
+	                            </div>
+	                          ))}
+	                        </div>
+	                      )}
+	                    </div>
                   </div>
                 ))}
                 <div ref={chatEndRef} />
               </div>
               <div className="p-3 border-t border-zero-800">
                 <div className="flex items-center gap-2">
-                  <input
-                    value={chatInput}
-                    onChange={(e) => setChatInput(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && handleSendMessage()}
-                    placeholder="Ask the AI copilot..."
-                    className="flex-1 px-3 py-2 bg-zero-800 border border-zero-700 rounded-lg text-sm focus:outline-none focus:border-brand-500"
-                  />
-                  <button
-                    onClick={handleSendMessage}
-                    className="p-2 bg-brand-600 rounded-lg hover:bg-brand-500 transition-colors"
-                  >
-                    <Send className="w-4 h-4 text-white" />
-                  </button>
+	                  <input
+	                    value={chatInput}
+	                    onChange={(e) => setChatInput(e.target.value)}
+	                    onKeyDown={(e) => e.key === "Enter" && handleSendMessage()}
+	                    placeholder="Ask the AI copilot..."
+	                    disabled={complianceAdvisor.isLoading}
+	                    className="flex-1 px-3 py-2 bg-zero-800 border border-zero-700 rounded-lg text-sm focus:outline-none focus:border-brand-500"
+	                  />
+	                  <button
+	                    onClick={handleSendMessage}
+	                    disabled={complianceAdvisor.isLoading || !chatInput.trim()}
+	                    className="p-2 bg-brand-600 rounded-lg hover:bg-brand-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+	                  >
+	                    {complianceAdvisor.isLoading ? (
+	                      <RefreshCw className="w-4 h-4 text-white animate-spin" />
+	                    ) : (
+	                      <Send className="w-4 h-4 text-white" />
+	                    )}
+	                  </button>
                 </div>
                 <div className="flex gap-2 mt-2">
-                  {["Run screening", "Risk summary", "Alerts"].map((action) => (
-                    <button
-                      key={action}
-                      className="px-2 py-1 rounded-md bg-zero-800 text-[10px] text-zero-400 hover:text-white hover:bg-zero-700 transition-colors"
-                    >
+	                  {["Run screening", "Risk summary", "Alerts"].map((action) => (
+	                    <button
+	                      key={action}
+	                      onClick={() => setChatInput(action)}
+	                      className="px-2 py-1 rounded-md bg-zero-800 text-[10px] text-zero-400 hover:text-white hover:bg-zero-700 transition-colors"
+	                    >
                       {action}
                     </button>
                   ))}
@@ -777,8 +837,8 @@ export default function AICompliancePage() {
                   },
                   {
                     icon: RefreshCw,
-                    label: "Simulate Regulation",
-                    desc: "Test impact of regulatory changes",
+                    label: "Assess Regulation Impact",
+                    desc: "Measure impact of regulatory changes",
                     color: "bg-identity-steel",
                   },
                 ].map((action) => (

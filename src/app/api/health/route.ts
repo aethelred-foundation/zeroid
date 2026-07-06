@@ -1,7 +1,7 @@
-import { NextResponse } from "next/server";
+import { apiJson } from "../_lib/backend";
 
 export async function GET() {
-  return NextResponse.json({
+  return apiJson({
     status: "healthy",
     service: "zeroid-frontend",
     version: "1.0.0",

@@ -1,9 +1,16 @@
+import { NextResponse } from "next/server";
+
 const DEFAULT_DEVELOPMENT_BACKEND_URL = "http://localhost:4000";
 const DEFAULT_BACKEND_FETCH_TIMEOUT_MS = 10_000;
 const MIN_BACKEND_FETCH_TIMEOUT_MS = 100;
 const MAX_BACKEND_FETCH_TIMEOUT_MS = 60_000;
 const MAX_JSON_BODY_BYTES = 1_048_576;
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
+const MAX_BEARER_TOKEN_LENGTH = 4096;
+const BEARER_TOKEN_PATTERN = /^[A-Za-z0-9._~+/=-]+$/;
+const MAX_BACKEND_ERROR_MESSAGE_LENGTH = 512;
+const PRIVATE_NO_STORE_CACHE_CONTROL =
+  "private, no-store, no-cache, must-revalidate, proxy-revalidate";
 
 export class BackendProxyConfigError extends Error {
   constructor(message: string) {
@@ -20,6 +27,34 @@ export class JsonBodyReadError extends Error {
     super(message);
     this.name = "JsonBodyReadError";
   }
+}
+
+export function apiJson<T>(body: T, init: ResponseInit = {}): NextResponse<T> {
+  return privateJson(body, init);
+}
+
+export function privateJson<T>(
+  body: T,
+  init: ResponseInit = {},
+): NextResponse<T> {
+  const headers = new Headers(init.headers);
+  headers.set("Cache-Control", PRIVATE_NO_STORE_CACHE_CONTROL);
+  headers.set("Pragma", "no-cache");
+  headers.set("Expires", "0");
+  headers.set("X-Content-Type-Options", "nosniff");
+  headers.set("Vary", mergeVaryHeader(headers.get("Vary"), "Authorization"));
+
+  return NextResponse.json(body, {
+    ...init,
+    headers,
+  });
+}
+
+export function noStoreJson<T>(
+  body: T,
+  init: ResponseInit = {},
+): NextResponse<T> {
+  return privateJson(body, init);
 }
 
 export function getBackendApiBaseUrl(): string {
@@ -46,7 +81,15 @@ export function requireAuthorization(request: Request): string | null {
   if (!authorization?.startsWith("Bearer ")) {
     return null;
   }
-  return authorization;
+  const token = authorization.slice("Bearer ".length).trim();
+  if (
+    token.length === 0 ||
+    token.length > MAX_BEARER_TOKEN_LENGTH ||
+    !BEARER_TOKEN_PATTERN.test(token)
+  ) {
+    return null;
+  }
+  return `Bearer ${token}`;
 }
 
 export function buildBackendHeaders(
@@ -121,7 +164,7 @@ export async function readBackendError(
 ): Promise<string> {
   try {
     const payload = await response.json();
-    return String(payload.message ?? payload.error ?? fallback);
+    return sanitizeBackendErrorMessage(payload.message ?? payload.error, fallback);
   } catch {
     return fallback;
   }
@@ -163,7 +206,7 @@ function normalizeBaseUrl(value: string): string {
   return url.toString().replace(/\/+$/, "");
 }
 
-function isProductionRuntime(): boolean {
+export function isProductionRuntime(): boolean {
   return (
     process.env.NODE_ENV === "production" ||
     process.env.ZEROID_ENV === "production"
@@ -184,6 +227,27 @@ function getBackendFetchTimeoutMs(): number {
   }
 
   return parsed;
+}
+
+function mergeVaryHeader(existing: string | null, value: string): string {
+  const fields = new Set(
+    (existing ?? "")
+      .split(",")
+      .map((field) => field.trim())
+      .filter(Boolean),
+  );
+  fields.add(value);
+  return Array.from(fields).join(", ");
+}
+
+function sanitizeBackendErrorMessage(value: unknown, fallback: string): string {
+  if (typeof value !== "string") return fallback;
+  const normalized = value.replace(/[\u0000-\u001f\u007f]/g, " ").trim();
+  if (!normalized) return fallback;
+  if (normalized.length <= MAX_BACKEND_ERROR_MESSAGE_LENGTH) {
+    return normalized;
+  }
+  return `${normalized.slice(0, MAX_BACKEND_ERROR_MESSAGE_LENGTH - 1)}…`;
 }
 
 async function readBodyTextWithLimit(request: Request): Promise<string> {

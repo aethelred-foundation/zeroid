@@ -210,7 +210,7 @@ export function DataTable<T>({
       });
       setCurrentPage(1);
     },
-    [sortable],
+    [],
   );
 
   // Sort data

@@ -14,8 +14,13 @@ import { TEE_REGISTRY_ADDRESS, TEE_REGISTRY_ABI } from "@/config/constants";
 import type {
   AttestationStatus,
   AttestationReport,
+  Bytes32,
+  TEENode,
+  TEENodeHealth,
   VerifyAttestationParams,
 } from "@/types";
+import { getPlatformLabel, selectBestNode } from "@/lib/tee/attestation";
+import { isExpired, isValidBytes32 } from "@/lib/utils";
 
 type BackendAttestationResult = {
   verified?: boolean;
@@ -38,8 +43,99 @@ type BackendAttestationChallenge = {
   expiresAt?: string | number;
 };
 
-function unsupportedTEEQuery(message: string): never {
-  throw new Error(message);
+type DerivedTEEHealth = "healthy" | "degraded" | "offline";
+type DerivedTEEStatus = "active" | "degraded" | "offline";
+
+export interface TEENetworkStatus {
+  status: DerivedTEEHealth;
+  totalNodes: number;
+  onlineNodes: number;
+  healthyNodes: number;
+  degradedNodes: number;
+  offlineNodes: number;
+  averageUptime: number;
+  averageLatencyMs: number;
+  totalVerificationsProcessed: number;
+  regions: string[];
+  bestNode: TEENode | null;
+  updatedAt: string;
+}
+
+function statusFromNode(node: TEENode): DerivedTEEStatus {
+  if (!node.isOnline) return "offline";
+  if (!node.attestation.isValid || isExpired(node.attestation.expiresAt)) {
+    return "degraded";
+  }
+  if (node.uptimePercent < 95 || node.avgLatencyMs > 5_000) {
+    return "degraded";
+  }
+  return "active";
+}
+
+function healthFromStatus(status: DerivedTEEStatus): DerivedTEEHealth {
+  if (status === "active") return "healthy";
+  if (status === "offline") return "offline";
+  return "degraded";
+}
+
+function nodeToHealth(node: TEENode): TEENodeHealth {
+  const status = statusFromNode(node);
+  const health = healthFromStatus(status);
+
+  return {
+    id: node.id,
+    type: getPlatformLabel(node.platform),
+    status,
+    health,
+    uptime: node.uptimePercent,
+    region: node.region,
+    name: node.name,
+    lastSeen: new Date().toISOString(),
+    latencyMs: node.avgLatencyMs,
+    verificationsProcessed: node.verificationsProcessed,
+    enclaveHash: node.attestation.enclaveHash,
+    attestationValid: node.attestation.isValid,
+    attestationExpiresAt: node.attestation.expiresAt,
+  };
+}
+
+function summarizeNetwork(nodes: TEENode[]): TEENetworkStatus {
+  const health = nodes.map((node) => healthFromStatus(statusFromNode(node)));
+  const totalNodes = nodes.length;
+  const healthyNodes = health.filter((state) => state === "healthy").length;
+  const degradedNodes = health.filter((state) => state === "degraded").length;
+  const offlineNodes = health.filter((state) => state === "offline").length;
+  const onlineNodes = nodes.filter((node) => node.isOnline).length;
+  const average = (values: number[]) =>
+    values.length
+      ? Math.round(
+          (values.reduce((sum, value) => sum + value, 0) / values.length) *
+            100,
+        ) / 100
+      : 0;
+
+  return {
+    status:
+      healthyNodes === totalNodes && totalNodes > 0
+        ? "healthy"
+        : onlineNodes > 0
+          ? "degraded"
+          : "offline",
+    totalNodes,
+    onlineNodes,
+    healthyNodes,
+    degradedNodes,
+    offlineNodes,
+    averageUptime: average(nodes.map((node) => node.uptimePercent)),
+    averageLatencyMs: average(nodes.map((node) => node.avgLatencyMs)),
+    totalVerificationsProcessed: nodes.reduce(
+      (sum, node) => sum + node.verificationsProcessed,
+      0,
+    ),
+    regions: Array.from(new Set(nodes.map((node) => node.region))).sort(),
+    bestNode: selectBestNode(nodes),
+    updatedAt: new Date().toISOString(),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -57,19 +153,24 @@ export function useAttestationStatus(enclaveId: string | undefined) {
 
   const apiQuery = useQuery({
     queryKey: ["attestation", enclaveId],
-    queryFn: async () => null as AttestationReport | null,
-    enabled: false,
+    queryFn: async () =>
+      apiClient.getAttestation(enclaveId as Bytes32) as Promise<AttestationReport>,
+    enabled: !!enclaveId && isValidBytes32(enclaveId),
     staleTime: 30_000,
   });
 
   const status = onChainStatus as AttestationStatus | undefined;
+  const apiAttestation = apiQuery.data;
+  const apiExpired = apiAttestation
+    ? isExpired(apiAttestation.expiresAt)
+    : false;
 
   return {
     ...apiQuery,
     onChainStatus: status,
     isOnChainLoading,
-    isAttested: status === "verified",
-    isExpired: status === "expired",
+    isAttested: status === "verified" || Boolean(apiAttestation?.isValid),
+    isExpired: status === "expired" || apiExpired,
   };
 }
 
@@ -141,10 +242,16 @@ export function useVerifyAttestation() {
 export function useTEENodes(activeOnly = true) {
   return useQuery({
     queryKey: ["teeNodes", activeOnly],
-    queryFn: async () =>
-      unsupportedTEEQuery(
-        "TEE node discovery is not exposed by the backend API.",
-      ),
+    queryFn: async () => {
+      const nodes = await apiClient.listTEENodes();
+      if (!activeOnly) return nodes;
+      return nodes.filter(
+        (node) =>
+          node.isOnline &&
+          node.attestation.isValid &&
+          !isExpired(node.attestation.expiresAt),
+      );
+    },
     staleTime: 60_000,
     refetchInterval: 120_000,
   });
@@ -157,8 +264,14 @@ export function useTEENodes(activeOnly = true) {
 export function useNodeHealth(nodeId: string | undefined) {
   return useQuery({
     queryKey: ["teeNodeHealth", nodeId],
-    queryFn: async () =>
-      unsupportedTEEQuery("TEE node health is not exposed by the backend API."),
+    queryFn: async () => {
+      const nodes = await apiClient.listTEENodes();
+      const node = nodes.find((candidate) => candidate.id === nodeId);
+      if (!node) {
+        throw new Error(`TEE node ${nodeId} was not found in discovery.`);
+      }
+      return nodeToHealth(node);
+    },
     enabled: !!nodeId,
     staleTime: 15_000,
     refetchInterval: 30_000,
@@ -172,10 +285,7 @@ export function useNodeHealth(nodeId: string | undefined) {
 export function useTEENetworkStatus() {
   return useQuery({
     queryKey: ["teeNetworkStatus"],
-    queryFn: async () =>
-      unsupportedTEEQuery(
-        "TEE network status is not exposed by the backend API.",
-      ),
+    queryFn: async () => summarizeNetwork(await apiClient.listTEENodes()),
     staleTime: 30_000,
     refetchInterval: 60_000,
   });

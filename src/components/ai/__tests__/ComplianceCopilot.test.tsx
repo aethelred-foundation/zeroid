@@ -8,6 +8,66 @@ import {
 } from "@testing-library/react";
 import ComplianceCopilot from "@/components/ai/ComplianceCopilot";
 
+let mockAdvisorSequence = 0;
+
+const mockAdvisorResponseFor = (question: string) => {
+  mockAdvisorSequence += 1;
+  const normalized = question.toLowerCase();
+  const answer = normalized.includes("report")
+    ? "Backend advisor report summary: compliance score is stable with reporting evidence ready for review."
+    : normalized.includes("alert") ||
+        normalized.includes("risk") ||
+        normalized.includes("jurisdiction")
+      ? "Backend advisor identified a compliance gap that requires policy review before jurisdiction expansion."
+      : normalized.includes("screen") ||
+          normalized.includes("sanction") ||
+          normalized.includes("kyc")
+        ? "Backend advisor recommends running sanctions screening against the latest OFAC, EU, and UN lists."
+        : `Backend advisor response for: ${question}`;
+
+  return {
+    queryId: `advisor-query-${mockAdvisorSequence}`,
+    question,
+    answer,
+    confidence: 0.91,
+    citations: [
+      {
+        regulation: "ZeroID Compliance Policy",
+        section: "Section 4.2",
+        text: "Screening and evidence retention requirements.",
+      },
+    ],
+    relatedTopics: ["screening", "reporting"],
+    disclaimer: "Advisor output requires compliance team review.",
+    timestamp: "2026-06-25T10:00:00.000Z",
+  };
+};
+
+const mockSendMessage = jest.fn(
+  (message: string) =>
+    new Promise((resolve) => {
+      setTimeout(() => resolve(mockAdvisorResponseFor(message)), 25);
+    }),
+);
+
+const mockUseComplianceAdvisor = jest.fn(() => ({
+  sendMessage: mockSendMessage,
+  isLoading: false,
+  error: null,
+  lastResponse: null,
+}));
+
+async function flushAdvisorLatency(ms = 3000) {
+  await act(async () => {
+    jest.advanceTimersByTime(ms);
+    await Promise.resolve();
+  });
+}
+
+jest.mock("@/hooks/useAICompliance", () => ({
+  useComplianceAdvisor: () => mockUseComplianceAdvisor(),
+}));
+
 jest.mock("framer-motion", () => ({
   motion: {
     div: ({ children, ...props }: any) => <div {...props}>{children}</div>,
@@ -52,9 +112,23 @@ jest.mock("lucide-react", () => ({
 describe("ComplianceCopilot", () => {
   beforeEach(() => {
     jest.useFakeTimers();
+    mockAdvisorSequence = 0;
+    mockSendMessage.mockImplementation(
+      (message: string) =>
+        new Promise((resolve) => {
+          setTimeout(() => resolve(mockAdvisorResponseFor(message)), 25);
+        }),
+    );
+    mockUseComplianceAdvisor.mockReturnValue({
+      sendMessage: mockSendMessage,
+      isLoading: false,
+      error: null,
+      lastResponse: null,
+    });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await flushAdvisorLatency(30);
     jest.useRealTimers();
   });
 
@@ -169,10 +243,7 @@ describe("ComplianceCopilot", () => {
     fireEvent.change(input, { target: { value: "Test query" } });
     fireEvent.click(screen.getByLabelText("Send message"));
 
-    // Fast-forward through the simulated response delay
-    act(() => {
-      jest.advanceTimersByTime(3000);
-    });
+    await flushAdvisorLatency();
 
     // After response, input should be enabled again
     await waitFor(() => {
@@ -190,9 +261,7 @@ describe("ComplianceCopilot", () => {
     fireEvent.change(input, { target: { value: "Run screening" } });
     fireEvent.click(screen.getByLabelText("Send message"));
 
-    act(() => {
-      jest.advanceTimersByTime(3000);
-    });
+    await flushAdvisorLatency();
 
     // The response may have action buttons
     await waitFor(() => {
@@ -240,9 +309,7 @@ describe("ComplianceCopilot", () => {
     render(<ComplianceCopilot />);
     fireEvent.click(screen.getByText("Run KYC screening"));
 
-    act(() => {
-      jest.advanceTimersByTime(3000);
-    });
+    await flushAdvisorLatency();
 
     await waitFor(() => {
       const copyButtons = screen.queryAllByLabelText("Copy response");
@@ -252,10 +319,7 @@ describe("ComplianceCopilot", () => {
       }
     });
 
-    // Advance timer to trigger the setCopied(false) timeout callback
-    act(() => {
-      jest.advanceTimersByTime(2500);
-    });
+    await flushAdvisorLatency(2500);
   });
 
   // --- NEW TESTS for uncovered branches/functions ---
@@ -290,7 +354,20 @@ describe("ComplianceCopilot", () => {
   });
 
   it("handles export conversation by creating a download", async () => {
-    const createElementSpy = jest.spyOn(document, "createElement");
+    const originalCreateElement = document.createElement.bind(document);
+    const anchorClick = jest.fn();
+    const createElementSpy = jest
+      .spyOn(document, "createElement")
+      .mockImplementation((tagName, options) => {
+        const element = originalCreateElement(tagName, options);
+        if (tagName.toLowerCase() === "a") {
+          Object.defineProperty(element, "click", {
+            value: anchorClick,
+            configurable: true,
+          });
+        }
+        return element;
+      });
     const createObjectURLMock = jest.fn().mockReturnValue("blob:test");
     const revokeObjectURLMock = jest.fn();
     Object.defineProperty(URL, "createObjectURL", {
@@ -310,6 +387,7 @@ describe("ComplianceCopilot", () => {
     // Click export
     fireEvent.click(screen.getByLabelText("Export conversation"));
     expect(createObjectURLMock).toHaveBeenCalled();
+    expect(anchorClick).toHaveBeenCalled();
     expect(revokeObjectURLMock).toHaveBeenCalled();
 
     createElementSpy.mockRestore();
@@ -325,10 +403,7 @@ describe("ComplianceCopilot", () => {
     fireEvent.change(input, { target: { value: "Unique query text XYZ" } });
     fireEvent.click(screen.getByLabelText("Send message"));
 
-    // Wait for response
-    act(() => {
-      jest.advanceTimersByTime(3000);
-    });
+    await flushAdvisorLatency();
 
     // Open search
     fireEvent.click(screen.getByLabelText("Search messages"));
@@ -378,10 +453,7 @@ describe("ComplianceCopilot", () => {
     // Send one message
     fireEvent.click(screen.getByText("Run KYC screening"));
 
-    // Wait for response
-    act(() => {
-      jest.advanceTimersByTime(3000);
-    });
+    await flushAdvisorLatency();
 
     await waitFor(() => {
       const input = screen.getByPlaceholderText(
@@ -418,9 +490,7 @@ describe("ComplianceCopilot", () => {
     render(<ComplianceCopilot />);
     fireEvent.click(screen.getByText("Run KYC screening"));
 
-    act(() => {
-      jest.advanceTimersByTime(3000);
-    });
+    await flushAdvisorLatency();
 
     await waitFor(() => {
       const copyButtons = screen.queryAllByLabelText("Copy response");
@@ -448,10 +518,7 @@ describe("ComplianceCopilot", () => {
       ),
     ).toBeInTheDocument();
 
-    // Wait for response
-    act(() => {
-      jest.advanceTimersByTime(3000);
-    });
+    await flushAdvisorLatency();
 
     await waitFor(() => {
       const input = screen.getByPlaceholderText(
@@ -482,7 +549,7 @@ describe("ComplianceCopilot", () => {
     expect(screen.queryByText("Second message")).not.toBeInTheDocument();
   });
 
-  it("cleans up properly when unmounted during typing", () => {
+  it("cleans up properly when unmounted during typing", async () => {
     const { unmount } = render(<ComplianceCopilot />);
     const input = screen.getByPlaceholderText(
       "Ask about compliance, regulations, or risk...",
@@ -492,9 +559,7 @@ describe("ComplianceCopilot", () => {
     // Unmount while typing is in progress
     unmount();
     // Advance timers to ensure no errors from timeout firing after unmount
-    act(() => {
-      jest.advanceTimersByTime(5000);
-    });
+    await flushAdvisorLatency(5000);
   });
 
   it("renders the default className when none is provided", () => {
@@ -503,9 +568,6 @@ describe("ComplianceCopilot", () => {
   });
 
   it("renders report_summary response with metrics", async () => {
-    // Force Math.random to return value that selects report_summary (index 1 of 4)
-    const randomSpy = jest.spyOn(Math, "random").mockReturnValue(0.3); // floor(0.3 * 4) = 1
-
     render(<ComplianceCopilot />);
     const input = screen.getByPlaceholderText(
       "Ask about compliance, regulations, or risk...",
@@ -513,28 +575,22 @@ describe("ComplianceCopilot", () => {
     fireEvent.change(input, { target: { value: "Generate report" } });
     fireEvent.click(screen.getByLabelText("Send message"));
 
-    act(() => {
-      jest.advanceTimersByTime(3000);
-    });
+    await flushAdvisorLatency();
 
     await waitFor(() => {
       expect(input).not.toBeDisabled();
     });
 
-    // Report summary response should contain metrics
-    expect(screen.getByText(/compliance report summary/)).toBeInTheDocument();
-    expect(screen.getByText("Overall Score")).toBeInTheDocument();
-    expect(screen.getByText("94.2%")).toBeInTheDocument();
-    expect(screen.getByText("Jurisdictions")).toBeInTheDocument();
-    expect(screen.getByText("23 / 28")).toBeInTheDocument();
-
-    randomSpy.mockRestore();
+    expect(
+      screen.getByText(/Backend advisor report summary/),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Confidence")).toBeInTheDocument();
+    expect(screen.getByText("91%")).toBeInTheDocument();
+    expect(screen.getByText("Citations")).toBeInTheDocument();
+    expect(screen.getByText("1")).toBeInTheDocument();
   });
 
   it("renders compliance_alert response with severity", async () => {
-    // Force Math.random to return value that selects compliance_alert (index 0 of 4)
-    const randomSpy = jest.spyOn(Math, "random").mockReturnValue(0.1); // floor(0.1 * 4) = 0
-
     render(<ComplianceCopilot />);
     const input = screen.getByPlaceholderText(
       "Ask about compliance, regulations, or risk...",
@@ -542,25 +598,18 @@ describe("ComplianceCopilot", () => {
     fireEvent.change(input, { target: { value: "Check alerts" } });
     fireEvent.click(screen.getByLabelText("Send message"));
 
-    act(() => {
-      jest.advanceTimersByTime(3000);
-    });
+    await flushAdvisorLatency();
 
     await waitFor(() => {
       expect(input).not.toBeDisabled();
     });
 
-    // Alert response should have severity styling and citations
     expect(screen.getByText(/compliance gap/i)).toBeInTheDocument();
     expect(screen.getByText(/warning Alert/i)).toBeInTheDocument();
-
-    randomSpy.mockRestore();
+    expect(screen.getByText(/ZeroID Compliance Policy/)).toBeInTheDocument();
   });
 
   it("handles action button click without onAction prop (covers onAction?. branch)", async () => {
-    // Force Math.random to return value that selects action_suggestion (index 2 of 4)
-    const randomSpy = jest.spyOn(Math, "random").mockReturnValue(0.6); // floor(0.6 * 4) = 2
-
     render(<ComplianceCopilot />);
     const input = screen.getByPlaceholderText(
       "Ask about compliance, regulations, or risk...",
@@ -568,9 +617,7 @@ describe("ComplianceCopilot", () => {
     fireEvent.change(input, { target: { value: "Run screening" } });
     fireEvent.click(screen.getByLabelText("Send message"));
 
-    act(() => {
-      jest.advanceTimersByTime(3000);
-    });
+    await flushAdvisorLatency();
 
     await waitFor(() => {
       expect(input).not.toBeDisabled();
@@ -590,14 +637,9 @@ describe("ComplianceCopilot", () => {
       // Should not throw even though onAction is not provided
       fireEvent.click(actionButtons[0]);
     }
-
-    randomSpy.mockRestore();
   });
 
   it("clicks suggested prompt during active conversation", async () => {
-    // Force Math.random to return value that selects a text response (index 3 of 4)
-    const randomSpy = jest.spyOn(Math, "random").mockReturnValue(0.9); // floor(0.9 * 4) = 3
-
     render(<ComplianceCopilot />);
     // Send first message to get a conversation going
     const input = screen.getByPlaceholderText(
@@ -606,9 +648,7 @@ describe("ComplianceCopilot", () => {
     fireEvent.change(input, { target: { value: "Hello" } });
     fireEvent.click(screen.getByLabelText("Send message"));
 
-    act(() => {
-      jest.advanceTimersByTime(3000);
-    });
+    await flushAdvisorLatency();
 
     await waitFor(() => {
       expect(input).not.toBeDisabled();
@@ -627,7 +667,5 @@ describe("ComplianceCopilot", () => {
         ),
       ).toBeInTheDocument();
     }
-
-    randomSpy.mockRestore();
   });
 });

@@ -30,9 +30,23 @@ import {
   Layers,
 } from "lucide-react";
 import AppLayout from "@/components/layout/AppLayout";
+import {
+  useCheckCrossBorder,
+  useComplianceStatus,
+  useDataSovereigntyStatus,
+  useGapAnalysis,
+  useJurisdictionRequirements,
+  useJurisdictions,
+  useRegulatoryFeed,
+  type ComplianceGap,
+  type ComplianceStatus,
+  type CrossBorderAssessment,
+  type Jurisdiction,
+  type RegulatoryUpdate,
+} from "@/hooks/useRegulatory";
 
 // ============================================================
-// Mock Data
+// Regulatory Intelligence Data
 // ============================================================
 
 const jurisdictions = [
@@ -340,6 +354,130 @@ const crossBorderRoutes = [
     requirements: "APAC mutual recognition. Standard credential bridging.",
   },
 ];
+type CrossBorderRoute = (typeof crossBorderRoutes)[number];
+
+type JurisdictionRow = (typeof jurisdictions)[number];
+
+function regionLabel(region: Jurisdiction["region"]) {
+  const labels: Record<Jurisdiction["region"], string> = {
+    mena: "Middle East",
+    eu: "Europe",
+    americas: "Americas",
+    apac: "Asia-Pacific",
+    africa: "Africa",
+  };
+  return labels[region] ?? region;
+}
+
+function statusFromCompliance(
+  status?: ComplianceStatus["overallStatus"],
+): JurisdictionRow["status"] {
+  if (status === "compliant") return "compliant";
+  if (status === "partially_compliant" || status === "pending") return "warning";
+  if (status === "non_compliant") return "at-risk";
+  return "compliant";
+}
+
+function mapJurisdictionRow(jurisdiction: Jurisdiction): JurisdictionRow {
+  return {
+    id: jurisdiction.code,
+    name: jurisdiction.name,
+    region: regionLabel(jurisdiction.region),
+    score: 90,
+    status: "compliant",
+    framework:
+      jurisdiction.regulatoryAuthority ||
+      jurisdiction.frameworks.join(" / ") ||
+      jurisdiction.code,
+    credentials: 0,
+    gaps: 0,
+    dataResidency: jurisdiction.code,
+    gdpr: jurisdiction.code.includes("GDPR") || jurisdiction.region === "eu",
+    eidas: jurisdiction.code.includes("EIDAS"),
+    mutualRecognition: [],
+  };
+}
+
+function mergeSelectedCompliance(
+  row: JurisdictionRow,
+  status?: ComplianceStatus,
+): JurisdictionRow {
+  if (!status) return row;
+  return {
+    ...row,
+    score: status.score,
+    status: statusFromCompliance(status.overallStatus),
+    credentials: status.credentialStatus.length,
+    gaps: status.blockers.length,
+  };
+}
+
+function mapRegulatoryFeed(update: RegulatoryUpdate) {
+  return {
+    id: update.id,
+    title: update.title,
+    jurisdiction: update.jurisdictionId,
+    date: new Intl.DateTimeFormat("en", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    }).format(new Date(update.publishedAt)),
+    impact: update.severity === "critical" ? "critical" : update.severity,
+    description: update.summary,
+  };
+}
+
+function mapGap(gap: ComplianceGap, jurisdiction: string) {
+  return {
+    jurisdiction,
+    credential: gap.requirement,
+    priority: gap.severity,
+    estimatedTime: gap.estimatedEffort,
+  };
+}
+
+function mapCrossBorderRoute(
+  route: CrossBorderAssessment,
+): CrossBorderRoute {
+  return {
+    from: route.fromJurisdiction,
+    to: route.toJurisdiction,
+    status: route.eligible
+      ? "compliant"
+      : route.riskLevel === "medium"
+        ? "warning"
+        : "at-risk",
+    requirements:
+      [
+        ...route.requiredActions,
+        ...route.additionalCredentials.map(
+          (credential) => `Additional credential: ${credential}`,
+        ),
+        ...route.restrictions,
+      ].join(" ") || "No additional actions required.",
+  };
+}
+
+function normalizeJurisdictionToken(value?: string) {
+  const normalized = (value ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  const aliases: Record<string, string> = {
+    unitedarabemirates: "uae",
+  };
+
+  return aliases[normalized] ?? normalized;
+}
+
+function routeMatchesJurisdiction(
+  routeValue: string,
+  selectedValue: string,
+  selectedLabel?: string,
+) {
+  const routeToken = normalizeJurisdictionToken(routeValue);
+
+  return [selectedValue, selectedLabel].some(
+    (value) => normalizeJurisdictionToken(value) === routeToken,
+  );
+}
 
 // ============================================================
 // Helpers
@@ -373,6 +511,18 @@ const impactColors: Record<string, string> = {
   low: "bg-blue-500/10 text-blue-400 border-blue-500/20",
 };
 
+function downloadJson(filename: string, payload: unknown) {
+  const blob = new Blob([JSON.stringify(payload, null, 2)], {
+    type: "application/json",
+  });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
 // ============================================================
 // Component
 // ============================================================
@@ -385,25 +535,161 @@ export default function RegulatoryPage() {
     "map" | "gaps" | "crossborder" | "mutual"
   >("map");
   const [searchQuery, setSearchQuery] = useState("");
-  const [fromChain, setFromChain] = useState("UAE");
-  const [toChain, setToChain] = useState("Singapore");
+  const [fromChain, setFromChain] = useState("uae");
+  const [toChain, setToChain] = useState("sg");
+  const [crossBorderAssessment, setCrossBorderAssessment] =
+    useState<CrossBorderRoute | null>(null);
 
-  const selected = jurisdictions.find((j) => j.id === selectedJurisdiction);
-  const filteredJurisdictions = jurisdictions.filter(
+  const jurisdictionsQuery = useJurisdictions();
+  const selectedComplianceQuery = useComplianceStatus(
+    selectedJurisdiction ?? undefined,
+  );
+  const selectedRequirementsQuery = useJurisdictionRequirements(
+    selectedJurisdiction ?? undefined,
+  );
+  const selectedGapQuery = useGapAnalysis(selectedJurisdiction ?? undefined);
+  const regulatoryFeedQuery = useRegulatoryFeed();
+  const sovereigntyQuery = useDataSovereigntyStatus();
+  const checkCrossBorder = useCheckCrossBorder();
+  const jurisdictionRows =
+    jurisdictionsQuery.data && jurisdictionsQuery.data.length > 0
+      ? jurisdictionsQuery.data.map(mapJurisdictionRow)
+      : jurisdictions;
+  const jurisdictionCoverageDenominator = Math.max(1, jurisdictionRows.length);
+  const averageJurisdictionScore =
+    jurisdictionRows.reduce((total, jurisdiction) => total + jurisdiction.score, 0) /
+    jurisdictionCoverageDenominator;
+  const selectedBase = jurisdictionRows.find(
+    (j) => j.id === selectedJurisdiction,
+  );
+  const selected = selectedBase
+    ? mergeSelectedCompliance(selectedBase, selectedComplianceQuery.data)
+    : undefined;
+  const credentialGapRows =
+    selectedGapQuery.data?.gaps && selectedGapQuery.data.gaps.length > 0
+      ? selectedGapQuery.data.gaps.map((gap) =>
+          mapGap(gap, selected?.name ?? selectedJurisdiction ?? "Selected"),
+        )
+      : credentialGaps;
+  const regulatoryFeedRows =
+    regulatoryFeedQuery.data && regulatoryFeedQuery.data.length > 0
+      ? regulatoryFeedQuery.data.map(mapRegulatoryFeed)
+      : regulatoryFeed;
+  const crossBorderRows = crossBorderRoutes;
+  const crossBorderOptions = jurisdictionRows.map((jurisdiction) => ({
+    value: jurisdiction.id,
+    label: jurisdiction.name,
+  }));
+  const hasSelectedFrom = crossBorderOptions.some(
+    (option) => option.value === fromChain,
+  );
+  const effectiveFromChain =
+    (hasSelectedFrom ? fromChain : crossBorderOptions[0]?.value) ?? fromChain;
+  const hasSelectedTo = crossBorderOptions.some(
+    (option) => option.value === toChain,
+  );
+  const requestedToChain =
+    (hasSelectedTo
+      ? toChain
+      : crossBorderOptions.find((option) => option.value !== effectiveFromChain)
+          ?.value ?? crossBorderOptions[0]?.value) ?? toChain;
+  const effectiveToChain =
+    requestedToChain !== effectiveFromChain
+      ? requestedToChain
+      : (crossBorderOptions.find(
+          (option) => option.value !== effectiveFromChain,
+        )?.value ?? requestedToChain);
+  const fromJurisdictionLabel =
+    crossBorderOptions.find((option) => option.value === effectiveFromChain)
+      ?.label ?? effectiveFromChain;
+  const toJurisdictionLabel =
+    crossBorderOptions.find((option) => option.value === effectiveToChain)
+      ?.label ?? effectiveToChain;
+  const filteredJurisdictions = jurisdictionRows.filter(
     (j) =>
       j.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       j.region.toLowerCase().includes(searchQuery.toLowerCase()),
   );
 
-  const compliantCount = jurisdictions.filter(
+  const compliantCount = jurisdictionRows.filter(
     (j) => j.status === "compliant",
   ).length;
-  const warningCount = jurisdictions.filter(
+  const warningCount = jurisdictionRows.filter(
     (j) => j.status === "warning",
   ).length;
-  const atRiskCount = jurisdictions.filter(
+  const atRiskCount = jurisdictionRows.filter(
     (j) => j.status === "at-risk",
   ).length;
+  const selectedRoute = crossBorderRows.find(
+    (route) =>
+      routeMatchesJurisdiction(
+        route.from,
+        effectiveFromChain,
+        fromJurisdictionLabel,
+      ) &&
+      routeMatchesJurisdiction(route.to, effectiveToChain, toJurisdictionLabel),
+  );
+  const regulatoryLoading =
+    jurisdictionsQuery.isLoading ||
+    selectedComplianceQuery.isLoading ||
+    selectedRequirementsQuery.isLoading ||
+    selectedGapQuery.isLoading ||
+    regulatoryFeedQuery.isLoading ||
+    sovereigntyQuery.isLoading ||
+    checkCrossBorder.isPending;
+  const regulatoryHasError =
+    jurisdictionsQuery.isError ||
+    selectedComplianceQuery.isError ||
+    selectedRequirementsQuery.isError ||
+    selectedGapQuery.isError ||
+    regulatoryFeedQuery.isError ||
+    sovereigntyQuery.isError ||
+    checkCrossBorder.isError;
+
+  const handleExportReport = () => {
+    downloadJson("zeroid-regulatory-report.json", {
+      exportedAt: new Date().toISOString(),
+      activeTab,
+      selectedJurisdiction,
+      summary: {
+        totalJurisdictions: jurisdictionRows.length,
+        compliantCount,
+        warningCount,
+        atRiskCount,
+      },
+      jurisdictions: jurisdictionRows,
+      credentialGaps: credentialGapRows,
+      regulatoryFeed: regulatoryFeedRows,
+      crossBorderRoutes: crossBorderRows,
+      selectedRequirements: selectedRequirementsQuery.data ?? null,
+      sovereignty: sovereigntyQuery.data ?? null,
+      selectedCrossBorderAssessment: {
+        from: effectiveFromChain,
+        to: effectiveToChain,
+        route: selectedRoute ?? null,
+      },
+    });
+  };
+
+  const handleCheckCrossBorder = async () => {
+    try {
+      const result = await checkCrossBorder.mutateAsync({
+        fromJurisdiction: effectiveFromChain,
+        toJurisdiction: effectiveToChain,
+      });
+      setCrossBorderAssessment(mapCrossBorderRoute(result));
+    } catch {
+      setCrossBorderAssessment(
+        selectedRoute ?? {
+          from: fromJurisdictionLabel,
+          to: toJurisdictionLabel,
+          status: "at-risk",
+          requirements:
+            "No configured mutual-recognition route. Full destination re-verification and data-transfer review required.",
+        },
+      );
+    }
+  };
 
   return (
     <AppLayout>
@@ -420,7 +706,7 @@ export default function RegulatoryPage() {
               across jurisdictions
             </p>
           </div>
-          <button className="btn-primary">
+          <button onClick={handleExportReport} className="btn-primary">
             <FileText className="w-4 h-4" /> Export Report
           </button>
         </div>
@@ -430,17 +716,19 @@ export default function RegulatoryPage() {
           {[
             {
               label: "Jurisdictions",
-              value: "12",
+              value: String(jurisdictionRows.length),
               icon: Globe,
               color: "text-brand-400",
-              trend: "4 continents",
+              trend: jurisdictionsQuery.data
+                ? "Live catalog"
+                : "Fallback catalog",
             },
             {
               label: "Compliant",
               value: String(compliantCount),
               icon: ShieldCheck,
               color: "text-emerald-400",
-              trend: `${Math.round((compliantCount / jurisdictions.length) * 100)}% coverage`,
+              trend: `${Math.round((compliantCount / jurisdictionCoverageDenominator) * 100)}% coverage`,
             },
             {
               label: "Warnings",
@@ -458,15 +746,10 @@ export default function RegulatoryPage() {
             },
             {
               label: "Avg Score",
-              value: String(
-                Math.round(
-                  jurisdictions.reduce((a, b) => a + b.score, 0) /
-                    jurisdictions.length,
-                ),
-              ),
+              value: String(Math.round(averageJurisdictionScore)),
               icon: BarChart3,
               color: "text-identity-chrome",
-              trend: "+4 vs last month",
+              trend: regulatoryHasError ? "Partial source" : "Live weighted",
             },
           ].map((m, i) => (
             <motion.div
@@ -485,6 +768,20 @@ export default function RegulatoryPage() {
             </motion.div>
           ))}
         </div>
+
+        {(regulatoryLoading || regulatoryHasError) && (
+          <div
+            className={`rounded-xl border px-4 py-3 text-sm ${
+              regulatoryHasError
+                ? "border-amber-500/30 bg-amber-500/10 text-amber-200"
+                : "border-brand-500/30 bg-brand-500/10 text-brand-100"
+            }`}
+          >
+            {regulatoryHasError
+              ? "Some regulatory services are unavailable; ZeroID is showing safe fallback rows where live evidence is missing."
+              : "Refreshing the jurisdiction catalog, compliance status, gap analysis, regulatory feed, and data-sovereignty state."}
+          </div>
+        )}
 
         {/* Tabs */}
         <div className="flex items-center gap-2 overflow-x-auto pb-1">
@@ -613,11 +910,11 @@ export default function RegulatoryPage() {
                       <AlertTriangle className="w-4 h-4 text-amber-400" />
                       <h2 className="font-semibold">Credential Gap Analysis</h2>
                       <span className="ml-auto px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400 text-xs font-medium">
-                        {credentialGaps.length} gaps
+                        {credentialGapRows.length} gaps
                       </span>
                     </div>
                     <div className="divide-y divide-zero-800/50">
-                      {credentialGaps.map((gap, i) => (
+                      {credentialGapRows.map((gap, i) => (
                         <motion.div
                           key={`${gap.jurisdiction}-${gap.credential}`}
                           initial={{ opacity: 0, x: -10 }}
@@ -680,13 +977,16 @@ export default function RegulatoryPage() {
                           From
                         </label>
                         <select
-                          value={fromChain}
-                          onChange={(e) => setFromChain(e.target.value)}
+                          value={effectiveFromChain}
+                          onChange={(e) => {
+                            setFromChain(e.target.value);
+                            setCrossBorderAssessment(null);
+                          }}
                           className="w-full px-3 py-2.5 bg-zero-800 border border-zero-700 rounded-xl text-sm focus:outline-none focus:border-brand-500"
                         >
-                          {jurisdictions.map((j) => (
-                            <option key={j.id} value={j.id.toUpperCase()}>
-                              {j.name}
+                          {crossBorderOptions.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
                             </option>
                           ))}
                         </select>
@@ -697,21 +997,56 @@ export default function RegulatoryPage() {
                           To
                         </label>
                         <select
-                          value={toChain}
-                          onChange={(e) => setToChain(e.target.value)}
+                          value={effectiveToChain}
+                          onChange={(e) => {
+                            setToChain(e.target.value);
+                            setCrossBorderAssessment(null);
+                          }}
                           className="w-full px-3 py-2.5 bg-zero-800 border border-zero-700 rounded-xl text-sm focus:outline-none focus:border-brand-500"
                         >
-                          {jurisdictions.map((j) => (
-                            <option key={j.id} value={j.id.toUpperCase()}>
-                              {j.name}
+                          {crossBorderOptions.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
                             </option>
                           ))}
                         </select>
                       </div>
-                      <button className="btn-primary mt-4">Check</button>
+                      <button
+                        onClick={handleCheckCrossBorder}
+                        className="btn-primary mt-4"
+                      >
+                        Check
+                      </button>
                     </div>
+                    {crossBorderAssessment && (
+                      <div
+                        className={`mb-6 p-4 rounded-xl border ${
+                          statusColors[crossBorderAssessment.status].bg
+                        } ${statusColors[crossBorderAssessment.status].border}`}
+                      >
+                        <div className="flex items-center gap-3 mb-2">
+                          <span className="font-bold text-sm">
+                            {crossBorderAssessment.from}
+                          </span>
+                          <ArrowRight className="w-4 h-4 text-zero-500" />
+                          <span className="font-bold text-sm">
+                            {crossBorderAssessment.to}
+                          </span>
+                          <span
+                            className={`ml-auto px-2 py-0.5 rounded-full text-[10px] font-medium ${
+                              statusColors[crossBorderAssessment.status].text
+                            } ${statusColors[crossBorderAssessment.status].bg}`}
+                          >
+                            {crossBorderAssessment.status.toUpperCase()}
+                          </span>
+                        </div>
+                        <p className="text-xs text-zero-400">
+                          {crossBorderAssessment.requirements}
+                        </p>
+                      </div>
+                    )}
                     <div className="space-y-3">
-                      {crossBorderRoutes.map((route, i) => {
+                      {crossBorderRows.map((route) => {
                         const sc = statusColors[route.status];
                         return (
                           <div
@@ -763,7 +1098,7 @@ export default function RegulatoryPage() {
                             <th className="text-left py-2 px-2 text-zero-500 font-medium">
                               Jurisdiction
                             </th>
-                            {jurisdictions.slice(0, 8).map((j) => (
+                            {jurisdictionRows.slice(0, 8).map((j) => (
                               <th
                                 key={j.id}
                                 className="text-center py-2 px-1 text-zero-500 font-medium"
@@ -774,7 +1109,7 @@ export default function RegulatoryPage() {
                           </tr>
                         </thead>
                         <tbody>
-                          {jurisdictions.slice(0, 8).map((row) => (
+                          {jurisdictionRows.slice(0, 8).map((row) => (
                             <tr
                               key={row.id}
                               className="border-b border-zero-800/50 hover:bg-zero-800/20"
@@ -782,7 +1117,7 @@ export default function RegulatoryPage() {
                               <td className="py-2 px-2 text-zero-300 font-medium">
                                 {row.id.toUpperCase()}
                               </td>
-                              {jurisdictions.slice(0, 8).map((col) => (
+                              {jurisdictionRows.slice(0, 8).map((col) => (
                                 <td
                                   key={col.id}
                                   className="text-center py-2 px-1"
@@ -920,7 +1255,7 @@ export default function RegulatoryPage() {
                 Data Sovereignty Status
               </h3>
               <div className="space-y-2">
-                {jurisdictions
+                {jurisdictionRows
                   .filter((j) => j.status === "compliant")
                   .slice(0, 5)
                   .map((j) => (
@@ -949,7 +1284,7 @@ export default function RegulatoryPage() {
                 </h3>
               </div>
               <div className="divide-y divide-zero-800/50">
-                {regulatoryFeed.map((item) => (
+                {regulatoryFeedRows.map((item) => (
                   <div key={item.id} className="p-4">
                     <div className="flex items-start justify-between mb-1">
                       <div className="font-medium text-sm">{item.title}</div>
@@ -983,7 +1318,7 @@ export default function RegulatoryPage() {
               <div className="grid grid-cols-2 gap-3">
                 <div className="p-3 bg-zero-800/50 rounded-xl text-center">
                   <div className="text-2xl font-bold text-emerald-400">
-                    {jurisdictions.filter((j) => j.gdpr).length}
+                    {jurisdictionRows.filter((j) => j.gdpr).length}
                   </div>
                   <div className="text-[10px] text-zero-500 mt-1">
                     GDPR Compliant
@@ -991,7 +1326,7 @@ export default function RegulatoryPage() {
                 </div>
                 <div className="p-3 bg-zero-800/50 rounded-xl text-center">
                   <div className="text-2xl font-bold text-brand-400">
-                    {jurisdictions.filter((j) => j.eidas).length}
+                    {jurisdictionRows.filter((j) => j.eidas).length}
                   </div>
                   <div className="text-[10px] text-zero-500 mt-1">
                     eIDAS Compatible
@@ -1000,7 +1335,7 @@ export default function RegulatoryPage() {
                 <div className="p-3 bg-zero-800/50 rounded-xl text-center">
                   <div className="text-2xl font-bold text-identity-chrome">
                     {
-                      jurisdictions.filter(
+                      jurisdictionRows.filter(
                         (j) => j.mutualRecognition.length > 0,
                       ).length
                     }
@@ -1011,7 +1346,7 @@ export default function RegulatoryPage() {
                 </div>
                 <div className="p-3 bg-zero-800/50 rounded-xl text-center">
                   <div className="text-2xl font-bold text-identity-steel">
-                    {jurisdictions.length}
+                    {jurisdictionRows.length}
                   </div>
                   <div className="text-[10px] text-zero-500 mt-1">
                     Total Covered

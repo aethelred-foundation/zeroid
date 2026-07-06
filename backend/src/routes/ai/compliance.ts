@@ -72,7 +72,7 @@ const AlertsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
 });
 
-const SimulateChangeSchema = z.object({
+const RegulatoryImpactAssessmentSchema = z.object({
   regulation: z.string().min(3).max(200),
   changes: z.string().min(10).max(5000),
   jurisdiction: z.string().min(2).max(10),
@@ -463,32 +463,59 @@ router.post(
   },
 );
 
+async function runRegulatoryImpactAssessment(
+  req: AuthenticatedRequest,
+  res: Response,
+  deprecatedAlias = false,
+): Promise<void> {
+  try {
+    const { regulation, changes, jurisdiction } = req.body;
+
+    const impact = await complianceAdvisorService.assessRegulatoryChangeImpact(
+      regulation,
+      changes,
+      jurisdiction,
+    );
+
+    if (deprecatedAlias) {
+      res.setHeader('Deprecation', 'true');
+      res.setHeader(
+        'Link',
+        '</api/v1/ai/compliance/impact-assessment>; rel="successor-version"',
+      );
+    }
+
+    res.json({
+      success: true,
+      data: impact,
+    });
+  } catch (error) {
+    handleError(error, res);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// POST /ai/compliance/impact-assessment
+// Assess regulatory change impact against live ZeroID records
+// ---------------------------------------------------------------------------
+router.post(
+  '/impact-assessment',
+  validate({ body: RegulatoryImpactAssessmentSchema }),
+  requireEnterpriseContext(COMPLIANCE_WRITE_ROLES),
+  (req: AuthenticatedRequest, res: Response): Promise<void> =>
+    runRegulatoryImpactAssessment(req, res),
+);
+
 // ---------------------------------------------------------------------------
 // POST /ai/compliance/simulate
-// Simulate regulatory change impact
+// Backward-compatible alias for regulatory change impact assessment
 // ---------------------------------------------------------------------------
 router.post(
   '/simulate',
-  validate({ body: SimulateChangeSchema }),
+  validate({ body: RegulatoryImpactAssessmentSchema }),
   requireEnterpriseContext(COMPLIANCE_WRITE_ROLES),
-  async (req: AuthenticatedRequest, res: Response): Promise<void> => {
-    try {
-      const { regulation, changes, jurisdiction } = req.body;
-
-      const impact = await complianceAdvisorService.simulateRegulatoryChange(
-        regulation,
-        changes,
-        jurisdiction,
-      );
-
-      res.json({
-        success: true,
-        data: impact,
-      });
-    } catch (error) {
-      handleError(error, res);
-    }
-  },
+  (req: AuthenticatedRequest, res: Response): Promise<void> =>
+    runRegulatoryImpactAssessment(req, res, true),
 );
 
 // ---------------------------------------------------------------------------

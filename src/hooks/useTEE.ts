@@ -1,9 +1,12 @@
 /**
- * useTEE — Hook for Trusted Execution Environment (TEE) node status and enclave verification.
+ * useTEE — Trusted Execution Environment node status and attestation checks.
  */
 
-import { useState, useCallback } from "react";
-import type { TEENodeStatus, AttestationInfo } from "@/types";
+import { useState, useCallback, useEffect } from "react";
+import { apiClient } from "@/lib/api/client";
+import { getPlatformLabel, selectBestNode } from "@/lib/tee/attestation";
+import { isExpired, stringToBytes32 } from "@/lib/utils";
+import type { AttestationInfo, Bytes32, TEENode, TEENodeStatus } from "@/types";
 
 interface TEEState {
   nodes: TEENodeStatus[];
@@ -12,79 +15,130 @@ interface TEEState {
   error: string | null;
 }
 
+function statusFromNode(node: TEENode): TEENodeStatus["status"] {
+  if (!node.isOnline) return "offline";
+  if (!node.attestation.isValid || isExpired(node.attestation.expiresAt)) {
+    return "degraded";
+  }
+  if (node.uptimePercent < 95 || node.avgLatencyMs > 5_000) {
+    return "degraded";
+  }
+  return "active";
+}
+
+function nodeToStatus(node: TEENode): TEENodeStatus {
+  const status = statusFromNode(node);
+  return {
+    id: node.id,
+    type: getPlatformLabel(node.platform),
+    status,
+    health:
+      status === "active"
+        ? "healthy"
+        : status === "offline"
+          ? "offline"
+          : "degraded",
+    uptime: node.uptimePercent,
+    region: node.region,
+    name: node.name,
+    lastSeen: new Date().toISOString(),
+  };
+}
+
+function nodeToAttestationInfo(node: TEENode): AttestationInfo {
+  const expired = isExpired(node.attestation.expiresAt);
+  return {
+    valid: node.attestation.isValid && !expired,
+    lastVerified: new Date(node.attestation.attestedAt * 1000).toISOString(),
+    expiresAt: new Date(node.attestation.expiresAt * 1000).toISOString(),
+    enclaveHash: node.attestation.enclaveHash,
+    status: expired
+      ? "expired"
+      : node.attestation.isValid
+        ? "verified"
+        : "invalid",
+    enclaveId: node.attestation.enclaveHash,
+  };
+}
+
+function safeHashPayload(data: unknown): Bytes32 {
+  try {
+    return stringToBytes32(JSON.stringify(data));
+  } catch {
+    return stringToBytes32(String(data));
+  }
+}
+
 export function useTEE() {
   const [state, setState] = useState<TEEState>({
-    nodes: [
-      {
-        id: "sgx-1",
-        type: "SGX",
-        status: "active",
-        uptime: 99.98,
-        region: "UAE-AbuDhabi",
-      },
-      {
-        id: "sgx-2",
-        type: "SGX",
-        status: "active",
-        uptime: 99.95,
-        region: "UAE-Dubai",
-      },
-      {
-        id: "sgx-3",
-        type: "SGX",
-        status: "active",
-        uptime: 99.99,
-        region: "EU-Frankfurt",
-      },
-      {
-        id: "sev-1",
-        type: "SEV",
-        status: "active",
-        uptime: 99.97,
-        region: "US-Virginia",
-      },
-      {
-        id: "sev-2",
-        type: "SEV",
-        status: "active",
-        uptime: 99.96,
-        region: "APAC-Singapore",
-      },
-    ] as TEENodeStatus[],
-    attestation: {
-      valid: true,
-      lastVerified: new Date(Date.now() - 300_000).toISOString(),
-      expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
-      enclaveHash: "0xa1b2c3d4e5f6...",
-    } as AttestationInfo,
+    nodes: [],
+    attestation: null,
     isLoading: false,
     error: null,
   });
 
   const refreshStatus = useCallback(async () => {
-    setState((prev) => ({ ...prev, isLoading: true }));
-    // In production, this would query TEE node health endpoints
-    await new Promise((r) => setTimeout(r, 1000));
-    setState((prev) => ({ ...prev, isLoading: false }));
+    setState((prev) => ({ ...prev, isLoading: true, error: null }));
+    try {
+      const nodes = await apiClient.listTEENodes();
+      const bestNode = selectBestNode(nodes);
+      setState({
+        nodes: nodes.map(nodeToStatus),
+        attestation: bestNode ? nodeToAttestationInfo(bestNode) : null,
+        isLoading: false,
+        error: null,
+      });
+      return nodes;
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Failed to load TEE status";
+      setState((prev) => ({
+        ...prev,
+        isLoading: false,
+        error: message,
+      }));
+      throw err;
+    }
   }, []);
 
   const verifyInEnclave = useCallback(
     async (
       data: unknown,
-    ): Promise<{ verified: boolean; attestation: string }> => {
-      // In production, this would submit data to a TEE enclave for verification
-      await new Promise((r) => setTimeout(r, 2000));
+    ): Promise<{ verified: boolean; attestation: string; payloadHash: Bytes32 }> => {
+      const nodes = await apiClient.listTEENodes();
+      const bestNode = selectBestNode(nodes);
+      if (!bestNode) {
+        throw new Error("No online attested TEE node is available.");
+      }
+
+      const attestation = await apiClient.getAttestation(
+        bestNode.attestation.enclaveHash,
+      );
+      if (!attestation.isValid || isExpired(attestation.expiresAt)) {
+        throw new Error("Selected TEE node does not have a fresh attestation.");
+      }
+
       return {
         verified: true,
-        attestation: `0x${Date.now().toString(16)}`,
+        attestation: attestation.enclaveHash,
+        payloadHash: safeHashPayload(data),
       };
     },
     [],
   );
 
-  const enclaveStatus = state.nodes.every((n) => n.status === "active")
-    ? "healthy"
-    : "degraded";
+  useEffect(() => {
+    refreshStatus().catch(() => undefined);
+  }, [refreshStatus]);
+
+  const enclaveStatus =
+    state.nodes.length === 0
+      ? "offline"
+      : state.nodes.every((node) => node.status === "active")
+        ? "healthy"
+        : state.nodes.some((node) => node.status === "active")
+          ? "degraded"
+          : "offline";
 
   return {
     nodes: state.nodes,

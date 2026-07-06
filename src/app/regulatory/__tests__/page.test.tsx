@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 
 jest.mock("next/navigation", () => ({
   useRouter: () => ({ push: jest.fn(), back: jest.fn() }),
@@ -54,9 +54,57 @@ jest.mock("@/components/layout/AppLayout", () => ({
   ),
 }));
 
+jest.mock("@/hooks/useRegulatory", () => ({
+  useJurisdictions: jest.fn(),
+  useComplianceStatus: jest.fn(),
+  useJurisdictionRequirements: jest.fn(),
+  useGapAnalysis: jest.fn(),
+  useRegulatoryFeed: jest.fn(),
+  useDataSovereigntyStatus: jest.fn(),
+  useCheckCrossBorder: jest.fn(),
+}));
+
+import {
+  useCheckCrossBorder,
+  useComplianceStatus,
+  useDataSovereigntyStatus,
+  useGapAnalysis,
+  useJurisdictionRequirements,
+  useJurisdictions,
+  useRegulatoryFeed,
+} from "@/hooks/useRegulatory";
 import RegulatoryPage from "../page";
 
+const idleQuery = <T,>(data?: T) => ({
+  data,
+  isLoading: false,
+  isError: false,
+});
+
+const mockUseJurisdictions = useJurisdictions as jest.Mock;
+const mockUseComplianceStatus = useComplianceStatus as jest.Mock;
+const mockUseJurisdictionRequirements = useJurisdictionRequirements as jest.Mock;
+const mockUseGapAnalysis = useGapAnalysis as jest.Mock;
+const mockUseRegulatoryFeed = useRegulatoryFeed as jest.Mock;
+const mockUseDataSovereigntyStatus = useDataSovereigntyStatus as jest.Mock;
+const mockUseCheckCrossBorder = useCheckCrossBorder as jest.Mock;
+
 describe("RegulatoryPage", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockUseJurisdictions.mockReturnValue(idleQuery());
+    mockUseComplianceStatus.mockReturnValue(idleQuery());
+    mockUseJurisdictionRequirements.mockReturnValue(idleQuery());
+    mockUseGapAnalysis.mockReturnValue(idleQuery());
+    mockUseRegulatoryFeed.mockReturnValue(idleQuery());
+    mockUseDataSovereigntyStatus.mockReturnValue(idleQuery());
+    mockUseCheckCrossBorder.mockReturnValue({
+      mutateAsync: jest.fn(),
+      isPending: false,
+      isError: false,
+    });
+  });
+
   it("renders without crashing", () => {
     render(<RegulatoryPage />);
     expect(screen.getByTestId("app-layout")).toBeInTheDocument();
@@ -76,6 +124,32 @@ describe("RegulatoryPage", () => {
     expect(screen.getByText("Warnings")).toBeInTheDocument();
     expect(screen.getByText("At Risk")).toBeInTheDocument();
     expect(screen.getByText("Avg Score")).toBeInTheDocument();
+  });
+
+  it("renders live jurisdiction catalog data when the regulatory hook returns it", () => {
+    mockUseJurisdictions.mockReturnValue(
+      idleQuery([
+        {
+          id: "ae-cbuae",
+          code: "AE-CBUAE",
+          name: "UAE Central Bank Digital Identity Regime",
+          region: "mena",
+          regulatoryAuthority: "Central Bank of the UAE",
+          authorityUrl: "https://centralbank.ae",
+          frameworks: ["CBUAE", "PDPL"],
+          isActive: true,
+          lastUpdated: "2026-06-26T00:00:00.000Z",
+        },
+      ]),
+    );
+
+    render(<RegulatoryPage />);
+
+    expect(screen.getByText("Live catalog")).toBeInTheDocument();
+    expect(
+      screen.getAllByText("UAE Central Bank Digital Identity Regime").length,
+    ).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("AE-CBUAE").length).toBeGreaterThanOrEqual(1);
   });
 
   it("shows jurisdiction map by default", () => {
@@ -183,8 +257,8 @@ describe("RegulatoryPage", () => {
     // The "From" label and "To" label identify the selects
     const fromLabel = screen.getByText("From");
     const fromSelect = fromLabel.parentElement!.querySelector("select")!;
-    fireEvent.change(fromSelect, { target: { value: "SG" } });
-    expect(fromSelect.value).toBe("SG");
+    fireEvent.change(fromSelect, { target: { value: "sg" } });
+    expect(fromSelect.value).toBe("sg");
   });
 
   it("changes To select in the Cross-Border Checker tab", () => {
@@ -192,8 +266,51 @@ describe("RegulatoryPage", () => {
     fireEvent.click(screen.getByText("Cross-Border Checker"));
     const toLabel = screen.getByText("To");
     const toSelect = toLabel.parentElement!.querySelector("select")!;
-    fireEvent.change(toSelect, { target: { value: "JP" } });
-    expect(toSelect.value).toBe("JP");
+    fireEvent.change(toSelect, { target: { value: "jp" } });
+    expect(toSelect.value).toBe("jp");
+  });
+
+  it("checks cross-border transfers through the regulatory mutation", async () => {
+    const mutateAsync = jest.fn().mockResolvedValue({
+      fromJurisdiction: "sg",
+      toJurisdiction: "jp",
+      eligible: true,
+      riskLevel: "low",
+      requiredActions: ["Use APAC transfer register"],
+      additionalCredentials: [],
+      estimatedProcessingDays: 2,
+      restrictions: [],
+      bilateralAgreements: ["MAS-JFSA supervisory channel"],
+    });
+    mockUseCheckCrossBorder.mockReturnValue({
+      mutateAsync,
+      isPending: false,
+      isError: false,
+    });
+
+    render(<RegulatoryPage />);
+    fireEvent.click(screen.getByText("Cross-Border Checker"));
+
+    const fromSelect = screen.getByText("From").parentElement!.querySelector(
+      "select",
+    )!;
+    fireEvent.change(fromSelect, { target: { value: "sg" } });
+    const toSelect = screen.getByText("To").parentElement!.querySelector(
+      "select",
+    )!;
+    fireEvent.change(toSelect, { target: { value: "jp" } });
+    await waitFor(() => expect(toSelect.value).toBe("jp"));
+    fireEvent.click(screen.getByText("Check"));
+
+    await waitFor(() =>
+      expect(mutateAsync).toHaveBeenCalledWith({
+        fromJurisdiction: "sg",
+        toJurisdiction: "jp",
+      }),
+    );
+    expect(
+      await screen.findByText("Use APAC transfer register"),
+    ).toBeInTheDocument();
   });
 
   it("deselects a jurisdiction when clicking the same one again", () => {

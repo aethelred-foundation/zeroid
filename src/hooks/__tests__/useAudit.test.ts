@@ -295,14 +295,23 @@ describe("exportAuditLog", () => {
   let mockCreateObjectURL: jest.Mock;
   let mockRevokeObjectURL: jest.Mock;
   let mockClick: jest.Mock;
+  let mockBlobParts: unknown[] | undefined;
+  let mockBlobType: string | undefined;
 
   beforeEach(() => {
     mockCreateObjectURL = jest.fn(() => "blob:url");
     mockRevokeObjectURL = jest.fn();
     mockClick = jest.fn();
+    mockBlobParts = undefined;
+    mockBlobType = undefined;
 
     global.URL.createObjectURL = mockCreateObjectURL;
     global.URL.revokeObjectURL = mockRevokeObjectURL;
+    global.Blob = jest.fn((parts: unknown[], options?: BlobPropertyBag) => {
+      mockBlobParts = parts;
+      mockBlobType = options?.type;
+      return { parts, type: options?.type ?? "" } as unknown as Blob;
+    }) as unknown as typeof Blob;
     jest.spyOn(document, "createElement").mockReturnValue({
       href: "",
       download: "",
@@ -311,7 +320,7 @@ describe("exportAuditLog", () => {
   });
 
   it("exports JSON audit log and triggers download", async () => {
-    mockApiClient.get.mockResolvedValue({ entries: [{ id: "1" }] });
+    mockApiClient.get.mockResolvedValue({ records: [{ id: "1" }] });
     await exportAuditLog(mockAddress, {}, "json");
 
     expect(mockApiClient.get).toHaveBeenCalledWith(
@@ -326,13 +335,33 @@ describe("exportAuditLog", () => {
     expect(mockToast.success).toHaveBeenCalledWith("Audit log exported");
   });
 
-  it("fails closed for CSV audit export", async () => {
-    await exportAuditLog(mockAddress, { action: "create" }, "csv");
-
-    expect(mockApiClient.get).not.toHaveBeenCalled();
-    expect(mockToast.error).toHaveBeenCalledWith("Export failed", {
-      description: "Audit CSV export is not exposed by the backend API.",
+  it("exports CSV audit log from backend JSON records", async () => {
+    mockApiClient.get.mockResolvedValue({
+      records: [
+        {
+          id: "1",
+          timestamp: "2026-01-01T00:00:00.000Z",
+          action: "create",
+          resourceType: "identity",
+          resourceId: "identity-1",
+          details: { source: "test" },
+        },
+      ],
     });
+
+    await exportAuditLog(mockAddress, {}, "csv");
+
+    expect(mockApiClient.get).toHaveBeenCalledWith(
+      expect.stringContaining("/api/v1/audit/export/download"),
+    );
+    expect(mockClick).toHaveBeenCalled();
+    const blob = mockCreateObjectURL.mock.calls[0][0] as Blob;
+    expect(blob.type).toBe("text/csv");
+    expect(String(mockBlobParts?.[0])).toContain(
+      '"1","2026-01-01T00:00:00.000Z","create"',
+    );
+    expect(mockBlobType).toBe("text/csv");
+    expect(mockToast.success).toHaveBeenCalledWith("Audit log exported");
   });
 
   it("shows error toast on failure", async () => {
@@ -360,13 +389,36 @@ describe("exportAuditLog", () => {
     expect(url).toContain("to=2026-03-01");
   });
 
-  it("fails closed for unsupported filtered export", async () => {
-    await exportAuditLog(mockAddress, { entityType: "identity" }, "json");
-
-    expect(mockApiClient.get).not.toHaveBeenCalled();
-    expect(mockToast.error).toHaveBeenCalledWith("Export failed", {
-      description:
-        "Filtered audit export by action or resource is not exposed by the backend API.",
+  it("filters exported records by action and resource client-side", async () => {
+    mockApiClient.get.mockResolvedValue({
+      records: [
+        {
+          id: "1",
+          action: "create",
+          resourceType: "identity",
+          resourceId: "identity-1",
+        },
+        {
+          id: "2",
+          action: "delete",
+          resourceType: "credential",
+          resourceId: "credential-1",
+        },
+      ],
     });
+
+    await exportAuditLog(
+      mockAddress,
+      { action: "create", entityType: "identity", entityId: "identity-1" },
+      "json",
+    );
+
+    expect(mockApiClient.get).toHaveBeenCalledWith(
+      expect.stringContaining("/api/v1/audit/export/download"),
+    );
+    const payload = String(mockBlobParts?.[0]);
+    expect(payload).toContain('"totalRecords": 1');
+    expect(payload).toContain('"id": "1"');
+    expect(payload).not.toContain('"id": "2"');
   });
 });

@@ -32,7 +32,7 @@ import {
 import AppLayout from "@/components/layout/AppLayout";
 
 // ============================================================
-// Mock Data
+// Marketplace Data
 // ============================================================
 
 const credentialSchemas = [

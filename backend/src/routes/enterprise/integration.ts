@@ -1392,6 +1392,36 @@ router.get(
 );
 
 // ---------------------------------------------------------------------------
+// POST /enterprise/webhooks/:id/test — Send synthetic test delivery
+// ---------------------------------------------------------------------------
+router.post(
+  '/webhooks/:id/test',
+  requireEnterpriseContext(ENTERPRISE_OPERATOR_ROLES),
+  validate({ params: RouteIdParamSchema }),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const clientId = getClientId(req);
+      const result = await webhookSystem.testDelivery(
+        req.params.id as string,
+        clientId,
+      );
+      res.status(200).json({
+        data: result,
+        message: result.delivered
+          ? 'Webhook test delivered'
+          : 'Webhook test attempted',
+      });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('webhook_test_error', { error: error.message });
+      res
+        .status(error.statusCode ?? 500)
+        .json({ error: error.message, code: error.code ?? 'WEBHOOK_TEST_ERROR' });
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
 // POST /enterprise/webhooks/:id/replay — Replay events
 // ---------------------------------------------------------------------------
 router.post(

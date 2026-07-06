@@ -111,10 +111,13 @@ const DEPTH_COLORS = [
 ];
 
 // ============================================================================
-// Mock data generator
+// Reference graph generator
 // ============================================================================
 
-function generateMockGraph(): { nodes: AgentNode[]; edges: DelegationEdge[] } {
+function generateReferenceGraph(): {
+  nodes: AgentNode[];
+  edges: DelegationEdge[];
+} {
   const nodes: AgentNode[] = [
     {
       id: "root",
@@ -482,9 +485,9 @@ export default function AgentDelegationGraph({
   onNodeClick,
   className = "",
 }: AgentDelegationGraphProps) {
-  const mockData = useMemo(() => generateMockGraph(), []);
-  const nodes = externalNodes ?? mockData.nodes;
-  const edges = externalEdges ?? mockData.edges;
+  const referenceData = useMemo(() => generateReferenceGraph(), []);
+  const nodes = externalNodes ?? referenceData.nodes;
+  const edges = externalEdges ?? referenceData.edges;
 
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [zoom, setZoom] = useState(1);

@@ -10,6 +10,11 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { apiClient } from "@/lib/api/client";
 import {
+  clearIdentityAuthToken,
+  getIdentityAuthToken,
+  storeIdentityAuthToken,
+} from "@/lib/identity/registration";
+import {
   IDENTITY_REGISTRY_ADDRESS,
   IDENTITY_REGISTRY_ABI,
 } from "@/config/constants";
@@ -98,6 +103,7 @@ beforeEach(() => {
   });
   mockWriteContractAsync.mockResolvedValue(mockTxHash);
   mockSignMessageAsync.mockResolvedValue("0xsignature");
+  clearIdentityAuthToken();
   window.sessionStorage.clear();
 });
 
@@ -289,9 +295,10 @@ describe("useIdentity hooks", () => {
           recoveryHash: validRecoveryHash.slice(2),
         }),
       );
-      expect(window.sessionStorage.getItem("zeroid.identity.authToken")).toBe(
-        "identity-token",
-      );
+      expect(getIdentityAuthToken()).toBe("identity-token");
+      expect(
+        window.sessionStorage.getItem("zeroid.identity.authToken"),
+      ).toBeNull();
 
       expect(toast.success).toHaveBeenCalledWith(
         "Identity created successfully",
@@ -333,10 +340,7 @@ describe("useIdentity hooks", () => {
 
   describe("useUpdateProfile", () => {
     it("updates profile via API PATCH and shows success toast", async () => {
-      window.sessionStorage.setItem(
-        "zeroid.identity.authToken",
-        "identity-token",
-      );
+      storeIdentityAuthToken("identity-token");
       (apiClient.patch as jest.Mock).mockResolvedValue({ success: true });
 
       const { useUpdateProfile } = await import("@/hooks/useIdentity");

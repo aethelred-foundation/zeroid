@@ -118,7 +118,7 @@ describe("AgentDelegationGraph", () => {
     expect(screen.getByText("Network error")).toBeInTheDocument();
   });
 
-  it("renders with default mock data when no props provided", () => {
+  it("renders with default reference data when no props provided", () => {
     render(<AgentDelegationGraph />);
     expect(screen.getByText("Agent Delegation Graph")).toBeInTheDocument();
     expect(screen.getByText(/agents/)).toBeInTheDocument();

@@ -76,6 +76,7 @@ const mockInitiateVerification = jest.fn().mockResolvedValue(undefined);
 const mockUseUAEPass = jest.fn(() => ({
   initiateVerification: mockInitiateVerification,
   verificationStatus: "idle",
+  error: null,
 }));
 
 jest.mock("@/hooks/useUAEPass", () => ({
@@ -86,6 +87,7 @@ const mockStartScan = jest.fn().mockResolvedValue(undefined);
 const mockUseBiometric = jest.fn(() => ({
   startScan: mockStartScan,
   scanStatus: "idle",
+  error: null,
 }));
 
 jest.mock("@/hooks/useBiometric", () => ({
@@ -106,10 +108,12 @@ describe("IdentityCreation", () => {
     mockUseUAEPass.mockReturnValue({
       initiateVerification: mockInitiateVerification,
       verificationStatus: "idle",
+      error: null,
     });
     mockUseBiometric.mockReturnValue({
       startScan: mockStartScan,
       scanStatus: "idle",
+      error: null,
     });
     mockCreateIdentity.mockResolvedValue(undefined);
     mockRegisterOnChain.mockResolvedValue(undefined);
@@ -256,14 +260,14 @@ describe("IdentityCreation", () => {
     expect(
       screen.getByText("UAE Pass Identity Verification"),
     ).toBeInTheDocument();
-    expect(screen.getByText("Start UAE Pass Verification")).toBeInTheDocument();
+    expect(screen.getByText("Start UAE Pass OAuth")).toBeInTheDocument();
   });
 
   it("calls initiateVerification when UAE Pass button is clicked", async () => {
     render(<IdentityCreation />);
     navigateToStep(1);
     await act(async () => {
-      fireEvent.click(screen.getByText("Start UAE Pass Verification"));
+      fireEvent.click(screen.getByText("Start UAE Pass OAuth"));
     });
     expect(mockInitiateVerification).toHaveBeenCalled();
   });
@@ -272,26 +276,26 @@ describe("IdentityCreation", () => {
     mockUseUAEPass.mockReturnValue({
       initiateVerification: mockInitiateVerification,
       verificationStatus: "verified",
+      error: null,
     });
     render(<IdentityCreation />);
     navigateToStep(1);
-    expect(screen.getByText("Verification Complete")).toBeInTheDocument();
     expect(
-      screen.queryByText("Start UAE Pass Verification"),
-    ).not.toBeInTheDocument();
+      screen.getByText("Government Verification Complete"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Start UAE Pass OAuth")).not.toBeInTheDocument();
   });
 
   it("shows pending state for UAE Pass", () => {
     mockUseUAEPass.mockReturnValue({
       initiateVerification: mockInitiateVerification,
       verificationStatus: "pending",
+      error: null,
     });
     render(<IdentityCreation />);
     navigateToStep(1);
-    expect(screen.getByText("Verification in Progress...")).toBeInTheDocument();
-    expect(
-      screen.queryByText("Start UAE Pass Verification"),
-    ).not.toBeInTheDocument();
+    expect(screen.getByText("Awaiting UAE Pass Callback...")).toBeInTheDocument();
+    expect(screen.queryByText("Start UAE Pass OAuth")).not.toBeInTheDocument();
   });
 
   it("handles UAE Pass error with Error instance", async () => {
@@ -301,7 +305,7 @@ describe("IdentityCreation", () => {
     render(<IdentityCreation />);
     navigateToStep(1);
     await act(async () => {
-      fireEvent.click(screen.getByText("Start UAE Pass Verification"));
+      fireEvent.click(screen.getByText("Start UAE Pass OAuth"));
     });
     expect(screen.getByText("UAE Pass timeout")).toBeInTheDocument();
   });
@@ -311,7 +315,7 @@ describe("IdentityCreation", () => {
     render(<IdentityCreation />);
     navigateToStep(1);
     await act(async () => {
-      fireEvent.click(screen.getByText("Start UAE Pass Verification"));
+      fireEvent.click(screen.getByText("Start UAE Pass OAuth"));
     });
     expect(
       screen.getByText("UAE Pass verification failed"),
@@ -324,14 +328,14 @@ describe("IdentityCreation", () => {
     render(<IdentityCreation />);
     navigateToStep(2);
     expect(screen.getByText("Biometric Verification")).toBeInTheDocument();
-    expect(screen.getByText("Start Biometric Scan")).toBeInTheDocument();
+    expect(screen.getByText("Request TEE Verification")).toBeInTheDocument();
   });
 
   it("calls startScan when biometric button is clicked", async () => {
     render(<IdentityCreation />);
     navigateToStep(2);
     await act(async () => {
-      fireEvent.click(screen.getByText("Start Biometric Scan"));
+      fireEvent.click(screen.getByText("Request TEE Verification"));
     });
     expect(mockStartScan).toHaveBeenCalled();
   });
@@ -340,21 +344,25 @@ describe("IdentityCreation", () => {
     mockUseBiometric.mockReturnValue({
       startScan: mockStartScan,
       scanStatus: "scanning",
+      error: null,
     });
     render(<IdentityCreation />);
     navigateToStep(2);
-    expect(screen.getByText("Scanning...")).toBeInTheDocument();
-    expect(screen.queryByText("Start Biometric Scan")).not.toBeInTheDocument();
+    expect(screen.getByText("Requesting TEE...")).toBeInTheDocument();
+    expect(
+      screen.queryByText("Request TEE Verification"),
+    ).not.toBeInTheDocument();
   });
 
   it("biometric button is disabled while scanning", () => {
     mockUseBiometric.mockReturnValue({
       startScan: mockStartScan,
       scanStatus: "scanning",
+      error: null,
     });
     render(<IdentityCreation />);
     navigateToStep(2);
-    const scanButton = screen.getByText("Scanning...").closest("button");
+    const scanButton = screen.getByText("Requesting TEE...").closest("button");
     expect(scanButton).toBeDisabled();
   });
 
@@ -362,11 +370,14 @@ describe("IdentityCreation", () => {
     mockUseBiometric.mockReturnValue({
       startScan: mockStartScan,
       scanStatus: "complete",
+      error: null,
     });
     render(<IdentityCreation />);
     navigateToStep(2);
-    expect(screen.getByText("Scan Complete")).toBeInTheDocument();
-    expect(screen.queryByText("Start Biometric Scan")).not.toBeInTheDocument();
+    expect(screen.getByText("TEE Verification Complete")).toBeInTheDocument();
+    expect(
+      screen.queryByText("Request TEE Verification"),
+    ).not.toBeInTheDocument();
   });
 
   it("handles biometric scan error with Error instance", async () => {
@@ -374,7 +385,7 @@ describe("IdentityCreation", () => {
     render(<IdentityCreation />);
     navigateToStep(2);
     await act(async () => {
-      fireEvent.click(screen.getByText("Start Biometric Scan"));
+      fireEvent.click(screen.getByText("Request TEE Verification"));
     });
     expect(screen.getByText("Camera not available")).toBeInTheDocument();
   });
@@ -384,7 +395,7 @@ describe("IdentityCreation", () => {
     render(<IdentityCreation />);
     navigateToStep(2);
     await act(async () => {
-      fireEvent.click(screen.getByText("Start Biometric Scan"));
+      fireEvent.click(screen.getByText("Request TEE Verification"));
     });
     expect(screen.getByText("Biometric scan failed")).toBeInTheDocument();
   });
@@ -501,13 +512,13 @@ describe("IdentityCreation", () => {
 
     // Trigger error
     await act(async () => {
-      fireEvent.click(screen.getByText("Start UAE Pass Verification"));
+      fireEvent.click(screen.getByText("Start UAE Pass OAuth"));
     });
     expect(screen.getByText("First failure")).toBeInTheDocument();
 
     // Retry — error should be cleared
     await act(async () => {
-      fireEvent.click(screen.getByText("Start UAE Pass Verification"));
+      fireEvent.click(screen.getByText("Start UAE Pass OAuth"));
     });
     expect(screen.queryByText("First failure")).not.toBeInTheDocument();
   });
@@ -616,13 +627,11 @@ describe("IdentityCreation", () => {
     navigateToStep(1);
 
     act(() => {
-      fireEvent.click(screen.getByText("Start UAE Pass Verification"));
+      fireEvent.click(screen.getByText("Start UAE Pass OAuth"));
     });
 
     // The button should now contain a loader icon (isProcessing = true)
-    const button = screen
-      .getByText("Start UAE Pass Verification")
-      .closest("button");
+    const button = screen.getByText("Start UAE Pass OAuth").closest("button");
     expect(button).toBeInTheDocument();
 
     await act(async () => {

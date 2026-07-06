@@ -105,7 +105,13 @@ describe("useJurisdictions", () => {
     expect(mockApiClient.get).toHaveBeenCalledWith(
       "/api/v1/enterprise/compliance/jurisdictions",
     );
-    expect(result.current.data).toEqual(mockJurisdictions);
+    expect(result.current.data?.[0]).toMatchObject({
+      id: "uae",
+      name: "United Arab Emirates",
+      code: "AE",
+      region: "mena",
+      isActive: true,
+    });
   });
 });
 
@@ -114,17 +120,38 @@ describe("useJurisdictions", () => {
 // ===========================================================================
 
 describe("useJurisdictionRequirements", () => {
-  it("fails closed because detailed requirements are not exposed", async () => {
+  it("fetches backend jurisdiction requirements", async () => {
+    mockApiClient.get.mockResolvedValue({
+      jurisdictionId: "AE-CBUAE",
+      requiredCredentials: [
+        {
+          schemaId: "emirates_id",
+          schemaName: "Emirates ID",
+          mandatory: true,
+          validityPeriodDays: 1825,
+          acceptedIssuers: ["Central Bank of UAE"],
+          renewalBufferDays: 90,
+        },
+      ],
+      dataRetentionDays: 1825,
+      consentRequirements: [],
+      reportingObligations: [],
+      kycLevel: 3,
+      amlThresholds: [],
+      updateFrequency: "quarterly",
+    });
     const { result } = renderHook(
       () => useJurisdictionRequirements("AE-CBUAE"),
       { wrapper: createWrapper() },
     );
 
-    await waitFor(() => expect(result.current.isError).toBe(true));
-    expect(mockApiClient.get).not.toHaveBeenCalled();
-    expect(result.current.error).toMatchObject({
-      code: "REGULATORY_REQUIREMENTS_UNAVAILABLE",
-      status: 501,
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(mockApiClient.get).toHaveBeenCalledWith(
+      "/api/v1/enterprise/compliance/jurisdictions/AE-CBUAE/requirements",
+    );
+    expect(result.current.data?.requiredCredentials[0]).toMatchObject({
+      schemaId: "emirates_id",
+      schemaName: "Emirates ID",
     });
   });
 
@@ -278,17 +305,46 @@ describe("useCheckCrossBorder", () => {
 // ===========================================================================
 
 describe("useGapAnalysis", () => {
-  it("fails closed because gap analysis is not exposed", async () => {
+  it("derives gap analysis from backend compliance status", async () => {
+    mockApiClient.get.mockResolvedValue({
+      jurisdiction: "AE-CBUAE",
+      overallStatus: "partial",
+      missingCredentials: ["source_of_funds"],
+      expiringCredentials: [
+        {
+          credentialType: "passport",
+          expiresAt: "2026-07-01T00:00:00Z",
+          daysRemaining: 15,
+        },
+      ],
+      rules: [
+        {
+          name: "KYC Completeness",
+          status: "fail",
+          detail: "Missing source_of_funds",
+        },
+      ],
+      lastEvaluated: "2026-01-01T00:00:00Z",
+      nextReviewDate: "2026-04-01T00:00:00Z",
+    });
     const { result } = renderHook(() => useGapAnalysis("AE-CBUAE"), {
       wrapper: createWrapper(),
     });
 
-    await waitFor(() => expect(result.current.isError).toBe(true));
-    expect(mockApiClient.get).not.toHaveBeenCalled();
-    expect(result.current.error).toMatchObject({
-      code: "REGULATORY_GAP_ANALYSIS_UNAVAILABLE",
-      status: 501,
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(mockApiClient.get).toHaveBeenCalledWith(
+      `/api/v1/enterprise/compliance/status/${mockAddress}`,
+      { jurisdiction: "AE-CBUAE" },
+    );
+    expect(result.current.data).toMatchObject({
+      jurisdictionId: "AE-CBUAE",
+      totalRequired: 2,
+      totalMet: 0,
     });
+    expect(result.current.data?.gaps.map((gap) => gap.requirement)).toEqual([
+      "Source Of Funds",
+      "Passport",
+    ]);
   });
 
   it("is disabled when jurisdictionId is undefined", () => {
@@ -315,16 +371,32 @@ describe("useGapAnalysis", () => {
 // ===========================================================================
 
 describe("useRegulatoryFeed", () => {
-  it("fails closed because the change feed is not exposed", async () => {
+  it("fetches and maps backend regulatory changes", async () => {
+    mockApiClient.get.mockResolvedValue([
+      {
+        id: "chg-1",
+        jurisdiction: "AE-CBUAE",
+        changeType: "new_requirement",
+        title: "Enhanced due diligence update",
+        description: "Source of funds evidence is required.",
+        effectiveDate: "2026-08-01T00:00:00Z",
+        publishedAt: "2026-06-01T00:00:00Z",
+        impactedEntities: ["institution"],
+      },
+    ]);
     const { result } = renderHook(() => useRegulatoryFeed(), {
       wrapper: createWrapper(),
     });
 
-    await waitFor(() => expect(result.current.isError).toBe(true));
-    expect(mockApiClient.get).not.toHaveBeenCalled();
-    expect(result.current.error).toMatchObject({
-      code: "REGULATORY_FEED_UNAVAILABLE",
-      status: 501,
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(mockApiClient.get).toHaveBeenCalledWith(
+      "/api/v1/enterprise/compliance/regulatory-changes",
+    );
+    expect(result.current.data?.[0]).toMatchObject({
+      id: "chg-1",
+      category: "new_regulation",
+      severity: "high",
+      impactsIdentity: true,
     });
   });
 });
@@ -334,16 +406,42 @@ describe("useRegulatoryFeed", () => {
 // ===========================================================================
 
 describe("useDataSovereigntyStatus", () => {
-  it("fails closed because sovereignty status is not exposed", async () => {
+  it("fetches backend data sovereignty status", async () => {
+    mockApiClient.get.mockResolvedValue({
+      compliantRegions: ["me-central-1"],
+      nonCompliantRegions: [],
+      dataResidencyMap: [
+        {
+          dataType: "personal",
+          currentRegion: "me-central-1",
+          requiredRegion: "me-central-1",
+          compliant: true,
+          migrationRequired: false,
+        },
+      ],
+      gdprStatus: {
+        dataProcessingAgreement: false,
+        dataProtectionOfficer: false,
+        privacyImpactAssessment: false,
+        consentManagement: true,
+        rightToErasure: true,
+        dataPortability: true,
+        breachNotificationProcess: true,
+        overallCompliant: true,
+      },
+      pendingTransfers: 0,
+    });
     const { result } = renderHook(() => useDataSovereigntyStatus(), {
       wrapper: createWrapper(),
     });
 
-    await waitFor(() => expect(result.current.isError).toBe(true));
-    expect(mockApiClient.get).not.toHaveBeenCalled();
-    expect(result.current.error).toMatchObject({
-      code: "REGULATORY_DATA_SOVEREIGNTY_UNAVAILABLE",
-      status: 501,
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(mockApiClient.get).toHaveBeenCalledWith(
+      `/api/v1/enterprise/compliance/sovereignty/status/${mockAddress}`,
+    );
+    expect(result.current.data).toMatchObject({
+      compliantRegions: ["me-central-1"],
+      pendingTransfers: 0,
     });
   });
 

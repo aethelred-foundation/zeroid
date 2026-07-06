@@ -11,6 +11,10 @@ import React from "react";
 import { renderHook, act, waitFor } from "@testing-library/react";
 import { IdentityProvider, useIdentity } from "@/contexts/IdentityContext";
 import { apiClient } from "@/lib/api/client";
+import {
+  clearIdentityAuthToken,
+  getIdentityAuthToken,
+} from "@/lib/identity/registration";
 import { createDID } from "@/lib/utils";
 import type {
   IdentityProfile,
@@ -124,11 +128,13 @@ beforeEach(() => {
   (createDID as jest.Mock).mockImplementation((id: string, network: string) =>
     makeDID(id),
   );
+  clearIdentityAuthToken();
   window.sessionStorage.clear();
 });
 
 afterEach(() => {
   jest.useRealTimers();
+  clearIdentityAuthToken();
 });
 
 // ---------------------------------------------------------------------------
@@ -177,7 +183,7 @@ describe("IdentityContext", () => {
   // =========================================================================
 
   describe("DID derivation", () => {
-    it("derives DID from connected address", () => {
+    it("derives DID from connected address", async () => {
       mockUseAccount.mockReturnValue({
         address: mockAddress,
         isConnected: true,
@@ -192,6 +198,9 @@ describe("IdentityContext", () => {
         expect.any(String),
       );
       expect(result.current.did).toEqual(makeDID(mockAddress.toLowerCase()));
+      await waitFor(() => {
+        expect(result.current.identity.isLoading).toBe(false);
+      });
     });
 
     it("returns null DID when disconnected", () => {
@@ -517,9 +526,10 @@ describe("IdentityContext", () => {
         recoveryHash: recoveryHash.slice(2),
         metadata: { controller: mockAddress.toLowerCase() },
       });
-      expect(window.sessionStorage.getItem("zeroid.identity.authToken")).toBe(
-        "identity-token",
-      );
+      expect(getIdentityAuthToken()).toBe("identity-token");
+      expect(
+        window.sessionStorage.getItem("zeroid.identity.authToken"),
+      ).toBeNull();
       expect(result.current.identity.isRegistered).toBe(true);
       expect(result.current.identity.profile).toEqual(profile);
       expect(result.current.identity.credentials).toEqual([]);

@@ -10,6 +10,11 @@ import { useAccount, useDisconnect } from "wagmi";
 
 import type { NavItem } from "./AppLayout";
 import { NAV_SECTIONS } from "./AppLayout";
+import {
+  getFeatureReadiness,
+  readinessBadgeClass,
+  readinessDotClass,
+} from "@/lib/product/readiness";
 
 interface SidebarProps {
   collapsed: boolean;
@@ -74,6 +79,7 @@ export function Sidebar({
               <div className="space-y-0.5">
                 {section.items.map((item) => {
                   const active = isActive(item.href);
+                  const readiness = getFeatureReadiness(item.href);
                   return (
                     <Link
                       key={item.href}
@@ -108,6 +114,17 @@ export function Sidebar({
                           }`}
                         >
                           {item.badge}
+                        </span>
+                      )}
+                      {readiness.status !== "Live" && (
+                        <span
+                          className={`${
+                            item.badge ? "" : "ml-auto"
+                          } text-[9px] px-1.5 py-px rounded-full font-semibold tracking-wide uppercase ${readinessBadgeClass(
+                            readiness.status,
+                          )}`}
+                        >
+                          {readiness.status}
                         </span>
                       )}
                     </Link>
@@ -166,6 +183,7 @@ export function Sidebar({
         {allItems.map((item) => {
           const active = isActive(item.href);
           const isHovered = hoveredItem === item.href;
+          const readiness = getFeatureReadiness(item.href);
 
           return (
             <div key={item.href} className="relative">
@@ -189,8 +207,12 @@ export function Sidebar({
                 )}
                 {item.icon}
                 {/* Badge dot */}
-                {item.badge && (
-                  <span className="absolute top-1 right-1 w-[5px] h-[5px] rounded-full bg-chrome-300" />
+                {(item.badge || readiness.status !== "Live") && (
+                  <span
+                    className={`absolute top-1 right-1 h-[5px] w-[5px] rounded-full ${readinessDotClass(
+                      readiness.status,
+                    )}`}
+                  />
                 )}
               </Link>
 
@@ -205,7 +227,10 @@ export function Sidebar({
                     className="tooltip"
                     style={{ top: "50%", transform: "translateY(-50%)" }}
                   >
-                    {item.label}
+                    <span className="block">{item.label}</span>
+                    <span className="mt-0.5 block text-[10px] text-zero-500">
+                      {readiness.status}
+                    </span>
                   </motion.div>
                 )}
               </AnimatePresence>

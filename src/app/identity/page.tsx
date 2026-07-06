@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Shield,
@@ -27,6 +27,41 @@ import IdentityCreation from "@/components/identity/IdentityCreation";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { useIdentity } from "@/hooks/useIdentity";
 import { toast } from "sonner";
+import { aethelredMainnet } from "@/config/chains";
+
+const AETHELRED_EXPLORER_URL =
+  aethelredMainnet.blockExplorers.default.url.replace(/\/$/, "");
+
+function getDidUri(did: unknown): string | null {
+  if (typeof did === "string") return did;
+  if (did && typeof did === "object" && "uri" in did) {
+    const uri = (did as { uri?: unknown }).uri;
+    return typeof uri === "string" ? uri : null;
+  }
+  return null;
+}
+
+function buildIdentityExplorerUrl(identity: unknown, fallbackAddress?: string) {
+  const record = identity as
+    | { did?: unknown; controller?: unknown; owner?: unknown }
+    | null
+    | undefined;
+  const controller =
+    typeof record?.controller === "string"
+      ? record.controller
+      : typeof record?.owner === "string"
+        ? record.owner
+        : fallbackAddress;
+
+  if (controller) {
+    return `${AETHELRED_EXPLORER_URL}/address/${controller}`;
+  }
+
+  const didUri = getDidUri(record?.did);
+  return didUri
+    ? `${AETHELRED_EXPLORER_URL}/search?q=${encodeURIComponent(didUri)}`
+    : AETHELRED_EXPLORER_URL;
+}
 
 export default function IdentityPage() {
   const { address, isConnected } = useAccount();
@@ -36,6 +71,10 @@ export default function IdentityPage() {
   const [activeTab, setActiveTab] = useState<
     "overview" | "delegates" | "recovery"
   >("overview");
+  const identityExplorerUrl = useMemo(
+    () => buildIdentityExplorerUrl(identity, address),
+    [identity, address],
+  );
 
   const copyDID = () => {
     if (identity?.did) {
@@ -185,7 +224,10 @@ export default function IdentityPage() {
                             <Copy className="w-4 h-4 text-[var(--text-tertiary)]" />
                           </button>
                           <a
-                            href="#"
+                            href={identityExplorerUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            aria-label="Open identity in Aethelred Explorer"
                             className="p-1.5 rounded-lg hover:bg-[var(--surface-tertiary)] transition-colors"
                           >
                             <ExternalLink className="w-4 h-4 text-[var(--text-tertiary)]" />

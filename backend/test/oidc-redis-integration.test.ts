@@ -39,16 +39,20 @@ let realRedis: Redis | null = null;
 let redisAvailable = false;
 
 beforeAll(async () => {
+  let candidate: Redis | null = null;
   try {
-    realRedis = new Redis(REDIS_URL, {
+    candidate = new Redis(REDIS_URL, {
       connectTimeout: 2000,
       maxRetriesPerRequest: 0,
       lazyConnect: true,
     });
+    candidate.on('error', () => undefined);
+    realRedis = candidate;
     await realRedis.connect();
     await realRedis.ping();
     redisAvailable = true;
   } catch {
+    candidate?.disconnect();
     realRedis = null;
     redisAvailable = false;
   }

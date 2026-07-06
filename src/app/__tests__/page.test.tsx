@@ -19,7 +19,10 @@ jest.mock("wagmi", () => ({
 // Mock next/image
 jest.mock("next/image", () => ({
   __esModule: true,
-  default: (props: any) => <img {...props} />,
+  default: ({ alt = "", priority: _priority, ...props }: any) => {
+    // eslint-disable-next-line @next/next/no-img-element
+    return <img alt={alt} {...props} />;
+  },
 }));
 
 // Mock next/link

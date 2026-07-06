@@ -220,11 +220,21 @@ describe("LivenessCheck", () => {
   });
 
   it("renders failure state when anti-spoof checks fail (covers lines 76, 122)", () => {
-    // Force Math.random to return 0 => finalConfidence = 85+0 = 85 (>= 80)
-    // but anti-spoof results will all be false (Math.random() returns 0 which is NOT > 0.1)
-    const randomSpy = jest.spyOn(Math, "random").mockReturnValue(0);
     const onComplete = jest.fn();
-    render(<LivenessCheck onComplete={onComplete} />);
+    render(
+      <LivenessCheck
+        onComplete={onComplete}
+        referenceResult={{
+          confidence: 85,
+          antiSpoofResults: {
+            "Depth Analysis": false,
+            "Texture Analysis": false,
+            "Motion Consistency": false,
+            "Light Reflection": false,
+          },
+        }}
+      />,
+    );
     fireEvent.click(screen.getByText("Start Liveness Check"));
 
     act(() => {
@@ -237,12 +247,9 @@ describe("LivenessCheck", () => {
       });
     }
 
-    // With Math.random() returning 0, anti-spoof checks fail (0 > 0.1 is false)
-    // So status should be 'failure'
     expect(onComplete).toHaveBeenCalledWith(false, expect.any(Number));
     // Should show failure UI elements
     expect(screen.getByText("Verification Failed")).toBeInTheDocument();
-    randomSpy.mockRestore();
   });
 
   it("restarts check on retry", () => {

@@ -10,6 +10,7 @@ import {
   LayoutDashboard,
   Fingerprint,
   BadgeCheck,
+  ShieldCheck,
   ScanEye,
   Vote,
   ClipboardList,
@@ -66,6 +67,12 @@ export const NAV_SECTIONS: NavSection[] = [
         label: "Credentials",
         href: "/credentials",
         icon: <BadgeCheck className={ICON_SIZE} />,
+      },
+      {
+        label: "Eligibility",
+        href: "/eligibility",
+        icon: <ShieldCheck className={ICON_SIZE} />,
+        badge: "Core",
       },
       {
         label: "Verification",
@@ -184,6 +191,12 @@ const SEARCH_ITEMS = [
     icon: <BadgeCheck className="w-4 h-4" />,
   },
   {
+    label: "Eligibility",
+    href: "/eligibility",
+    section: "Core",
+    icon: <ShieldCheck className="w-4 h-4" />,
+  },
+  {
     label: "Verification",
     href: "/verification",
     section: "Core",
@@ -284,6 +297,12 @@ const SEARCH_ITEMS = [
     href: "/verification",
     section: "Actions",
     icon: <ScanEye className="w-4 h-4" />,
+  },
+  {
+    label: "Run Eligibility Proof",
+    href: "/eligibility",
+    section: "Actions",
+    icon: <ShieldCheck className="w-4 h-4" />,
   },
   {
     label: "Register AI Agent",

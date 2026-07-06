@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen, fireEvent, act } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 
 // Mock next/navigation
 jest.mock("next/navigation", () => ({
@@ -44,15 +44,42 @@ jest.mock("@/components/layout/AppLayout", () => ({
   ),
 }));
 
+jest.mock("@/hooks/useAICompliance", () => ({
+  useComplianceAdvisor: jest.fn(),
+}));
+
+import { useComplianceAdvisor } from "@/hooks/useAICompliance";
 import AICompliancePage from "../page";
+
+const mockUseComplianceAdvisor = useComplianceAdvisor as jest.Mock;
+const mockSendMessage = jest.fn();
 
 describe("AICompliancePage", () => {
   beforeEach(() => {
-    jest.useFakeTimers();
-  });
-
-  afterEach(() => {
-    jest.useRealTimers();
+    jest.clearAllMocks();
+    mockSendMessage.mockResolvedValue({
+      queryId: "advisor-query-1",
+      question: "Check compliance",
+      answer:
+        "Backend advisor answer: sanctions screening is current and escalation is not required.",
+      confidence: 0.91,
+      citations: [
+        {
+          regulation: "FATF",
+          section: "Recommendation 10",
+          text: "Customer due diligence controls must stay current.",
+        },
+      ],
+      relatedTopics: ["sanctions", "customer due diligence"],
+      disclaimer: "Decision support only.",
+      timestamp: "2026-06-26T00:00:00.000Z",
+    });
+    mockUseComplianceAdvisor.mockReturnValue({
+      sendMessage: mockSendMessage,
+      isLoading: false,
+      error: null,
+      lastResponse: null,
+    });
   });
 
   it("renders without crashing", () => {
@@ -243,21 +270,21 @@ describe("AICompliancePage", () => {
     ).toBeInTheDocument();
   });
 
-  it("sends a chat message via Enter key and receives a response", () => {
+  it("sends a chat message via Enter key and renders the advisor response", async () => {
     render(<AICompliancePage />);
     const chatInput = screen.getByPlaceholderText("Ask the AI copilot...");
     fireEvent.change(chatInput, { target: { value: "Check compliance" } });
     fireEvent.keyDown(chatInput, { key: "Enter" });
     expect(screen.getByText("Check compliance")).toBeInTheDocument();
 
-    // Advance timer for response
-    act(() => {
-      jest.advanceTimersByTime(2000);
-    });
-    // Response should appear (the mock always gives the same response)
+    await waitFor(() =>
+      expect(mockSendMessage).toHaveBeenCalledWith("Check compliance"),
+    );
     expect(
-      screen.getAllByText(/I've analyzed the request/).length,
-    ).toBeGreaterThanOrEqual(1);
+      await screen.findByText(/Backend advisor answer/),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Confidence 91%")).toBeInTheDocument();
+    expect(screen.getByText(/FATF Recommendation 10/)).toBeInTheDocument();
   });
 
   it("does not send empty chat messages", () => {
@@ -266,8 +293,8 @@ describe("AICompliancePage", () => {
     const messagesBefore = screen.getAllByText(/.*/).length;
     fireEvent.change(chatInput, { target: { value: "   " } });
     fireEvent.keyDown(chatInput, { key: "Enter" });
-    // Message count should remain the same
     expect(screen.queryByText("   ")).not.toBeInTheDocument();
+    expect(mockSendMessage).not.toHaveBeenCalled();
   });
 
   it("renders quick action buttons", () => {
@@ -275,7 +302,7 @@ describe("AICompliancePage", () => {
     expect(screen.getByText("Quick Actions")).toBeInTheDocument();
     expect(screen.getByText("Run Full Screening")).toBeInTheDocument();
     expect(screen.getByText("Generate Report")).toBeInTheDocument();
-    expect(screen.getByText("Simulate Regulation")).toBeInTheDocument();
+    expect(screen.getByText("Assess Regulation Impact")).toBeInTheDocument();
   });
 
   it("renders active alerts section with risk feed items", () => {
@@ -300,6 +327,15 @@ describe("AICompliancePage", () => {
     expect(screen.getByText("Run screening")).toBeInTheDocument();
     expect(screen.getByText("Risk summary")).toBeInTheDocument();
     expect(screen.getByText("Alerts")).toBeInTheDocument();
+  });
+
+  it("chat quick action buttons populate the advisor prompt", () => {
+    render(<AICompliancePage />);
+    const chatInput = screen.getByPlaceholderText(
+      "Ask the AI copilot...",
+    ) as HTMLInputElement;
+    fireEvent.click(screen.getByText("Risk summary"));
+    expect(chatInput.value).toBe("Risk summary");
   });
 
   it("displays risk feed items with severity badges", () => {

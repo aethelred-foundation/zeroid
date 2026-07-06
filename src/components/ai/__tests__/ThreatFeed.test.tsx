@@ -253,14 +253,6 @@ describe("ThreatFeed", () => {
   });
 
   it("handles internal review when no onReview callback is provided", () => {
-    // Create deterministic but unique events by cycling random values
-    let callCount = 0;
-    const randomSpy = jest.spyOn(Math, "random").mockImplementation(() => {
-      callCount++;
-      // Return low values to ensure reviewed=false (Math.random() > 0.6 means reviewed)
-      return (callCount % 10) * 0.05; // cycles 0, 0.05, 0.10, ...
-    });
-
     render(<ThreatFeed autoRefresh={false} />);
 
     // Get the first event card and expand it
@@ -274,8 +266,6 @@ describe("ThreatFeed", () => {
     const markReviewedBtn = screen.queryByText("Mark Reviewed");
     expect(markReviewedBtn).toBeTruthy();
     fireEvent.click(markReviewedBtn!);
-
-    randomSpy.mockRestore();
   });
 
   it("applies custom className", () => {
@@ -422,11 +412,11 @@ describe("ThreatFeed", () => {
     jest.useRealTimers();
   });
 
-  it("generates mock events when no external events and autoRefresh is off", () => {
+  it("renders reference events when no external events and autoRefresh is off", () => {
     render(<ThreatFeed autoRefresh={false} />);
-    // Should generate 8 mock events
+    // Should render the built-in reference event set
     expect(screen.getByText("Threat Intelligence Feed")).toBeInTheDocument();
-    // Should show some events (8 generated)
+    // Should show reference feed events
     expect(screen.getByText(/events/)).toBeInTheDocument();
   });
 
@@ -564,7 +554,7 @@ describe("ThreatFeed", () => {
       );
     if (typeFilterButtons.length > 0) {
       fireEvent.click(typeFilterButtons[0]);
-      // Verify the filter is active (no events should match since our mock events don't have that type)
+      // Verify the filter is active for a type not present in this fixture
       expect(
         screen.getByText("No threat events match your filters"),
       ).toBeInTheDocument();

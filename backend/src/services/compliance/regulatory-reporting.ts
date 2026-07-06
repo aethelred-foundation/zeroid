@@ -429,16 +429,10 @@ export class RegulatoryReportingService {
     this.assertDataSubjectRightsConnectorAvailable();
     const reportId = crypto.randomUUID();
 
-    // Development-only local collection placeholder.
-    const collectedData: Record<string, unknown> = {};
-    for (const category of parsed.dataCategories) {
-      collectedData[category] = {
-        status: 'collected',
-        recordCount: Math.floor(Math.random() * 50) + 1,
-        lastUpdated: new Date().toISOString(),
-        retentionPolicy: this.getRetentionPolicyForCategory(category),
-      };
-    }
+    const collectedData = this.collectLocalDataSubjectInventory(
+      parsed.requestorId,
+      parsed.dataCategories,
+    );
 
     const report: GeneratedReport = {
       reportId,
@@ -699,7 +693,7 @@ export class RegulatoryReportingService {
       );
     }
 
-    // Simulate regulatory API submission
+    // Non-production connectorless filing reference for local workflow tests.
     const filingReference = `${report.reportType}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
     report.filingReference = filingReference;
     report.submittedAt = new Date().toISOString();
@@ -1030,6 +1024,32 @@ export class RegulatoryReportingService {
       'Data subject rights connector is required in production',
       'DATA_SUBJECT_RIGHTS_CONNECTOR_REQUIRED',
       503,
+    );
+  }
+
+  private collectLocalDataSubjectInventory(
+    requestorId: string,
+    dataCategories: string[],
+  ): Record<string, unknown> {
+    return Object.fromEntries(
+      dataCategories.map((category) => {
+        const collectionDigest = crypto
+          .createHash('sha256')
+          .update(`${requestorId}:${category}:zeroid-dsar-local-collector-v1`)
+          .digest('hex');
+
+        return [
+          category,
+          {
+            status: 'collected',
+            collectionMode: 'local_deterministic_connector',
+            recordCount: (Number.parseInt(collectionDigest.slice(0, 8), 16) % 50) + 1,
+            evidenceHash: `0x${collectionDigest}`,
+            lastUpdated: new Date().toISOString(),
+            retentionPolicy: this.getRetentionPolicyForCategory(category),
+          },
+        ];
+      }),
     );
   }
 

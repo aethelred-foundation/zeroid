@@ -25,6 +25,10 @@ import {
   X,
   RefreshCw,
 } from "lucide-react";
+import {
+  useComplianceAdvisor,
+  type AdvisorResponse,
+} from "@/hooks/useAICompliance";
 
 // ============================================================================
 // Types
@@ -41,7 +45,8 @@ type MessageRole = "user" | "assistant";
 interface Citation {
   title: string;
   source: string;
-  url: string;
+  url?: string;
+  text?: string;
 }
 
 interface ActionButton {
@@ -129,8 +134,11 @@ const ALERT_STYLES: Record<
 // Helpers
 // ============================================================================
 
+let messageSequence = 0;
+
 function generateId(): string {
-  return `msg_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+  messageSequence += 1;
+  return `msg_${Date.now()}_${messageSequence.toString(36).padStart(4, "0")}`;
 }
 
 function formatTime(ts: number): string {
@@ -138,6 +146,129 @@ function formatTime(ts: number): string {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+function inferMessageType(response: AdvisorResponse): MessageType {
+  const normalized = `${response.question} ${response.answer}`.toLowerCase();
+  if (/\b(report|summary|metrics|dashboard)\b/.test(normalized)) {
+    return "report_summary";
+  }
+  if (/\b(alert|gap|risk|violation|breach|critical)\b/.test(normalized)) {
+    return "compliance_alert";
+  }
+  if (
+    /\b(recommend|should|action|required|screen|screening)\b/.test(normalized)
+  ) {
+    return "action_suggestion";
+  }
+  return "text";
+}
+
+function inferAlertSeverity(
+  response: AdvisorResponse,
+): ChatMessage["alertSeverity"] {
+  const normalized = response.answer.toLowerCase();
+  if (
+    response.confidence < 0.55 ||
+    /\bcritical|breach|violation\b/.test(normalized)
+  ) {
+    return "critical";
+  }
+  if (/\bgap|risk|warning|review|required\b/.test(normalized)) {
+    return "warning";
+  }
+  return "info";
+}
+
+function inferActions(response: AdvisorResponse): ActionButton[] {
+  const normalized =
+    `${response.question} ${response.answer} ${response.relatedTopics.join(" ")}`.toLowerCase();
+  const actions: ActionButton[] = [];
+
+  if (/\b(screen|screening|sanction|kyc|aml|pep|ofac)\b/.test(normalized)) {
+    actions.push({
+      label: "Run Screening",
+      icon: "screening",
+      action: "run_sanctions_screening",
+    });
+  }
+
+  if (/\b(report|summary|evidence|audit)\b/.test(normalized)) {
+    actions.push({
+      label: "Generate Full Report",
+      icon: "report",
+      action: "generate_report",
+    });
+  }
+
+  if (
+    response.citations.length > 0 ||
+    /\bdetail|regulation|policy\b/.test(normalized)
+  ) {
+    actions.push({
+      label: "View Details",
+      icon: "details",
+      action: "view_advisor_evidence",
+    });
+  }
+
+  return actions;
+}
+
+function advisorResponseToMessage(response: AdvisorResponse): ChatMessage {
+  const type = inferMessageType(response);
+  const timestamp = Date.parse(response.timestamp);
+  const citations = response.citations.map((citation) => ({
+    title: citation.regulation,
+    source: citation.section,
+    text: citation.text,
+  }));
+
+  return {
+    id: response.queryId || generateId(),
+    role: "assistant",
+    type,
+    content: response.answer,
+    timestamp: Number.isFinite(timestamp) ? timestamp : Date.now(),
+    citations,
+    actions: inferActions(response),
+    alertSeverity:
+      type === "compliance_alert" ? inferAlertSeverity(response) : undefined,
+    reportMetrics:
+      type === "report_summary"
+        ? [
+            {
+              label: "Confidence",
+              value: `${Math.round(response.confidence * 100)}%`,
+            },
+            { label: "Citations", value: String(response.citations.length) },
+            {
+              label: "Topics",
+              value: String(response.relatedTopics.length),
+            },
+            { label: "Query", value: response.queryId },
+          ]
+        : undefined,
+  };
+}
+
+function advisorFailureMessage(err: unknown): ChatMessage {
+  const detail = err instanceof Error ? err.message : "Unknown advisor error";
+  return {
+    id: generateId(),
+    role: "assistant",
+    type: "compliance_alert",
+    content: `Advisor request failed. The backend did not return a compliance response. ${detail}`,
+    timestamp: Date.now(),
+    alertSeverity: "warning",
+    actions: [
+      {
+        label: "View Details",
+        icon: "details",
+        action: "inspect_ai_compliance_service",
+      },
+    ],
+  };
 }
 
 // ============================================================================
@@ -165,7 +296,11 @@ function TypingIndicator() {
 }
 
 function CitationLink({ citation }: { citation: Citation }) {
-  return (
+  const label = citation.source
+    ? `${citation.title} ${citation.source}`
+    : citation.title;
+
+  return citation.url ? (
     <a
       href={citation.url}
       target="_blank"
@@ -173,8 +308,16 @@ function CitationLink({ citation }: { citation: Citation }) {
       className="inline-flex items-center gap-1 text-xs text-brand-500 hover:text-brand-400 transition-colors bg-brand-500/5 rounded px-2 py-0.5"
     >
       <ExternalLink className="w-3 h-3" />
-      {citation.title}
+      {label}
     </a>
+  ) : (
+    <span
+      title={citation.text}
+      className="inline-flex items-center gap-1 text-xs text-brand-500 bg-brand-500/5 rounded px-2 py-0.5"
+    >
+      <FileText className="w-3 h-3" />
+      {label}
+    </span>
   );
 }
 
@@ -347,6 +490,14 @@ export default function ComplianceCopilot({
   const [showHistory, setShowHistory] = useState(true);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const mountedRef = useRef(true);
+  const { sendMessage, isLoading: advisorLoading } = useComplianceAdvisor();
+
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -362,143 +513,51 @@ export default function ComplianceCopilot({
     return messages.filter((m) => m.content.toLowerCase().includes(q));
   }, [messages, searchQuery]);
 
-  const simulateResponse = useCallback((userMessage: string) => {
-    setIsTyping(true);
+  const submitPrompt = useCallback(
+    async (prompt: string) => {
+      const trimmed = prompt.trim();
+      if (!trimmed || isTyping || advisorLoading) return;
 
-    const timeout = setTimeout(
-      () => {
-        const responseTypes: ChatMessage[] = [
-          {
-            id: generateId(),
-            role: "assistant",
-            type: "compliance_alert",
-            content:
-              "I detected a potential compliance gap in the EU jurisdiction. The eIDAS 2.0 regulation requires updated credential schemas for cross-border identity verification effective March 2026.",
-            timestamp: Date.now(),
-            alertSeverity: "warning",
-            citations: [
-              {
-                title: "eIDAS 2.0 Regulation",
-                source: "EU Official Journal",
-                url: "https://eur-lex.europa.eu/eli/reg/2024/1183/oj",
-              },
-            ],
-            actions: [
-              {
-                label: "Run Screening",
-                icon: "screening",
-                action: "run_screening",
-              },
-              {
-                label: "View Details",
-                icon: "details",
-                action: "view_details",
-              },
-            ],
-          },
-          {
-            id: generateId(),
-            role: "assistant",
-            type: "report_summary",
-            content:
-              "Here is the compliance report summary. All critical metrics are within acceptable thresholds, with minor gaps identified in APAC jurisdictions.",
-            timestamp: Date.now(),
-            reportMetrics: [
-              { label: "Overall Score", value: "94.2%" },
-              { label: "Jurisdictions", value: "23 / 28" },
-              { label: "Open Issues", value: "7" },
-              { label: "Critical Gaps", value: "0" },
-            ],
-            actions: [
-              {
-                label: "Generate Full Report",
-                icon: "report",
-                action: "generate_report",
-              },
-            ],
-          },
-          {
-            id: generateId(),
-            role: "assistant",
-            type: "action_suggestion",
-            content:
-              "Based on your query, I recommend running a comprehensive sanctions screening against the latest OFAC, EU, and UN consolidated lists. The last screening was completed 48 hours ago.",
-            timestamp: Date.now(),
-            actions: [
-              {
-                label: "Run Screening",
-                icon: "screening",
-                action: "run_sanctions_screening",
-              },
-              {
-                label: "View Last Report",
-                icon: "report",
-                action: "view_last_report",
-              },
-              {
-                label: "View Details",
-                icon: "details",
-                action: "view_screening_details",
-              },
-            ],
-            citations: [
-              {
-                title: "OFAC SDN List",
-                source: "US Treasury",
-                url: "https://sanctionssearch.ofac.treas.gov/",
-              },
-            ],
-          },
-          {
-            id: generateId(),
-            role: "assistant",
-            type: "text",
-            content: userMessage.includes("status")
-              ? "Your compliance posture is strong. 23 out of 28 target jurisdictions are fully compliant. 4 jurisdictions require updated KYC credential schemas, and 1 jurisdiction (Singapore) has a pending MAS regulatory review."
-              : "I have analyzed the request. All identity credentials are within their validity window and the ZK proof circuits are up to date. No immediate action is required.",
-            timestamp: Date.now(),
-          },
-        ];
-
-        const response =
-          responseTypes[Math.floor(Math.random() * responseTypes.length)];
-        setMessages((prev) => [...prev, response]);
-        setIsTyping(false);
-      },
-      1500 + Math.random() * 1000,
-    );
-  }, []);
-
-  const handleSend = useCallback(() => {
-    const trimmed = input.trim();
-    if (!trimmed || isTyping) return;
-
-    const userMsg: ChatMessage = {
-      id: generateId(),
-      role: "user",
-      type: "text",
-      content: trimmed,
-      timestamp: Date.now(),
-    };
-
-    setMessages((prev) => [...prev, userMsg]);
-    setInput("");
-    simulateResponse(trimmed);
-  }, [input, isTyping, simulateResponse]);
-
-  const handleStarterClick = useCallback(
-    (prompt: string) => {
       const userMsg: ChatMessage = {
         id: generateId(),
         role: "user",
         type: "text",
-        content: prompt,
+        content: trimmed,
         timestamp: Date.now(),
       };
+
       setMessages((prev) => [...prev, userMsg]);
-      simulateResponse(prompt);
+      setInput("");
+      setIsTyping(true);
+
+      try {
+        const advisorResponse = await sendMessage(trimmed);
+        if (!mountedRef.current) return;
+        setMessages((prev) => [
+          ...prev,
+          advisorResponseToMessage(advisorResponse),
+        ]);
+      } catch (err) {
+        if (!mountedRef.current) return;
+        setMessages((prev) => [...prev, advisorFailureMessage(err)]);
+      } finally {
+        if (mountedRef.current) {
+          setIsTyping(false);
+        }
+      }
     },
-    [simulateResponse],
+    [advisorLoading, isTyping, sendMessage],
+  );
+
+  const handleSend = useCallback(() => {
+    void submitPrompt(input);
+  }, [input, submitPrompt]);
+
+  const handleStarterClick = useCallback(
+    (prompt: string) => {
+      void submitPrompt(prompt);
+    },
+    [submitPrompt],
   );
 
   const handleCopy = useCallback(async (content: string) => {
@@ -676,11 +735,11 @@ export default function ComplianceCopilot({
             onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && handleSend()}
             placeholder="Ask about compliance, regulations, or risk..."
             className="flex-1 px-4 py-2.5 rounded-xl bg-[var(--surface-secondary)] border border-[var(--border-primary)] text-sm text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:outline-none focus:border-brand-500 transition-colors"
-            disabled={isTyping}
+            disabled={isTyping || advisorLoading}
           />
           <button
             onClick={handleSend}
-            disabled={!input.trim() || isTyping}
+            disabled={!input.trim() || isTyping || advisorLoading}
             className="p-2.5 rounded-xl bg-brand-500 text-white hover:bg-brand-600 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
             aria-label="Send message"
           >

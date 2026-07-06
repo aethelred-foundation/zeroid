@@ -19,7 +19,7 @@ import type { DisclosureSelection, ZKProof } from "@/types";
 type ProofStage =
   | "idle"
   | "loading-wasm"
-  | "computing-witness"
+  | "loading-zkey"
   | "generating-proof"
   | "complete"
   | "error";
@@ -46,9 +46,9 @@ const stageConfig: Record<
     icon: Binary,
     progress: 25,
   },
-  "computing-witness": {
-    label: "Computing Witness",
-    description: "Evaluating circuit constraints with private inputs...",
+  "loading-zkey": {
+    label: "Loading Proving Key",
+    description: "Fetching zkey proving parameters for the circuit...",
     icon: Cpu,
     progress: 55,
   },
@@ -79,20 +79,31 @@ export default function ProofGenerator({
 }: ProofGeneratorProps) {
   const [stage, setStage] = useState<ProofStage>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const { generateProof } = useProof();
+  const { generateProof, progress } = useProof();
+
+  useEffect(() => {
+    if (stage === "idle" || stage === "complete" || stage === "error") {
+      return;
+    }
+
+    if (progress.stage === "loading-wasm") {
+      setStage("loading-wasm");
+    } else if (progress.stage === "loading-zkey") {
+      setStage("loading-zkey");
+    } else if (progress.stage === "generating") {
+      setStage("generating-proof");
+    } else if (progress.stage === "done") {
+      setStage("complete");
+    } else if (progress.stage === "error") {
+      setStage("error");
+    }
+  }, [progress.stage, stage]);
 
   const handleGenerate = useCallback(async () => {
     setStage("loading-wasm");
     setErrorMessage(null);
 
     try {
-      // Simulate stage transitions (in production, these would be callbacks from the prover)
-      await new Promise((resolve) => setTimeout(resolve, 1200));
-      setStage("computing-witness");
-
-      await new Promise((resolve) => setTimeout(resolve, 1500));
-      setStage("generating-proof");
-
       const proof = await generateProof(disclosure);
       setStage("complete");
       onProofGenerated(proof);
@@ -196,7 +207,7 @@ export default function ProofGenerator({
               const nodeDelay = idx * 0.08;
               const isHighlighted = (() => {
                 if (stage === "complete") return true;
-                if (stage === "computing-witness") return idx < 8;
+                if (stage === "loading-zkey") return idx < 8;
                 if (stage === "generating-proof") return idx >= 4;
                 return false;
               })();
@@ -291,7 +302,7 @@ export default function ProofGenerator({
           {(
             [
               "loading-wasm",
-              "computing-witness",
+              "loading-zkey",
               "generating-proof",
             ] as ProofStage[]
           ).map((s, idx) => {
@@ -299,7 +310,7 @@ export default function ProofGenerator({
             const Icon = config.icon;
             const stageOrder = [
               "loading-wasm",
-              "computing-witness",
+              "loading-zkey",
               "generating-proof",
             ];
             const currentOrder = stageOrder.indexOf(stage);

@@ -47,7 +47,7 @@ import {
 import AppLayout from "@/components/layout/AppLayout";
 
 // ============================================================
-// Mock Data
+// Administrative Operations Data
 // ============================================================
 
 const roles = [

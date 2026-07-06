@@ -16,6 +16,7 @@ import {
   GOVERNANCE_TOKEN_ADDRESS,
   GOVERNANCE_TOKEN_ABI,
 } from "@/config/constants";
+import { apiClient } from "@/lib/api/client";
 import type {
   Proposal,
   ProposalStatus,
@@ -23,12 +24,6 @@ import type {
   CreateProposalParams,
   VotingPower,
 } from "@/types";
-
-function unsupportedGovernanceMetadata(): never {
-  throw new Error(
-    "Governance proposal metadata is not exposed by the backend API.",
-  );
-}
 
 // ---------------------------------------------------------------------------
 // Convenience wrapper — used by pages that need { proposals, votingPower }
@@ -99,7 +94,13 @@ export function useVotingPower() {
 export function useProposals(status?: ProposalStatus, page = 1) {
   return useQuery<{ proposals: Proposal[]; total: number }, Error>({
     queryKey: ["proposals", status, page],
-    queryFn: async () => unsupportedGovernanceMetadata(),
+    queryFn: async () => {
+      const result = await apiClient.listProposals(page, 10);
+      const proposals = status
+        ? result.items.filter((proposal) => proposal.status === status)
+        : result.items;
+      return { proposals, total: result.total };
+    },
     staleTime: 15_000,
     refetchInterval: 60_000,
   });
@@ -120,7 +121,7 @@ export function useProposalDetail(proposalId: bigint | undefined) {
 
   const apiQuery = useQuery<Proposal, Error>({
     queryKey: ["proposal", proposalId?.toString()],
-    queryFn: async () => unsupportedGovernanceMetadata(),
+    queryFn: async () => apiClient.getProposal(proposalId!.toString()),
     enabled: proposalId !== undefined,
     staleTime: 10_000,
   });

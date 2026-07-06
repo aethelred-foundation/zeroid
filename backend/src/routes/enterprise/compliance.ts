@@ -107,6 +107,49 @@ const ReportExportHandoffQuerySchema = z.object({
 const SubmissionPackageVerificationSchema = z.object({
   bundle: z.record(z.unknown()),
 });
+const JurisdictionRequirementsParamsSchema = z.object({
+  jurisdiction: JurisdictionCodeSchema,
+});
+const JurisdictionRequirementsQuerySchema = z.object({
+  operationType: ComplianceEvaluationRequestSchema.shape.operationType
+    .optional()
+    .default('onboarding'),
+});
+const RegulatoryChangesQuerySchema = z.object({
+  jurisdiction: JurisdictionCodeSchema.optional(),
+  since: z.string().datetime().optional(),
+});
+const DataSovereigntyStatusParamsSchema = z.object({
+  dataSubjectId: z.string().min(1),
+});
+
+function labelCredentialType(credentialType: string): string {
+  return credentialType
+    .split('_')
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+function inferKycLevel(requiredCredentials: string[]): number {
+  if (
+    requiredCredentials.some((credential) =>
+      ['source_of_funds', 'source_of_wealth', 'kyc_enhanced'].includes(
+        credential,
+      ),
+    )
+  ) {
+    return 3;
+  }
+  if (
+    requiredCredentials.some((credential) =>
+      ['aml_clearance', 'sanctions_clearance'].includes(credential),
+    )
+  ) {
+    return 2;
+  }
+  return 1;
+}
 
 // ---------------------------------------------------------------------------
 // Middleware: validate request targets with Zod schemas
@@ -4217,6 +4260,130 @@ router.get(
 );
 
 // ---------------------------------------------------------------------------
+// GET /enterprise/compliance/jurisdictions/:jurisdiction/requirements — Read required credentials and policy metadata
+// ---------------------------------------------------------------------------
+router.get(
+  '/jurisdictions/:jurisdiction/requirements',
+  requireEnterpriseContext(ENTERPRISE_COMPLIANCE_READ_ROLES),
+  validate({
+    params: JurisdictionRequirementsParamsSchema,
+    query: JurisdictionRequirementsQuerySchema,
+  }),
+  (req: Request, res: Response): void => {
+    try {
+      const { jurisdiction } = req.params;
+      const { operationType } = req.query as z.infer<
+        typeof JurisdictionRequirementsQuerySchema
+      >;
+      const jurisdictionMeta = jurisdictionEngine
+        .listJurisdictions()
+        .find((candidate) => candidate.code === jurisdiction);
+
+      if (!jurisdictionMeta) {
+        res.status(404).json({
+          error: 'Jurisdiction not found',
+          code: 'JURISDICTION_NOT_FOUND',
+        });
+        return;
+      }
+
+      const requiredCredentials = jurisdictionEngine.getRequiredCredentials(
+        jurisdiction as z.infer<typeof JurisdictionCodeSchema>,
+        operationType,
+      );
+      const retentionPolicy = jurisdictionEngine.getDataRetentionPolicy(
+        jurisdiction as z.infer<typeof JurisdictionCodeSchema>,
+      );
+
+      res.status(200).json({
+        data: {
+          jurisdictionId: jurisdictionMeta.code,
+          operationType,
+          requiredCredentials: requiredCredentials.map((credentialType) => ({
+            schemaId: credentialType,
+            schemaName: labelCredentialType(credentialType),
+            mandatory: true,
+            validityPeriodDays: retentionPolicy.retentionDays,
+            acceptedIssuers: [jurisdictionMeta.regulatoryBody],
+            renewalBufferDays: 90,
+          })),
+          dataRetentionDays: retentionPolicy.retentionDays,
+          consentRequirements: [
+            {
+              type:
+                retentionPolicy.consentModel === 'opt-out'
+                  ? 'opt_out'
+                  : retentionPolicy.consentModel === 'explicit'
+                    ? 'explicit'
+                    : 'implicit',
+              purpose: `${jurisdictionMeta.name} identity and compliance processing`,
+              retentionDays: retentionPolicy.retentionDays,
+              withdrawalEnabled: retentionPolicy.consentModel !== 'opt-out',
+              granularity: 'per_credential',
+            },
+          ],
+          reportingObligations: [
+            {
+              type: `${operationType}_compliance`,
+              frequency:
+                operationType === 'transaction' ? 'real_time' : 'quarterly',
+              authority: jurisdictionMeta.regulatoryBody,
+              format: 'zeroid.policy_receipt.v1',
+            },
+          ],
+          kycLevel: inferKycLevel(requiredCredentials),
+          amlThresholds: [
+            {
+              transactionType: 'transfer',
+              amountUSD: 10_000,
+              action: 'enhanced_due_diligence',
+            },
+          ],
+          updateFrequency: 'quarterly',
+        },
+      });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('jurisdiction_requirements_error', {
+        error: error.message,
+      });
+      res.status(error.statusCode ?? 500).json({
+        error: error.message,
+        code: error.code ?? 'JURISDICTION_REQUIREMENTS_ERROR',
+      });
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// GET /enterprise/compliance/regulatory-changes — List published jurisdiction changes
+// ---------------------------------------------------------------------------
+router.get(
+  '/regulatory-changes',
+  requireEnterpriseContext(ENTERPRISE_COMPLIANCE_READ_ROLES),
+  validate({ query: RegulatoryChangesQuerySchema }),
+  (req: Request, res: Response): void => {
+    try {
+      const { jurisdiction, since } = req.query as z.infer<
+        typeof RegulatoryChangesQuerySchema
+      >;
+      const changes = jurisdictionEngine.getRegulatoryChanges(
+        jurisdiction,
+        since ? new Date(since) : undefined,
+      );
+      res.status(200).json({ data: changes });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('regulatory_changes_error', { error: error.message });
+      res.status(error.statusCode ?? 500).json({
+        error: error.message,
+        code: error.code ?? 'REGULATORY_CHANGES_ERROR',
+      });
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
 // POST /enterprise/compliance/cross-border — Cross-border transfer assessment
 // ---------------------------------------------------------------------------
 router.post(
@@ -4374,6 +4541,90 @@ router.post(
       res.status(error.statusCode ?? 500).json({
         error: error.message,
         code: error.code ?? 'CROSS_BORDER_ERROR',
+      });
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// GET /enterprise/compliance/sovereignty/status/:dataSubjectId — Data residency and privacy workflow status
+// ---------------------------------------------------------------------------
+router.get(
+  '/sovereignty/status/:dataSubjectId',
+  requireEnterpriseContext(ENTERPRISE_COMPLIANCE_READ_ROLES),
+  validate({ params: DataSovereigntyStatusParamsSchema }),
+  (req: Request, res: Response): void => {
+    try {
+      const dataSubjectId = String(req.params.dataSubjectId);
+      const retentionStatus =
+        dataSovereigntyService.getRetentionStatus(dataSubjectId);
+      const consentRecords = dataSovereigntyService.getConsents(dataSubjectId);
+      const dataResidencyMap =
+        retentionStatus?.records.map((record) => {
+          const residencyRule = dataSovereigntyService.getResidencyRules(
+            record.jurisdiction,
+            record.category,
+          )[0];
+          const currentRegion =
+            residencyRule?.storageRegion ?? record.jurisdiction;
+          return {
+            dataType: record.category,
+            currentRegion,
+            requiredRegion: residencyRule?.storageRegion ?? currentRegion,
+            compliant: Boolean(residencyRule) && !record.expired,
+            migrationRequired: !residencyRule || record.expired,
+            retentionExpiresAt: record.expiresAt,
+            autoDeleteScheduled: record.autoDeleteScheduled,
+          };
+        }) ?? [];
+      const compliantRegions = [
+        ...new Set(
+          dataResidencyMap
+            .filter((entry) => entry.compliant)
+            .map((entry) => entry.requiredRegion),
+        ),
+      ];
+      const nonCompliantRegions = [
+        ...new Set(
+          dataResidencyMap
+            .filter((entry) => !entry.compliant)
+            .map((entry) => entry.currentRegion),
+        ),
+      ];
+      const hasActiveConsent = consentRecords.some(
+        (record) => record.consentGiven,
+      );
+
+      res.status(200).json({
+        data: {
+          compliantRegions,
+          nonCompliantRegions,
+          dataResidencyMap,
+          gdprStatus: {
+            dataProcessingAgreement: false,
+            dataProtectionOfficer: false,
+            privacyImpactAssessment: false,
+            consentManagement: hasActiveConsent,
+            rightToErasure: true,
+            dataPortability: true,
+            breachNotificationProcess: true,
+            overallCompliant:
+              nonCompliantRegions.length === 0 &&
+              (consentRecords.length === 0 || hasActiveConsent),
+          },
+          pendingTransfers: 0,
+          consentRecords: consentRecords.length,
+          retentionRecords: retentionStatus?.records.length ?? 0,
+        },
+      });
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      logger.error('data_sovereignty_status_error', {
+        error: error.message,
+      });
+      res.status(error.statusCode ?? 500).json({
+        error: error.message,
+        code: error.code ?? 'DATA_SOVEREIGNTY_STATUS_ERROR',
       });
     }
   },

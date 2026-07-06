@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 
 jest.mock("next/navigation", () => ({
   useRouter: () => ({ push: jest.fn(), back: jest.fn() }),
@@ -54,9 +54,199 @@ jest.mock("@/components/layout/AppLayout", () => ({
   ),
 }));
 
+jest.mock("@/hooks/useCrossChain", () => ({
+  useSupportedChains: jest.fn(),
+  useBridgedCredentials: jest.fn(),
+  useBridgeFeeEstimate: jest.fn(),
+  useBridgeCredential: jest.fn(),
+}));
+
+jest.mock("@/hooks/useCredentials", () => ({
+  useCredentials: jest.fn(),
+}));
+
+import {
+  useBridgeCredential,
+  useBridgeFeeEstimate,
+  useBridgedCredentials,
+  useSupportedChains,
+} from "@/hooks/useCrossChain";
+import { useCredentials } from "@/hooks/useCredentials";
 import CrossChainPage from "../page";
 
+const mockUseSupportedChains = useSupportedChains as jest.Mock;
+const mockUseBridgedCredentials = useBridgedCredentials as jest.Mock;
+const mockUseBridgeFeeEstimate = useBridgeFeeEstimate as jest.Mock;
+const mockUseBridgeCredential = useBridgeCredential as jest.Mock;
+const mockUseCredentials = useCredentials as jest.Mock;
+const mockBridgeMutateAsync = jest.fn();
+
+const supportedChainRows = [
+  {
+    chainId: 1,
+    name: "Ethereum",
+    shortName: "eth",
+    network: "mainnet",
+    bridgeContractAddress: "0x0000000000000000000000000000000000000000",
+    explorerUrl: "https://etherscan.io",
+    avgBlockTimeMs: 12_000,
+    requiredConfirmations: 12,
+    isActive: false,
+    supportedCredentialTypes: ["kyc", "identity"],
+    bridgeFeeBaseBps: 35,
+  },
+  {
+    chainId: 137,
+    name: "Polygon",
+    shortName: "pol",
+    network: "mainnet",
+    bridgeContractAddress: "0x0000000000000000000000000000000000000000",
+    explorerUrl: "https://polygonscan.com",
+    avgBlockTimeMs: 2_100,
+    requiredConfirmations: 128,
+    isActive: false,
+    supportedCredentialTypes: ["kyc", "identity"],
+    bridgeFeeBaseBps: 20,
+  },
+  {
+    chainId: 42161,
+    name: "Arbitrum One",
+    shortName: "arb",
+    network: "mainnet",
+    bridgeContractAddress: "0x0000000000000000000000000000000000000000",
+    explorerUrl: "https://arbiscan.io",
+    avgBlockTimeMs: 250,
+    requiredConfirmations: 20,
+    isActive: false,
+    supportedCredentialTypes: ["kyc", "identity"],
+    bridgeFeeBaseBps: 25,
+  },
+];
+
 describe("CrossChainPage", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockBridgeMutateAsync.mockResolvedValue({
+      id: "bridge-1",
+      credentialId: "cred-kyc",
+      credentialSchemaName: "KYC Identity Verification",
+      sourceChainId: 1,
+      destinationChainId: 137,
+      sourceChainName: "Ethereum",
+      destinationChainName: "Polygon",
+      status: "pending",
+      priority: "standard",
+      initiatedAt: "2026-06-26T00:00:00.000Z",
+      estimatedCompletionAt: "2026-06-26T00:10:00.000Z",
+      fee: {
+        baseFee: "0.001020",
+        priorityFee: "0.000000",
+        totalFee: "0.001020",
+        feeCurrency: "ETH",
+        feeUSD: 3.26,
+      },
+      sourceConfirmations: 0,
+      requiredConfirmations: 128,
+    });
+    mockUseSupportedChains.mockReturnValue({
+      data: supportedChainRows,
+      isLoading: false,
+      isError: false,
+    });
+    mockUseCredentials.mockReturnValue({
+      credentials: [
+        {
+          id: "cred-kyc",
+          hash: "0xabc",
+          schemaHash: "0xschema",
+          schemaName: "KYC Identity Verification",
+          issuerDid: "did:aethelred:issuer:zeroid",
+          subjectDid: "did:aethelred:subject:demo",
+          issuedAt: 1_700_000_000,
+          expiresAt: 2_000_000_000,
+          status: "verified",
+          merkleRoot: "0xroot",
+        },
+        {
+          id: "cred-age",
+          hash: "0xdef",
+          schemaHash: "0xschema2",
+          schemaName: "Age Verification (18+)",
+          issuerDid: "did:aethelred:issuer:zeroid",
+          subjectDid: "did:aethelred:subject:demo",
+          issuedAt: 1_700_000_000,
+          expiresAt: 2_000_000_000,
+          status: "verified",
+          merkleRoot: "0xroot2",
+        },
+      ],
+      total: 2,
+      isLoading: false,
+      isError: false,
+    });
+    mockUseBridgedCredentials.mockReturnValue({
+      data: [
+        {
+          credentialId: "cred-kyc",
+          originalChainId: 1,
+          bridgedChainId: 137,
+          originalChainName: "Ethereum",
+          bridgedChainName: "Polygon",
+          schemaName: "KYC Identity Verification",
+          bridgedAt: new Date(Date.now() - 60 * 60_000).toISOString(),
+          expiresAt: "2030-01-01T00:00:00.000Z",
+          status: "active",
+          bridgeTxId: "bridge-cred-kyc-137",
+          lastSyncedAt: "2026-06-26T00:00:00.000Z",
+        },
+      ],
+      isLoading: false,
+      isError: false,
+    });
+    mockUseBridgeFeeEstimate.mockReturnValue({
+      data: {
+        credentialId: "cred-kyc",
+        destinationChainId: 137,
+        estimates: {
+          standard: {
+            baseFee: "0.001020",
+            priorityFee: "0.000000",
+            totalFee: "0.001020",
+            feeCurrency: "ETH",
+            feeUSD: 3.26,
+          },
+          fast: {
+            baseFee: "0.001020",
+            priorityFee: "0.000816",
+            totalFee: "0.001836",
+            feeCurrency: "ETH",
+            feeUSD: 5.88,
+          },
+          instant: {
+            baseFee: "0.001020",
+            priorityFee: "0.002244",
+            totalFee: "0.003264",
+            feeCurrency: "ETH",
+            feeUSD: 10.44,
+          },
+        },
+        estimatedTimes: {
+          standard: 868.8,
+          fast: 448.8,
+          instant: 313.8,
+        },
+        validUntil: "2026-06-26T00:05:00.000Z",
+      },
+      isLoading: false,
+      isError: false,
+    });
+    mockUseBridgeCredential.mockReturnValue({
+      mutateAsync: mockBridgeMutateAsync,
+      isPending: false,
+      isError: false,
+    });
+  });
+
   it("renders without crashing", () => {
     render(<CrossChainPage />);
     expect(screen.getByTestId("app-layout")).toBeInTheDocument();
@@ -72,16 +262,16 @@ describe("CrossChainPage", () => {
     expect(
       screen.getAllByText("Supported Chains").length,
     ).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText("Avg Bridge Time")).toBeInTheDocument();
-    expect(screen.getByText("Bridge TVL")).toBeInTheDocument();
-    expect(screen.getByText("$29.1M")).toBeInTheDocument();
+    expect(screen.getAllByText("Standard Fee").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("Relayer Status")).toBeInTheDocument();
+    expect(screen.getAllByText("0.001020 ETH").length).toBeGreaterThanOrEqual(1);
   });
 
   it("displays supported chains in the sidebar", () => {
     render(<CrossChainPage />);
-    expect(screen.getAllByText("Aethelred").length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText("Ethereum").length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText("Polygon").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("Arbitrum One").length).toBeGreaterThanOrEqual(1);
   });
 
   it("switches tabs when clicking on tab buttons", () => {
@@ -108,16 +298,16 @@ describe("CrossChainPage", () => {
     render(<CrossChainPage />);
     const selects = screen.getAllByRole("combobox");
     // Source chain select is the first one
-    fireEvent.change(selects[0], { target: { value: "polygon" } });
-    expect((selects[0] as HTMLSelectElement).value).toBe("polygon");
+    fireEvent.change(selects[0], { target: { value: "137" } });
+    expect((selects[0] as HTMLSelectElement).value).toBe("137");
   });
 
   it("changes destination chain via dropdown", () => {
     render(<CrossChainPage />);
     const selects = screen.getAllByRole("combobox");
     // Destination chain select is the second one
-    fireEvent.change(selects[1], { target: { value: "arbitrum" } });
-    expect((selects[1] as HTMLSelectElement).value).toBe("arbitrum");
+    fireEvent.change(selects[1], { target: { value: "42161" } });
+    expect((selects[1] as HTMLSelectElement).value).toBe("42161");
   });
 
   it("has a swap button that can be clicked without error", () => {
@@ -135,7 +325,7 @@ describe("CrossChainPage", () => {
 
   it("toggles credential selection and enables/disables bridge button", () => {
     render(<CrossChainPage />);
-    const checkbox = screen.getByLabelText("KYC Identity Verification");
+    const checkbox = screen.getByLabelText(/KYC Identity Verification/);
     expect(checkbox).not.toBeChecked();
     fireEvent.click(checkbox);
     expect(checkbox).toBeChecked();
@@ -146,60 +336,54 @@ describe("CrossChainPage", () => {
     expect(checkbox).not.toBeChecked();
   });
 
-  it("starts bridge process when bridge button is clicked with credentials selected", () => {
-    jest.useFakeTimers();
+  it("submits bridge requests through the cross-chain mutation", async () => {
     render(<CrossChainPage />);
-    // Select a credential
-    const checkbox = screen.getByLabelText("KYC Identity Verification");
+    const checkbox = screen.getByLabelText(/KYC Identity Verification/);
     fireEvent.click(checkbox);
-    // Click bridge button
     const bridgeButton = screen.getByText(/Bridge 1 Credential/);
     fireEvent.click(bridgeButton);
-    // Should show bridge progress
-    expect(screen.getByText("Bridge Progress")).toBeInTheDocument();
-    expect(screen.getByText("Bridging...")).toBeInTheDocument();
-    jest.useRealTimers();
+
+    await waitFor(() =>
+      expect(mockBridgeMutateAsync).toHaveBeenCalledWith({
+        credentialId: "cred-kyc",
+        destinationChainId: 137,
+        priority: "standard",
+        preservePrivacy: true,
+      }),
+    );
+    expect(
+      await screen.findByText(/Bridge accepted for Polygon/),
+    ).toBeInTheDocument();
   });
 
   it("shows history tab with bridge status indicators", () => {
     render(<CrossChainPage />);
     fireEvent.click(screen.getByText("History"));
-    // Check for in-progress status
-    expect(screen.getByText("in-progress")).toBeInTheDocument();
-    // Check for completed status
-    expect(screen.getAllByText("completed").length).toBe(4);
+    expect(screen.getByText("verified")).toBeInTheDocument();
+    expect(screen.getByText(/Bridge ID: bridge-cred-kyc/)).toBeInTheDocument();
   });
 
-  it("completes bridge process through all steps and finishes", async () => {
-    jest.useFakeTimers();
-    const { act } = require("@testing-library/react");
+  it("shows relayer configuration errors instead of fake bridge progress", async () => {
+    mockBridgeMutateAsync.mockRejectedValueOnce(
+      new Error("Cross-chain bridge relayer endpoint is not configured."),
+    );
     render(<CrossChainPage />);
-    // Select a credential
-    const checkbox = screen.getByLabelText("KYC Identity Verification");
+    const checkbox = screen.getByLabelText(/KYC Identity Verification/);
     fireEvent.click(checkbox);
-    // Start bridge
     fireEvent.click(screen.getByText(/Bridge 1 Credential/));
-    expect(screen.getByText("Bridge Progress")).toBeInTheDocument();
 
-    // Advance through all steps (each interval tick is 2000ms, 5 ticks to reach step 5)
-    for (let i = 0; i < 6; i++) {
-      await act(async () => {
-        jest.advanceTimersByTime(2000);
-      });
-    }
-    // After step reaches 5, a setTimeout of 2000ms is scheduled to set bridgeInProgress=false
-    await act(async () => {
-      jest.advanceTimersByTime(2000);
-    });
-    // Bridge progress should be gone now
-    expect(screen.queryByText("Bridge Progress")).not.toBeInTheDocument();
-    jest.useRealTimers();
+    expect(
+      await screen.findByText(
+        "Cross-chain bridge relayer endpoint is not configured.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Bridge Submission Status")).toBeInTheDocument();
   });
 
   it('bridge button shows plural "Credentials" for multiple selections', () => {
     render(<CrossChainPage />);
-    fireEvent.click(screen.getByLabelText("KYC Identity Verification"));
-    fireEvent.click(screen.getByLabelText("Age Verification (18+)"));
+    fireEvent.click(screen.getByLabelText(/KYC Identity Verification/));
+    fireEvent.click(screen.getByLabelText(/Age Verification \(18\+\)/));
     expect(screen.getByText(/Bridge 2 Credentials/)).toBeInTheDocument();
   });
 

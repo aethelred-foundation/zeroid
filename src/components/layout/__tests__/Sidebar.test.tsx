@@ -98,6 +98,7 @@ jest.mock("lucide-react", () => {
     LayoutDashboard: createIcon("dashboard"),
     Fingerprint: createIcon("fingerprint"),
     BadgeCheck: createIcon("badge-check"),
+    ShieldCheck: createIcon("shield-check"),
     ScanEye: createIcon("scan-eye"),
     Vote: createIcon("vote"),
     ClipboardList: createIcon("clipboard"),

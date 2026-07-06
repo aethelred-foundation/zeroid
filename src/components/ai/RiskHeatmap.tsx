@@ -78,6 +78,30 @@ const SEVERITY_CONFIG: Record<
   critical: { label: "Critical", color: "text-red-400", bg: "bg-red-500" },
 };
 
+const CATEGORY_BASE_RISK: Record<string, number> = {
+  "KYC/AML": 42,
+  Sanctions: 58,
+  "Data Privacy": 34,
+  "Cross-border": 48,
+  "Credential Fraud": 51,
+  "Identity Theft": 46,
+};
+
+const JURISDICTION_RISK_MODIFIER: Record<string, number> = {
+  US: 4,
+  EU: -7,
+  UK: -4,
+  SG: -6,
+  JP: -5,
+  AU: -3,
+  CA: -4,
+  CH: -8,
+  AE: -6,
+  HK: 3,
+};
+
+const REFERENCE_RISK_ANCHOR_MS = Date.UTC(2026, 5, 25, 8, 0, 0);
+
 function getSeverity(score: number): SeverityLevel {
   if (score <= 25) return "low";
   if (score <= 50) return "medium";
@@ -95,14 +119,27 @@ function getCellColor(score: number): string {
   return "bg-red-500/60 hover:bg-red-500/70";
 }
 
-function generateMockData(
+function buildReferenceRiskData(
   categories: string[],
   jurisdictions: string[],
 ): RiskCell[] {
   const cells: RiskCell[] = [];
   for (const category of categories) {
     for (const jurisdiction of jurisdictions) {
-      const score = Math.floor(Math.random() * 100);
+      const score = clampRiskScore(
+        (CATEGORY_BASE_RISK[category] ?? 45) +
+          (JURISDICTION_RISK_MODIFIER[jurisdiction] ?? 0) +
+          stableScore(`${category}:${jurisdiction}:overall`, -9, 12),
+      );
+      const regulatoryCoverage = clampRiskScore(
+        score + stableScore(`${category}:${jurisdiction}:coverage`, -14, 9),
+      );
+      const enforcementExposure = clampRiskScore(
+        score + stableScore(`${category}:${jurisdiction}:enforcement`, -8, 16),
+      );
+      const dataResidencyPressure = clampRiskScore(
+        score + stableScore(`${category}:${jurisdiction}:data`, -12, 12),
+      );
       cells.push({
         category,
         jurisdiction,
@@ -110,28 +147,47 @@ function generateMockData(
         severity: getSeverity(score),
         factors: [
           {
-            name: "Regulatory Gap",
-            score: Math.floor(Math.random() * 100),
-            description: "Missing or outdated regulatory framework",
+            name: "Regulatory Coverage",
+            score: regulatoryCoverage,
+            description: "Policy coverage, licensing clarity, and local control maturity",
           },
           {
-            name: "Enforcement Risk",
-            score: Math.floor(Math.random() * 100),
-            description: "Likelihood of enforcement action",
+            name: "Enforcement Exposure",
+            score: enforcementExposure,
+            description: "Likelihood that a control exception escalates to regulator review",
           },
           {
-            name: "Data Risk",
-            score: Math.floor(Math.random() * 100),
-            description: "Risk of data exposure or breach",
+            name: "Data Residency Pressure",
+            score: dataResidencyPressure,
+            description: "Operational friction from localization and transfer controls",
           },
         ],
         lastUpdated: new Date(
-          Date.now() - Math.random() * 7 * 86400000,
+          REFERENCE_RISK_ANCHOR_MS -
+            stableScore(`${category}:${jurisdiction}:updated`, 6, 120) *
+              60 *
+              60 *
+              1000,
         ).toISOString(),
       });
     }
   }
   return cells;
+}
+
+function stableScore(key: string, min: number, max: number): number {
+  let hash = 2166136261;
+  for (let index = 0; index < key.length; index++) {
+    hash ^= key.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+
+  const range = max - min + 1;
+  return min + (Math.abs(hash) % range);
+}
+
+function clampRiskScore(score: number): number {
+  return Math.max(0, Math.min(99, score));
 }
 
 // ============================================================================
@@ -287,7 +343,7 @@ export default function RiskHeatmap({
   const [showFilter, setShowFilter] = useState(false);
 
   const cellData = useMemo(() => {
-    return data ?? generateMockData(categories, jurisdictions);
+    return data ?? buildReferenceRiskData(categories, jurisdictions);
   }, [data, categories, jurisdictions]);
 
   const displayCategories = useMemo(() => {

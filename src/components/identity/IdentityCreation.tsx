@@ -45,8 +45,8 @@ const STEPS: StepConfig[] = [
   },
   {
     id: "biometric",
-    title: "Biometric Scan",
-    subtitle: "Provide biometric data for enhanced security",
+    title: "TEE Biometric Verification",
+    subtitle: "Bind encrypted liveness evidence to an attested enclave",
     icon: ScanFace,
   },
   {
@@ -91,6 +91,7 @@ export default function IdentityCreation() {
   const {
     initiateVerification: initiateUAEPass,
     verificationStatus: uaePassStatus,
+    error: uaePassError,
   } = useUAEPass();
   const { startScan, scanStatus } = useBiometric();
 
@@ -252,37 +253,42 @@ export default function IdentityCreation() {
                 UAE Pass Identity Verification
               </h4>
               <p className="text-sm text-[var(--text-secondary)] mb-6">
-                Verify your identity using the UAE Pass system. This links your
-                real-world identity to your DID without exposing personal data
-                on-chain.
+                Start an official UAE Pass OAuth handoff. ZeroID marks this
+                step complete only after the backend validates the callback and
+                records government verification evidence.
               </p>
               {uaePassStatus === "verified" ? (
                 <div className="flex items-center justify-center gap-2 text-status-verified">
                   <CheckCircle2 className="w-5 h-5" />
                   <span className="text-sm font-medium">
-                    Verification Complete
+                    Government Verification Complete
                   </span>
                 </div>
               ) : uaePassStatus === "pending" ? (
                 <div className="flex items-center justify-center gap-2 text-status-pending">
                   <Loader2 className="w-5 h-5 animate-spin" />
                   <span className="text-sm font-medium">
-                    Verification in Progress...
+                    Awaiting UAE Pass Callback...
                   </span>
                 </div>
               ) : (
-                <button
-                  onClick={handleUAEPass}
-                  disabled={isProcessing}
-                  className="btn-primary"
-                >
-                  {isProcessing ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <ShieldCheck className="w-4 h-4" />
+                <div className="space-y-3">
+                  {uaePassStatus === "failed" && uaePassError && (
+                    <p className="text-sm text-red-400">{uaePassError}</p>
                   )}
-                  Start UAE Pass Verification
-                </button>
+                  <button
+                    onClick={handleUAEPass}
+                    disabled={isProcessing}
+                    className="btn-primary"
+                  >
+                    {isProcessing ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <ShieldCheck className="w-4 h-4" />
+                    )}
+                    Start UAE Pass OAuth
+                  </button>
+                </div>
               )}
             </div>
           </div>
@@ -314,14 +320,16 @@ export default function IdentityCreation() {
                 Biometric Verification
               </h4>
               <p className="text-sm text-[var(--text-secondary)] mb-6">
-                A biometric scan adds an additional layer of identity assurance.
-                Your biometric data is processed inside a Trusted Execution
-                Environment and never stored raw.
+                ZeroID submits a sealed biometric capture envelope to an
+                attested TEE node. This step remains incomplete until the
+                backend returns a verification identifier from the enclave.
               </p>
               {scanStatus === "success" || scanStatus === "complete" ? (
                 <div className="flex items-center justify-center gap-2 text-status-verified">
                   <CheckCircle2 className="w-5 h-5" />
-                  <span className="text-sm font-medium">Scan Complete</span>
+                  <span className="text-sm font-medium">
+                    TEE Verification Complete
+                  </span>
                 </div>
               ) : (
                 <button
@@ -332,12 +340,12 @@ export default function IdentityCreation() {
                   {scanStatus === "scanning" ? (
                     <>
                       <Loader2 className="w-4 h-4 animate-spin" />
-                      Scanning...
+                      Requesting TEE...
                     </>
                   ) : (
                     <>
                       <Fingerprint className="w-4 h-4" />
-                      Start Biometric Scan
+                      Request TEE Verification
                     </>
                   )}
                 </button>
