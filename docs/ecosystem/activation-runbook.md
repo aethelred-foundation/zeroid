@@ -46,6 +46,10 @@ NEXT_PUBLIC_AETHELRED_VKEYS='{}'                 # circuitId -> registered vkey 
 NEXT_PUBLIC_PQC_SIGNING="false"                  # flip per gate W4c
 NEXT_PUBLIC_CONDITIONAL_DISCLOSURE_ADDRESS="0x..." # from step 1
 NEXT_PUBLIC_FEE_ROUTER_ADDRESS="0x..."             # from step 1
+OID4VCI_ISSUER_JWK='{"kty":"EC","crv":"P-256",...,"d":"...","kid":"issuer-key-1"}'
+                                  # REQUIRED in production (private JWK; boot +
+                                  # issuance fail closed without it — audit F1)
+OID4VP_ISSUER_JWKS='{"issuer-key-1":{...public jwk...}}' # verifier trust store
 ```
 
 ## 1. Deploy contracts

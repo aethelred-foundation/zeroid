@@ -88,6 +88,26 @@ function isTrue(value: string | undefined): boolean {
   return value?.toLowerCase() === 'true';
 }
 
+function isParseableJson(value: string): boolean {
+  try {
+    JSON.parse(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** JSON object with `kty` and a private component (`d` for EC/OKP/RSA, `k` for oct). */
+function isPrivateJwkJson(value: string): boolean {
+  try {
+    const jwk = JSON.parse(value) as Record<string, unknown>;
+    if (typeof jwk !== 'object' || jwk === null || typeof jwk.kty !== 'string') return false;
+    return typeof jwk.d === 'string' || typeof jwk.k === 'string';
+  } catch {
+    return false;
+  }
+}
+
 export function getMetricsAuthToken(env: NodeJS.ProcessEnv = process.env): string | undefined {
   const token = env.METRICS_AUTH_TOKEN?.trim();
   return token && token.length > 0 ? token : undefined;
@@ -146,6 +166,8 @@ export function checkedProductionSafetyControls(): string[] {
     'SANCTIONS_LIST_MAX_AGE_HOURS',
     'SANCTIONS_SCREENING_STORE_FILE',
     'WEBHOOK_SECRET_ENCRYPTION_KEY',
+    'OID4VCI_ISSUER_JWK',
+    'OID4VP_ISSUER_JWKS',
     'POLICY_RECEIPT_SIGNING_SECRET',
     'REGULATORY_REPORT_STORE_DIR',
     'DATA_SOVEREIGNTY_STORE_FILE',
@@ -346,6 +368,31 @@ export function collectProductionSafetyViolations(
     violations.push({
       control: 'WEBHOOK_SECRET_ENCRYPTION_KEY',
       risk: `Webhook secret encryption key must decode to ${REQUIRED_SECRET_KEY_BYTES} bytes`,
+    });
+  }
+
+  // OpenID4VCI issuer signing key: without it the issuer would silently fall
+  // back to an ephemeral key — credentials become unverifiable after restart.
+  const oid4vciIssuerJwk = env.OID4VCI_ISSUER_JWK?.trim();
+  if (!oid4vciIssuerJwk) {
+    violations.push({
+      control: 'OID4VCI_ISSUER_JWK',
+      risk: 'OpenID4VCI would issue credentials with an ephemeral signing key; issued credentials become unverifiable after every restart',
+    });
+  } else if (!isPrivateJwkJson(oid4vciIssuerJwk)) {
+    violations.push({
+      control: 'OID4VCI_ISSUER_JWK',
+      risk: 'OID4VCI_ISSUER_JWK must be a JSON private JWK (kty plus a private component)',
+    });
+  }
+
+  // OpenID4VP issuer trust store: absence is fail-closed by design (the
+  // verifier 401s), but a malformed value is a silent misconfiguration.
+  const oid4vpIssuerJwks = env.OID4VP_ISSUER_JWKS?.trim();
+  if (oid4vpIssuerJwks && !isParseableJson(oid4vpIssuerJwks)) {
+    violations.push({
+      control: 'OID4VP_ISSUER_JWKS',
+      risk: 'OID4VP_ISSUER_JWKS is set but is not valid JSON; every SD-JWT presentation would be rejected as VP_TOKEN_INVALID',
     });
   }
 

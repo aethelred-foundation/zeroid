@@ -28,6 +28,10 @@ const apiJwtPublicKey = apiJwtKeyPair.publicKey.export({
   format: 'pem',
 }) as string;
 
+const oid4vciKeyPair = crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' });
+const oid4vciIssuerJwk = oid4vciKeyPair.privateKey.export({ format: 'jwk' });
+const oid4vciIssuerPublicJwk = oid4vciKeyPair.publicKey.export({ format: 'jwk' });
+
 const BASE_ENV: NodeJS.ProcessEnv = { NODE_ENV: 'test' };
 const circuitDigestManifest = Object.fromEntries(
   circuitArtifactDigestKeys().map((key, index) => [
@@ -78,6 +82,7 @@ const PROD_BASE_ENV: NodeJS.ProcessEnv = {
   SCHEMA_REJECTION_THRESHOLD: '3',
   ZK_CONTEXT_BOUND_CIRCUITS_READY: 'true',
   ZK_CIRCUIT_ARTIFACT_DIGESTS_JSON: JSON.stringify(circuitDigestManifest),
+  OID4VCI_ISSUER_JWK: JSON.stringify(oid4vciIssuerJwk),
 };
 
 describe('production safety controls', () => {
@@ -822,5 +827,45 @@ describe('production safety controls', () => {
     })).toEqual([
       expect.objectContaining({ control: 'ZK_CONTEXT_BOUND_CIRCUITS_READY' }),
     ]);
+  });
+});
+
+describe('OpenID4VCI / OpenID4VP production controls', () => {
+  const cleanProdEnv: NodeJS.ProcessEnv = {
+    ...PROD_BASE_ENV,
+    METRICS_PUBLIC_DISABLED: 'true',
+  };
+
+  it('blocks production startup when OID4VCI_ISSUER_JWK is missing (ephemeral-key fail-open)', () => {
+    const { OID4VCI_ISSUER_JWK: _omit, ...withoutKey } = cleanProdEnv;
+    expect(collectProductionSafetyViolations(withoutKey)).toEqual([
+      expect.objectContaining({ control: 'OID4VCI_ISSUER_JWK' }),
+    ]);
+  });
+
+  it('rejects a malformed OID4VCI_ISSUER_JWK', () => {
+    expect(
+      collectProductionSafetyViolations({ ...cleanProdEnv, OID4VCI_ISSUER_JWK: 'not-json' }),
+    ).toEqual([expect.objectContaining({ control: 'OID4VCI_ISSUER_JWK' })]);
+  });
+
+  it('rejects a public-only OID4VCI_ISSUER_JWK (no private component)', () => {
+    expect(
+      collectProductionSafetyViolations({
+        ...cleanProdEnv,
+        OID4VCI_ISSUER_JWK: JSON.stringify(oid4vciIssuerPublicJwk),
+      }),
+    ).toEqual([expect.objectContaining({ control: 'OID4VCI_ISSUER_JWK' })]);
+  });
+
+  it('accepts a valid private OID4VCI_ISSUER_JWK (no violations)', () => {
+    expect(collectProductionSafetyViolations(cleanProdEnv)).toEqual([]);
+  });
+
+  it('flags OID4VP_ISSUER_JWKS only when set but malformed (absence is fail-closed by design)', () => {
+    expect(
+      collectProductionSafetyViolations({ ...cleanProdEnv, OID4VP_ISSUER_JWKS: '{broken' }),
+    ).toEqual([expect.objectContaining({ control: 'OID4VP_ISSUER_JWKS' })]);
+    expect(collectProductionSafetyViolations(cleanProdEnv)).toEqual([]);
   });
 });

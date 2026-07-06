@@ -16,7 +16,6 @@
 import { Router, Response } from 'express';
 import { z } from 'zod';
 import { randomBytes } from 'node:crypto';
-import { generateKeyPair, importJWK, type KeyLike } from 'jose';
 import { prisma, logger } from '../../index';
 import { AuthenticatedRequest, authMiddleware } from '../../middleware/auth';
 import { apiRateLimiter } from '../../middleware/rateLimit';
@@ -31,29 +30,23 @@ import {
 } from '../../services/oid4vci/issuance';
 import { createPrismaIssuanceStores } from '../../services/oid4vci/issuance-stores-prisma';
 import { createPrismaIssuanceAuditRecorder } from '../../services/oid4vci/issuance-audit';
-import {
-  createJoseIssuanceSignDeps,
-  createJoseKeyProofVerifier,
-} from '../../services/oid4vci/jose';
+import { createJoseKeyProofVerifier } from '../../services/oid4vci/jose';
+import { createIssuerSignDepsFromEnv } from '../../services/oid4vci/issuer-key';
 import type { SdJwtIssueDeps } from '../../services/oid4vci/sd-jwt-issuer';
 
 const ISSUER = process.env.OID4VCI_ISSUER ?? 'https://issuer.zeroid';
 const stores = createPrismaIssuanceStores(prisma);
 
+// Fail-closed issuer key (audit F1): in production a missing/unusable
+// OID4VCI_ISSUER_JWK throws 503 — never an ephemeral key. Dev keeps the
+// ephemeral fallback (with a warning). See services/oid4vci/issuer-key.ts.
 let signDepsPromise: Promise<SdJwtIssueDeps> | null = null;
 function getSignDeps(): Promise<SdJwtIssueDeps> {
   if (!signDepsPromise) {
-    signDepsPromise = (async () => {
-      const raw = process.env.OID4VCI_ISSUER_JWK;
-      if (raw) {
-        const jwk = JSON.parse(raw);
-        const key = (await importJWK(jwk, jwk.alg ?? 'ES256')) as KeyLike;
-        return createJoseIssuanceSignDeps({ privateKey: key, kid: jwk.kid });
-      }
-      const { privateKey } = await generateKeyPair('ES256');
-      logger.warn?.('oid4vci: using ephemeral issuer key — set OID4VCI_ISSUER_JWK in production');
-      return createJoseIssuanceSignDeps({ privateKey });
-    })();
+    signDepsPromise = createIssuerSignDepsFromEnv(process.env, logger).catch((error) => {
+      signDepsPromise = null; // don't cache the failure
+      throw error;
+    });
   }
   return signDepsPromise;
 }
