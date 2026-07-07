@@ -41,6 +41,7 @@ import {
   createPublicClient,
   createWalletClient,
   defineChain,
+  encodeDeployData,
   http,
   keccak256,
   stringToBytes,
@@ -102,12 +103,43 @@ const step = (msg) => console.log(`\n== ${msg}`);
 
 let REGISTRY_ADDRESS = process.env.REGISTRY_ADDRESS;
 
+// Aethelred's cosmos/evm EVM charges max(actualGas, gasLimit/2) — a refund of
+// more than half the gas limit is capped — so an over-large fixed limit
+// overpays (e.g. a 3M limit is billed 1.5M even for a ~130k call). Its
+// eth_estimateGas is accurate for settled state, so the limit is 2x the estimate
+// (the fee stays at the true cost, with 100% headroom), floored for safety.
+// Keeping estimation on the path makes a disallowed call throw here rather than
+// mine a failed tx; the floor covers the window where the estimate momentarily
+// lags just-committed state (e.g. right after a deploy) and would under-shoot.
+// WRITE_GAS/DEPLOY_GAS override the estimate entirely if ever needed.
+const WRITE_GAS = process.env.WRITE_GAS ? BigInt(process.env.WRITE_GAS) : null;
+const DEPLOY_GAS = process.env.DEPLOY_GAS ? BigInt(process.env.DEPLOY_GAS) : null;
+const FLOOR_WRITE = 800_000n;
+const FLOOR_DEPLOY = 6_000_000n;
+const withHeadroom = (estimate, floor) => {
+  const doubled = estimate * 2n;
+  return doubled > floor ? doubled : floor;
+};
+
 async function write(functionName, args = []) {
+  const gas =
+    WRITE_GAS ??
+    withHeadroom(
+      await publicClient.estimateContractGas({
+        address: REGISTRY_ADDRESS,
+        abi,
+        functionName,
+        args,
+        account,
+      }),
+      FLOOR_WRITE,
+    );
   const hash = await walletClient.writeContract({
     address: REGISTRY_ADDRESS,
     abi,
     functionName,
     args,
+    gas,
   });
   const receipt = await publicClient.waitForTransactionReceipt({
     hash,
@@ -135,10 +167,20 @@ async function main() {
 
   if (!REGISTRY_ADDRESS) {
     step("deploy SealAttestationRegistry(governance = deployer)");
+    const deployGas =
+      DEPLOY_GAS ??
+      withHeadroom(
+        await publicClient.estimateGas({
+          account,
+          data: encodeDeployData({ abi, bytecode, args: [account.address] }),
+        }),
+        FLOOR_DEPLOY,
+      );
     const hash = await walletClient.deployContract({
       abi,
       bytecode,
       args: [account.address],
+      gas: deployGas,
     });
     const receipt = await publicClient.waitForTransactionReceipt({
       hash,
