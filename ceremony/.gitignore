@@ -1,0 +1,7 @@
+# Large phase-1 SRS (download from the perpetual Powers of Tau; see README)
+ptau/*.ptau
+ptau/*.log
+# Compiled circuit artifacts (reproducible via 01-compile.sh)
+build/
+# Per-contributor proving keys — passed between participants, never committed
+contributions/
