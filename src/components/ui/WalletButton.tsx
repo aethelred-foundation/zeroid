@@ -68,7 +68,7 @@ export function WalletButton({ className = "" }: WalletButtonProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const { address, isConnected, isConnecting } = useAccount();
   const chainId = useChainId();
-  const { connectors, connect, isPending } = useConnect();
+  const { connectors, connect, isPending, error: connectError } = useConnect();
   const { disconnect } = useDisconnect();
   const { switchChain } = useSwitchChain();
   const { data: balance } = useBalance({
@@ -138,6 +138,21 @@ export function WalletButton({ className = "" }: WalletButtonProps) {
                 </span>
               </button>
             ))}
+          </div>
+        )}
+
+        {connectError && !menuOpen && (
+          <div
+            role="alert"
+            className="absolute right-0 top-11 z-50 min-w-[190px] max-w-[260px] rounded-lg px-3 py-2 text-[11px] text-rose-300"
+            style={{
+              background: "rgba(251,113,133,0.10)",
+              border: "1px solid rgba(251,113,133,0.20)",
+            }}
+          >
+            {/^(4001|.*not initialized|.*locked)/i.test(connectError.message)
+              ? "Wallet is locked or has no account. Open the wallet, unlock it and create/select an account, then try again."
+              : connectError.message}
           </div>
         )}
       </div>
