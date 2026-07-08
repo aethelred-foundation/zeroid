@@ -84,4 +84,8 @@ forge script script/GrantRoles.s.sol:GrantRoles --rpc-url http://<validator-ip>:
 - [ ] `deployments/<chainId>.json` committed after the run.
 - [ ] `.env.local` filled from the printed `NEXT_PUBLIC_*` addresses.
 - [ ] Operational roles granted to their actors (`GrantRoles`) once they exist.
+- [ ] Verification keys registered on-chain once the ceremony is finalized —
+      `ceremony/scripts/07-register-vkeys.sh --broadcast` with the
+      `CIRCUIT_MANAGER_ROLE` key (registers into the `ZKCredentialVerifier` from
+      this manifest; see `ceremony/README.md`).
 - [ ] (Mainnet) admin migrated to a multisig + timelock before real issuance.

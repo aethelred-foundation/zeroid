@@ -61,6 +61,8 @@ Prerequisites: `npm install` (brings `snarkjs` + `circomlib`) and
 | 3. Contribute | **each participant** | `scripts/03-contribute.sh <your-handle>` |
 | 4. Verify | anyone, any time | `scripts/04-verify.sh` |
 | 5. Finalize (beacon + export) | coordinator, once | `scripts/05-finalize.sh <beaconHashHex>` |
+| 6. Deploy artifacts (frontend + backend) | coordinator, once | `scripts/06-deploy-artifacts.sh` |
+| 7. Register vkeys on-chain | coordinator, once | `scripts/07-register-vkeys.sh [--broadcast]` |
 
 ### If you are a contributor
 
@@ -81,9 +83,12 @@ multi-party security comes from having independent contributors, not from
 whether they typed or piped.
 
 The `.zkey` contribution files are large and are **not** committed
-(`contributions/` is git-ignored); they are passed between participants. What is
-committed and public is `TRANSCRIPT.md` (the record) and, after finalization,
-`artifacts/` (the verification keys + Solidity verifiers).
+(`contributions/` is git-ignored); they are passed between participants. The
+committed public record is `TRANSCRIPT.md`. The finalized `artifacts/`
+(verification keys + Solidity verifiers) are the public trust anchor and are
+published at finalization — the directory is git-ignored during the ceremony so
+that throwaway or dev-beacon runs are never committed by accident; the
+coordinator force-adds the real vkeys once the ceremony is genuinely closed.
 
 ## Finalization
 
@@ -93,6 +98,44 @@ announced height) to close the ceremony, then exports each circuit's
 `verification_key.json` and `Verifier.sol` into `artifacts/`. Those verifying
 keys are what the app and the on-chain verifier trust; the proving keys
 (`*_final.zkey`) are distributed to whoever generates proofs.
+
+## Deploying the finalized artifacts
+
+Finalization produces the artifacts; two scripts distribute them to their
+runtime consumers. Both are idempotent and run against a finalized ceremony.
+
+**`06-deploy-artifacts.sh`** copies each circuit's `wasm` + `_final.zkey` (+
+`vkey`) to where the code expects them:
+
+- **Frontend** — `public/circuits/<age|residency|credit>/…` for browser-side
+  snarkjs proof generation (paths per `src/config/constants.ts`). These are
+  ceremony output, not source: they are git-ignored and re-materialised here.
+- **Backend** — the flagship `eligibility_context_proof` only, to the paths its
+  manifest (`circuits/manifest/eligibility_v1.json`) declares under
+  `build/circuits/eligibility_context_v1/`. Landing these flips the API's
+  `/ready` `circuitArtifacts` check from `degraded` to `ok`.
+
+It writes `artifacts/deployment-manifest.json` (sha256 of every deployed file)
+so a deployment ties back to `TRANSCRIPT.md`.
+
+**`07-register-vkeys.sh`** registers each verification key on-chain in
+`ZKCredentialVerifier.setVerificationKey` (`CIRCUIT_MANAGER_ROLE`). It is
+**dry-run by default** — it validates every curve point, checks
+`IC == nPublic + 1`, derives the canonical `circuitId = keccak256(utf8(name))`,
+writes `artifacts/circuit-ids.json` (the ids the frontend must call
+`verifyProof` with), and prints the calldata without touching a chain. Add
+`--broadcast` with `RPC_URL`, `ZKVERIFIER_ADDRESS`, and a
+`CIRCUIT_MANAGER_PRIVATE_KEY` to send.
+
+> **G2 coordinate order.** snarkjs stores a G2 element `c0 + c1·u` as `[c0, c1]`;
+> the EVM pairing precompile wants `[c1, c0]`. `ZKCredentialVerifier` stores keys
+> in snarkjs order and swaps internally, so `register-vkeys.mjs` maps the vkey
+> **element-for-element with no reordering** — and a submitted proof's `b` point
+> must likewise be in native snarkjs order.
+
+The full pipeline — finalize → deploy → register → generate a proof →
+on-chain `verifyProof` (accepts a valid proof, rejects a tampered one) — is the
+acceptance test to run against the real finalized artifacts.
 
 ## Status
 
