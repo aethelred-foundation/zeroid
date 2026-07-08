@@ -1,4 +1,4 @@
-import { prisma } from '../../index';
+import { prisma } from '../../runtime';
 import {
   ComplianceEvaluationRequest,
   ComplianceStatus,

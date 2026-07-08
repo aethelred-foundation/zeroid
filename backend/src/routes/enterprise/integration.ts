@@ -52,7 +52,7 @@ import {
   policyExceptionService,
   RevokePolicyExceptionSchema,
 } from '../../services/enterprise/policy-exception-service';
-import { prisma } from '../../index';
+import { prisma } from '../../runtime';
 
 // ---------------------------------------------------------------------------
 // Logger

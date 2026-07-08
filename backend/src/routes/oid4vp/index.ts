@@ -16,7 +16,7 @@ import { Router, Response } from 'express';
 import { z } from 'zod';
 import { randomBytes } from 'node:crypto';
 import type { JWK } from 'jose';
-import { prisma, logger } from '../../index';
+import { prisma, logger } from '../../runtime';
 import { AuthenticatedRequest, authMiddleware } from '../../middleware/auth';
 import { apiRateLimiter } from '../../middleware/rateLimit';
 import { validate } from '../../middleware/validation';

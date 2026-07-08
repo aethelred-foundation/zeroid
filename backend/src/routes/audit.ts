@@ -3,7 +3,7 @@ import type { Prisma } from '@prisma/client';
 import { AuthenticatedRequest } from '../middleware/auth';
 import { apiRateLimiter } from '../middleware/rateLimit';
 import { validate, auditQuerySchema, uuidSchema } from '../middleware/validation';
-import { prisma, logger } from '../index';
+import { prisma, logger } from '../runtime';
 import { asRouteError, sendRouteError } from '../utils/route-error';
 import { z } from 'zod';
 

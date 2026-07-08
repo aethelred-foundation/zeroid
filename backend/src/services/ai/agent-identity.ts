@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import { prisma, logger, redis } from '../../index';
+import { prisma, logger, redis } from '../../runtime';
 // tee import removed — not used in this module
 
 const AGENT_RECORD_TTL_SECONDS = 30 * 86400;

@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import type { Prisma } from '@prisma/client';
 import * as jose from 'jose';
-import { prisma, logger, redis } from '../index';
+import { prisma, logger, redis } from '../runtime';
 import { isAethelredDid } from '../utils/did';
 import { isProductionRuntime } from '../services/production-safety';
 

@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { createLogger, format, transports } from 'winston';
 import crypto from 'crypto';
 import * as net from 'net';
-import { prisma, redis } from '../../index';
+import { prisma, redis } from '../../runtime';
 import { isProductionRuntime } from '../production-safety';
 
 // ---------------------------------------------------------------------------

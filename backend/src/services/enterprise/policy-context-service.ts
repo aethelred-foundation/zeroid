@@ -1,4 +1,4 @@
-import { prisma } from '../../index';
+import { prisma } from '../../runtime';
 import type { EnterpriseApprovalClass, EnterpriseRole } from './organization-service';
 
 export class PolicyContextError extends Error {

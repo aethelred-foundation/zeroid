@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { prisma } from '../../index';
+import { prisma } from '../../runtime';
 
 export const ISSUER_TRUST_STATUSES = [
   'pending_review',

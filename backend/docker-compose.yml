@@ -1,0 +1,46 @@
+# ZeroID backend stack for testnet: Postgres + Redis + the API on :4003.
+#   cp .env.testnet.example .env   # then set a real JWT_SECRET
+#   docker compose up --build
+# The API waits for healthy Postgres + Redis, runs Prisma migrations, then serves.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: zeroid
+      POSTGRES_PASSWORD: zeroid
+      POSTGRES_DB: zeroid
+    volumes:
+      - zeroid-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U zeroid -d zeroid"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  api:
+    build: .
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # These point the API at the compose services and override any localhost
+    # values in .env (which are for running the API without Docker).
+    environment:
+      DATABASE_URL: postgresql://zeroid:zeroid@postgres:5432/zeroid
+      REDIS_URL: redis://redis:6379
+      PORT: "4003"
+    ports:
+      - "4003:4003"
+
+volumes:
+  zeroid-pg:

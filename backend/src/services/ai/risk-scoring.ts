@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import { prisma, logger, redis } from '../../index';
+import { prisma, logger, redis } from '../../runtime';
 
 // ---------------------------------------------------------------------------
 // Types & Enums

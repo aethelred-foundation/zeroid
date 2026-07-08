@@ -1,4 +1,4 @@
-import { prisma, logger, redis } from '../index';
+import { prisma, logger, redis } from '../runtime';
 import { generateToken, revokeToken } from '../middleware/auth';
 import { oidcBridge } from './enterprise/oidc-bridge';
 import { isAethelredDid } from '../utils/did';

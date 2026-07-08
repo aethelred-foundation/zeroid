@@ -9,7 +9,7 @@ import {
 } from '../services/zkproof';
 import { teeService } from '../services/tee';
 import { credentialService } from '../services/credential';
-import { prisma, logger, redis, verificationCounter } from '../index';
+import { prisma, logger, redis, verificationCounter } from '../runtime';
 import { createHash, randomUUID } from 'crypto';
 import { asRouteError, sendRouteError } from '../utils/route-error';
 import { isProductionRuntime } from '../services/production-safety';

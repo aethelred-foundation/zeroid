@@ -1,4 +1,4 @@
-import { prisma, logger, redis, credentialIssuedCounter } from '../index';
+import { prisma, logger, redis, credentialIssuedCounter } from '../runtime';
 import { CredentialStatus } from '@prisma/client';
 import crypto from 'crypto';
 import {

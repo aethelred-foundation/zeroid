@@ -1,6 +1,6 @@
 import { Router, Response } from 'express';
 import { z } from 'zod';
-import { logger, prisma } from '../../index';
+import { logger, prisma } from '../../runtime';
 import { AuthenticatedRequest, authMiddleware } from '../../middleware/auth';
 import {
   EnterpriseAuthenticatedRequest,

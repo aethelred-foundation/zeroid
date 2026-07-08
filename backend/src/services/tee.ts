@@ -1,4 +1,4 @@
-import { logger, redis, prisma, metricsRegistry } from '../index';
+import { logger, redis, prisma, metricsRegistry } from '../runtime';
 import * as crypto from 'crypto';
 import * as https from 'https';
 import * as net from 'net';

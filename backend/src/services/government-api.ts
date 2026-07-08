@@ -3,7 +3,7 @@ import * as https from 'https';
 import * as net from 'net';
 import { promises as dns } from 'dns';
 import type { Prisma } from '@prisma/client';
-import { logger, redis, prisma } from '../index';
+import { logger, redis, prisma } from '../runtime';
 import { isProductionRuntime } from './production-safety';
 
 // ---------------------------------------------------------------------------

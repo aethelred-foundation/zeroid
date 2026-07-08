@@ -4,7 +4,7 @@ import crypto from 'crypto';
 import * as https from 'https';
 import * as net from 'net';
 import { promises as dns } from 'dns';
-import { prisma, redis } from '../../index';
+import { prisma, redis } from '../../runtime';
 import { isProductionRuntime } from '../production-safety';
 
 const PRIVATE_OIDC_HOSTNAME_SUFFIXES = [

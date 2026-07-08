@@ -12,7 +12,7 @@ import {
   apiRateLimiter,
   credentialIssuanceLimiter,
 } from '../middleware/rateLimit';
-import { logger } from '../index';
+import { logger } from '../runtime';
 import { z } from 'zod';
 
 const router = Router();

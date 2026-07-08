@@ -1,6 +1,6 @@
 import { Router, Response } from 'express';
 import { z } from 'zod';
-import { logger } from '../../index';
+import { logger } from '../../runtime';
 import { AuthenticatedRequest, authMiddleware } from '../../middleware/auth';
 import { apiRateLimiter } from '../../middleware/rateLimit';
 import { validate } from '../../middleware/validation';

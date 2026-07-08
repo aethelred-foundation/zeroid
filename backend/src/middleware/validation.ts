@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { z, ZodSchema, ZodError } from 'zod';
-import { logger } from '../index';
+import { logger } from '../runtime';
 import { AETHELRED_DID_PATTERN } from '../utils/did';
 
 // ---------------------------------------------------------------------------

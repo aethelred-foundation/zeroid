@@ -2,7 +2,7 @@ import { Router, Response } from 'express';
 import { AuthenticatedRequest } from '../middleware/auth';
 import { validate, createSchemaSchema, uuidSchema, paginationSchema } from '../middleware/validation';
 import { governanceLimiter } from '../middleware/rateLimit';
-import { prisma, logger } from '../index';
+import { prisma, logger } from '../runtime';
 import { governmentAPIService } from '../services/government-api';
 import { teeService } from '../services/tee';
 import { asRouteError, sendRouteError } from '../utils/route-error';
