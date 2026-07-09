@@ -31,6 +31,7 @@ import type {
   Address,
 } from "@/types";
 import { apiClient } from "@/lib/api/client";
+import { friendlyWalletError } from "@/lib/wallet-errors";
 import {
   buildRegistrationMessage,
   clearIdentityAuthToken,
@@ -267,7 +268,14 @@ export function IdentityProvider({ children }: { children: React.ReactNode }) {
           controller: address as Address,
           recoveryHash: normalizedRecoveryHash,
         });
-        const signature = await signMessageAsync({ message });
+        let signature: `0x${string}`;
+        try {
+          signature = await signMessageAsync({ message });
+        } catch (signError) {
+          // Surface signing failures as guidance (e.g. personal_sign reaching
+          // the node because a non-signing provider owns window.ethereum).
+          throw friendlyWalletError(signError);
+        }
         const publicKey = await recoverRegistrationPublicKey(
           message,
           signature,

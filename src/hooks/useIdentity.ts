@@ -25,6 +25,7 @@ import {
   recoverRegistrationPublicKey,
   storeIdentityAuthToken,
 } from "@/lib/identity/registration";
+import { friendlyWalletError } from "@/lib/wallet-errors";
 import {
   IDENTITY_REGISTRY_ADDRESS,
   IDENTITY_REGISTRY_ABI,
@@ -133,7 +134,14 @@ export function useCreateIdentity() {
           controller: address,
           recoveryHash,
         });
-        const signature = await signMessageAsync({ message });
+        let signature: `0x${string}`;
+        try {
+          signature = await signMessageAsync({ message });
+        } catch (error) {
+          // Surface signing failures as guidance (e.g. personal_sign reaching
+          // the node because a non-signing provider owns window.ethereum).
+          throw friendlyWalletError(error);
+        }
         publicKey = await recoverRegistrationPublicKey(message, signature);
       }
 
