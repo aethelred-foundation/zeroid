@@ -26,10 +26,18 @@ export const AETHELRED_DEVNET_ID = 7332;
 /**
  * Resolve an RPC endpoint with an optional env override, so an operator can
  * point ZeroID at their own aethelredd node without editing source.
+ *
+ * IMPORTANT: the override MUST be passed in as a literal `process.env.NEXT_PUBLIC_*`
+ * dot-access at the call site — NOT via a dynamic `process.env[key]` lookup here.
+ * Next.js inlines client-side env vars only when it can see a literal member
+ * expression at build time; a computed key is never substituted and resolves to
+ * `undefined` in the browser, silently forcing the fallback. (That bug is why
+ * NEXT_PUBLIC_AETHELRED_*_RPC_URL overrides appeared to be ignored no matter what
+ * operators set.)
  */
-function rpcEndpoint(envVar: string, fallback: string): string {
-  const override = process.env[envVar]?.trim();
-  return override && override.length > 0 ? override : fallback;
+function rpcEndpoint(override: string | undefined, fallback: string): string {
+  const trimmed = override?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : fallback;
 }
 
 // ---------------------------------------------------------------------------
@@ -41,12 +49,22 @@ function rpcEndpoint(envVar: string, fallback: string): string {
 // is hardcoded — an operator can repoint them, and on testnet the active chain
 // leads the wagmi list so these are never queried.
 const AETHELRED_MAINNET_HTTP = rpcEndpoint(
-  "NEXT_PUBLIC_AETHELRED_MAINNET_RPC_URL",
+  process.env.NEXT_PUBLIC_AETHELRED_MAINNET_RPC_URL,
   "https://evm-rpc.aethelred.network",
 );
 const AETHELRED_MAINNET_WS = rpcEndpoint(
-  "NEXT_PUBLIC_AETHELRED_MAINNET_WS_URL",
+  process.env.NEXT_PUBLIC_AETHELRED_MAINNET_WS_URL,
   "wss://evm-ws.aethelred.network",
+);
+// Hosted testnet RPC — operators point this at a validator's public JSON-RPC.
+const AETHELRED_TESTNET_HTTP = rpcEndpoint(
+  process.env.NEXT_PUBLIC_AETHELRED_TESTNET_RPC_URL,
+  "https://evm-rpc-testnet.aethelred.network",
+);
+// Local devnet defaults to a `aethelredd start --json-rpc.enable` node.
+const AETHELRED_DEVNET_HTTP = rpcEndpoint(
+  process.env.NEXT_PUBLIC_AETHELRED_DEVNET_RPC_URL,
+  "http://127.0.0.1:8545",
 );
 
 export const aethelredMainnet = defineChain({
@@ -85,22 +103,8 @@ export const aethelredTestnet = defineChain({
     decimals: 18,
   },
   rpcUrls: {
-    default: {
-      http: [
-        rpcEndpoint(
-          "NEXT_PUBLIC_AETHELRED_TESTNET_RPC_URL",
-          "https://evm-rpc-testnet.aethelred.network",
-        ),
-      ],
-    },
-    public: {
-      http: [
-        rpcEndpoint(
-          "NEXT_PUBLIC_AETHELRED_TESTNET_RPC_URL",
-          "https://evm-rpc-testnet.aethelred.network",
-        ),
-      ],
-    },
+    default: { http: [AETHELRED_TESTNET_HTTP] },
+    public: { http: [AETHELRED_TESTNET_HTTP] },
   },
   blockExplorers: {
     default: {
@@ -122,22 +126,8 @@ export const aethelredDevnet = defineChain({
   rpcUrls: {
     // Defaults to a local `aethelredd start --json-rpc.enable` node (which
     // returns chain id 7332); override with the env var for a remote node.
-    default: {
-      http: [
-        rpcEndpoint(
-          "NEXT_PUBLIC_AETHELRED_DEVNET_RPC_URL",
-          "http://127.0.0.1:8545",
-        ),
-      ],
-    },
-    public: {
-      http: [
-        rpcEndpoint(
-          "NEXT_PUBLIC_AETHELRED_DEVNET_RPC_URL",
-          "http://127.0.0.1:8545",
-        ),
-      ],
-    },
+    default: { http: [AETHELRED_DEVNET_HTTP] },
+    public: { http: [AETHELRED_DEVNET_HTTP] },
   },
   testnet: true,
 });
