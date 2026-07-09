@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 import AppLayout from '@/components/layout/AppLayout';
 import { getIdentityAuthToken } from '@/lib/identity/registration';
+import { generateUUID } from '@/lib/utils';
 import {
   RELYING_APP_PROFILES,
   ZEROID_ELIGIBILITY_POLICY_V1,
@@ -846,7 +847,7 @@ const decision = await apiClient.generateEligibilityProof({
   credentialId: "cred_kyc_v1_ae_000184",
   policyId: "zeroid://policy/regulated-digital-services/age-jurisdiction@2026.06.1",
   relyingAppId: "edge-secure-data-room",
-  contextNonce: crypto.randomUUID(),
+  contextNonce: generateUUID(),
   options: {
     requireNonRevocationProof: true,
     requireOnchainAttestation: false

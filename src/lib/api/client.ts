@@ -28,7 +28,7 @@ import type {
 } from '@/types';
 import { ProposalState, ProposalType, VerificationStatus } from '@/types';
 import { API_BASE_URL } from '@/config/constants';
-import { withRetry, withTimeout } from '@/lib/utils';
+import { generateUUID, withRetry, withTimeout } from '@/lib/utils';
 import {
   getIdentityAuthToken,
   type BackendIdentityRegistrationPayload,
@@ -221,7 +221,9 @@ export interface EligibilityProofReceipt {
 
 /** Generate a short random request ID for tracing */
 function generateRequestId(): string {
-  return `zid-${crypto.randomUUID()}`;
+  // generateUUID (not crypto.randomUUID): the latter is missing on plain-HTTP
+  // origins, which would crash every API request from a testnet box.
+  return `zid-${generateUUID()}`;
 }
 
 /** Build a backend URL without allowing absolute/protocol-relative path escape. */

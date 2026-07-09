@@ -34,6 +34,7 @@ jest.mock('@/lib/utils', () => ({
     mockWithRetry(...(args as [() => Promise<unknown>, number])),
   withTimeout: (...args: unknown[]) =>
     mockWithTimeout(...(args as [Promise<unknown>, number, string?])),
+  generateUUID: () => '12345678-1234-4234-8234-123456789abc',
 }));
 
 jest.mock('@/config/constants', () => ({
