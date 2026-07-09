@@ -48,7 +48,7 @@ jobs:
         with:
           toolchain: ${{ env.RUST_VERSION }}
       - name: Install cargo-audit
-        uses: taiki-e/install-action@e1c4cd42111751368541a7cb5db3522bd1f846a4
+        uses: taiki-e/install-action@7be9fd86bd1707236395105d6e9329dd1511a7e1
         with:
           tool: cargo-audit
       - name: Rust Security Audit
@@ -169,7 +169,7 @@ jobs:
           toolchain: ${{ env.RUST_VERSION }}
           components: rustfmt, clippy
       - name: Install cargo-audit
-        uses: taiki-e/install-action@e1c4cd42111751368541a7cb5db3522bd1f846a4
+        uses: taiki-e/install-action@7be9fd86bd1707236395105d6e9329dd1511a7e1
         with:
           tool: cargo-audit
       - name: Check formatting
