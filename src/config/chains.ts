@@ -36,6 +36,19 @@ function rpcEndpoint(envVar: string, fallback: string): string {
 // Chain Definitions
 // ---------------------------------------------------------------------------
 
+// Mainnet is not deployed yet; the aethelred.network endpoints are placeholders
+// for when it launches. They are env-overridable (like testnet/devnet) so nothing
+// is hardcoded — an operator can repoint them, and on testnet the active chain
+// leads the wagmi list so these are never queried.
+const AETHELRED_MAINNET_HTTP = rpcEndpoint(
+  "NEXT_PUBLIC_AETHELRED_MAINNET_RPC_URL",
+  "https://evm-rpc.aethelred.network",
+);
+const AETHELRED_MAINNET_WS = rpcEndpoint(
+  "NEXT_PUBLIC_AETHELRED_MAINNET_WS_URL",
+  "wss://evm-ws.aethelred.network",
+);
+
 export const aethelredMainnet = defineChain({
   id: AETHELRED_MAINNET_ID,
   name: "Aethelred",
@@ -46,12 +59,12 @@ export const aethelredMainnet = defineChain({
   },
   rpcUrls: {
     default: {
-      http: ["https://evm-rpc.aethelred.network"],
-      webSocket: ["wss://evm-ws.aethelred.network"],
+      http: [AETHELRED_MAINNET_HTTP],
+      webSocket: [AETHELRED_MAINNET_WS],
     },
     public: {
-      http: ["https://evm-rpc.aethelred.network"],
-      webSocket: ["wss://evm-ws.aethelred.network"],
+      http: [AETHELRED_MAINNET_HTTP],
+      webSocket: [AETHELRED_MAINNET_WS],
     },
   },
   blockExplorers: {
