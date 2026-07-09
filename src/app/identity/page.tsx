@@ -99,7 +99,16 @@ export default function IdentityPage() {
     );
   }
 
-  if (!identity && !showCreation) {
+  // useIdentity always returns a truthy identity object; a wallet is
+  // unregistered when it has neither a backend profile nor an on-chain DID.
+  // (Checking `!identity` alone never fires and used to strand new users on
+  // the registered view, where the Create ZeroID card links back here.)
+  const notRegistered =
+    !identity ||
+    ((identity as { isRegistered?: boolean }).isRegistered === false &&
+      !(identity as { profile?: unknown }).profile);
+
+  if (notRegistered && !showCreation) {
     return (
       <AppLayout>
         <div className="flex items-center justify-center min-h-[60vh]">
@@ -216,7 +225,7 @@ export default function IdentityPage() {
                         <div className="mt-1.5 flex items-center gap-2 p-3 bg-[var(--surface-secondary)] rounded-xl">
                           <Hash className="w-4 h-4 text-brand-500 shrink-0" />
                           <code className="text-sm font-mono truncate flex-1">
-                            {identity?.did ?? "did:aethelred:zeroid:0x..."}
+                            {identity?.did ?? "—"}
                           </code>
                           <button
                             onClick={copyDID}
@@ -238,11 +247,17 @@ export default function IdentityPage() {
 
                       {/* Identity Details Grid */}
                       <div className="grid grid-cols-2 gap-4">
+                        {/* Values are the identity's real state — no sample
+                            attestation/status rows. */}
                         {[
                           {
                             label: "Status",
-                            value: (identity as any)?.status ?? "Active",
-                            badge: true,
+                            value:
+                              (identity as any)?.verificationStatus ??
+                              "unverified",
+                            badge:
+                              (identity as any)?.verificationStatus ===
+                              "verified",
                           },
                           {
                             label: "Created",
@@ -263,14 +278,6 @@ export default function IdentityPage() {
                             value: (
                               (identity as any)?.verificationCount ?? 0
                             ).toString(),
-                          },
-                          {
-                            label: "TEE Attestation",
-                            value: "Intel SGX",
-                          },
-                          {
-                            label: "Last Active",
-                            value: "Just now",
                           },
                         ].map((item) => (
                           <div key={item.label} className="space-y-1">
@@ -297,9 +304,9 @@ export default function IdentityPage() {
                               On-chain Anchored
                             </div>
                             <div className="text-xs text-[var(--text-tertiary)]">
-                              Identity registered on Aethelred L1 at block #
-                              {(identity as any)?.registrationBlock ??
-                                "4,521,089"}
+                              {(identity as any)?.registrationBlock
+                                ? `Identity registered on Aethelred L1 at block #${(identity as any).registrationBlock}`
+                                : "Identity registered on the Aethelred L1"}
                             </div>
                           </div>
                         </div>

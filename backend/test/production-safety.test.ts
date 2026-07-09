@@ -1,5 +1,6 @@
 import {
   collectProductionSafetyViolations,
+  getAllowedCorsOrigins,
   isProductionRuntime,
   isMetricsAccessConfigured,
   isMetricsEndpointDisabled,
@@ -260,6 +261,31 @@ describe('production safety controls', () => {
     })).toEqual([
       expect.objectContaining({ control: 'CORS_ORIGINS' }),
     ]);
+
+    // The testnet wildcard (reflect any origin) must never survive production.
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      CORS_ORIGINS: '*',
+      METRICS_PUBLIC_DISABLED: 'true',
+    })).toEqual([
+      expect.objectContaining({ control: 'CORS_ORIGINS' }),
+    ]);
+  });
+
+  it('resolves CORS_ORIGINS=* to origin reflection for test networks', () => {
+    expect(getAllowedCorsOrigins({ CORS_ORIGINS: '*' } as NodeJS.ProcessEnv)).toBe(true);
+    // Wildcard wins even when mixed with explicit origins.
+    expect(
+      getAllowedCorsOrigins({
+        CORS_ORIGINS: 'http://localhost:3003,*',
+      } as NodeJS.ProcessEnv),
+    ).toBe(true);
+    // Explicit lists still resolve to a deduplicated allowlist.
+    expect(
+      getAllowedCorsOrigins({
+        CORS_ORIGINS: 'http://localhost:3003,http://localhost:3003',
+      } as NodeJS.ProcessEnv),
+    ).toEqual(['http://localhost:3003']);
   });
 
   it('rejects wildcard trusted proxy configuration in production', () => {

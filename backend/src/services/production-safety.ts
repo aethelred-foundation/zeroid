@@ -189,15 +189,25 @@ export function checkedProductionSafetyControls(): string[] {
   ];
 }
 
+/**
+ * Resolve the CORS origin setting for the API.
+ *
+ * Returns `true` (reflect any request origin) when CORS_ORIGINS is `*` — meant
+ * for public test networks where the frontend may be served from arbitrary
+ * hosts/IPs. This is acceptable there because auth is a per-user Bearer token
+ * (no cookies), so reflection grants no ambient authority. Production refuses
+ * the wildcard via collectProductionSafetyViolations.
+ */
 export function getAllowedCorsOrigins(
   env: NodeJS.ProcessEnv = process.env,
-): string[] {
+): string[] | true {
   const configured = env.CORS_ORIGINS
     ?.split(',')
     .map((origin) => origin.trim())
     .filter(Boolean);
 
   if (configured && configured.length > 0) {
+    if (configured.includes('*')) return true;
     return [...new Set(configured)];
   }
 
@@ -290,6 +300,11 @@ export function collectProductionSafetyViolations(
     violations.push({
       control: 'CORS_ORIGINS',
       risk: 'Production CORS allowlist is missing and would fall back to localhost',
+    });
+  } else if (corsOrigins === true) {
+    violations.push({
+      control: 'CORS_ORIGINS',
+      risk: 'Production CORS must be an explicit origin allowlist; "*" (reflect any origin) is only acceptable on test networks',
     });
   } else {
     const unsafeOrigin = corsOrigins.find(

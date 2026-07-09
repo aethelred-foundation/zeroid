@@ -239,7 +239,10 @@ describe("IdentityPage", () => {
     expect(screen.getByText("Decentralized Identifier")).toBeInTheDocument();
     expect(screen.getByText("did:aethelred:zeroid:0x1234")).toBeInTheDocument();
     expect(screen.getByText("On-chain Anchored")).toBeInTheDocument();
-    expect(screen.getByText("TEE Attestation")).toBeInTheDocument();
+    // The overview shows only real identity fields — no sample attestation rows.
+    expect(screen.queryByText("TEE Attestation")).not.toBeInTheDocument();
+    expect(screen.queryByText("Intel SGX")).not.toBeInTheDocument();
+    expect(screen.queryByText("Just now")).not.toBeInTheDocument();
   });
 
   it("shows fallback values when identity fields are missing", () => {
@@ -254,15 +257,18 @@ describe("IdentityPage", () => {
       revokeDelegate: jest.fn(),
     });
     render(<IdentityPage />);
-    // DID fallback
-    expect(screen.getByText("did:aethelred:zeroid:0x...")).toBeInTheDocument();
+    // DID fallback is an honest em dash, not a sample DID
+    expect(screen.getByText("—")).toBeInTheDocument();
     // createdAt fallback
     expect(screen.getByText("N/A")).toBeInTheDocument();
     // credentialCount and verificationCount fallbacks (0)
     const zeros = screen.getAllByText("0");
     expect(zeros.length).toBeGreaterThanOrEqual(2);
-    // registrationBlock fallback
-    expect(screen.getByText(/4,521,089/)).toBeInTheDocument();
+    // no invented registration block number
+    expect(screen.queryByText(/4,521,089/)).not.toBeInTheDocument();
+    expect(
+      screen.getByText("Identity registered on the Aethelred L1"),
+    ).toBeInTheDocument();
   });
 
   it("does not copy DID when identity.did is falsy", () => {
@@ -276,7 +282,7 @@ describe("IdentityPage", () => {
       revokeDelegate: jest.fn(),
     });
     render(<IdentityPage />);
-    const didSection = screen.getByText("did:aethelred:zeroid:0x...");
+    const didSection = screen.getByText("—");
     const copyBtn = didSection.parentElement?.querySelector("button");
     fireEvent.click(copyBtn!);
     expect(writeTextMock).not.toHaveBeenCalled();
@@ -300,14 +306,40 @@ describe("IdentityPage", () => {
   });
 
   it("renders overview detail items showing badge vs text correctly", () => {
-    // The overview tab has items with badge:true (Status) and badge:undefined (others)
-    // Ensure both branches are rendered
+    // Status renders a badge only for a genuinely verified identity; other
+    // states render as plain text.
+    mockUseIdentity.mockReturnValue({
+      identity: {
+        did: "did:aethelred:zeroid:0x1234",
+        verificationStatus: "verified",
+        createdAt: "2025-01-01",
+        credentialCount: 5,
+        verificationCount: 12,
+      },
+      delegates: [],
+      isLoading: false,
+      createIdentity: jest.fn(),
+      revokeDelegate: jest.fn(),
+    });
     render(<IdentityPage />);
-    // The Status item renders a StatusBadge
     const badges = screen.getAllByTestId("status-badge");
     expect(badges.length).toBeGreaterThanOrEqual(1);
-    // Other items render text values
-    expect(screen.getByText("Intel SGX")).toBeInTheDocument();
-    expect(screen.getByText("Just now")).toBeInTheDocument();
+
+    // An unverified identity shows its real status as text, not a badge.
+    mockUseIdentity.mockReturnValue({
+      identity: {
+        did: "did:aethelred:zeroid:0x1234",
+        verificationStatus: "unverified",
+        createdAt: "2025-01-01",
+        credentialCount: 0,
+        verificationCount: 0,
+      },
+      delegates: [],
+      isLoading: false,
+      createIdentity: jest.fn(),
+      revokeDelegate: jest.fn(),
+    });
+    const { getByText } = render(<IdentityPage />);
+    expect(getByText("unverified")).toBeInTheDocument();
   });
 });
