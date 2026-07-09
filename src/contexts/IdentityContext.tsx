@@ -130,12 +130,14 @@ export function IdentityProvider({ children }: { children: React.ReactNode }) {
       const profile = await apiClient.getIdentityByAddress(addr);
       return profile;
     } catch (error) {
-      // 404 means the user is not registered yet — not an error
-      if (
-        error instanceof Error &&
-        "statusCode" in error &&
-        (error as { statusCode: number }).statusCode === 404
-      ) {
+      // A wallet with no ZeroID yet resolves to 404 (code
+      // IDENTITY_ADDRESS_NOT_FOUND). That is the normal first-run state, not a
+      // failure — return null so the UI shows the "create your identity" prompt
+      // instead of an error card. Duck-typed (not `instanceof ZeroIDApiError`)
+      // so it still holds when the API module is mocked. Genuine errors propagate.
+      const statusCode = (error as { statusCode?: number })?.statusCode;
+      const code = (error as { code?: string })?.code;
+      if (statusCode === 404 || code === "IDENTITY_ADDRESS_NOT_FOUND") {
         return null;
       }
       throw error;

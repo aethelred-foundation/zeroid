@@ -110,9 +110,12 @@ describe("IdentityCard", () => {
     expect(screen.getByText(/Failed to load identity/)).toBeInTheDocument();
   });
 
-  it('shows "No Identity" state when no identity exists', () => {
+  it("shows the not-registered onboarding prompt when no identity exists", () => {
     render(<IdentityCard />);
-    expect(screen.getByText("No Identity")).toBeInTheDocument();
+    expect(screen.getByText("No identity yet")).toBeInTheDocument();
+    // The prompt is actionable: a CTA into the identity-creation flow.
+    const cta = screen.getByRole("link", { name: /create zeroid/i });
+    expect(cta).toHaveAttribute("href", "/identity");
   });
 
   it("displays credential and verification counts", () => {

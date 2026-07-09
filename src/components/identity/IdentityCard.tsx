@@ -12,7 +12,9 @@ import {
   Award,
   Clock,
   CheckCircle2,
+  ArrowRight,
 } from "lucide-react";
+import Link from "next/link";
 import { useIdentity } from "@/hooks/useIdentity";
 import type { DID, IdentityProfile } from "@/types";
 
@@ -154,12 +156,16 @@ export default function IdentityCard({
           </div>
           <div>
             <p className="text-zero-300 text-[14px] font-display font-medium mb-1">
-              No Identity
+              No identity yet
             </p>
             <p className="text-zero-500 text-[12px] font-body">
-              Create your ZeroID to get started.
+              Create your ZeroID to request credentials and run proofs.
             </p>
           </div>
+          <Link href="/identity" className="btn-primary btn-sm mt-1">
+            Create ZeroID
+            <ArrowRight className="w-4 h-4" />
+          </Link>
         </div>
       </div>
     );
