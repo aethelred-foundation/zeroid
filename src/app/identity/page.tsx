@@ -113,8 +113,9 @@ export default function IdentityPage() {
             </div>
             <h2 className="text-2xl font-bold mb-3">Create Your Identity</h2>
             <p className="text-[var(--text-secondary)] mb-6">
-              Create a self-sovereign decentralized identity. Your DID is
-              anchored on-chain and verified through TEE enclaves.
+              Create a self-sovereign decentralized identity. You sign in with
+              your wallet and your DID is anchored on-chain — you retain full
+              control.
             </p>
             <button
               onClick={() => setShowCreation(true)}

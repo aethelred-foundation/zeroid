@@ -1445,4 +1445,5 @@ export type IdentityCreationStep =
   | "uae-pass"
   | "biometric"
   | "generate-did"
-  | "on-chain";
+  | "on-chain"
+  | "register";

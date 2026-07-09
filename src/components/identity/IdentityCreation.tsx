@@ -1,12 +1,12 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import Link from "next/link";
 import {
   Wallet,
   ShieldCheck,
   Fingerprint,
-  KeyRound,
   Globe,
   ArrowRight,
   ArrowLeft,
@@ -14,8 +14,6 @@ import {
   Loader2,
   AlertCircle,
   ScanFace,
-  Shield,
-  Sparkles,
 } from "lucide-react";
 import { useAccount, useConnect } from "wagmi";
 import { useIdentity } from "@/hooks/useIdentity";
@@ -28,9 +26,14 @@ interface StepConfig {
   title: string;
   subtitle: string;
   icon: typeof Wallet;
+  /** Shown, but the base identity does not require it — surfaced as skippable. */
+  optional?: boolean;
 }
 
-const STEPS: StepConfig[] = [
+// The full catalogue. The visible STEPS are this filtered by feature flags, so
+// step order/count is dynamic — which is why rendering keys off step id, never
+// a hard-coded index.
+const ALL_STEPS: StepConfig[] = [
   {
     id: "connect-wallet",
     title: "Connect Wallet",
@@ -42,52 +45,59 @@ const STEPS: StepConfig[] = [
     title: "UAE Pass Verification",
     subtitle: "Verify your real-world identity via UAE Pass",
     icon: ShieldCheck,
+    optional: true,
   },
   {
     id: "biometric",
     title: "TEE Biometric Verification",
     subtitle: "Bind encrypted liveness evidence to an attested enclave",
     icon: ScanFace,
+    optional: true,
   },
   {
-    id: "generate-did",
-    title: "Generate DID",
-    subtitle: "Create your decentralized identifier",
-    icon: KeyRound,
-  },
-  {
-    id: "on-chain",
-    title: "On-Chain Registration",
-    subtitle: "Register your identity on the Aethelred network",
+    id: "register",
+    title: "Register Identity",
+    subtitle: "Sign in with your wallet and anchor your DID on-chain",
     icon: Globe,
   },
 ];
 
+// Enterprise identity-assurance steps (government ID via UAE Pass, TEE biometric
+// liveness) require real external credentials and are off unless a deployment
+// enables them. Gating them keeps the default (testnet) flow to just Connect
+// Wallet → Register, instead of surfacing steps that error when their backends
+// aren't configured. Read as literal process.env.* so Next.js inlines the value
+// into the client bundle (a computed key is never substituted at build time).
+function visibleSteps(): StepConfig[] {
+  const uaePassEnabled = process.env.NEXT_PUBLIC_UAE_PASS_ENABLED === "true";
+  const teeBiometricEnabled =
+    process.env.NEXT_PUBLIC_TEE_BIOMETRIC_ENABLED === "true";
+  return ALL_STEPS.filter((s) => {
+    if (s.id === "uae-pass") return uaePassEnabled;
+    if (s.id === "biometric") return teeBiometricEnabled;
+    return true;
+  });
+}
+
 const stepVariants = {
-  enter: (direction: number) => ({
-    x: direction > 0 ? 300 : -300,
-    opacity: 0,
-  }),
-  center: {
-    x: 0,
-    opacity: 1,
-  },
-  exit: (direction: number) => ({
-    x: direction > 0 ? -300 : 300,
-    opacity: 0,
-  }),
+  enter: (direction: number) => ({ x: direction > 0 ? 300 : -300, opacity: 0 }),
+  center: { x: 0, opacity: 1 },
+  exit: (direction: number) => ({ x: direction > 0 ? -300 : 300, opacity: 0 }),
 };
 
 export default function IdentityCreation() {
+  const STEPS = useMemo(visibleSteps, []);
+
   const [currentStep, setCurrentStep] = useState(0);
   const [direction, setDirection] = useState(1);
   const [stepErrors, setStepErrors] = useState<Record<number, string>>({});
   const [completedSteps, setCompletedSteps] = useState<Set<number>>(new Set());
   const [isProcessing, setIsProcessing] = useState(false);
+  const [registered, setRegistered] = useState(false);
 
   const { address, isConnected } = useAccount();
   const { connectors, connect } = useConnect();
-  const { createIdentity, registerOnChain } = useIdentity();
+  const { createIdentity } = useIdentity();
   const {
     initiateVerification: initiateUAEPass,
     verificationStatus: uaePassStatus,
@@ -95,10 +105,13 @@ export default function IdentityCreation() {
   } = useUAEPass();
   const { startScan, scanStatus } = useBiometric();
 
+  const step = STEPS[currentStep];
+  const isLastStep = currentStep === STEPS.length - 1;
+
   const goToStep = useCallback(
-    (step: number) => {
-      setDirection(step > currentStep ? 1 : -1);
-      setCurrentStep(step);
+    (target: number) => {
+      setDirection(target > currentStep ? 1 : -1);
+      setCurrentStep(target);
     },
     [currentStep],
   );
@@ -108,12 +121,10 @@ export default function IdentityCreation() {
       setCompletedSteps((prev) => new Set([...prev, currentStep]));
       goToStep(currentStep + 1);
     }
-  }, [currentStep, goToStep]);
+  }, [currentStep, goToStep, STEPS.length]);
 
   const handleBack = useCallback(() => {
-    if (currentStep > 0) {
-      goToStep(currentStep - 1);
-    }
+    if (currentStep > 0) goToStep(currentStep - 1);
   }, [currentStep, goToStep]);
 
   const clearError = useCallback(() => {
@@ -124,92 +135,60 @@ export default function IdentityCreation() {
     });
   }, [currentStep]);
 
-  const handleConnectWallet = useCallback(
-    async (connectorId: number) => {
+  const runStep = useCallback(
+    async (action: () => Promise<unknown>, fallbackMessage: string) => {
       clearError();
       setIsProcessing(true);
       try {
-        const connector = connectors[connectorId];
-        if (connector) {
-          connect({ connector });
-        }
+        await action();
+        return true;
       } catch (err) {
         setStepErrors((prev) => ({
           ...prev,
-          0: err instanceof Error ? err.message : "Failed to connect wallet",
+          [currentStep]: err instanceof Error ? err.message : fallbackMessage,
         }));
+        return false;
       } finally {
         setIsProcessing(false);
       }
     },
-    [connectors, connect, clearError],
+    [clearError, currentStep],
   );
 
-  const handleUAEPass = useCallback(async () => {
-    clearError();
-    setIsProcessing(true);
-    try {
-      await initiateUAEPass();
-    } catch (err) {
-      setStepErrors((prev) => ({
-        ...prev,
-        1: err instanceof Error ? err.message : "UAE Pass verification failed",
-      }));
-    } finally {
-      setIsProcessing(false);
-    }
-  }, [initiateUAEPass, clearError]);
+  const handleConnectWallet = useCallback(
+    (connectorIndex: number) =>
+      runStep(async () => {
+        const connector = connectors[connectorIndex];
+        if (connector) connect({ connector });
+      }, "Failed to connect wallet"),
+    [connectors, connect, runStep],
+  );
 
-  const handleBiometricScan = useCallback(async () => {
-    clearError();
-    setIsProcessing(true);
-    try {
-      await startScan();
-    } catch (err) {
-      setStepErrors((prev) => ({
-        ...prev,
-        2: err instanceof Error ? err.message : "Biometric scan failed",
-      }));
-    } finally {
-      setIsProcessing(false);
-    }
-  }, [startScan, clearError]);
+  const handleUAEPass = useCallback(
+    () => runStep(initiateUAEPass, "UAE Pass verification failed"),
+    [initiateUAEPass, runStep],
+  );
 
-  const handleGenerateDID = useCallback(async () => {
-    clearError();
-    setIsProcessing(true);
-    try {
-      await createIdentity();
-    } catch (err) {
-      setStepErrors((prev) => ({
-        ...prev,
-        3: err instanceof Error ? err.message : "DID generation failed",
-      }));
-    } finally {
-      setIsProcessing(false);
-    }
-  }, [createIdentity, clearError]);
+  const handleBiometricScan = useCallback(
+    () => runStep(startScan, "Biometric scan failed"),
+    [startScan, runStep],
+  );
 
-  const handleOnChainRegistration = useCallback(async () => {
-    clearError();
-    setIsProcessing(true);
-    try {
-      await registerOnChain();
-    } catch (err) {
-      setStepErrors((prev) => ({
-        ...prev,
-        4: err instanceof Error ? err.message : "On-chain registration failed",
-      }));
-    } finally {
-      setIsProcessing(false);
-    }
-  }, [registerOnChain, clearError]);
+  const handleRegister = useCallback(
+    async () => {
+      const ok = await runStep(async () => {
+        await createIdentity();
+      }, "Identity registration failed");
+      if (ok) setRegistered(true);
+    },
+    [createIdentity, runStep],
+  );
 
   const currentError = stepErrors[currentStep];
 
   const renderStepContent = () => {
-    switch (currentStep) {
-      case 0:
+    switch (step?.id) {
+      case "connect-wallet":
         return (
           <div className="space-y-4">
             {isConnected && address ? (
@@ -242,7 +221,7 @@ export default function IdentityCreation() {
           </div>
         );
 
-      case 1:
+      case "uae-pass":
         return (
           <div className="space-y-4">
             <div className="card p-6 text-center">
@@ -253,8 +232,8 @@ export default function IdentityCreation() {
                 UAE Pass Identity Verification
               </h4>
               <p className="text-sm text-[var(--text-secondary)] mb-6">
-                Start an official UAE Pass OAuth handoff. ZeroID marks this
-                step complete only after the backend validates the callback and
+                Start an official UAE Pass OAuth handoff. ZeroID marks this step
+                complete only after the backend validates the callback and
                 records government verification evidence.
               </p>
               {uaePassStatus === "verified" ? (
@@ -294,7 +273,7 @@ export default function IdentityCreation() {
           </div>
         );
 
-      case 2:
+      case "biometric":
         return (
           <div className="space-y-4">
             <div className="card p-6 text-center">
@@ -320,9 +299,9 @@ export default function IdentityCreation() {
                 Biometric Verification
               </h4>
               <p className="text-sm text-[var(--text-secondary)] mb-6">
-                ZeroID submits a sealed biometric capture envelope to an
-                attested TEE node. This step remains incomplete until the
-                backend returns a verification identifier from the enclave.
+                ZeroID submits a sealed biometric capture envelope to an attested
+                TEE node. This step remains incomplete until the backend returns
+                a verification identifier from the enclave.
               </p>
               {scanStatus === "success" || scanStatus === "complete" ? (
                 <div className="flex items-center justify-center gap-2 text-status-verified">
@@ -354,47 +333,7 @@ export default function IdentityCreation() {
           </div>
         );
 
-      case 3:
-        return (
-          <div className="space-y-4">
-            <div className="card p-6 text-center">
-              <motion.div
-                className="w-16 h-16 mx-auto mb-4 rounded-2xl bg-identity-chrome/10 flex items-center justify-center"
-                animate={{ rotate: [0, 360] }}
-                transition={{ duration: 20, repeat: Infinity, ease: "linear" }}
-              >
-                <KeyRound className="w-8 h-8 text-identity-chrome" />
-              </motion.div>
-              <h4 className="font-semibold text-[var(--text-primary)] mb-2">
-                Generate Decentralized Identifier
-              </h4>
-              <p className="text-sm text-[var(--text-secondary)] mb-6">
-                Your DID is a globally unique, cryptographically verifiable
-                identifier anchored to the Aethelred network. It puts you in
-                full control of your digital identity.
-              </p>
-              <button
-                onClick={handleGenerateDID}
-                disabled={isProcessing}
-                className="btn-primary"
-              >
-                {isProcessing ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    Generating...
-                  </>
-                ) : (
-                  <>
-                    <Sparkles className="w-4 h-4" />
-                    Generate DID
-                  </>
-                )}
-              </button>
-            </div>
-          </div>
-        );
-
-      case 4:
+      case "register":
         return (
           <div className="space-y-4">
             <div className="card p-6 text-center">
@@ -404,36 +343,72 @@ export default function IdentityCreation() {
                 animate={{ scale: 1 }}
                 transition={{ type: "spring", stiffness: 200 }}
               >
-                <Globe className="w-8 h-8 text-brand-500" />
-              </motion.div>
-              <h4 className="font-semibold text-[var(--text-primary)] mb-2">
-                On-Chain Registration
-              </h4>
-              <p className="text-sm text-[var(--text-secondary)] mb-6">
-                Register your DID on the Aethelred blockchain. This creates an
-                immutable record while keeping your personal information private
-                through zero-knowledge proofs.
-              </p>
-              <button
-                onClick={handleOnChainRegistration}
-                disabled={isProcessing}
-                className="btn-primary"
-              >
-                {isProcessing ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    Registering...
-                  </>
+                {registered ? (
+                  <CheckCircle2 className="w-8 h-8 text-status-verified" />
                 ) : (
-                  <>
-                    <Globe className="w-4 h-4" />
-                    Register On-Chain
-                  </>
+                  <Globe className="w-8 h-8 text-brand-500" />
                 )}
-              </button>
+              </motion.div>
+
+              {registered ? (
+                <>
+                  <h4 className="font-semibold text-[var(--text-primary)] mb-2">
+                    Identity Registered
+                  </h4>
+                  <p className="text-sm text-[var(--text-secondary)] mb-6">
+                    Your DID is anchored on the Aethelred network and your session
+                    is active. You can now request credentials and run proofs.
+                  </p>
+                  <Link href="/" className="btn-primary">
+                    Go to Dashboard
+                    <ArrowRight className="w-4 h-4" />
+                  </Link>
+                </>
+              ) : (
+                <>
+                  <h4 className="font-semibold text-[var(--text-primary)] mb-2">
+                    Register Your Identity
+                  </h4>
+                  <p className="text-sm text-[var(--text-secondary)] mb-6">
+                    This anchors your decentralized identifier on-chain and starts
+                    your session. Your wallet will prompt you twice — first to{" "}
+                    <span className="text-[var(--text-primary)]">sign a message</span>{" "}
+                    (free), then to confirm one{" "}
+                    <span className="text-[var(--text-primary)]">
+                      on-chain transaction
+                    </span>{" "}
+                    (a little AETHEL for gas).
+                  </p>
+                  {!isConnected && (
+                    <p className="text-sm text-status-pending mb-4">
+                      Connect your wallet first (step 1).
+                    </p>
+                  )}
+                  <button
+                    onClick={handleRegister}
+                    disabled={isProcessing || !isConnected}
+                    className="btn-primary"
+                  >
+                    {isProcessing ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        Registering...
+                      </>
+                    ) : (
+                      <>
+                        <Globe className="w-4 h-4" />
+                        Register Identity
+                      </>
+                    )}
+                  </button>
+                </>
+              )}
             </div>
           </div>
         );
+
+      default:
+        return null;
     }
   };
 
@@ -442,13 +417,13 @@ export default function IdentityCreation() {
       {/* Progress bar */}
       <div className="mb-8">
         <div className="flex items-center justify-between mb-4">
-          {STEPS.map((step, idx) => {
-            const StepIcon = step.icon;
+          {STEPS.map((s, idx) => {
+            const StepIcon = s.icon;
             const isCompleted = completedSteps.has(idx);
             const isCurrent = idx === currentStep;
 
             return (
-              <div key={step.id} className="flex items-center">
+              <div key={s.id} className="flex items-center">
                 <button
                   onClick={() => isCompleted && goToStep(idx)}
                   disabled={!isCompleted && !isCurrent}
@@ -484,10 +459,15 @@ export default function IdentityCreation() {
         </div>
         <div className="text-center">
           <h2 className="text-xl font-bold text-[var(--text-primary)]">
-            {STEPS[currentStep].title}
+            {step?.title}
           </h2>
           <p className="text-sm text-[var(--text-secondary)] mt-1">
-            {STEPS[currentStep].subtitle}
+            {step?.subtitle}
+            {step?.optional && (
+              <span className="ml-2 text-[var(--text-tertiary)]">
+                · Optional
+              </span>
+            )}
           </p>
         </div>
       </div>
@@ -530,9 +510,9 @@ export default function IdentityCreation() {
           Back
         </button>
         <div className="flex items-center gap-1.5">
-          {STEPS.map((_, idx) => (
+          {STEPS.map((s, idx) => (
             <div
-              key={idx}
+              key={s.id}
               className={`w-2 h-2 rounded-full transition-colors ${
                 idx === currentStep
                   ? "bg-brand-500"
@@ -543,10 +523,10 @@ export default function IdentityCreation() {
         </div>
         <button
           onClick={handleNext}
-          disabled={currentStep === STEPS.length - 1}
+          disabled={isLastStep}
           className="btn-primary btn-sm"
         >
-          Next
+          {step?.optional ? "Skip" : "Next"}
           <ArrowRight className="w-4 h-4" />
         </button>
       </div>
