@@ -141,7 +141,15 @@ export default function IdentityCard({
     );
   }
 
-  if (!identity) {
+  // The hook always returns an identity object (with hasIdentity/profile
+  // fields), so "no identity" must be detected from its contents: a wallet is
+  // unregistered when it has neither a backend profile nor an on-chain DID.
+  const notRegistered =
+    !identity ||
+    ((identity as { isRegistered?: boolean }).isRegistered === false &&
+      !(identity as { profile?: unknown }).profile);
+
+  if (notRegistered) {
     return (
       <div
         className="bento p-7 h-full"

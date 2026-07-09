@@ -118,6 +118,32 @@ describe("IdentityCard", () => {
     expect(cta).toHaveAttribute("href", "/identity");
   });
 
+  it("shows the onboarding prompt for the hook's real unregistered shape", () => {
+    // useIdentity always returns a truthy identity object; unregistered is
+    // signalled by isRegistered:false + profile:null, not a null identity.
+    mockUseIdentity.mockReturnValue({
+      identity: {
+        did: `0x${"0".repeat(64)}`,
+        didHash: `0x${"0".repeat(64)}`,
+        hasIdentity: false,
+        isRegistered: false,
+        profile: null,
+        delegates: [],
+        credentialCount: 0,
+        verificationCount: 0,
+        verificationStatus: "unverified",
+        createdAt: undefined,
+      },
+      isLoading: false,
+      error: null,
+    });
+    render(<IdentityCard />);
+    expect(screen.getByText("No identity yet")).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: /create zeroid/i }),
+    ).toHaveAttribute("href", "/identity");
+  });
+
   it("displays credential and verification counts", () => {
     render(<IdentityCard identity={mockIdentity as any} />);
     expect(screen.getByText("5")).toBeInTheDocument();

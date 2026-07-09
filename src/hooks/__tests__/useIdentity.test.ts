@@ -172,6 +172,21 @@ describe("useIdentity hooks", () => {
       expect(result.current.hasIdentity).toBe(false);
     });
 
+    it("returns hasIdentity false for the zero hash (unregistered wallet)", async () => {
+      // identityOf returns bytes32(0) for a wallet with no identity — it is
+      // truthy and !== "0x", so it must not count as having an identity.
+      mockUseReadContract
+        .mockReturnValueOnce({ data: `0x${"0".repeat(64)}`, isLoading: false })
+        .mockReturnValueOnce({ data: [], isLoading: false });
+
+      const { useOnChainIdentity } = await import("@/hooks/useIdentity");
+      const { result } = renderHook(() => useOnChainIdentity(), {
+        wrapper: createQueryWrapper(),
+      });
+
+      expect(result.current.hasIdentity).toBe(false);
+    });
+
     it("reflects loading state", async () => {
       mockUseReadContract.mockReturnValue({
         data: undefined,
@@ -252,6 +267,45 @@ describe("useIdentity hooks", () => {
       // Query should not fire
       expect(result.current.isFetching).toBe(false);
       expect(apiClient.get).not.toHaveBeenCalled();
+    });
+
+    it("resolves to null (not an error) when the wallet is not registered (404)", async () => {
+      // The backend answers 404 IDENTITY_ADDRESS_NOT_FOUND for a wallet with
+      // no ZeroID — the normal first-run state. It must surface as a null
+      // profile so the UI shows onboarding, not the error card.
+      const notFound = Object.assign(new Error("Identity not found for address"), {
+        statusCode: 404,
+        code: "IDENTITY_ADDRESS_NOT_FOUND",
+      });
+      (apiClient.get as jest.Mock).mockRejectedValue(notFound);
+
+      const { useIdentityProfile } = await import("@/hooks/useIdentity");
+      const { result } = renderHook(() => useIdentityProfile(), {
+        wrapper: createQueryWrapper(),
+      });
+
+      await waitFor(() => {
+        expect(result.current.isSuccess).toBe(true);
+      });
+      expect(result.current.data).toBeNull();
+      expect(result.current.error).toBeNull();
+    });
+
+    it("still surfaces genuine (non-404) errors", async () => {
+      const boom = Object.assign(new Error("Network failure"), {
+        statusCode: 500,
+      });
+      (apiClient.get as jest.Mock).mockRejectedValue(boom);
+
+      const { useIdentityProfile } = await import("@/hooks/useIdentity");
+      const { result } = renderHook(() => useIdentityProfile(), {
+        wrapper: createQueryWrapper(),
+      });
+
+      await waitFor(() => {
+        expect(result.current.isError).toBe(true);
+      });
+      expect((result.current.error as Error).message).toBe("Network failure");
     });
   });
 

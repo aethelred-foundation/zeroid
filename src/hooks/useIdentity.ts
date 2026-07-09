@@ -68,7 +68,9 @@ export function useOnChainIdentity() {
     didHash: didHash as string | undefined,
     delegates: (delegates as DelegateRecord[]) ?? [],
     isLoading: isDIDLoading || isDelegatesLoading,
-    hasIdentity: !!didHash && didHash !== "0x",
+    // identityOf returns bytes32(0) for an unregistered wallet — the zero hash
+    // is truthy and !== "0x", so it must be excluded explicitly.
+    hasIdentity: !!didHash && didHash !== "0x" && didHash !== EMPTY_BYTES32,
   };
 }
 
@@ -76,13 +78,31 @@ export function useOnChainIdentity() {
 // Identity profile (off-chain, API-backed)
 // ---------------------------------------------------------------------------
 
+/** True for the backend's "no identity for this address" 404. */
+function isNotRegistered(error: unknown): boolean {
+  const statusCode = (error as { statusCode?: number })?.statusCode;
+  const code = (error as { code?: string })?.code;
+  return statusCode === 404 || code === "IDENTITY_ADDRESS_NOT_FOUND";
+}
+
 export function useIdentityProfile() {
   const { address } = useAccount();
 
   return useQuery({
     queryKey: ["identity", "profile", address],
-    queryFn: () =>
-      apiClient.get<IdentityProfile>(`/api/v1/identity/address/${address}`),
+    queryFn: async (): Promise<IdentityProfile | null> => {
+      try {
+        return await apiClient.get<IdentityProfile>(
+          `/api/v1/identity/address/${address}`,
+        );
+      } catch (error) {
+        // A wallet with no ZeroID yet resolves to 404 — the normal first-run
+        // state, not a failure. Null lets the UI show the onboarding prompt
+        // instead of an error card; genuine errors still propagate.
+        if (isNotRegistered(error)) return null;
+        throw error;
+      }
+    },
     enabled: !!address,
     staleTime: 30_000,
   });
