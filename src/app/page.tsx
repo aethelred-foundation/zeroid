@@ -249,14 +249,11 @@ export default function DashboardPage() {
         </div>
 
         {/* Bento Grid — Row 1: Metrics strip */}
-        <motion.div
-          variants={stagger}
-          initial="hidden"
-          animate="visible"
-          className="grid grid-cols-2 lg:grid-cols-4 gap-4"
-        >
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           {/* Every metric is computed from the account's real data — no sample
-              trends or invented network stats. */}
+              trends or invented network stats. Explicit per-card animation:
+              variant propagation through the stagger container proved
+              unreliable on the connect→dashboard mount path. */}
           {[
             {
               label: "Active Credentials",
@@ -278,12 +275,21 @@ export default function DashboardPage() {
               value: stats.totalVerifications,
               icon: <Fingerprint className="w-[18px] h-[18px]" />,
             },
-          ].map((m) => (
-            <motion.div key={m.label} variants={fadeUp}>
+          ].map((m, i) => (
+            <motion.div
+              key={m.label}
+              initial={{ opacity: 0, y: 24 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{
+                duration: 0.6,
+                delay: 0.1 + i * 0.07,
+                ease: [0.16, 1, 0.3, 1],
+              }}
+            >
               <MetricCard label={m.label} value={m.value} icon={m.icon} />
             </motion.div>
           ))}
-        </motion.div>
+        </div>
 
         {/* Bento Grid — Row 2: Identity + Quick Actions */}
         <div className="grid grid-cols-12 gap-4">

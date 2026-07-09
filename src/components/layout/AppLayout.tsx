@@ -508,7 +508,7 @@ export function AppLayout({ children }: AppLayoutProps) {
       {/* Noise texture */}
       <div className="noise-overlay" />
 
-      {/* Desktop floating dock */}
+      {/* Desktop labeled sidebar */}
       <Sidebar
         collapsed={false}
         onToggle={() => {}}
@@ -546,7 +546,7 @@ export function AppLayout({ children }: AppLayoutProps) {
       </AnimatePresence>
 
       {/* Main content area — offset for dock on desktop */}
-      <div className="lg:pl-[76px] flex flex-col min-h-screen relative z-10">
+      <div className="lg:pl-[248px] flex flex-col min-h-screen relative z-10">
         <Header
           onMenuClick={() => setMobileSidebarOpen(true)}
           onSearchClick={openSearch}
@@ -554,7 +554,7 @@ export function AppLayout({ children }: AppLayoutProps) {
         />
 
         <main className="flex-1">
-          <div className="mx-auto max-w-[1320px] px-5 sm:px-8 lg:px-10 pb-8">
+          <div className="mx-auto max-w-[1320px] px-5 sm:px-8 lg:px-10 pt-7 pb-8">
             <motion.div
               key={pathname}
               initial={{ opacity: 0, y: 12 }}

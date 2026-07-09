@@ -1,11 +1,11 @@
 "use client";
 
-import React, { useState } from "react";
+import React from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion } from "framer-motion";
 import Image from "next/image";
-import { ExternalLink, LogOut, Settings } from "lucide-react";
+import { ExternalLink, LogOut } from "lucide-react";
 import { useAccount, useDisconnect } from "wagmi";
 
 import type { NavItem } from "./AppLayout";
@@ -13,7 +13,6 @@ import { NAV_SECTIONS } from "./AppLayout";
 import {
   getFeatureReadiness,
   readinessBadgeClass,
-  readinessDotClass,
 } from "@/lib/product/readiness";
 
 interface SidebarProps {
@@ -24,6 +23,11 @@ interface SidebarProps {
   mobile?: boolean;
 }
 
+/**
+ * Labeled navigation panel, shared by the fixed desktop sidebar and the mobile
+ * drawer. Grouped sections, glyph chips, and a spring-tracked active pill —
+ * every destination is named, never a bare icon.
+ */
 export function Sidebar({
   collapsed: _collapsed,
   onToggle: _onToggle,
@@ -34,30 +38,20 @@ export function Sidebar({
   const pathname = usePathname();
   const { isConnected } = useAccount();
   const { disconnect } = useDisconnect();
-  const [hoveredItem, setHoveredItem] = useState<string | null>(null);
 
   const isActive = (href: string) => {
     if (href === "/") return pathname === "/";
     return pathname.startsWith(href);
   };
 
-  // Flatten all nav items for the dock
-  const allItems = NAV_SECTIONS.flatMap((s) => s.items);
-
-  // Mobile gets a full sidebar, desktop gets a dock
-  if (mobile) {
-    return (
-      <aside
-        className={`w-[280px] flex flex-col h-screen ${className}`}
-        style={{
-          background: "var(--surface-secondary)",
-          borderRight: "1px solid rgba(255, 255, 255, 0.04)",
-        }}
+  const body = (
+    <>
+      {/* Wordmark */}
+      <div
+        className="flex items-center gap-3 px-5 h-[64px] shrink-0"
+        style={{ borderBottom: "1px solid rgba(255, 255, 255, 0.05)" }}
       >
-        <div
-          className="flex items-center gap-3 px-5 h-[64px] shrink-0"
-          style={{ borderBottom: "1px solid rgba(255, 255, 255, 0.04)" }}
-        >
+        <Link href="/" className="flex items-center gap-3">
           <Image
             src="/zeroid-logo.png"
             alt="ZeroID"
@@ -69,43 +63,60 @@ export function Sidebar({
           <span className="text-[15px] font-semibold tracking-tight text-white font-display">
             Zero<span className="text-chrome-300">ID</span>
           </span>
-        </div>
-        <nav className="flex-1 overflow-y-auto px-3 py-4">
-          {NAV_SECTIONS.map((section, si) => (
-            <div key={section.title} className={si > 0 ? "mt-5" : ""}>
-              <p className="px-3 mb-1.5 text-label-sm uppercase text-zero-500 font-body">
-                {section.title}
-              </p>
-              <div className="space-y-0.5">
-                {section.items.map((item) => {
-                  const active = isActive(item.href);
-                  const readiness = getFeatureReadiness(item.href);
-                  return (
-                    <Link
-                      key={item.href}
-                      href={item.href}
-                      className={`group relative flex items-center gap-3 px-3 py-2.5 rounded-xl text-[13px] font-medium transition-all duration-200 font-body ${
-                        active
-                          ? "text-white"
-                          : "text-zero-400 hover:text-zero-200"
-                      }`}
-                      style={
-                        active
-                          ? { background: "rgba(192, 196, 204, 0.08)" }
-                          : {}
-                      }
-                    >
+        </Link>
+      </div>
+
+      {/* Sections */}
+      <nav className="flex-1 overflow-y-auto px-3 py-4">
+        {NAV_SECTIONS.map((section, si) => (
+          <div key={section.title} className={si > 0 ? "mt-6" : ""}>
+            <p className="px-2.5 mb-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-zero-600 font-body">
+              {section.title}
+            </p>
+            <div className="space-y-px">
+              {section.items.map((item) => {
+                const active = isActive(item.href);
+                const readiness = getFeatureReadiness(item.href);
+                return (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    aria-label={item.label}
+                    className={`nav-row ${active ? "nav-row-active" : ""}`}
+                  >
+                    {active && (
+                      <motion.span
+                        layoutId={mobile ? "nav-pill-mobile" : "nav-pill"}
+                        className="absolute left-0 top-1/2 -translate-y-1/2 w-[2.5px] h-4 rounded-full"
+                        style={{
+                          background:
+                            "linear-gradient(180deg, #d4d7de, #7c8290)",
+                        }}
+                        transition={{
+                          type: "spring",
+                          damping: 32,
+                          stiffness: 420,
+                        }}
+                      />
+                    )}
+                    <span className="nav-glyph">{item.icon}</span>
+                    <span className="truncate">{item.label}</span>
+                    {/* One badge per row. Honest gating (Preview etc.) always
+                        wins the slot; the decorative AI/New chips only show
+                        when readiness is quiet, and ready states (Live /
+                        Configured) carry no badge at all — a badge on every
+                        row is noise, not information. */}
+                    {readiness.status !== "Live" &&
+                    readiness.status !== "Configured" ? (
                       <span
-                        className={
-                          active
-                            ? "text-chrome-300"
-                            : "text-zero-500 group-hover:text-zero-400"
-                        }
+                        className={`ml-auto text-[9px] px-1.5 py-px rounded-full font-semibold tracking-wide uppercase ${readinessBadgeClass(
+                          readiness.status,
+                        )}`}
                       >
-                        {item.icon}
+                        {readiness.status}
                       </span>
-                      <span className="truncate">{item.label}</span>
-                      {item.badge && (
+                    ) : (
+                      item.badge && (
                         <span
                           className={`ml-auto text-[9px] px-1.5 py-px rounded-full font-semibold tracking-wide uppercase ${
                             item.badge === "AI"
@@ -115,192 +126,69 @@ export function Sidebar({
                         >
                           {item.badge}
                         </span>
-                      )}
-                      {readiness.status !== "Live" && (
-                        <span
-                          className={`${
-                            item.badge ? "" : "ml-auto"
-                          } text-[9px] px-1.5 py-px rounded-full font-semibold tracking-wide uppercase ${readinessBadgeClass(
-                            readiness.status,
-                          )}`}
-                        >
-                          {readiness.status}
-                        </span>
-                      )}
-                    </Link>
-                  );
-                })}
-              </div>
+                      )
+                    )}
+                  </Link>
+                );
+              })}
             </div>
-          ))}
-        </nav>
-        <div
-          className="shrink-0 px-3 pb-4 space-y-1"
-          style={{ borderTop: "1px solid rgba(255, 255, 255, 0.04)" }}
-        >
-          <div className="pt-3" />
-          {isConnected && (
-            <button
-              onClick={() => disconnect()}
-              className="flex items-center gap-2.5 px-3 py-2 rounded-xl text-zero-500 hover:text-rose-400 transition-colors text-[12px] w-full font-body"
-            >
-              <LogOut className="w-3.5 h-3.5" /> Disconnect
-            </button>
-          )}
-          <div className="px-3 pt-2 text-[10px] text-zero-600 font-mono">
-            v1.0.0
           </div>
+        ))}
+      </nav>
+
+      {/* Footer */}
+      <div
+        className="shrink-0 px-3 py-3 space-y-px"
+        style={{ borderTop: "1px solid rgba(255, 255, 255, 0.05)" }}
+      >
+        <a
+          href="https://docs.aethelred.io/zeroid"
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label="Documentation"
+          className="nav-row"
+        >
+          <span className="nav-glyph">
+            <ExternalLink className="w-4 h-4" />
+          </span>
+          Documentation
+        </a>
+        {isConnected && (
+          <button
+            onClick={() => disconnect()}
+            aria-label="Disconnect"
+            className="nav-row w-full text-left hover:!text-rose-400"
+          >
+            <span className="nav-glyph">
+              <LogOut className="w-4 h-4" />
+            </span>
+            Disconnect
+          </button>
+        )}
+        <div className="px-2.5 pt-2 text-[10px] text-zero-600 font-mono">
+          v1.0.0
         </div>
+      </div>
+    </>
+  );
+
+  if (mobile) {
+    return (
+      <aside
+        className={`w-[280px] flex flex-col h-screen sidebar-panel ${className}`}
+      >
+        {body}
       </aside>
     );
   }
 
-  // Desktop: Floating glass dock
   return (
     <aside
-      className={`fixed left-4 top-1/2 -translate-y-1/2 z-40 ${className}`}
+      className={`fixed inset-y-0 left-0 z-40 w-[248px] flex-col sidebar-panel ${
+        className.includes("lg:block") ? "hidden lg:flex" : "flex"
+      } ${className.replace("lg:block", "").trim()}`}
     >
-      <div className="dock rounded-2xl p-2 flex flex-col items-center gap-1">
-        {/* Logo */}
-        <Link href="/" className="mb-2 p-1">
-          <Image
-            src="/zeroid-logo.png"
-            alt="ZeroID"
-            width={28}
-            height={28}
-            className="object-contain rounded-lg"
-            priority
-          />
-        </Link>
-
-        {/* Separator */}
-        <div
-          className="w-6 h-px mb-1"
-          style={{ background: "rgba(255, 255, 255, 0.06)" }}
-        />
-
-        {/* Nav items */}
-        {allItems.map((item) => {
-          const active = isActive(item.href);
-          const isHovered = hoveredItem === item.href;
-          const readiness = getFeatureReadiness(item.href);
-
-          return (
-            <div key={item.href} className="relative">
-              <Link
-                href={item.href}
-                className={`dock-item ${active ? "dock-item-active" : ""}`}
-                onMouseEnter={() => setHoveredItem(item.href)}
-                onMouseLeave={() => setHoveredItem(null)}
-                aria-label={item.label}
-              >
-                {/* Active indicator bar */}
-                {active && (
-                  <motion.div
-                    layoutId="dock-active"
-                    className="absolute -left-[5px] top-1/2 -translate-y-1/2 w-[3px] h-5 rounded-full"
-                    style={{
-                      background: "linear-gradient(180deg, #c0c4cc, #7c8290)",
-                    }}
-                    transition={{ type: "spring", damping: 30, stiffness: 400 }}
-                  />
-                )}
-                {item.icon}
-                {/* Badge dot */}
-                {(item.badge || readiness.status !== "Live") && (
-                  <span
-                    className={`absolute top-1 right-1 h-[5px] w-[5px] rounded-full ${readinessDotClass(
-                      readiness.status,
-                    )}`}
-                  />
-                )}
-              </Link>
-
-              {/* Tooltip */}
-              <AnimatePresence>
-                {isHovered && (
-                  <motion.div
-                    initial={{ opacity: 0, x: -4 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    exit={{ opacity: 0, x: -4 }}
-                    transition={{ duration: 0.15 }}
-                    className="tooltip"
-                    style={{ top: "50%", transform: "translateY(-50%)" }}
-                  >
-                    <span className="block">{item.label}</span>
-                    <span className="mt-0.5 block text-[10px] text-zero-500">
-                      {readiness.status}
-                    </span>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </div>
-          );
-        })}
-
-        {/* Separator */}
-        <div
-          className="w-6 h-px my-1"
-          style={{ background: "rgba(255, 255, 255, 0.06)" }}
-        />
-
-        {/* Bottom actions */}
-        <div className="relative">
-          <a
-            href="https://docs.aethelred.io/zeroid"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="dock-item"
-            onMouseEnter={() => setHoveredItem("docs")}
-            onMouseLeave={() => setHoveredItem(null)}
-            aria-label="Documentation"
-          >
-            <ExternalLink className="w-[16px] h-[16px]" />
-          </a>
-          <AnimatePresence>
-            {hoveredItem === "docs" && (
-              <motion.div
-                initial={{ opacity: 0, x: -4 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -4 }}
-                transition={{ duration: 0.15 }}
-                className="tooltip"
-                style={{ top: "50%", transform: "translateY(-50%)" }}
-              >
-                Documentation
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </div>
-
-        {isConnected && (
-          <div className="relative">
-            <button
-              onClick={() => disconnect()}
-              className="dock-item text-zero-600 hover:text-rose-400"
-              onMouseEnter={() => setHoveredItem("disconnect")}
-              onMouseLeave={() => setHoveredItem(null)}
-              aria-label="Disconnect"
-            >
-              <LogOut className="w-[16px] h-[16px]" />
-            </button>
-            <AnimatePresence>
-              {hoveredItem === "disconnect" && (
-                <motion.div
-                  initial={{ opacity: 0, x: -4 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  exit={{ opacity: 0, x: -4 }}
-                  transition={{ duration: 0.15 }}
-                  className="tooltip"
-                  style={{ top: "50%", transform: "translateY(-50%)" }}
-                >
-                  Disconnect
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </div>
-        )}
-      </div>
+      {body}
     </aside>
   );
 }

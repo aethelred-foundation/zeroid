@@ -101,8 +101,14 @@ export function Header({ onMenuClick, onSearchClick }: HeaderProps) {
   };
 
   return (
-    <header className="sticky top-0 z-30">
-      <div className="flex items-center justify-between h-[72px] px-6 sm:px-8">
+    <header
+      className="sticky top-0 z-30 backdrop-blur-2xl"
+      style={{
+        background: "rgba(8, 9, 11, 0.72)",
+        borderBottom: "1px solid rgba(255, 255, 255, 0.05)",
+      }}
+    >
+      <div className="flex items-center justify-between h-[64px] px-6 sm:px-8">
         {/* Left — Mobile menu + Page info */}
         <div className="flex items-center gap-4">
           <button

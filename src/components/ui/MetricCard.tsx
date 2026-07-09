@@ -76,24 +76,16 @@ export function MetricCard({
         onClick={onClick}
       >
         {/* Icon */}
-        <div
-          className="w-10 h-10 rounded-xl flex items-center justify-center mb-5 text-chrome-300"
-          style={{
-            background: "rgba(192, 196, 204, 0.06)",
-            border: "1px solid rgba(192, 196, 204, 0.08)",
-          }}
-        >
-          {icon}
-        </div>
+        <div className="icon-chip mb-5">{icon}</div>
 
         {/* Label */}
-        <p className="text-label-sm text-zero-500 mb-2 uppercase font-body">
+        <p className="text-[10px] font-semibold text-zero-500 mb-2 uppercase tracking-[0.14em] font-body">
           {label}
         </p>
 
-        {/* Value — Big and bold */}
+        {/* Value — Big and bold, digits aligned */}
         <div className="flex items-end justify-between">
-          <p className="text-[36px] font-bold text-white tracking-tight font-display leading-none">
+          <p className="text-[34px] font-bold text-white tracking-[-0.02em] font-display leading-none tnum">
             {value}
           </p>
 

@@ -305,6 +305,164 @@
   }
 
   /* ================================================================
+   * SIDEBAR — labeled navigation panel (macOS-grade)
+   * ================================================================ */
+  .sidebar-panel {
+    @apply backdrop-blur-2xl;
+    background: rgba(9, 10, 12, 0.78);
+    border-right: 1px solid rgba(255, 255, 255, 0.05);
+  }
+
+  .nav-row {
+    @apply relative flex items-center gap-2.5 rounded-[10px] px-2.5 text-[13px] font-medium transition-colors duration-200 font-body;
+    height: 34px;
+    color: var(--text-secondary);
+  }
+
+  .nav-row:hover {
+    color: var(--text-primary);
+    background: rgba(255, 255, 255, 0.04);
+  }
+
+  .nav-row-active {
+    color: #eceef1;
+    background: rgba(192, 196, 204, 0.09);
+    box-shadow: 0 0 0 1px rgba(192, 196, 204, 0.07) inset;
+  }
+
+  .nav-glyph {
+    @apply flex items-center justify-center shrink-0 rounded-[7px] transition-colors duration-200;
+    width: 24px;
+    height: 24px;
+    color: var(--text-tertiary);
+  }
+
+  .nav-row:hover .nav-glyph {
+    color: var(--text-secondary);
+  }
+
+  .nav-row-active .nav-glyph {
+    color: #c0c4cc;
+    background: linear-gradient(
+      180deg,
+      rgba(192, 196, 204, 0.14),
+      rgba(192, 196, 204, 0.05)
+    );
+    box-shadow: 0 0 0 1px rgba(192, 196, 204, 0.12) inset;
+  }
+
+  /* ================================================================
+   * ICON CHIP — consistent icon containers for content surfaces
+   * ================================================================ */
+  .icon-chip {
+    @apply flex items-center justify-center shrink-0;
+    width: 36px;
+    height: 36px;
+    border-radius: 11px;
+    color: #c0c4cc;
+    background: linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.055),
+      rgba(255, 255, 255, 0.02)
+    );
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.05) inset;
+  }
+
+  .icon-chip-sm {
+    width: 30px;
+    height: 30px;
+    border-radius: 9px;
+  }
+
+  /* ================================================================
+   * TITANIUM CARD — the identity as a physical object
+   * ================================================================ */
+  .titanium-card {
+    position: relative;
+    border-radius: 22px;
+    overflow: hidden;
+    isolation: isolate;
+    background:
+      radial-gradient(
+        130% 170% at 18% -12%,
+        rgba(255, 255, 255, 0.13),
+        transparent 46%
+      ),
+      conic-gradient(
+        from 208deg at 55% 38%,
+        #14161a 0deg,
+        #1d2026 72deg,
+        #262a31 128deg,
+        #191c21 198deg,
+        #21252b 268deg,
+        #14161a 360deg
+      );
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    box-shadow:
+      0 26px 70px -22px rgba(0, 0, 0, 0.68),
+      0 1px 0 rgba(255, 255, 255, 0.1) inset,
+      0 -14px 44px -20px rgba(192, 196, 204, 0.15) inset;
+  }
+
+  /* Brushed-metal grain */
+  .titanium-card::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: repeating-linear-gradient(
+      105deg,
+      rgba(255, 255, 255, 0.022) 0 1px,
+      transparent 1px 3px
+    );
+    pointer-events: none;
+  }
+
+  /* Specular sweep on hover */
+  .titanium-card::after {
+    content: "";
+    position: absolute;
+    inset: -40% -60%;
+    background: linear-gradient(
+      100deg,
+      transparent 34%,
+      rgba(255, 255, 255, 0.05) 45%,
+      rgba(212, 215, 222, 0.13) 50%,
+      rgba(255, 255, 255, 0.05) 55%,
+      transparent 66%
+    );
+    transform: translateX(-70%);
+    pointer-events: none;
+  }
+
+  .titanium-card:hover::after {
+    transform: translateX(70%);
+    transition: transform 1.2s cubic-bezier(0.22, 0.61, 0.21, 1);
+  }
+
+  /* Laser-engraved lettering */
+  .engraved {
+    color: rgba(226, 229, 234, 0.85);
+    text-shadow:
+      0 1px 1px rgba(0, 0, 0, 0.6),
+      0 -1px 0 rgba(255, 255, 255, 0.05);
+  }
+
+  .engraved-faint {
+    color: rgba(200, 204, 212, 0.38);
+    text-shadow: 0 1px 1px rgba(0, 0, 0, 0.55);
+  }
+
+  /* Hallmark — the status stamp on the card */
+  .hallmark {
+    @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] font-body;
+    background: rgba(8, 9, 11, 0.45);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.06) inset;
+    backdrop-filter: blur(6px);
+  }
+
+  /* ================================================================
    * IDENTITY VISUALS
    * ================================================================ */
   .shield-gradient {
@@ -505,6 +663,12 @@
     text-wrap: balance;
   }
 
+  /* Metrics and addresses align digit-for-digit */
+  .tnum {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum";
+  }
+
   .animate-delay-100 {
     animation-delay: 100ms;
   }
@@ -519,5 +683,18 @@
   }
   .animate-delay-700 {
     animation-delay: 700ms;
+  }
+}
+
+/* Respect the user's motion preference everywhere: collapse transitions and
+ * animations (including the titanium sheen sweep) to near-instant. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }
