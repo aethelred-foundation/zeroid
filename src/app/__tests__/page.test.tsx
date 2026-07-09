@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 
 // Mock next/navigation
 jest.mock("next/navigation", () => ({
@@ -159,16 +159,25 @@ describe("DashboardPage", () => {
     expect(metricCards.length).toBe(4);
   });
 
-  it("allows switching time range", () => {
+  it("does not render the decorative time-range selector (it filtered nothing)", () => {
     (useAccount as jest.Mock).mockReturnValue({
       address: "0x1234",
       isConnected: true,
     });
     render(<DashboardPage />);
-    const button24h = screen.getByRole("button", { name: "24h" });
-    fireEvent.click(button24h);
-    // Verify button is present and clickable (state is internal)
-    expect(button24h).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "24h" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "30d" })).not.toBeInTheDocument();
+  });
+
+  it("does not render fabricated network or score panels", () => {
+    (useAccount as jest.Mock).mockReturnValue({
+      address: "0x1234",
+      isConnected: true,
+    });
+    render(<DashboardPage />);
+    expect(screen.queryByText("TEE Network")).not.toBeInTheDocument();
+    expect(screen.queryByText("Privacy Score")).not.toBeInTheDocument();
+    expect(screen.queryByText("SGX Enclaves")).not.toBeInTheDocument();
   });
 
   it("handles empty credentials data", () => {
@@ -232,55 +241,71 @@ describe("DashboardPage", () => {
     expect(screen.getByTestId("app-layout")).toBeInTheDocument();
   });
 
-  it("formats time ago correctly for hours and days", () => {
+  it("derives recent activity from real credentials and verifications", () => {
     (useAccount as jest.Mock).mockReturnValue({
       address: "0x1234",
       isConnected: true,
     });
+    const { useCredentials } = require("@/hooks/useCredentials");
+    useCredentials.mockReturnValue({
+      data: {
+        credentials: [
+          {
+            id: "c1",
+            status: "active",
+            name: "KYC Credential",
+            issuer: "Aethelred Registry",
+            issuedAt: Math.floor(Date.now() / 1000) - 3600,
+          },
+        ],
+      },
+      isLoading: false,
+    });
+    const { useVerification } = require("@/hooks/useVerification");
+    useVerification.mockReturnValue({
+      verificationHistory: [
+        {
+          id: "v1",
+          proofType: "age",
+          verifier: "EDGE data room",
+          status: "completed",
+          timestamp: new Date(Date.now() - 7200000).toISOString(),
+        },
+      ],
+      isLoading: false,
+    });
     render(<DashboardPage />);
+    expect(screen.getByText("KYC Credential")).toBeInTheDocument();
+    expect(screen.getByText("Issued by Aethelred Registry")).toBeInTheDocument();
+    expect(screen.getByText("age verification")).toBeInTheDocument();
     expect(screen.getByText("1h ago")).toBeInTheDocument();
-    expect(screen.getByText("1d ago")).toBeInTheDocument();
+    expect(screen.getByText("2h ago")).toBeInTheDocument();
   });
 
-  it("formats time ago as Just now for very recent timestamps", () => {
+  it("shows an honest empty state when the account has no activity", () => {
     (useAccount as jest.Mock).mockReturnValue({
       address: "0x1234",
       isConnected: true,
     });
-    // Mock Date.now to advance slightly between activity creation and formatTimeAgo call.
-    // Activity items use Date.now() - offset. The smallest offset is 3600000 (1h).
-    // We need a timestamp that yields < 60 seconds difference.
-    // Strategy: freeze Date.now during render, then the 3600000ms offset always yields 1h.
-    // Instead, we can manipulate Date.now so the 2nd set of calls (in formatTimeAgo)
-    // sees a time much closer to the timestamp.
-    const realNow = Date.now();
-    let callCount = 0;
-    const spy = jest.spyOn(Date, "now").mockImplementation(() => {
-      callCount++;
-      // First 4 calls create timestamps in recentActivity (Date.now() - offset)
-      // Subsequent calls in formatTimeAgo should see time very close to the first activity
-      if (callCount <= 4) return realNow;
-      // For the first formatTimeAgo call, return realNow - 3600000 + 10 (10s after the 1st activity)
-      if (callCount === 5) return realNow - 3600000 + 10000;
-      // For the second call, return realNow - 7200000 + 120000 (2min after 2nd activity)
-      if (callCount === 6) return realNow - 7200000 + 120000;
-      return realNow;
+    const { useCredentials } = require("@/hooks/useCredentials");
+    useCredentials.mockReturnValue({
+      data: { credentials: [] },
+      isLoading: false,
+    });
+    const { useVerification } = require("@/hooks/useVerification");
+    useVerification.mockReturnValue({
+      verificationHistory: [],
+      isLoading: false,
     });
     render(<DashboardPage />);
-    expect(screen.getByText("Just now")).toBeInTheDocument();
-    expect(screen.getByText("2m ago")).toBeInTheDocument();
-    spy.mockRestore();
-  });
-
-  it("switches to 30d time range", () => {
-    (useAccount as jest.Mock).mockReturnValue({
-      address: "0x1234",
-      isConnected: true,
-    });
-    render(<DashboardPage />);
-    const button30d = screen.getByRole("button", { name: "30d" });
-    fireEvent.click(button30d);
-    expect(button30d).toBeInTheDocument();
+    expect(screen.getByText("No activity yet")).toBeInTheDocument();
+    // None of the old sample records may reappear.
+    expect(
+      screen.queryByText("Age Verification Credential"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("Credit Tier Credential Renewed"),
+    ).not.toBeInTheDocument();
   });
 
   it("renders welcome features when not connected", () => {
@@ -290,7 +315,7 @@ describe("DashboardPage", () => {
     });
     render(<DashboardPage />);
     expect(screen.getByText("Private by Default")).toBeInTheDocument();
-    expect(screen.getByText("TEE Secured")).toBeInTheDocument();
+    expect(screen.getByText("On-Chain Anchored")).toBeInTheDocument();
     expect(screen.getByText("Self-Sovereign")).toBeInTheDocument();
   });
 });

@@ -1,6 +1,5 @@
 "use client";
 
-import { useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { motion } from "framer-motion";
@@ -12,17 +11,13 @@ import {
   EyeOff,
   ArrowRight,
   ArrowUpRight,
-  Users,
   FileCheck,
   CheckCircle2,
   ClipboardCheck,
   Lock,
-  Globe,
-  Server,
   Zap,
   BarChart3,
   Bot,
-  Cpu,
 } from "lucide-react";
 import { useAccount } from "wagmi";
 import AppLayout from "@/components/layout/AppLayout";
@@ -56,7 +51,6 @@ export default function DashboardPage() {
   const credentialsQuery = useCredentials();
   const credentials = credentialsQuery.data?.credentials ?? [];
   const { verificationHistory } = useVerification();
-  const [timeRange, setTimeRange] = useState<"24h" | "7d" | "30d">("7d");
 
   const stats = {
     totalCredentials: credentials.length,
@@ -67,43 +61,41 @@ export default function DashboardPage() {
         (v: any) =>
           new Date(v.timestamp).toDateString() === new Date().toDateString(),
       ).length ?? 0,
-    zkProofsGenerated: verificationHistory?.length ?? 0,
+    totalVerifications: verificationHistory?.length ?? 0,
   };
 
-  const recentActivity = [
-    {
-      id: "1",
-      title: "Age Verification Credential",
-      description: "Issued by UAE Pass TEE Node",
-      timestamp: new Date(Date.now() - 3600000),
-      status: "verified" as const,
+  // Activity is derived from the user's real credentials and verification
+  // history — the dashboard shows nothing it cannot back with data. A fresh
+  // account renders the empty state instead of sample records.
+  const recentActivity: Array<{
+    id: string;
+    title: string;
+    description: string;
+    timestamp: Date | null;
+    status: "verified" | "pending" | "revoked" | "expired" | "active";
+    icon: typeof ShieldCheck;
+  }> = [
+    ...credentials.map((c: any, i: number) => ({
+      id: `cred-${c.id ?? c.hash ?? i}`,
+      title: c.name ?? c.schemaName ?? "Credential",
+      description: c.issuer
+        ? `Issued by ${c.issuer}`
+        : "Verifiable credential",
+      timestamp: toDate(c.issuedAt),
+      status: normalizeActivityStatus(c.status),
       icon: ShieldCheck,
-    },
-    {
-      id: "2",
-      title: "Eligibility Proof Receipt",
-      description: "Age + AE jurisdiction policy approved for EDGE data room",
-      timestamp: new Date(Date.now() - 7200000),
-      status: "verified" as const,
-      icon: ClipboardCheck,
-    },
-    {
-      id: "3",
-      title: "Residency Verification Request",
-      description: "From Aethelred DeFi Protocol",
-      timestamp: new Date(Date.now() - 14400000),
-      status: "pending" as const,
-      icon: Globe,
-    },
-    {
-      id: "4",
-      title: "Credit Tier Credential Renewed",
-      description: "Auto-renewed via TEE re-verification",
-      timestamp: new Date(Date.now() - 86400000),
-      status: "verified" as const,
-      icon: FileCheck,
-    },
-  ];
+    })),
+    ...(verificationHistory ?? []).map((v: any, i: number) => ({
+      id: `verif-${v.id ?? i}`,
+      title: v.proofType ? `${v.proofType} verification` : "Verification",
+      description: v.verifier ? `Verifier: ${v.verifier}` : "Proof verification",
+      timestamp: toDate(v.timestamp),
+      status: normalizeActivityStatus(v.status),
+      icon: Fingerprint,
+    })),
+  ]
+    .sort((a, b) => (b.timestamp?.getTime() ?? 0) - (a.timestamp?.getTime() ?? 0))
+    .slice(0, 6);
 
   // ================================================================
   // WELCOME STATE — Not Connected
@@ -176,8 +168,8 @@ export default function DashboardPage() {
                 },
                 {
                   icon: Lock,
-                  label: "TEE Secured",
-                  desc: "Hardware-verified credential issuance",
+                  label: "On-Chain Anchored",
+                  desc: "Credentials anchored on the Aethelred network",
                 },
                 {
                   icon: Key,
@@ -254,35 +246,6 @@ export default function DashboardPage() {
               Your identity at a glance
             </p>
           </div>
-          <div
-            className="flex items-center gap-1 p-1 rounded-xl"
-            style={{
-              background: "rgba(255,255,255,0.03)",
-              border: "1px solid rgba(255,255,255,0.05)",
-            }}
-          >
-            {(["24h", "7d", "30d"] as const).map((r) => (
-              <button
-                key={r}
-                onClick={() => setTimeRange(r)}
-                className={`px-3.5 py-1.5 rounded-lg text-[12px] font-medium transition-all font-body ${
-                  timeRange === r
-                    ? "text-white"
-                    : "text-zero-500 hover:text-zero-300"
-                }`}
-                style={
-                  timeRange === r
-                    ? {
-                        background: "rgba(192,196,204,0.1)",
-                        boxShadow: "0 0 0 1px rgba(192,196,204,0.08)",
-                      }
-                    : {}
-                }
-              >
-                {r}
-              </button>
-            ))}
-          </div>
         </div>
 
         {/* Bento Grid — Row 1: Metrics strip */}
@@ -292,123 +255,46 @@ export default function DashboardPage() {
           animate="visible"
           className="grid grid-cols-2 lg:grid-cols-4 gap-4"
         >
+          {/* Every metric is computed from the account's real data — no sample
+              trends or invented network stats. */}
           {[
             {
               label: "Active Credentials",
               value: stats.activeCredentials,
               icon: <ShieldCheck className="w-[18px] h-[18px]" />,
-              trend: { direction: "up" as const, value: "+2" },
             },
             {
-              label: "Verifications",
+              label: "Total Credentials",
+              value: stats.totalCredentials,
+              icon: <FileCheck className="w-[18px] h-[18px]" />,
+            },
+            {
+              label: "Verifications Today",
               value: stats.verificationsToday,
               icon: <CheckCircle2 className="w-[18px] h-[18px]" />,
-              trend: { direction: "up" as const, value: "+12%" },
             },
             {
-              label: "ZK Proofs",
-              value: stats.zkProofsGenerated,
+              label: "Total Verifications",
+              value: stats.totalVerifications,
               icon: <Fingerprint className="w-[18px] h-[18px]" />,
-              trend: { direction: "up" as const, value: "156" },
-            },
-            {
-              label: "TEE Nodes",
-              value: 8,
-              icon: <Server className="w-[18px] h-[18px]" />,
-              trend: { direction: "up" as const, value: "99.97%" },
             },
           ].map((m) => (
             <motion.div key={m.label} variants={fadeUp}>
-              <MetricCard
-                label={m.label}
-                value={m.value}
-                icon={m.icon}
-                trend={m.trend}
-              />
+              <MetricCard label={m.label} value={m.value} icon={m.icon} />
             </motion.div>
           ))}
         </motion.div>
 
-        {/* Bento Grid — Row 2: Identity + Privacy + Quick Actions */}
+        {/* Bento Grid — Row 2: Identity + Quick Actions */}
         <div className="grid grid-cols-12 gap-4">
           {/* Identity Card — Hero element */}
           <motion.div
             initial={{ opacity: 0, y: 16 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.25, duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
-            className="col-span-12 lg:col-span-5"
+            className="col-span-12 lg:col-span-7"
           >
             <IdentityCard />
-          </motion.div>
-
-          {/* Privacy Score */}
-          <motion.div
-            initial={{ opacity: 0, y: 16 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.3, duration: 0.5 }}
-            className="col-span-12 sm:col-span-6 lg:col-span-3"
-          >
-            <div className="bento p-6 h-full flex flex-col">
-              <p className="text-label-sm text-zero-500 uppercase mb-5 font-body">
-                Privacy Score
-              </p>
-
-              <div className="flex-1 flex flex-col items-center justify-center">
-                <div className="relative w-28 h-28 mb-4">
-                  <svg className="w-28 h-28 -rotate-90" viewBox="0 0 100 100">
-                    <circle
-                      cx="50"
-                      cy="50"
-                      r="42"
-                      fill="none"
-                      stroke="rgba(255,255,255,0.03)"
-                      strokeWidth="4"
-                    />
-                    <circle
-                      cx="50"
-                      cy="50"
-                      r="42"
-                      fill="none"
-                      stroke="url(#privGrad)"
-                      strokeWidth="4"
-                      strokeLinecap="round"
-                      strokeDasharray="264"
-                      strokeDashoffset="26"
-                      className="proof-ring"
-                    />
-                    <defs>
-                      <linearGradient
-                        id="privGrad"
-                        x1="0%"
-                        y1="0%"
-                        x2="100%"
-                        y2="100%"
-                      >
-                        <stop offset="0%" stopColor="#34d399" />
-                        <stop offset="100%" stopColor="#c0c4cc" />
-                      </linearGradient>
-                    </defs>
-                  </svg>
-                  <div className="absolute inset-0 flex flex-col items-center justify-center">
-                    <span className="text-[32px] font-bold text-white font-display leading-none">
-                      90
-                    </span>
-                    <span className="text-[10px] text-zero-500 font-body mt-1">
-                      / 100
-                    </span>
-                  </div>
-                </div>
-
-                <div className="text-center">
-                  <span className="text-emerald-400 text-[13px] font-semibold font-body">
-                    Excellent
-                  </span>
-                  <p className="text-[11px] text-zero-500 mt-1 font-body leading-relaxed max-w-[160px]">
-                    All verifications use ZK proofs
-                  </p>
-                </div>
-              </div>
-            </div>
           </motion.div>
 
           {/* Quick Actions */}
@@ -416,7 +302,7 @@ export default function DashboardPage() {
             initial={{ opacity: 0, y: 16 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.35, duration: 0.5 }}
-            className="col-span-12 sm:col-span-6 lg:col-span-4"
+            className="col-span-12 lg:col-span-5"
           >
             <div className="bento p-6 h-full">
               <div className="flex items-center justify-between mb-5">
@@ -431,7 +317,7 @@ export default function DashboardPage() {
                   {
                     icon: ShieldCheck,
                     label: "Request Credential",
-                    desc: "Get verified via TEE",
+                    desc: "Request a verifiable credential",
                     href: "/credentials",
                     color: "emerald",
                   },
@@ -493,14 +379,14 @@ export default function DashboardPage() {
           </motion.div>
         </div>
 
-        {/* Bento Grid — Row 3: Activity + TEE Network */}
+        {/* Bento Grid — Row 3: Activity */}
         <div className="grid grid-cols-12 gap-4">
-          {/* Activity Feed */}
+          {/* Activity Feed — real credentials + verifications only */}
           <motion.div
             initial={{ opacity: 0, y: 16 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.4, duration: 0.5 }}
-            className="col-span-12 lg:col-span-8"
+            className="col-span-12"
           >
             <div className="bento">
               <div
@@ -517,6 +403,19 @@ export default function DashboardPage() {
                   View All <ArrowRight className="w-3.5 h-3.5" />
                 </Link>
               </div>
+
+              {recentActivity.length === 0 && (
+                <div className="px-6 py-12 text-center">
+                  <Shield className="w-7 h-7 text-zero-600 mx-auto mb-3" />
+                  <p className="text-[13px] text-zero-400 font-body">
+                    No activity yet
+                  </p>
+                  <p className="text-[11px] text-zero-500 font-body mt-1">
+                    Create your identity and request a credential — your real
+                    issuance and verification events appear here.
+                  </p>
+                </div>
+              )}
 
               <div>
                 {recentActivity.map((a, i) => (
@@ -558,7 +457,7 @@ export default function DashboardPage() {
                     <div className="flex items-center gap-3 shrink-0">
                       <StatusBadge status={a.status} size="sm" />
                       <span className="text-[10px] text-zero-600 whitespace-nowrap font-mono">
-                        {formatTimeAgo(a.timestamp)}
+                        {a.timestamp ? formatTimeAgo(a.timestamp) : "—"}
                       </span>
                     </div>
                   </motion.div>
@@ -567,99 +466,6 @@ export default function DashboardPage() {
             </div>
           </motion.div>
 
-          {/* TEE Network Status */}
-          <motion.div
-            initial={{ opacity: 0, y: 16 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.45, duration: 0.5 }}
-            className="col-span-12 lg:col-span-4"
-          >
-            <div className="bento p-6 h-full">
-              <div className="flex items-center justify-between mb-5">
-                <p className="text-label-sm text-zero-500 uppercase font-body">
-                  TEE Network
-                </p>
-                <div className="flex items-center gap-1.5">
-                  <span className="relative flex h-[5px] w-[5px]">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-60" />
-                    <span className="relative inline-flex rounded-full h-[5px] w-[5px] bg-emerald-500" />
-                  </span>
-                  <span className="text-[11px] text-emerald-400 font-medium font-body">
-                    Healthy
-                  </span>
-                </div>
-              </div>
-
-              {/* Network visualization */}
-              <div className="w-full aspect-square max-w-[180px] mx-auto mb-6 relative">
-                <div
-                  className="absolute inset-0 rounded-full"
-                  style={{
-                    background: "rgba(52,211,153,0.03)",
-                    border: "1px solid rgba(52,211,153,0.06)",
-                  }}
-                />
-                <div
-                  className="absolute inset-4 rounded-full"
-                  style={{
-                    background: "rgba(52,211,153,0.04)",
-                    border: "1px solid rgba(52,211,153,0.08)",
-                  }}
-                />
-                <div className="absolute inset-0 flex items-center justify-center">
-                  <div className="text-center">
-                    <Cpu className="w-6 h-6 text-emerald-400 mx-auto mb-1.5" />
-                    <span className="text-[20px] font-bold text-white font-display leading-none">
-                      8
-                    </span>
-                    <p className="text-[9px] text-zero-500 font-body mt-0.5 uppercase tracking-wider">
-                      Active Nodes
-                    </p>
-                  </div>
-                </div>
-                {/* Orbiting dots */}
-                {[0, 45, 90, 135, 180, 225, 270, 315].map((deg) => (
-                  <motion.div
-                    key={deg}
-                    className="absolute w-2 h-2 rounded-full bg-emerald-400"
-                    style={{
-                      top: `${50 + 42 * Math.sin((deg * Math.PI) / 180)}%`,
-                      left: `${50 + 42 * Math.cos((deg * Math.PI) / 180)}%`,
-                      transform: "translate(-50%, -50%)",
-                      boxShadow: "0 0 8px rgba(52,211,153,0.4)",
-                    }}
-                    animate={{ opacity: [0.4, 1, 0.4] }}
-                    transition={{
-                      duration: 3,
-                      delay: deg / 360,
-                      repeat: Infinity,
-                    }}
-                  />
-                ))}
-              </div>
-
-              <div className="space-y-3">
-                {[
-                  { label: "SGX Enclaves", value: "5/5" },
-                  { label: "SEV Nodes", value: "3/3" },
-                  { label: "Avg Attestation", value: "1.2s" },
-                  { label: "Queue Depth", value: "12" },
-                ].map((n) => (
-                  <div
-                    key={n.label}
-                    className="flex items-center justify-between"
-                  >
-                    <span className="text-[12px] text-zero-500 font-body">
-                      {n.label}
-                    </span>
-                    <span className="text-[12px] font-semibold text-zero-300 font-mono">
-                      {n.value}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </motion.div>
         </div>
       </div>
     </AppLayout>
@@ -675,4 +481,28 @@ function formatTimeAgo(date: Date): string {
   if (hours < 24) return `${hours}h ago`;
   const days = Math.floor(hours / 24);
   return `${days}d ago`;
+}
+
+/** Accepts Unix seconds, Unix milliseconds, or an ISO string. */
+function toDate(ts: unknown): Date | null {
+  if (typeof ts === "number" && Number.isFinite(ts) && ts > 0) {
+    return new Date(ts < 1e12 ? ts * 1000 : ts);
+  }
+  if (typeof ts === "string" && ts) {
+    const d = new Date(ts);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+  return null;
+}
+
+/** Collapse backend/legacy status strings onto the StatusBadge vocabulary. */
+function normalizeActivityStatus(
+  status: unknown,
+): "verified" | "pending" | "revoked" | "expired" | "active" {
+  const s = typeof status === "string" ? status.toLowerCase() : "";
+  if (s === "verified" || s === "completed") return "verified";
+  if (s === "active") return "active";
+  if (s === "revoked" || s === "rejected" || s === "failed") return "revoked";
+  if (s === "expired") return "expired";
+  return "pending";
 }
