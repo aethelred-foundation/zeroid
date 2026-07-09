@@ -43,6 +43,12 @@ jest.mock("@/lib/api/client", () => ({
   },
 }));
 
+// A registered user has an identity session token; protected credential queries
+// are gated on it, so mock a present token for the fetch-path tests.
+jest.mock("@/lib/identity/registration", () => ({
+  getIdentityAuthToken: jest.fn(() => "identity-token"),
+}));
+
 jest.mock("@/config/constants", () => ({
   DID_METHOD_PREFIX: "did:aethelred",
   CREDENTIAL_REGISTRY_ADDRESS: "0xCredRegistryAddress",
@@ -142,6 +148,26 @@ describe("useCredentials hooks", () => {
 
       expect(result.current.isFetching).toBe(false);
       expect(apiClient.get).not.toHaveBeenCalled();
+    });
+
+    it("does not fetch protected credentials without an identity session token", async () => {
+      // A connected-but-unregistered wallet has no session JWT; the query must
+      // stay disabled rather than fire and 401.
+      const { getIdentityAuthToken } = jest.requireMock(
+        "@/lib/identity/registration",
+      );
+      (getIdentityAuthToken as jest.Mock).mockReturnValue(null);
+      try {
+        const { useCredentials } = await import("@/hooks/useCredentials");
+        const { result } = renderHook(() => useCredentials(), {
+          wrapper: createQueryWrapper(),
+        });
+
+        expect(result.current.isFetching).toBe(false);
+        expect(apiClient.get).not.toHaveBeenCalled();
+      } finally {
+        (getIdentityAuthToken as jest.Mock).mockReturnValue("identity-token");
+      }
     });
 
     it("includes correct query key with status", async () => {

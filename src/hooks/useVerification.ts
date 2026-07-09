@@ -227,7 +227,8 @@ export function usePendingVerifications() {
       apiClient.get<VerificationRequest[]>(
         "/api/v1/verification/requests?role=subject&result=PENDING&limit=100",
       ),
-    enabled: !!address,
+    // Protected: needs an identity session (registration JWT); skip until then.
+    enabled: !!address && !!getIdentityAuthToken(),
     staleTime: 10_000,
     refetchInterval: 20_000,
   });
@@ -288,7 +289,8 @@ export function useVerificationHistory(
         total: items.length,
       };
     },
-    enabled: !!address,
+    // Protected: needs an identity session (registration JWT); skip until then.
+    enabled: !!address && !!getIdentityAuthToken(),
     staleTime: 15_000,
   });
 }

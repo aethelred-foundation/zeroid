@@ -10,6 +10,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { type Address, type Hash } from "viem";
 import { toast } from "sonner";
 import { apiClient } from "@/lib/api/client";
+import { getIdentityAuthToken } from "@/lib/identity/registration";
 import { createDID } from "@/lib/utils";
 import {
   CREDENTIAL_REGISTRY_ADDRESS,
@@ -110,7 +111,10 @@ export function useCredentials(status?: CredentialStatus) {
         total: credentials.length,
       };
     },
-    enabled: !!address,
+    // Protected endpoint: only fetch once the wallet has an identity session
+    // (a registration JWT). Firing before onboarding just 401s. Registration
+    // stores the token and re-renders, which re-enables this query.
+    enabled: !!address && !!getIdentityAuthToken(),
     staleTime: 15_000,
     refetchInterval: process.env.NODE_ENV === "test" ? false : 30_000,
   });
