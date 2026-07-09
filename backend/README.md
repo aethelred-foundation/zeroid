@@ -1,6 +1,6 @@
 # ZeroID backend
 
-The ZeroID API (`:4003`) the frontend calls via `NEXT_PUBLIC_API_URL`. Express +
+The ZeroID API (`:4003`) the frontend calls via `NEXT_PUBLIC_ZEROID_API_URL`. Express +
 Prisma (Postgres) + Redis, with credential signing that switches between a local
 dev key (testnet) and a KMS/HSM provider (production). It is self-contained — it
 does **not** read the chain directly; on-chain reads happen in the frontend.
@@ -22,7 +22,7 @@ Then:
 - Liveness: `curl http://localhost:4003/health` → `{ status: "ok", ... }`
 - Readiness: `curl http://localhost:4003/ready` → DB / Redis / production-safety / circuit-artifact checks.
 
-Point the frontend at it with `NEXT_PUBLIC_API_URL=http://localhost:4003` (or the
+Point the frontend at it with `NEXT_PUBLIC_ZEROID_API_URL=http://localhost:4003` (or the
 dApp server's IP:4003 with the port open).
 
 ## Run it (native, no Docker)

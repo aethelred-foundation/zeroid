@@ -56,12 +56,17 @@ function createZeroIdWalletConfig() {
   };
 
   // wagmi rejects duplicate chain ids in its chains tuple. Testnet and devnet
-  // share id 7332 (same chain, different endpoints), so dedupe by id — but keep
-  // `activeChain` first so the surviving 7332 object carries the RPC for the
+  // share id 7332 (same chain, different endpoints), so dedupe by id — and put
+  // `activeChain` FIRST. wagmi treats chains[0] as the default chain for any
+  // hook called without an explicit chainId, so the active environment's chain
+  // must lead: otherwise those background calls resolve to mainnet's hardcoded,
+  // non-overridable RPC (evm-rpc.aethelred.network), which is not deployed and
+  // floods the console with net::ERR_NAME_NOT_RESOLVED. Keeping activeChain
+  // first also means the surviving 7332 object carries the RPC for the
   // environment we're actually running (hosted testnet vs local devnet).
   const uniqueChains = [
-    aethelredMainnet,
     activeChain,
+    aethelredMainnet,
     aethelredTestnet,
     aethelredDevnet,
   ].filter((c, i, arr) => arr.findIndex((x) => x.id === c.id) === i);

@@ -47,6 +47,15 @@ describe("wagmi config", () => {
     expect(ids).toEqual([7331, 7332]);
   });
 
+  it("puts the active chain first so unscoped hooks don't hit undeployed mainnet RPC", () => {
+    // wagmi treats chains[0] as the default for hooks called without a chainId.
+    // If mainnet (7331) leads, those background calls resolve to its hardcoded,
+    // non-overridable RPC (evm-rpc.aethelred.network), which isn't deployed and
+    // floods the console with net::ERR_NAME_NOT_RESOLVED. activeChain must lead.
+    const config = wagmiConfig as any;
+    expect(config.chains[0].id).toBe(activeChain.id);
+  });
+
   it("wires only the audited injected connector (no unaudited peer SDKs)", () => {
     const config = wagmiConfig as any;
     expect(config.connectors).toEqual(["injected-connector"]);
