@@ -330,7 +330,10 @@ describe("useIdentity hooks", () => {
         await result.current.mutateAsync({
           didDocumentHash: validRecoveryHash,
           recoveryAddress: "0xrecovery",
-          didDocument: { id: "did:aethelred:testnet:0xabc" },
+          // Canonical address-bound DID, mixed-case address on purpose.
+          didDocument: {
+            id: "did:aethelred:testnet:0x1234567890ABCDEF1234567890abcdef12345678",
+          },
           publicKeys: [validPublicKey],
         } as any);
       });
@@ -342,9 +345,10 @@ describe("useIdentity hooks", () => {
         }),
       );
 
+      // The DID passes through normalized to a lowercase address segment.
       expect(apiClient.registerIdentity).toHaveBeenCalledWith(
         expect.objectContaining({
-          did: "did:aethelred:testnet:0xabc",
+          did: `did:aethelred:testnet:${mockAddress}`,
           publicKey: validPublicKey,
           recoveryHash: validRecoveryHash.slice(2),
         }),
@@ -356,6 +360,43 @@ describe("useIdentity hooks", () => {
 
       expect(toast.success).toHaveBeenCalledWith(
         "Identity created successfully",
+      );
+    });
+
+    it("never registers a placeholder DID — derives the wallet DID instead", async () => {
+      // The wizard once passed { id: "did:aethelred:pending" }, which a loose
+      // pattern accepted verbatim: the backend stored a literal "pending"
+      // identity that squatted the DID for every wallet (409 on retry) while
+      // the address lookup 404'd. Placeholders must fall through to address
+      // derivation, and the stored didDocument must carry the derived id.
+      (apiClient.registerIdentity as jest.Mock).mockResolvedValue({
+        token: "identity-token",
+        sessionId: "session-1",
+        identity: {},
+      });
+
+      const { useCreateIdentity } = await import("@/hooks/useIdentity");
+      const { result } = renderHook(() => useCreateIdentity(), {
+        wrapper: createQueryWrapper(),
+      });
+
+      await act(async () => {
+        await result.current.mutateAsync({
+          didDocumentHash: validRecoveryHash,
+          recoveryAddress: "0xrecovery",
+          didDocument: { id: "did:aethelred:pending" },
+          publicKeys: [validPublicKey],
+        } as any);
+      });
+
+      const expectedDid = `did:aethelred:testnet:${mockAddress}`;
+      expect(apiClient.registerIdentity).toHaveBeenCalledWith(
+        expect.objectContaining({
+          did: expectedDid,
+          metadata: expect.objectContaining({
+            didDocument: expect.objectContaining({ id: expectedDid }),
+          }),
+        }),
       );
     });
 

@@ -31,7 +31,10 @@ import type {
   Address,
 } from "@/types";
 import { apiClient } from "@/lib/api/client";
-import { friendlyWalletError } from "@/lib/wallet-errors";
+import {
+  friendlyRegistrationError,
+  friendlyWalletError,
+} from "@/lib/wallet-errors";
 import {
   buildRegistrationMessage,
   clearIdentityAuthToken,
@@ -280,12 +283,19 @@ export function IdentityProvider({ children }: { children: React.ReactNode }) {
           message,
           signature,
         );
-        const registration = await apiClient.registerIdentity({
-          did: did.uri,
-          publicKey,
-          recoveryHash: normalizedRecoveryHash,
-          metadata: { controller: address.toLowerCase() },
-        });
+        let registration: Awaited<
+          ReturnType<typeof apiClient.registerIdentity>
+        >;
+        try {
+          registration = await apiClient.registerIdentity({
+            did: did.uri,
+            publicKey,
+            recoveryHash: normalizedRecoveryHash,
+            metadata: { controller: address.toLowerCase() },
+          });
+        } catch (registerError) {
+          throw friendlyRegistrationError(registerError);
+        }
         storeIdentityAuthToken(registration.token);
 
         // Re-fetch the profile after registration

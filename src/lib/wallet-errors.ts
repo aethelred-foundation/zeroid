@@ -26,3 +26,23 @@ export function friendlyWalletError(error: unknown): Error {
 
   return error instanceof Error ? error : new Error(message || "Wallet request failed");
 }
+
+/**
+ * Map backend registration failures to guidance. The notable case is the 409
+ * DID conflict: after the fix that derives the canonical address-bound DID,
+ * a conflict means this wallet's identity already exists server-side (e.g. a
+ * previous attempt that stored the record but lost the session).
+ */
+export function friendlyRegistrationError(error: unknown): Error {
+  const statusCode = (error as { statusCode?: number })?.statusCode;
+  const code = (error as { code?: string })?.code;
+  if (statusCode === 409 || code === "IDENTITY_DID_EXISTS") {
+    return new Error(
+      "An identity for this wallet is already registered. Reload the " +
+        "dashboard — it should appear there. If it does not, an earlier " +
+        "partial registration may hold the record; ask the operator to " +
+        "remove it and register again.",
+    );
+  }
+  return friendlyWalletError(error);
+}

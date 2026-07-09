@@ -39,3 +39,28 @@ describe("friendlyWalletError", () => {
     expect(friendly.message).toBe("boom");
   });
 });
+
+// ---------------------------------------------------------------------------
+// friendlyRegistrationError
+// ---------------------------------------------------------------------------
+
+import { friendlyRegistrationError } from "@/lib/wallet-errors";
+
+describe("friendlyRegistrationError", () => {
+  it("maps the backend 409 DID conflict to already-registered guidance", () => {
+    const conflict = Object.assign(new Error("DID already registered"), {
+      statusCode: 409,
+      code: "IDENTITY_DID_EXISTS",
+    });
+    const friendly = friendlyRegistrationError(conflict);
+    expect(friendly.message).toMatch(/already registered/i);
+    expect(friendly.message).toMatch(/reload the dashboard/i);
+  });
+
+  it("falls back to the wallet mapper for non-409 errors", () => {
+    const friendly = friendlyRegistrationError(
+      new Error("the method personal_sign does not exist/is not available"),
+    );
+    expect(friendly.message).toMatch(/could not sign/i);
+  });
+});

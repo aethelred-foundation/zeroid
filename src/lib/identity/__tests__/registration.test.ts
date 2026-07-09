@@ -78,3 +78,46 @@ describe("identity auth token storage", () => {
     expect(getIdentityAuthToken()).toBeUndefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// getRegistrationDid — canonical wallet-DID derivation
+// ---------------------------------------------------------------------------
+
+import { getRegistrationDid } from "@/lib/identity/registration";
+
+describe("getRegistrationDid", () => {
+  const address = "0x1234567890ABCDEF1234567890abcdef12345678" as `0x${string}`;
+  const lower = address.toLowerCase();
+
+  it("accepts a canonical wallet DID and lowercases its address segment", () => {
+    expect(
+      getRegistrationDid({ id: `did:aethelred:testnet:${address}` }, address),
+    ).toBe(`did:aethelred:testnet:${lower}`);
+  });
+
+  it("rejects the pending placeholder and derives from the wallet address", () => {
+    // Regression: "did:aethelred:pending" once registered verbatim, squatting
+    // the DID for every wallet while the address lookup 404'd.
+    expect(getRegistrationDid({ id: "did:aethelred:pending" }, address)).toBe(
+      `did:aethelred:testnet:${lower}`,
+    );
+  });
+
+  it("rejects short/non-address DIDs and derives instead", () => {
+    expect(
+      getRegistrationDid({ id: "did:aethelred:testnet:0xabc" }, address),
+    ).toBe(`did:aethelred:testnet:${lower}`);
+  });
+
+  it("derives from the address when the document has no id", () => {
+    expect(getRegistrationDid({}, address)).toBe(
+      `did:aethelred:testnet:${lower}`,
+    );
+  });
+
+  it("throws when no usable id and no address are available", () => {
+    expect(() => getRegistrationDid({ id: "did:aethelred:pending" })).toThrow(
+      /wallet address is required/i,
+    );
+  });
+});

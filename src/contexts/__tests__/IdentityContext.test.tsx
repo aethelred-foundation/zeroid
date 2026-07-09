@@ -613,8 +613,11 @@ describe("IdentityContext", () => {
         }
       });
 
-      expect(caught).toBe("string registration error");
-      expect(result.current.identity.error).toBe("Registration failed");
+      // Non-Error throwables are wrapped into a real Error by the
+      // registration error mapper so the UI always has a message to show.
+      expect(caught).toBeInstanceOf(Error);
+      expect((caught as Error).message).toBe("string registration error");
+      expect(result.current.identity.error).toBe("string registration error");
     });
   });
 

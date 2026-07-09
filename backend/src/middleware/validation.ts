@@ -85,6 +85,21 @@ export const didSchema = z
     'Invalid DID format. Expected: did:aethelred:<segment>[:<segment>...]',
   );
 
+/**
+ * Wallet-identity DIDs must be address-bound: did:aethelred:<network>:<0x…40>.
+ * The looser didSchema once let a frontend placeholder ("did:aethelred:pending")
+ * register as a real identity, squatting that DID for every wallet (409 on any
+ * retry) while the address lookup 404'd. Normalized to lowercase so the address
+ * lookup's lowercase candidate DIDs always match what was stored.
+ */
+export const walletDidSchema = z
+  .string()
+  .regex(
+    /^did:aethelred:(mainnet|testnet|devnet):0x[0-9a-fA-F]{40}$/,
+    'Invalid identity DID. Expected: did:aethelred:<network>:<0x-address>',
+  )
+  .transform((value) => value.toLowerCase());
+
 export const uuidSchema = z.string().uuid('Invalid UUID format');
 
 export const paginationSchema = z.object({
@@ -163,7 +178,7 @@ export function parseOrThrow<T>(
 // Schema for common request patterns
 // ---------------------------------------------------------------------------
 export const registerIdentitySchema = z.object({
-  did: didSchema,
+  did: walletDidSchema,
   publicKey: publicKeySchema,
   recoveryHash: recoveryHashSchema,
   displayName: z.string().min(1).max(100).optional(),

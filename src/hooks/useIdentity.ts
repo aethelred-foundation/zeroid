@@ -25,7 +25,10 @@ import {
   recoverRegistrationPublicKey,
   storeIdentityAuthToken,
 } from "@/lib/identity/registration";
-import { friendlyWalletError } from "@/lib/wallet-errors";
+import {
+  friendlyRegistrationError,
+  friendlyWalletError,
+} from "@/lib/wallet-errors";
 import {
   IDENTITY_REGISTRY_ADDRESS,
   IDENTITY_REGISTRY_ABI,
@@ -153,17 +156,23 @@ export function useCreateIdentity() {
         args: [params.didDocumentHash, params.recoveryAddress],
       });
 
-      // Persist full DID document via API
-      const registration = await apiClient.registerIdentity({
-        did,
-        publicKey,
-        recoveryHash,
-        metadata: {
-          controller: address?.toLowerCase(),
-          txHash: hash,
-          didDocument: params.didDocument,
-        },
-      });
+      // Persist full DID document via API. The stored document carries the
+      // DERIVED did — never a caller-supplied placeholder id.
+      let registration: Awaited<ReturnType<typeof apiClient.registerIdentity>>;
+      try {
+        registration = await apiClient.registerIdentity({
+          did,
+          publicKey,
+          recoveryHash,
+          metadata: {
+            controller: address?.toLowerCase(),
+            txHash: hash,
+            didDocument: { ...params.didDocument, id: did },
+          },
+        });
+      } catch (error) {
+        throw friendlyRegistrationError(error);
+      }
       storeIdentityAuthToken(registration.token);
 
       return hash;
@@ -249,7 +258,9 @@ export function useIdentity() {
       createMutation.mutateAsync({
         didDocumentHash: params?.didDocumentHash ?? EMPTY_BYTES32,
         recoveryAddress: params?.recoveryAddress ?? address ?? ZERO_ADDRESS,
-        didDocument: params?.didDocument ?? { id: "did:aethelred:pending" },
+        // No placeholder id: getRegistrationDid derives the canonical
+        // address-bound DID when the document carries none.
+        didDocument: params?.didDocument ?? {},
         publicKeys: params?.publicKeys ?? [],
       }),
     [address, createMutation],

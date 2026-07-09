@@ -1,7 +1,15 @@
 import { hashMessage, recoverPublicKey, type Hex } from "viem";
 import type { Address, Bytes32 } from "@/types";
 
-const DID_PATTERN = /^did:aethelred:[A-Za-z0-9._-]+(?::[A-Za-z0-9._-]+)*$/;
+/**
+ * Wallet identities register under the canonical address-bound form
+ * `did:aethelred:<network>:<0x-address>`. The pattern is deliberately strict:
+ * a looser one once let the wizard's `did:aethelred:pending` placeholder
+ * through, registering a literal "pending" identity that then squatted the
+ * DID for every wallet (409 on retry, 404 on address lookup).
+ */
+const WALLET_DID_PATTERN =
+  /^did:aethelred:(mainnet|testnet|devnet):(0x[0-9a-fA-F]{40})$/;
 const BASE64_PATTERN = /^[A-Za-z0-9+/=]+$/;
 const IDENTITY_AUTH_TOKEN_STORAGE_KEY = "zeroid.identity.authToken";
 const ALLOW_BROWSER_TOKEN_STORAGE_FLAG =
@@ -60,10 +68,15 @@ export function getRegistrationDid(
   network = "testnet",
 ): string {
   const did = typeof didDocument.id === "string" ? didDocument.id : undefined;
-  if (did && DID_PATTERN.test(did)) {
-    return did;
+  const canonical = did?.match(WALLET_DID_PATTERN);
+  if (canonical) {
+    // Normalize the address segment so registration and the backend's
+    // lowercase address lookup can never disagree on case.
+    return `did:aethelred:${canonical[1]}:${canonical[2].toLowerCase()}`;
   }
 
+  // Anything else (placeholders like did:aethelred:pending, malformed ids) is
+  // ignored and the DID is derived from the connected wallet.
   if (!address) {
     throw new Error("Wallet address is required to derive the identity DID.");
   }
