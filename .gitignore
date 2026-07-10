@@ -59,3 +59,9 @@ backend/prisma/migrations/
 
 # Vercel
 .vercel
+
+# Local integration env (dummy secrets, never committed)
+.env.integration
+
+# Foundry broadcast logs — deployments/<chainId>.json is the source of truth
+broadcast/
