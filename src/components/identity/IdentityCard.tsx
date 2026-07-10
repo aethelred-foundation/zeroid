@@ -283,9 +283,10 @@ export default function IdentityCard({
             { value: verificationCount, label: "Verifications" },
             {
               value: createdAt
-                ? new Date(createdAt).toLocaleDateString("en-US", {
+                ? // Full year: "Jul 26" (2-digit year) reads as a day of month.
+                  new Date(createdAt).toLocaleDateString("en-US", {
                     month: "short",
-                    year: "2-digit",
+                    year: "numeric",
                   })
                 : "--",
               label: "Created",

@@ -315,8 +315,9 @@ describe("IdentityCard", () => {
   it("formats createdAt date properly", () => {
     render(<IdentityCard identity={mockIdentity as any} />);
     expect(screen.getByText("Created")).toBeInTheDocument();
-    // Should show month/year format like "Jun 25"
-    expect(screen.getByText(/Jun/)).toBeInTheDocument();
+    // Should show month/full-year format like "Jun 2025" — a 2-digit year
+    // ("Jun 25") reads as a day of month.
+    expect(screen.getByText(/Jun \d{4}/)).toBeInTheDocument();
   });
 
   it("defaults credentialCount and verificationCount to 0", () => {
