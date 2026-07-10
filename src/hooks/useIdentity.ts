@@ -13,7 +13,7 @@ import {
   useWriteContract,
 } from "wagmi";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { type Address, type Hash } from "viem";
+import { type Address, type Hash, keccak256, toBytes } from "viem";
 import { toast } from "sonner";
 import { apiClient } from "@/lib/api/client";
 import {
@@ -21,7 +21,6 @@ import {
   extractRegistrationPublicKey,
   getIdentityAuthToken,
   getRegistrationDid,
-  normalizeRecoveryHash,
   recoverRegistrationPublicKey,
   storeIdentityAuthToken,
 } from "@/lib/identity/registration";
@@ -55,25 +54,19 @@ export function useOnChainIdentity() {
   const { data: didHash, isLoading: isDIDLoading } = useReadContract({
     address: IDENTITY_REGISTRY_ADDRESS as Address,
     abi: IDENTITY_REGISTRY_ABI,
-    functionName: "identityOf",
-    args: address ? [address] : undefined,
-    query: { enabled: !!address },
-  });
-
-  const { data: delegates, isLoading: isDelegatesLoading } = useReadContract({
-    address: IDENTITY_REGISTRY_ADDRESS as Address,
-    abi: IDENTITY_REGISTRY_ABI,
-    functionName: "getDelegates",
+    functionName: "resolveByController",
     args: address ? [address] : undefined,
     query: { enabled: !!address },
   });
 
   return {
     didHash: didHash as string | undefined,
-    delegates: (delegates as DelegateRecord[]) ?? [],
-    isLoading: isDIDLoading || isDelegatesLoading,
-    // identityOf returns bytes32(0) for an unregistered wallet — the zero hash
-    // is truthy and !== "0x", so it must be excluded explicitly.
+    // ZeroID.sol has no enumerable delegate getter (only isValidDelegate);
+    // the delegate list is sourced from the backend/events, not this read.
+    delegates: [] as DelegateRecord[],
+    isLoading: isDIDLoading,
+    // resolveByController returns bytes32(0) for an unregistered wallet — the
+    // zero hash is truthy and !== "0x", so it must be excluded explicitly.
     hasIdentity: !!didHash && didHash !== "0x" && didHash !== EMPTY_BYTES32,
   };
 }
@@ -124,8 +117,25 @@ export function useCreateIdentity() {
 
   return useMutation({
     mutationFn: async (params: CreateIdentityParams): Promise<Hash> => {
-      const recoveryHash = normalizeRecoveryHash(params.didDocumentHash);
       const did = getRegistrationDid(params.didDocument, address);
+
+      // Derive the on-chain arguments from the DID itself. The contract's
+      // registerIdentity(bytes32 didHash, bytes32 recoveryHash) reverts on a
+      // zero didHash, so the didHash MUST be the real keccak of the DID — not
+      // the placeholder EMPTY_BYTES32 the wizard passes — and the second arg
+      // MUST be a bytes32 recovery hash, not the recovery ADDRESS.
+      const didHash = keccak256(toBytes(did));
+      const recoveryController =
+        params.recoveryAddress && params.recoveryAddress !== ZERO_ADDRESS
+          ? params.recoveryAddress
+          : (address ?? ZERO_ADDRESS);
+      const recoveryHashHex = keccak256(
+        toBytes(`${did}#recovery:${recoveryController.toLowerCase()}`),
+      );
+      // Backend recovery hash is the same digest without the 0x prefix
+      // (its schema is a bare 64-char hex SHA-256-shaped string).
+      const recoveryHash = recoveryHashHex.slice(2);
+
       let publicKey = extractRegistrationPublicKey(params.publicKeys);
 
       if (!publicKey) {
@@ -148,12 +158,12 @@ export function useCreateIdentity() {
         publicKey = await recoverRegistrationPublicKey(message, signature);
       }
 
-      // Register DID document hash on-chain
+      // Anchor the DID on-chain: registerIdentity(didHash, recoveryHash).
       const hash = await writeContractAsync({
         address: IDENTITY_REGISTRY_ADDRESS as Address,
         abi: IDENTITY_REGISTRY_ABI,
         functionName: "registerIdentity",
-        args: [params.didDocumentHash, params.recoveryAddress],
+        args: [didHash, recoveryHashHex],
       });
 
       // Persist full DID document via API. The stored document carries the
@@ -167,6 +177,7 @@ export function useCreateIdentity() {
           metadata: {
             controller: address?.toLowerCase(),
             txHash: hash,
+            didHash,
             didDocument: { ...params.didDocument, id: did },
           },
         });

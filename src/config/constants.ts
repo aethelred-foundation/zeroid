@@ -44,29 +44,27 @@ export const IDENTITY_REGISTRY_ADDRESS = CONTRACT_ADDRESSES.identityRegistry;
 export const CREDENTIAL_REGISTRY_ADDRESS =
   CONTRACT_ADDRESSES.credentialRegistry;
 
-// Minimal ABIs for on-chain reads/writes
+// Minimal ABIs for on-chain reads/writes. Names/shapes must match the deployed
+// ZeroID.sol: the controller→DID getter is resolveByController (returns
+// bytes32(0) when unbound, never reverts). The earlier identityOf/getDelegates
+// existed on neither this ABI's contract nor ZeroID.sol, so every on-chain
+// identity read silently failed and hasIdentity was always false.
 export const IDENTITY_REGISTRY_ABI = [
   {
     type: "function",
-    name: "identityOf",
-    inputs: [{ name: "owner", type: "address" }],
+    name: "resolveByController",
+    inputs: [{ name: "controller", type: "address" }],
     outputs: [{ name: "", type: "bytes32" }],
     stateMutability: "view",
   },
   {
     type: "function",
-    name: "getDelegates",
-    inputs: [{ name: "owner", type: "address" }],
-    outputs: [
-      {
-        name: "",
-        type: "tuple[]",
-        components: [
-          { name: "delegate", type: "address" },
-          { name: "expiry", type: "uint256" },
-        ],
-      },
+    name: "isValidDelegate",
+    inputs: [
+      { name: "didHash", type: "bytes32" },
+      { name: "delegate", type: "address" },
     ],
+    outputs: [{ name: "", type: "bool" }],
     stateMutability: "view",
   },
   {
@@ -74,7 +72,7 @@ export const IDENTITY_REGISTRY_ABI = [
     name: "registerIdentity",
     inputs: [
       { name: "didHash", type: "bytes32" },
-      { name: "recovery", type: "address" },
+      { name: "recoveryHash", type: "bytes32" },
     ],
     outputs: [],
     stateMutability: "nonpayable",

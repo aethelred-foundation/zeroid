@@ -62,7 +62,7 @@ jest.mock("@/lib/api/client", () => ({
 
 jest.mock("@/config/constants", () => ({
   IDENTITY_REGISTRY_ADDRESS: "0xRegistryAddress",
-  IDENTITY_REGISTRY_ABI: [{ type: "function", name: "identityOf" }],
+  IDENTITY_REGISTRY_ABI: [{ type: "function", name: "resolveByController" }],
 }));
 
 // ---------------------------------------------------------------------------
@@ -117,30 +117,26 @@ describe("useIdentity hooks", () => {
   // =========================================================================
 
   describe("useOnChainIdentity", () => {
-    it("reads identityOf and getDelegates from the registry", async () => {
+    it("reads the controller→DID hash from the registry (resolveByController)", async () => {
       const didHashValue = "0xdid_hash_001";
-      const delegatesList = [
-        { delegate: "0xdelegate1", expiry: BigInt(1800000000) },
-      ];
 
-      // First call is for identityOf, second for getDelegates
-      mockUseReadContract
-        .mockReturnValueOnce({
-          data: didHashValue,
-          isLoading: false,
-        })
-        .mockReturnValueOnce({
-          data: delegatesList,
-          isLoading: false,
-        });
+      // Single read: resolveByController. Must use the deployed getter name.
+      mockUseReadContract.mockReturnValue({
+        data: didHashValue,
+        isLoading: false,
+      });
 
       const { useOnChainIdentity } = await import("@/hooks/useIdentity");
       const { result } = renderHook(() => useOnChainIdentity(), {
         wrapper: createQueryWrapper(),
       });
 
+      expect(mockUseReadContract).toHaveBeenCalledWith(
+        expect.objectContaining({ functionName: "resolveByController" }),
+      );
       expect(result.current.didHash).toBe(didHashValue);
-      expect(result.current.delegates).toEqual(delegatesList);
+      // No on-chain enumerable delegate getter exists — always [] from-chain.
+      expect(result.current.delegates).toEqual([]);
       expect(result.current.isLoading).toBe(false);
       expect(result.current.hasIdentity).toBe(true);
     });
@@ -160,9 +156,7 @@ describe("useIdentity hooks", () => {
     });
 
     it("returns hasIdentity false when didHash is 0x", async () => {
-      mockUseReadContract
-        .mockReturnValueOnce({ data: "0x", isLoading: false })
-        .mockReturnValueOnce({ data: [], isLoading: false });
+      mockUseReadContract.mockReturnValue({ data: "0x", isLoading: false });
 
       const { useOnChainIdentity } = await import("@/hooks/useIdentity");
       const { result } = renderHook(() => useOnChainIdentity(), {
@@ -173,11 +167,12 @@ describe("useIdentity hooks", () => {
     });
 
     it("returns hasIdentity false for the zero hash (unregistered wallet)", async () => {
-      // identityOf returns bytes32(0) for a wallet with no identity — it is
+      // resolveByController returns bytes32(0) for a wallet with no identity —
       // truthy and !== "0x", so it must not count as having an identity.
-      mockUseReadContract
-        .mockReturnValueOnce({ data: `0x${"0".repeat(64)}`, isLoading: false })
-        .mockReturnValueOnce({ data: [], isLoading: false });
+      mockUseReadContract.mockReturnValue({
+        data: `0x${"0".repeat(64)}`,
+        isLoading: false,
+      });
 
       const { useOnChainIdentity } = await import("@/hooks/useIdentity");
       const { result } = renderHook(() => useOnChainIdentity(), {
@@ -216,10 +211,8 @@ describe("useIdentity hooks", () => {
       }
     });
 
-    it("returns empty delegates array when data is null", async () => {
-      mockUseReadContract
-        .mockReturnValueOnce({ data: "0xdid", isLoading: false })
-        .mockReturnValueOnce({ data: null, isLoading: false });
+    it("always returns an empty delegates array (no on-chain getter)", async () => {
+      mockUseReadContract.mockReturnValue({ data: "0xdid", isLoading: false });
 
       const { useOnChainIdentity } = await import("@/hooks/useIdentity");
       const { result } = renderHook(() => useOnChainIdentity(), {
@@ -338,19 +331,30 @@ describe("useIdentity hooks", () => {
         } as any);
       });
 
+      // On-chain args are DERIVED bytes32 hashes, not the placeholder/address:
+      // registerIdentity(keccak256(did), keccak256(did#recovery:controller)).
+      const { keccak256, toBytes } = require("viem");
+      const expectedDid = `did:aethelred:testnet:${mockAddress}`;
+      const expectedDidHash = keccak256(toBytes(expectedDid));
+      // recoveryAddress "0xrecovery" was supplied, so it is the recovery
+      // controller (lowercased) — not the wallet address.
+      const expectedRecoveryHex = keccak256(
+        toBytes(`${expectedDid}#recovery:0xrecovery`),
+      );
       expect(mockWriteContractAsync).toHaveBeenCalledWith(
         expect.objectContaining({
           functionName: "registerIdentity",
-          args: [validRecoveryHash, "0xrecovery"],
+          args: [expectedDidHash, expectedRecoveryHex],
         }),
       );
 
-      // The DID passes through normalized to a lowercase address segment.
+      // The DID passes through normalized, and the backend gets the same
+      // recovery digest without the 0x prefix.
       expect(apiClient.registerIdentity).toHaveBeenCalledWith(
         expect.objectContaining({
-          did: `did:aethelred:testnet:${mockAddress}`,
+          did: expectedDid,
           publicKey: validPublicKey,
-          recoveryHash: validRecoveryHash.slice(2),
+          recoveryHash: expectedRecoveryHex.slice(2),
         }),
       );
       expect(getIdentityAuthToken()).toBe("identity-token");
@@ -546,17 +550,13 @@ describe("useIdentity hooks", () => {
   describe("useIdentity (wrapper)", () => {
     it("combines on-chain and profile data", async () => {
       const didHashValue = "0xdid_hash_combined";
-      const delegates = [{ delegate: "0xd1", expiry: BigInt(1800000000) }];
       const profile = {
         did: "did:aethelred:testnet:0xabc",
         displayName: "Combined",
       };
 
       mockUseReadContract
-        .mockReturnValueOnce({ data: didHashValue, isLoading: false }) // identityOf
-        .mockReturnValueOnce({ data: delegates, isLoading: false }) // getDelegates
-        .mockReturnValueOnce({ data: didHashValue, isLoading: false }) // identityOf (useCreateIdentity)
-        .mockReturnValueOnce({ data: delegates, isLoading: false }); // getDelegates (useCreateIdentity)
+        .mockReturnValue({ data: didHashValue, isLoading: false }); // resolveByController
 
       (apiClient.get as jest.Mock).mockResolvedValue(profile);
 
@@ -572,7 +572,8 @@ describe("useIdentity hooks", () => {
       expect(result.current.identity.didHash).toBe(didHashValue);
       expect(result.current.identity.hasIdentity).toBe(true);
       expect(result.current.identity.isRegistered).toBe(true);
-      expect(result.current.delegates).toEqual(delegates);
+      // Delegates come from backend/events, not on-chain enumeration.
+      expect(result.current.delegates).toEqual([]);
       expect(typeof result.current.createIdentity).toBe("function");
       expect(typeof result.current.revokeDelegate).toBe("function");
     });
