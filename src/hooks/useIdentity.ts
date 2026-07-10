@@ -8,6 +8,7 @@
 import { useCallback } from "react";
 import {
   useAccount,
+  usePublicClient,
   useReadContract,
   useSignMessage,
   useWriteContract,
@@ -114,6 +115,7 @@ export function useCreateIdentity() {
   const { writeContractAsync } = useWriteContract();
   const { signMessageAsync } = useSignMessage();
   const { address } = useAccount();
+  const publicClient = usePublicClient();
 
   return useMutation({
     mutationFn: async (params: CreateIdentityParams): Promise<Hash> => {
@@ -165,6 +167,36 @@ export function useCreateIdentity() {
         functionName: "registerIdentity",
         args: [didHash, recoveryHashHex],
       });
+
+      // A wallet returning a hash only means it ACCEPTED the request — it says
+      // nothing about where (or whether) the transaction landed. Require the
+      // receipt on THIS app's configured RPC, with success status, before the
+      // backend learns about the identity or the user is told it is anchored.
+      // This closes two real failure modes: a reverted transaction, and a
+      // wallet whose RPC for chain 7332 points at a different node than ours
+      // (the hash then never appears here and we must not claim success).
+      if (!publicClient) {
+        throw new Error(
+          "No RPC client for the active network — cannot confirm the registration transaction.",
+        );
+      }
+      let receipt;
+      try {
+        receipt = await publicClient.waitForTransactionReceipt({
+          hash,
+          timeout: 90_000,
+        });
+      } catch {
+        throw new Error(
+          `The registration transaction (${hash}) was not confirmed on this network's RPC. ` +
+            "If your wallet talks to a different node for this chain, point it at the same RPC as this app and retry.",
+        );
+      }
+      if (receipt.status !== "success") {
+        throw new Error(
+          "The registration transaction was rejected on-chain. No identity was created.",
+        );
+      }
 
       // Persist full DID document via API. The stored document carries the
       // DERIVED did — never a caller-supplied placeholder id.
