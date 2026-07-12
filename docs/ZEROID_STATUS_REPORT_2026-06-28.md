@@ -1,5 +1,7 @@
 # ZeroID — Engineering Status Report
 
+> **Correction (2026-07-12):** this report describes a W1 "chain-ID fix 7331/7332 → canonical 8821/88210". That direction was WRONG: 8821/88210 were never-deployed placeholders in ecosystem manifest v1.0.0 (8821 is the SLIP-44 coin type, not an EVM chain id). The canonical EVM chain ids are **7331 (mainnet, reserved) / 7332 (testnet & devnet, confirmed live)** per the aethelred repo `ecosystem/manifest.json` **v2.0.0** (2026-07-12). ZeroID's code (`src/config/chains.ts`) has since been re-migrated and is conformant; every 8821/88210 reference below is historical.
+
 **Prepared for:** External strategy/architecture consultant (for review & opinion)
 **Date:** 28 June 2026 (rev. 2 — adds AI Agent Passport v1, §5.4)
 **Subject:** ZeroID re-platforming onto the canonical Aethelred protocol; implementation of the institutional ("20×") moat features; and a new "AI agent's passport" (AI Agent Identity v1) vertical

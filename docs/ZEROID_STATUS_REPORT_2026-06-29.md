@@ -1,5 +1,7 @@
 # ZeroID — Engineering Status Report
 
+> **Correction (2026-07-12):** the target-L1 row below lists "chain IDs 8821 / 88210" — those were never-deployed placeholders (8821 is the SLIP-44 coin type, not an EVM chain id). Canonical EVM chain ids are **7331 (mainnet, reserved) / 7332 (testnet & devnet, confirmed live)** per the aethelred repo `ecosystem/manifest.json` **v2.0.0** (2026-07-12); ZeroID's `src/config/chains.ts` is conformant.
+
 **Date:** 2026-06-29
 **Audience:** External consultant review
 **Repo:** `zeroid` (local: `~/Downloads/zeroid`)

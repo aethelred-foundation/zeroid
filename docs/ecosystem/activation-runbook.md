@@ -40,7 +40,7 @@ App / backend (`.env`):
 
 ```bash
 DATABASE_URL="postgresql://.../zeroid"
-NEXT_PUBLIC_AETHELRED_NETWORK="testnet"          # chain 88210
+NEXT_PUBLIC_AETHELRED_NETWORK="testnet"          # chain 7332 (canonical; see aethelred ecosystem/manifest.json v2.0.0)
 NEXT_PUBLIC_CANONICAL_VERIFY="false"             # flip per gate W2c
 NEXT_PUBLIC_AETHELRED_VKEYS='{}'                 # circuitId -> registered vkey hash
 NEXT_PUBLIC_PQC_SIGNING="false"                  # flip per gate W4c
