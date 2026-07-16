@@ -16,6 +16,7 @@ const mockAddress = "0x1234567890abcdef1234567890abcdef12345678";
 
 jest.mock("wagmi", () => ({
   useAccount: jest.fn(() => ({ address: mockAddress, isConnected: true })),
+  usePublicClient: jest.fn(() => undefined),
   useWriteContract: jest.fn(() => ({ writeContractAsync: jest.fn() })),
 }));
 

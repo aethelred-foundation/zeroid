@@ -5,7 +5,8 @@
  * Credential status transitions: pending -> verified -> (expired | revoked).
  */
 
-import { useAccount, useReadContract, useWriteContract } from "wagmi";
+import { useAccount, useReadContract } from "wagmi";
+import { useSafeWriteContract } from "./useSafeWriteContract";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { type Address, type Hash } from "viem";
 import { toast } from "sonner";
@@ -259,7 +260,7 @@ export function useRequestCredential() {
 
 export function useRevokeCredential() {
   const queryClient = useQueryClient();
-  const { writeContractAsync } = useWriteContract();
+  const { writeContractAsync } = useSafeWriteContract();
   const { address } = useAccount();
 
   return useMutation({

@@ -6,7 +6,8 @@
  */
 
 import { useState, useCallback, useRef } from "react";
-import { useAccount, useWriteContract } from "wagmi";
+import { useAccount } from "wagmi";
+import { useSafeWriteContract } from "./useSafeWriteContract";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { type Address, type Hash } from "viem";
 import { toast } from "sonner";
@@ -42,7 +43,7 @@ const EMPTY_BYTES32 = `0x${"0".repeat(64)}` as Bytes32;
 
 export function useZKProof() {
   const queryClient = useQueryClient();
-  const { writeContractAsync } = useWriteContract();
+  const { writeContractAsync } = useSafeWriteContract();
   const [progress, setProgress] = useState<ProofProgress>({
     stage: "idle" as ProofStage,
     percent: 0,

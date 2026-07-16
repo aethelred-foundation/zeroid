@@ -24,6 +24,7 @@ const mockWriteContractAsync = jest.fn();
 jest.mock("wagmi", () => ({
   useAccount: () => mockUseAccount(),
   useReadContract: (args: unknown) => mockUseReadContract(args),
+  usePublicClient: jest.fn(() => undefined),
   useWriteContract: () => ({
     writeContractAsync: mockWriteContractAsync,
   }),

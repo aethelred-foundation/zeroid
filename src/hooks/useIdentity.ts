@@ -11,8 +11,8 @@ import {
   usePublicClient,
   useReadContract,
   useSignMessage,
-  useWriteContract,
 } from "wagmi";
+import { useSafeWriteContract } from "./useSafeWriteContract";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { type Address, type Hash, keccak256, toBytes } from "viem";
 import { toast } from "sonner";
@@ -112,7 +112,7 @@ export function useIdentityProfile() {
 
 export function useCreateIdentity() {
   const queryClient = useQueryClient();
-  const { writeContractAsync } = useWriteContract();
+  const { writeContractAsync } = useSafeWriteContract();
   const { signMessageAsync } = useSignMessage();
   const { address } = useAccount();
   const publicClient = usePublicClient();
@@ -339,7 +339,7 @@ export function useIdentity() {
 
 export function useDelegateControl() {
   const queryClient = useQueryClient();
-  const { writeContractAsync } = useWriteContract();
+  const { writeContractAsync } = useSafeWriteContract();
 
   const delegateControl = useCallback(
     async (delegateAddress: Address, expirySeconds: bigint): Promise<Hash> => {

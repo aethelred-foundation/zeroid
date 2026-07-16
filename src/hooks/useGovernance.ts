@@ -6,7 +6,8 @@
  */
 
 import { useCallback } from "react";
-import { useAccount, useReadContract, useWriteContract } from "wagmi";
+import { useAccount, useReadContract } from "wagmi";
+import { useSafeWriteContract } from "./useSafeWriteContract";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { type Address, type Hash, parseEther } from "viem";
 import { toast } from "sonner";
@@ -145,7 +146,7 @@ export function useProposalDetail(proposalId: bigint | undefined) {
 
 export function useCreateProposal() {
   const queryClient = useQueryClient();
-  const { writeContractAsync } = useWriteContract();
+  const { writeContractAsync } = useSafeWriteContract();
 
   return useMutation({
     mutationFn: async (params: CreateProposalParams): Promise<Hash> => {
@@ -180,7 +181,7 @@ export function useCreateProposal() {
 
 export function useVote() {
   const queryClient = useQueryClient();
-  const { writeContractAsync } = useWriteContract();
+  const { writeContractAsync } = useSafeWriteContract();
 
   return useMutation({
     mutationFn: async (params: {
@@ -219,7 +220,7 @@ export function useVote() {
 
 export function useExecuteProposal() {
   const queryClient = useQueryClient();
-  const { writeContractAsync } = useWriteContract();
+  const { writeContractAsync } = useSafeWriteContract();
 
   return useMutation({
     mutationFn: async (params: {
