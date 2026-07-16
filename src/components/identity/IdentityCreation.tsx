@@ -16,6 +16,10 @@ import {
   ScanFace,
 } from "lucide-react";
 import { useAccount, useConnect } from "wagmi";
+import {
+  isAethelredWallet,
+  orderWalletConnectors,
+} from "@/config/wallet-picker";
 import { useIdentity } from "@/hooks/useIdentity";
 import { useUAEPass } from "@/hooks/useUAEPass";
 import { useBiometric } from "@/hooks/useBiometric";
@@ -155,13 +159,14 @@ export default function IdentityCreation() {
     [clearError, currentStep],
   );
 
+  const walletOptions = orderWalletConnectors(connectors);
+
   const handleConnectWallet = useCallback(
-    (connectorIndex: number) =>
+    (connector: (typeof connectors)[number]) =>
       runStep(async () => {
-        const connector = connectors[connectorIndex];
-        if (connector) connect({ connector });
+        connect({ connector });
       }, "Failed to connect wallet"),
-    [connectors, connect, runStep],
+    [connect, runStep],
   );
 
   const handleUAEPass = useCallback(
@@ -205,15 +210,31 @@ export default function IdentityCreation() {
               </div>
             ) : (
               <div className="space-y-3">
-                {connectors.map((connector, idx) => (
+                {walletOptions.map((connector) => (
                   <button
-                    key={connector.id}
-                    onClick={() => handleConnectWallet(idx)}
+                    key={connector.uid}
+                    onClick={() => handleConnectWallet(connector)}
                     disabled={isProcessing}
                     className="btn-secondary w-full justify-start gap-3"
                   >
-                    <Wallet className="w-4 h-4" />
+                    {connector.icon ? (
+                      // EIP-6963 icons are wallet-announced data: URIs.
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={connector.icon}
+                        alt=""
+                        aria-hidden
+                        className="h-4 w-4 rounded"
+                      />
+                    ) : (
+                      <Wallet className="w-4 h-4" />
+                    )}
                     {connector.name}
+                    {isAethelredWallet(connector) && (
+                      <span className="ml-auto text-[10px] uppercase tracking-[0.18em] text-brand-500">
+                        Recommended
+                      </span>
+                    )}
                   </button>
                 ))}
               </div>

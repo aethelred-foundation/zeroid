@@ -65,6 +65,38 @@ describe("WalletButton", () => {
     expect(skeleton).toBeInTheDocument();
   });
 
+  it("orders EIP-6963 wallets Aethelred-first, hides the generic fallback, and marks the first-party wallet", () => {
+    mockConnectState = {
+      connectors: [
+        { uid: "w0", id: "injected", name: "Injected" },
+        { uid: "w1", id: "io.metamask", name: "MetaMask", icon: "data:image/svg+xml,fox" },
+        {
+          uid: "w2",
+          id: "org.aethelred.wallet",
+          name: "Aethelred Wallet",
+          icon: "data:image/svg+xml,cube",
+        },
+      ],
+      connect: mockConnect,
+      isPending: false,
+    };
+
+    render(<WalletButton />);
+    fireEvent.click(screen.getByText("Connect"));
+
+    const entries = screen.getAllByRole("button").slice(1); // drop the Connect toggle
+    expect(entries.map((b) => b.textContent)).toEqual([
+      "Aethelred WalletRecommended",
+      "MetaMaskWallet",
+    ]);
+    expect(screen.queryByText("Injected")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("Aethelred Wallet"));
+    expect(mockConnect).toHaveBeenCalledWith({
+      connector: expect.objectContaining({ id: "org.aethelred.wallet" }),
+    });
+  });
+
   it("opens connector menu and connects with selected wallet", () => {
     render(<WalletButton />);
 

@@ -17,6 +17,10 @@ import {
   aethelredMainnet,
   aethelredTestnet,
 } from "@/config/chains";
+import {
+  isAethelredWallet,
+  orderWalletConnectors,
+} from "@/config/wallet-picker";
 
 type VerificationLevel = "verified" | "pending" | "unverified";
 
@@ -122,7 +126,7 @@ export function WalletButton({ className = "" }: WalletButtonProps) {
               backdropFilter: "blur(18px)",
             }}
           >
-            {connectors.map((connector) => (
+            {orderWalletConnectors(connectors).map((connector) => (
               <button
                 key={connector.uid}
                 disabled={isPending}
@@ -130,11 +134,24 @@ export function WalletButton({ className = "" }: WalletButtonProps) {
                   connect({ connector });
                   setMenuOpen(false);
                 }}
-                className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-[12px] font-medium text-zero-200 transition-colors hover:bg-white/[0.06] disabled:opacity-60"
+                className="flex w-full items-center justify-between gap-2 rounded-xl px-3 py-2 text-left text-[12px] font-medium text-zero-200 transition-colors hover:bg-white/[0.06] disabled:opacity-60"
               >
-                {connector.name}
+                <span className="flex items-center gap-2">
+                  {connector.icon && (
+                    // EIP-6963 wallet icons are data: URIs announced by the
+                    // wallet itself; next/image adds nothing for inline data.
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={connector.icon}
+                      alt=""
+                      aria-hidden
+                      className="h-4 w-4 rounded"
+                    />
+                  )}
+                  {connector.name}
+                </span>
                 <span className="text-[10px] uppercase tracking-[0.18em] text-zero-500">
-                  Wallet
+                  {isAethelredWallet(connector) ? "Recommended" : "Wallet"}
                 </span>
               </button>
             ))}
