@@ -1,218 +1,146 @@
 import {
-  EligibilityProofContractError,
   ZEROID_ELIGIBILITY_POLICY_V1,
-  ZEROID_SAMPLE_KYC_CREDENTIAL,
-  calculateAge,
   createEligibilityProofRequest,
-  evaluateEligibilityProof,
+  formatEligibilityReceipt,
+  formatEligibilityRequest,
+  type EligibilityProofResponse,
 } from "@/lib/eligibility/kycCredential";
 
-const AS_OF = new Date("2026-06-23T10:00:00.000Z");
-
-describe("ZeroID eligibility proof model", () => {
-  it("calculates age from the compact KYC credential date fields", () => {
-    expect(calculateAge(ZEROID_SAMPLE_KYC_CREDENTIAL, AS_OF)).toBe(33);
-  });
-
-  it("allows the sample holder for the regulated services policy", async () => {
-    const request = createEligibilityProofRequest("edge-secure-data-room");
-
-    const receipt = await evaluateEligibilityProof(
-      request,
-      ZEROID_SAMPLE_KYC_CREDENTIAL,
-      ZEROID_ELIGIBILITY_POLICY_V1,
-      { asOf: AS_OF },
-    );
-
-    expect(receipt.status).toBe("ALLOWED");
-    expect(receipt.policyVersion).toBe("2026.06.1");
-    expect(receipt.evaluation).toMatchObject({
-      ageOverThreshold: true,
-      residencyAllowed: true,
-      sanctionsClear: true,
-      riskAccepted: true,
-      nonRevocationChecked: true,
-      teeAttested: true,
-    });
-    expect(receipt.proof.privateInputsRedacted).toContain("dobYear");
-    expect(receipt.proof.disclosurePolicy.rawFieldsDisclosed).toEqual([]);
-    expect(receipt.proof.disclosurePolicy.disclosureBudget).toMatchObject({
-      rawFieldCount: 0,
-      publicSignalCount: 6,
-      redactedPrivateInputCount:
-        ZEROID_ELIGIBILITY_POLICY_V1.circuitManifest.privateInputsRedacted
-          .length,
-    });
-    expect(receipt.proof.disclosurePolicy.provedPredicates).toEqual(
-      expect.arrayContaining([
-        "AGE_OVER_THRESHOLD",
-        "RESIDENCY_ALLOWED",
-        "SANCTIONS_CLEAR",
-        "NON_REVOCATION_CHECKED",
-        "TEE_ATTESTED",
-      ]),
-    );
-    expect(receipt.evidence.receiptHash).toMatch(/^0x[0-9a-f]{64}$/);
-    expect(receipt.evidence.receiptHashAlgorithm).toBe(
-      "sha256-canonical-json-v1",
-    );
-    expect(receipt.evidence.manifestDigest).toBe(
-      ZEROID_ELIGIBILITY_POLICY_V1.circuitManifest.manifestDigest,
-    );
-    expect(receipt.evidence.policyBindingDigest).toBe(
-      ZEROID_ELIGIBILITY_POLICY_V1.circuitManifest.policyBindingDigest,
-    );
-    expect(receipt.proof.publicSignals).toMatchObject({
-      claimsHash: ZEROID_SAMPLE_KYC_CREDENTIAL.evidence.claimsHash,
-      residencyCountryCode: "AE",
-    });
-    expect(receipt.proof.publicSignals.policyVersionHash).toMatch(
-      /^0x[0-9a-f]{64}$/,
-    );
-  });
-
-  it("returns deterministic receipt identifiers for the same proof context", async () => {
-    const request = createEligibilityProofRequest("presight-analytics-mesh");
-
-    const first = await evaluateEligibilityProof(
-      request,
-      ZEROID_SAMPLE_KYC_CREDENTIAL,
-      ZEROID_ELIGIBILITY_POLICY_V1,
-      { asOf: AS_OF },
-    );
-    const second = await evaluateEligibilityProof(
-      request,
-      ZEROID_SAMPLE_KYC_CREDENTIAL,
-      ZEROID_ELIGIBILITY_POLICY_V1,
-      { asOf: AS_OF },
-    );
-
-    expect(second.decisionId).toBe(first.decisionId);
-    expect(second.proof.proofId).toBe(first.proof.proofId);
-    expect(second.evidence.auditHash).toBe(first.evidence.auditHash);
-  });
-
-  it("binds the disclosure policy to the receipt hash", async () => {
-    const request = createEligibilityProofRequest("edge-secure-data-room");
-    const baseline = await evaluateEligibilityProof(
-      request,
-      ZEROID_SAMPLE_KYC_CREDENTIAL,
-      ZEROID_ELIGIBILITY_POLICY_V1,
-      { asOf: AS_OF },
-    );
-    const stricterDisclosurePolicy = {
-      ...ZEROID_ELIGIBILITY_POLICY_V1,
-      circuitManifest: {
-        ...ZEROID_ELIGIBILITY_POLICY_V1.circuitManifest,
-        privateInputsRedacted: [
-          ...ZEROID_ELIGIBILITY_POLICY_V1.circuitManifest.privateInputsRedacted,
-          "manualReviewNotes",
-        ],
+describe("ZeroID eligibility client contract", () => {
+  it("creates an explicit backend request and cannot weaken policy controls", () => {
+    const request = createEligibilityProofRequest(
+      {
+        subjectDid: "did:aethelred:testnet:holder-1",
+        credentialId: "cred-kyc-test-1",
+        relyingAppId: "test-relying-app",
+        contextNonce: "verifier-issued-context-001",
       },
-    };
-
-    const changed = await evaluateEligibilityProof(
-      request,
-      ZEROID_SAMPLE_KYC_CREDENTIAL,
-      stricterDisclosurePolicy,
-      { asOf: AS_OF },
-    );
-
-    expect(changed.status).toBe(baseline.status);
-    expect(changed.proof.disclosurePolicy.privateInputsRedacted).toContain(
-      "manualReviewNotes",
-    );
-    expect(changed.evidence.receiptHash).not.toBe(
-      baseline.evidence.receiptHash,
-    );
-  });
-
-  it("denies credentials that fail sanctions screening", async () => {
-    const request = createEligibilityProofRequest("tii-research-sandbox");
-    const credential = {
-      ...ZEROID_SAMPLE_KYC_CREDENTIAL,
-      attributes: {
-        ...ZEROID_SAMPLE_KYC_CREDENTIAL.attributes,
-        sanctionsScreeningResult: "POTENTIAL_MATCH" as const,
+      {
+        requireOnchainAttestation: true,
+        requireNonRevocationProof: false,
+        dryRun: true,
       },
-    };
-
-    const receipt = await evaluateEligibilityProof(
-      request,
-      credential,
-      ZEROID_ELIGIBILITY_POLICY_V1,
-      { asOf: AS_OF },
     );
 
-    expect(receipt.status).toBe("DENIED");
-    expect(receipt.evaluation.deniedReasons).toContain("SANCTIONS_NOT_CLEAR");
+    expect(request).toEqual({
+      subjectDid: "did:aethelred:testnet:holder-1",
+      credentialId: "cred-kyc-test-1",
+      policyId: ZEROID_ELIGIBILITY_POLICY_V1.policyId,
+      relyingAppId: "test-relying-app",
+      contextNonce: "verifier-issued-context-001",
+      options: {
+        requireOnchainAttestation: true,
+        requireNonRevocationProof: true,
+        dryRun: false,
+      },
+    });
   });
 
-  it("rejects a proof request for the wrong subject DID", async () => {
-    const request = {
-      ...createEligibilityProofRequest("edge-secure-data-room"),
-      subjectDid: "did:aethelred:mainnet:0xwrong",
-    };
+  it("formats only a supplied backend receipt", () => {
+    const receipt = {
+      status: "ALLOWED",
+      decisionId: "dec_backend_1",
+      policyId: ZEROID_ELIGIBILITY_POLICY_V1.policyId,
+      policyVersion: ZEROID_ELIGIBILITY_POLICY_V1.version,
+      subjectDid: "did:aethelred:testnet:holder-1",
+      credentialId: "cred-kyc-test-1",
+      relyingAppId: "test-relying-app",
+      proof: {
+        proofId: "zkp_backend_1",
+        verified: true,
+        groth16Proof: {
+          pi_a: ["1", "2", "1"],
+          pi_b: [
+            ["3", "4"],
+            ["5", "6"],
+            ["1", "0"],
+          ],
+          pi_c: ["7", "8", "1"],
+          protocol: "groth16",
+          curve: "bn128",
+        },
+        circuitId: ZEROID_ELIGIBILITY_POLICY_V1.circuitManifest.circuitId,
+        circuitName: ZEROID_ELIGIBILITY_POLICY_V1.circuitManifest.circuitName,
+        verificationKeyId:
+          ZEROID_ELIGIBILITY_POLICY_V1.circuitManifest.verificationKeyId,
+        manifestDigest:
+          ZEROID_ELIGIBILITY_POLICY_V1.circuitManifest.manifestDigest,
+        policyBindingDigest:
+          ZEROID_ELIGIBILITY_POLICY_V1.circuitManifest.policyBindingDigest,
+        contextHash: `0x${"1".repeat(64)}`,
+        verifiedAt: "2026-07-18T00:00:00.000Z",
+        publicSignals: { claimsHash: "123" },
+        privateInputsRedacted: ["dateOfBirth"],
+        disclosurePolicy: {
+          rawFieldsDisclosed: [],
+          publicSignals: ["claimsHash"],
+          provedPredicates: ["AGE_OVER_THRESHOLD"],
+          privateInputsRedacted: ["dateOfBirth"],
+          disclosureBudget: {
+            rawFieldCount: 0,
+            publicSignalCount: 1,
+            provedPredicateCount: 1,
+            redactedPrivateInputCount: 1,
+          },
+        },
+      },
+      evaluation: {
+        ageOverThreshold: true,
+        residencyAllowed: true,
+        nationalityAllowed: true,
+        sanctionsClear: true,
+        riskAccepted: true,
+        credentialActive: true,
+        credentialNotExpired: true,
+        nonRevocationChecked: true,
+        onchainAttested: false,
+        teeAttested: true,
+        minimumAge: 21,
+        computedAge: 30,
+        allowedResidencies: ["AE"],
+        deniedReasons: [],
+      },
+      evidence: {
+        auditLogId: "audit-backend-1",
+        auditHash: `0x${"2".repeat(64)}`,
+        teeAttestationId: "tee-backend-1",
+        receiptHash: `0x${"3".repeat(64)}`,
+        receiptHashAlgorithm: "sha256-canonical-json-v1",
+        policyRegistry:
+          ZEROID_ELIGIBILITY_POLICY_V1.evidenceAnchors.policyRegistry,
+        artifactDigest:
+          ZEROID_ELIGIBILITY_POLICY_V1.circuitManifest.artifactDigest,
+        manifestPath: ZEROID_ELIGIBILITY_POLICY_V1.circuitManifest.manifestPath,
+        manifestDigest:
+          ZEROID_ELIGIBILITY_POLICY_V1.circuitManifest.manifestDigest,
+        sourceDigest: ZEROID_ELIGIBILITY_POLICY_V1.circuitManifest.sourceDigest,
+        policyBindingDigest:
+          ZEROID_ELIGIBILITY_POLICY_V1.circuitManifest.policyBindingDigest,
+        artifactStatus:
+          ZEROID_ELIGIBILITY_POLICY_V1.circuitManifest.artifactStatus,
+        evidenceChain: ["credential:cred-kyc-test-1"],
+      },
+      issuedAt: "2026-07-18T00:00:00.000Z",
+    } satisfies EligibilityProofResponse;
 
-    await expect(
-      evaluateEligibilityProof(
-        request,
-        ZEROID_SAMPLE_KYC_CREDENTIAL,
-        ZEROID_ELIGIBILITY_POLICY_V1,
-        { asOf: AS_OF },
-      ),
-    ).rejects.toMatchObject({
-      name: "EligibilityProofContractError",
-      code: "CREDENTIAL_SUBJECT_MISMATCH",
-      statusCode: 403,
-    } satisfies Partial<EligibilityProofContractError>);
+    const formatted = JSON.parse(formatEligibilityReceipt(receipt));
+
+    expect(formatted).toMatchObject({
+      decisionId: "dec_backend_1",
+      proofId: "zkp_backend_1",
+      auditHash: `0x${"2".repeat(64)}`,
+      receiptHash: `0x${"3".repeat(64)}`,
+    });
   });
 
-  it("marks dry-run on-chain requirements as not production-attested", async () => {
-    const request = createEligibilityProofRequest("edge-secure-data-room", {
-      requireOnchainAttestation: true,
-      dryRun: true,
+  it("formats requests without evaluating credentials in the browser", () => {
+    const request = createEligibilityProofRequest({
+      subjectDid: "did:aethelred:testnet:holder-1",
+      credentialId: "cred-kyc-test-1",
+      relyingAppId: "test-relying-app",
+      contextNonce: "verifier-issued-context-001",
     });
 
-    const receipt = await evaluateEligibilityProof(
-      request,
-      ZEROID_SAMPLE_KYC_CREDENTIAL,
-      ZEROID_ELIGIBILITY_POLICY_V1,
-      { asOf: AS_OF },
-    );
-
-    expect(receipt.status).toBe("DENIED");
-    expect(receipt.evaluation.deniedReasons).toContain(
-      "ONCHAIN_ATTESTATION_REQUIRES_LIVE_MODE",
-    );
-    expect(receipt.proof.onchainTxHash).toBeUndefined();
-  });
-
-  it("keeps raw KYC fields out of the disclosure policy for denied proofs", async () => {
-    const request = createEligibilityProofRequest("presight-analytics-mesh");
-    const credential = {
-      ...ZEROID_SAMPLE_KYC_CREDENTIAL,
-      attributes: {
-        ...ZEROID_SAMPLE_KYC_CREDENTIAL.attributes,
-        status: "SUSPENDED" as const,
-      },
-    };
-
-    const receipt = await evaluateEligibilityProof(
-      request,
-      credential,
-      ZEROID_ELIGIBILITY_POLICY_V1,
-      { asOf: AS_OF },
-    );
-
-    expect(receipt.status).toBe("DENIED");
-    expect(receipt.evaluation.deniedReasons).toContain("CREDENTIAL_NOT_ACTIVE");
-    expect(receipt.proof.disclosurePolicy.rawFieldsDisclosed).toHaveLength(0);
-    expect(receipt.proof.disclosurePolicy.privateInputsRedacted).toEqual(
-      ZEROID_ELIGIBILITY_POLICY_V1.circuitManifest.privateInputsRedacted,
-    );
-    expect(receipt.proof.disclosurePolicy.provedPredicates).not.toContain(
-      "CREDENTIAL_ACTIVE",
-    );
+    expect(JSON.parse(formatEligibilityRequest(request))).toEqual(request);
   });
 });

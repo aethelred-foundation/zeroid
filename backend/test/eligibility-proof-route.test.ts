@@ -1,7 +1,6 @@
 import express from 'express';
 import request from 'supertest';
 import type { Express, NextFunction, Response } from 'express';
-import { createHash } from 'crypto';
 import type { AuthenticatedRequest } from '../src/middleware/auth';
 
 const mockRedis = {
@@ -34,6 +33,7 @@ const mockPrisma = {
     create: jest.fn(),
     findFirst: jest.fn(),
   },
+  $transaction: jest.fn(),
 };
 
 const mockCredentialService = {
@@ -60,7 +60,7 @@ const mockZkProofService = {
   validateContextBoundPublicSignals: jest.fn(() => ({ valid: true })),
   buildSelectiveDisclosureInputs: jest.fn(() => ({})),
   generateProof: jest.fn(),
-  verifyProof: jest.fn(),
+  verifyProof: jest.fn(async () => ({ valid: true })),
   listCircuits: jest.fn(() => []),
 };
 
@@ -90,32 +90,6 @@ const SUBJECT_DID = 'did:aethelred:subject';
 const CREDENTIAL_ID = 'cred-kyc-prod-1';
 const POLICY_ID =
   'zeroid://policy/regulated-digital-services/age-jurisdiction@2026.06.1';
-const TEST_CLAIMS = {
-  attributes: {
-    dobYear: 1990,
-    dobMonth: 6,
-    dobDay: 1,
-    countryOfResidence: 'AE',
-    nationality: 'AE',
-    sanctionsScreeningResult: 'CLEAR',
-    riskTier: 'LOW',
-    status: 'ACTIVE',
-    revocationNonce: 'rev-nonce-1',
-  },
-  riskProfile: {
-    assessmentId: 'risk-1',
-    riskTier: 'LOW',
-    factors: {
-      sanctions: 'pass',
-      revocation: 'not_revoked',
-    },
-  },
-  evidence: {
-    issuerProofId: 'issuer-proof-1',
-    teeAttestationId: 'tee-1',
-  },
-};
-
 const TEST_MANIFEST_DIGEST =
   '0x1f48ddf10a370c1ab6af80f17e359f0c00700b5151a7ee1db835dfdb3cde25e5';
 const TEST_SOURCE_DIGEST =
@@ -124,28 +98,8 @@ const TEST_POLICY_BINDING_DIGEST =
   '0xc339f81323c5288c23a30a0fcbc3140bdb60f79193101cbc8ee0fc42eda45e0c';
 const TEST_RECEIPT_HASH =
   '0x575d6472ac31125157a91ba8cb9374a3e79483294163e5fb57f9b2e95575e3d9';
-
-function canonicalizeClaims(value: unknown): string {
-  if (value === null || value === undefined) return JSON.stringify(value);
-  if (typeof value !== 'object') return JSON.stringify(value);
-  if (Array.isArray(value)) {
-    return '[' + value.map((item) => canonicalizeClaims(item)).join(',') + ']';
-  }
-
-  const obj = value as Record<string, unknown>;
-  return (
-    '{' +
-    Object.keys(obj)
-      .sort()
-      .map((key) => JSON.stringify(key) + ':' + canonicalizeClaims(obj[key]))
-      .join(',') +
-    '}'
-  );
-}
-
-function computeClaimsHash(claims: Record<string, unknown>): string {
-  return createHash('sha256').update(canonicalizeClaims(claims)).digest('hex');
-}
+const TEST_CONTEXT_HASH =
+  '0x9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a';
 
 function buildApp(
   identity = {
@@ -177,12 +131,12 @@ function buildRequest() {
     options: {
       requireOnchainAttestation: false,
       requireNonRevocationProof: true,
-      dryRun: true,
+      dryRun: false,
     },
   };
 }
 
-function buildReceiptRecord() {
+function buildVerifiedGroth16Receipt() {
   return {
     id: 'verification-1',
     credentialId: CREDENTIAL_ID,
@@ -192,47 +146,33 @@ function buildReceiptRecord() {
     requestedAt: new Date('2026-06-23T10:00:00.000Z'),
     completedAt: new Date('2026-06-23T10:00:01.000Z'),
     zkProofData: {
-      proofId: 'zkp_testproof',
+      proofId: '123e4567-e89b-42d3-a456-426614174000',
       circuitId: 'zkc_eligibility_policy_context_v1',
       circuitName: 'eligibility_policy_context_v1',
       verificationKeyId: 'vk_eligibility_policy_context_v1_2026_06_27',
       manifestDigest: TEST_MANIFEST_DIGEST,
       sourceDigest: TEST_SOURCE_DIGEST,
       policyBindingDigest: TEST_POLICY_BINDING_DIGEST,
-      artifactStatus: 'SOURCE_VALIDATED_ARTIFACTS_PENDING',
-      contextHash:
-        '0x9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a',
+      artifactStatus: 'PINNED_PRODUCTION_ARTIFACTS',
+      contextHash: TEST_CONTEXT_HASH,
       receiptHash: TEST_RECEIPT_HASH,
       receiptHashAlgorithm: 'sha256-canonical-json-v1',
-      publicSignals: {
-        claimsHash:
-          '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-        ageThresholdYears: '21',
-        residencyCountryCode: 'AE',
-        currentTimestamp: '1782208801',
-        policyVersionHash:
-          '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
-        contextCommitment:
-          '0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
-      },
-      privateInputsRedacted: ['dateOfBirth', 'nationality', 'issuerSignature'],
-      disclosurePolicy: {
-        rawFieldsDisclosed: [],
-        publicSignals: [
-          'claimsHash',
-          'ageThresholdYears',
-          'residencyCountryCode',
-          'currentTimestamp',
-          'policyVersionHash',
-          'contextCommitment',
+      publicSignals: ['1', '21', '78473', '1782208801', '5', '6'],
+      proof: {
+        pi_a: ['1', '2', '1'],
+        pi_b: [
+          ['3', '4'],
+          ['5', '6'],
+          ['1', '0'],
         ],
-        provedPredicates: ['AGE_OVER_THRESHOLD', 'TEE_ATTESTED'],
-        disclosureBudget: {
-          rawFieldCount: 0,
-          publicSignalCount: 6,
-          provedPredicateCount: 2,
-          redactedPrivateInputCount: 3,
-        },
+        pi_c: ['7', '8', '1'],
+        protocol: 'groth16',
+        curve: 'bn128',
+      },
+      proofVerification: {
+        valid: true,
+        proofSystem: 'groth16',
+        verifiedAt: '2026-06-23T10:00:01.000Z',
       },
     },
     teeAttestation: {
@@ -245,186 +185,61 @@ function buildReceiptRecord() {
       policyId: POLICY_ID,
       policyVersion: '2026.06.1',
       relyingAppId: 'edge-secure-data-room',
-      deniedReasons: [],
-      evaluation: {
-        ageOverThreshold: true,
-        residencyAllowed: true,
-        nationalityAllowed: true,
-        sanctionsClear: true,
-        riskAccepted: true,
-        credentialActive: true,
-        credentialNotExpired: true,
-        nonRevocationChecked: true,
-        onchainAttested: true,
-        teeAttested: true,
-      },
       receiptHash: TEST_RECEIPT_HASH,
       receiptHashAlgorithm: 'sha256-canonical-json-v1',
       manifestPath: 'circuits/manifest/eligibility_v1.json',
       manifestDigest: TEST_MANIFEST_DIGEST,
       sourceDigest: TEST_SOURCE_DIGEST,
       policyBindingDigest: TEST_POLICY_BINDING_DIGEST,
-      artifactStatus: 'SOURCE_VALIDATED_ARTIFACTS_PENDING',
-      disclosureBudget: {
-        rawFieldCount: 0,
-        publicSignalCount: 6,
-        provedPredicateCount: 10,
-        redactedPrivateInputCount: 11,
-      },
+      artifactStatus: 'PINNED_PRODUCTION_ARTIFACTS',
     },
   };
 }
 
 beforeEach(() => {
   jest.clearAllMocks();
-
-  const credential = {
-    id: CREDENTIAL_ID,
-    credentialType: 'KYC_LEVEL_2',
-    issuerId: 'issuer-1',
-    subjectId: SUBJECT_ID,
-    claims: TEST_CLAIMS,
-    claimsHash: computeClaimsHash(TEST_CLAIMS),
-    proof: {},
-    status: 'ACTIVE',
-    issuedAt: new Date('2026-06-01T00:00:00.000Z'),
-    expiresAt: new Date('2027-06-01T00:00:00.000Z'),
-  };
-
-  mockCredentialService.getCredential.mockResolvedValue(credential);
-  mockCredentialService.verifyCredential.mockResolvedValue({
-    valid: true,
-    credential,
-    checks: {
-      statusActive: true,
-      notExpired: true,
-      integrityValid: true,
-      issuerActive: true,
-      subjectActive: true,
-      signatureValid: true,
-      issuerTrustValid: true,
-      notRevoked: true,
-    },
-  });
-  mockPrisma.identity.findUnique.mockResolvedValue({
-    id: SUBJECT_ID,
-    status: 'ACTIVE',
-    teeAttested: true,
-    teeAttestationId: 'tee-1',
-  });
-  mockTeeService.isAttestationValid.mockResolvedValue(true);
-  mockPrisma.verification.create.mockResolvedValue({ id: 'verification-1' });
-  mockPrisma.verification.findFirst.mockResolvedValue(buildReceiptRecord());
-  mockPrisma.auditLog.create.mockResolvedValue({
-    id: 'audit-1',
-    entryHash:
-      '9f2f6c5804f31959e424bd0a624987887fe0c2ba5f5e77c49020a66a9f2dd904',
-  });
+  mockPrisma.verification.findFirst.mockResolvedValue(
+    buildVerifiedGroth16Receipt(),
+  );
   mockPrisma.auditLog.findFirst.mockResolvedValue({
     id: 'audit-1',
     timestamp: new Date('2026-06-23T10:00:02.000Z'),
-    details: {
-      auditHash:
-        '0x9f2f6c5804f31959e424bd0a624987887fe0c2ba5f5e77c49020a66a9f2dd904',
-      receiptHash: TEST_RECEIPT_HASH,
-      decisionId: 'dec_testdecision',
-      proofId: 'zkp_testproof',
-    },
+    entryHash:
+      '9f2f6c5804f31959e424bd0a624987887fe0c2ba5f5e77c49020a66a9f2dd904',
   });
 });
 
 describe('POST /api/v1/verification/eligibility-proof', () => {
-  it('creates a policy-bound eligibility proof receipt from a verified KYC credential', async () => {
+  it('fails closed until signed-credential Groth16 proving is integrated', async () => {
     const res = await request(buildApp())
       .post('/api/v1/verification/eligibility-proof')
       .send(buildRequest());
 
-    expect(res.status).toBe(201);
-    expect(res.body.data.status).toBe('ALLOWED');
-    expect(res.body.data.policyId).toBe(POLICY_ID);
-    expect(res.body.data.proof.circuitName).toBe(
-      'eligibility_policy_context_v1',
-    );
-    expect(res.body.data.proof.manifestDigest).toMatch(/^0x[0-9a-f]{64}$/);
-    expect(res.body.data.evidence.manifestDigest).toBe(
-      res.body.data.proof.manifestDigest,
-    );
-    expect(res.body.data.evidence.artifactStatus).toBe(
-      'SOURCE_VALIDATED_ARTIFACTS_PENDING',
-    );
-    expect(res.body.data.proof.disclosurePolicy.rawFieldsDisclosed).toEqual([]);
-    expect(res.body.data.proof.disclosurePolicy.disclosureBudget).toMatchObject(
-      {
-        rawFieldCount: 0,
-        publicSignalCount: 6,
+    expect(res.status).toBe(503);
+    expect(res.body).toMatchObject({
+      code: 'ZK_ELIGIBILITY_PROVER_NOT_INTEGRATED',
+      details: {
+        policyId: POLICY_ID,
+        policyVersion: '2026.06.1',
+        circuitId: 'zkc_eligibility_policy_context_v1',
+        circuitName: 'eligibility_policy_context_v1',
+        verificationKeyId: 'vk_eligibility_policy_context_v1_2026_06_27',
+        artifactStatus: 'SOURCE_VALIDATED_ARTIFACTS_PENDING',
       },
-    );
-    expect(res.body.data.proof.disclosurePolicy.provedPredicates).toEqual(
-      expect.arrayContaining(['AGE_OVER_THRESHOLD', 'TEE_ATTESTED']),
-    );
-    expect(res.body.data.evidence.auditLogId).toBe('audit-1');
-    expect(res.body.data.evidence.receiptHashAlgorithm).toBe(
-      'sha256-canonical-json-v1',
-    );
-    expect(res.body.data.evaluation.deniedReasons).toEqual([]);
-    expect(mockCredentialService.verifyCredential).toHaveBeenCalledWith(
-      CREDENTIAL_ID,
-    );
-    expect(mockPrisma.verification.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          verificationType: 'ELIGIBILITY_PROOF',
-          result: 'VERIFIED',
-          zkProofData: expect.objectContaining({
-            disclosurePolicy: expect.objectContaining({
-              rawFieldsDisclosed: [],
-              disclosureBudget: expect.objectContaining({
-                rawFieldCount: 0,
-              }),
-            }),
-            receiptHash: expect.stringMatching(/^0x[0-9a-f]{64}$/),
-            receiptHashAlgorithm: 'sha256-canonical-json-v1',
-            manifestDigest: expect.stringMatching(/^0x[0-9a-f]{64}$/),
-            sourceDigest: expect.stringMatching(/^0x[0-9a-f]{64}$/),
-            policyBindingDigest: expect.stringMatching(/^0x[0-9a-f]{64}$/),
-            artifactStatus: 'SOURCE_VALIDATED_ARTIFACTS_PENDING',
-          }),
-          resultDetails: expect.objectContaining({
-            receiptHash: expect.stringMatching(/^0x[0-9a-f]{64}$/),
-            receiptHashAlgorithm: 'sha256-canonical-json-v1',
-            manifestDigest: expect.stringMatching(/^0x[0-9a-f]{64}$/),
-            sourceDigest: expect.stringMatching(/^0x[0-9a-f]{64}$/),
-            policyBindingDigest: expect.stringMatching(/^0x[0-9a-f]{64}$/),
-            artifactStatus: 'SOURCE_VALIDATED_ARTIFACTS_PENDING',
-            disclosureBudget: expect.objectContaining({
-              rawFieldCount: 0,
-            }),
-          }),
-        }),
-      }),
-    );
-    expect(mockPrisma.auditLog.create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          action: 'VERIFICATION_COMPLETED',
-          resourceType: 'eligibility_proof',
-          details: expect.objectContaining({
-            receiptHash: expect.stringMatching(/^0x[0-9a-f]{64}$/),
-            receiptHashAlgorithm: 'sha256-canonical-json-v1',
-            manifestDigest: expect.stringMatching(/^0x[0-9a-f]{64}$/),
-            sourceDigest: expect.stringMatching(/^0x[0-9a-f]{64}$/),
-            policyBindingDigest: expect.stringMatching(/^0x[0-9a-f]{64}$/),
-            artifactStatus: 'SOURCE_VALIDATED_ARTIFACTS_PENDING',
-            disclosureBudget: expect.objectContaining({
-              rawFieldCount: 0,
-            }),
-          }),
-        }),
-      }),
-    );
+    });
+    expect(res.body.data).toBeUndefined();
+    expect(JSON.stringify(res.body)).not.toContain('zkp_');
+    expect(JSON.stringify(res.body)).not.toContain('computedAge');
+    expect(JSON.stringify(res.body)).not.toContain('provedPredicates');
+    expect(mockCredentialService.getCredential).not.toHaveBeenCalled();
+    expect(mockCredentialService.verifyCredential).not.toHaveBeenCalled();
+    expect(mockTeeService.isAttestationValid).not.toHaveBeenCalled();
+    expect(mockPrisma.verification.create).not.toHaveBeenCalled();
+    expect(mockPrisma.auditLog.create).not.toHaveBeenCalled();
+    expect(mockPrisma.$transaction).not.toHaveBeenCalled();
   });
 
-  it('rejects a proof request for a DID different from the authenticated identity', async () => {
+  it('rejects a different subject before reporting prover availability', async () => {
     const res = await request(buildApp())
       .post('/api/v1/verification/eligibility-proof')
       .send({
@@ -434,15 +249,98 @@ describe('POST /api/v1/verification/eligibility-proof', () => {
 
     expect(res.status).toBe(403);
     expect(res.body.code).toBe('CREDENTIAL_SUBJECT_MISMATCH');
-    expect(mockCredentialService.getCredential).not.toHaveBeenCalled();
+    expect(
+      mockZkProofService.getCircuitPublicSignalSchema,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('rejects browser-style dry-run evaluation', async () => {
+    const res = await request(buildApp())
+      .post('/api/v1/verification/eligibility-proof')
+      .send({
+        ...buildRequest(),
+        options: {
+          requireOnchainAttestation: false,
+          requireNonRevocationProof: true,
+          dryRun: true,
+        },
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('ELIGIBILITY_DRY_RUN_UNSUPPORTED');
     expect(mockPrisma.verification.create).not.toHaveBeenCalled();
   });
 
-  it('fails closed when the registered ZK circuit schema drifts from the pinned manifest', async () => {
+  it('rejects attempts to disable mandatory non-revocation evidence', async () => {
+    const res = await request(buildApp())
+      .post('/api/v1/verification/eligibility-proof')
+      .send({
+        ...buildRequest(),
+        options: {
+          requireOnchainAttestation: false,
+          requireNonRevocationProof: false,
+          dryRun: false,
+        },
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('ELIGIBILITY_POLICY_OPTION_CONFLICT');
+  });
+
+  it('rejects on-chain claims while no transaction-backed verifier exists', async () => {
+    const res = await request(buildApp())
+      .post('/api/v1/verification/eligibility-proof')
+      .send({
+        ...buildRequest(),
+        options: {
+          requireOnchainAttestation: true,
+          requireNonRevocationProof: true,
+          dryRun: false,
+        },
+      });
+
+    expect(res.status).toBe(501);
+    expect(res.body.code).toBe('ELIGIBILITY_ONCHAIN_ATTESTATION_UNAVAILABLE');
+    expect(mockPrisma.verification.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects unsupported option fields at the HTTP boundary', async () => {
+    const res = await request(buildApp())
+      .post('/api/v1/verification/eligibility-proof')
+      .send({
+        ...buildRequest(),
+        options: {
+          ...buildRequest().options,
+          trustCallerClaims: true,
+        },
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('VALIDATION_ERROR');
+    expect(
+      mockZkProofService.getCircuitPublicSignalSchema,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('returns 404 for an unknown policy without touching proof services', async () => {
+    const res = await request(buildApp())
+      .post('/api/v1/verification/eligibility-proof')
+      .send({
+        ...buildRequest(),
+        policyId: 'zeroid://policy/unknown',
+      });
+
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('POLICY_NOT_FOUND');
+    expect(
+      mockZkProofService.getCircuitPublicSignalSchema,
+    ).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the registered circuit schema drifts', async () => {
     mockZkProofService.getCircuitPublicSignalSchema.mockReturnValueOnce([
       'claimsHash',
       'ageThresholdYears',
-      'currentTimestamp',
       'contextCommitment',
     ]);
 
@@ -452,13 +350,43 @@ describe('POST /api/v1/verification/eligibility-proof', () => {
 
     expect(res.status).toBe(503);
     expect(res.body.code).toBe('ZK_CIRCUIT_SCHEMA_MISMATCH');
-    expect(mockCredentialService.getCredential).not.toHaveBeenCalled();
     expect(mockPrisma.verification.create).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when context-bound circuit artifacts are unavailable', async () => {
+    mockZkProofService.isCircuitContextBound.mockReturnValueOnce(false);
+
+    const res = await request(buildApp())
+      .post('/api/v1/verification/eligibility-proof')
+      .send(buildRequest());
+
+    expect(res.status).toBe(503);
+    expect(res.body.code).toBe('ZK_CIRCUIT_ARTIFACTS_NOT_READY');
+    expect(mockPrisma.verification.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects the unpinned manifest outside the unit-test runtime', async () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'development';
+
+    try {
+      const res = await request(buildApp())
+        .post('/api/v1/verification/eligibility-proof')
+        .send(buildRequest());
+
+      expect(res.status).toBe(503);
+      expect(res.body.code).toBe('ZK_CIRCUIT_ARTIFACTS_NOT_READY');
+      expect(
+        mockZkProofService.getCircuitPublicSignalSchema,
+      ).not.toHaveBeenCalled();
+    } finally {
+      process.env.NODE_ENV = originalNodeEnv;
+    }
   });
 });
 
 describe('GET /api/v1/verification/eligibility-proof/:receiptId', () => {
-  it('rejects malformed eligibility receipt ids before lookup', async () => {
+  it('rejects malformed receipt ids before lookup', async () => {
     const res = await request(buildApp()).get(
       '/api/v1/verification/eligibility-proof/dec%20bad',
     );
@@ -468,7 +396,148 @@ describe('GET /api/v1/verification/eligibility-proof/:receiptId', () => {
     expect(mockPrisma.verification.findFirst).not.toHaveBeenCalled();
   });
 
-  it('loads an authenticated eligibility proof receipt by decision id', async () => {
+  it('returns 404 when the receipt is missing', async () => {
+    mockPrisma.verification.findFirst.mockResolvedValueOnce(null);
+
+    const res = await request(buildApp()).get(
+      '/api/v1/verification/eligibility-proof/dec_missing',
+    );
+
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('ELIGIBILITY_RECEIPT_NOT_FOUND');
+    expect(mockPrisma.auditLog.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('fails closed for legacy pseudo-proof predicate evaluations', async () => {
+    const legacyReceipt = buildVerifiedGroth16Receipt();
+    legacyReceipt.resultDetails = {
+      ...legacyReceipt.resultDetails,
+      evaluation: {
+        ageOverThreshold: true,
+        computedAge: 36,
+        onchainAttested: false,
+      },
+    };
+    mockPrisma.verification.findFirst.mockResolvedValueOnce(legacyReceipt);
+
+    const res = await request(buildApp()).get(
+      '/api/v1/verification/eligibility-proof/dec_testdecision',
+    );
+
+    expect(res.status).toBe(503);
+    expect(res.body.code).toBe('ELIGIBILITY_RECEIPT_LEGACY_UNSUPPORTED');
+    expect(res.body.data).toBeUndefined();
+    expect(JSON.stringify(res.body)).not.toContain('computedAge');
+    expect(mockPrisma.auditLog.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('fails closed for receipts backed by pending artifacts', async () => {
+    const pendingReceipt = buildVerifiedGroth16Receipt();
+    pendingReceipt.zkProofData.artifactStatus =
+      'SOURCE_VALIDATED_ARTIFACTS_PENDING';
+    pendingReceipt.resultDetails.artifactStatus =
+      'SOURCE_VALIDATED_ARTIFACTS_PENDING';
+    mockPrisma.verification.findFirst.mockResolvedValueOnce(pendingReceipt);
+
+    const res = await request(buildApp()).get(
+      '/api/v1/verification/eligibility-proof/dec_testdecision',
+    );
+
+    expect(res.status).toBe(503);
+    expect(res.body.code).toBe('ELIGIBILITY_RECEIPT_ARTIFACTS_NOT_READY');
+    expect(mockPrisma.auditLog.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('fails closed for non-Groth16 proof evidence', async () => {
+    const nonGroth16Receipt = buildVerifiedGroth16Receipt();
+    nonGroth16Receipt.zkProofData.proof.protocol = 'plonk';
+    mockPrisma.verification.findFirst.mockResolvedValueOnce(nonGroth16Receipt);
+
+    const res = await request(buildApp()).get(
+      '/api/v1/verification/eligibility-proof/dec_testdecision',
+    );
+
+    expect(res.status).toBe(503);
+    expect(res.body.code).toBe('ELIGIBILITY_RECEIPT_PROOF_INVALID');
+    expect(mockPrisma.auditLog.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('fails closed for an unverified Groth16 proof marker', async () => {
+    const unverifiedReceipt = buildVerifiedGroth16Receipt();
+    unverifiedReceipt.zkProofData.proofVerification.valid = false;
+    mockPrisma.verification.findFirst.mockResolvedValueOnce(unverifiedReceipt);
+
+    const res = await request(buildApp()).get(
+      '/api/v1/verification/eligibility-proof/dec_testdecision',
+    );
+
+    expect(res.status).toBe(503);
+    expect(res.body.code).toBe('ELIGIBILITY_RECEIPT_PROOF_INVALID');
+    expect(mockPrisma.auditLog.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('does not expose stored receipts while the production prover gate is closed', async () => {
+    const originalNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'development';
+
+    try {
+      const res = await request(buildApp()).get(
+        '/api/v1/verification/eligibility-proof/dec_testdecision',
+      );
+
+      expect(res.status).toBe(503);
+      expect(res.body.code).toBe('ZK_CIRCUIT_ARTIFACTS_NOT_READY');
+      expect(res.body.data).toBeUndefined();
+      expect(mockZkProofService.verifyProof).not.toHaveBeenCalled();
+      expect(mockPrisma.auditLog.findFirst).not.toHaveBeenCalled();
+    } finally {
+      process.env.NODE_ENV = originalNodeEnv;
+    }
+  });
+
+  it('fails closed for legacy unverified on-chain assertions', async () => {
+    const legacyReceipt = buildVerifiedGroth16Receipt();
+    legacyReceipt.zkProofData.onchainTxHash = '0xdeadbeef';
+    mockPrisma.verification.findFirst.mockResolvedValueOnce(legacyReceipt);
+
+    const res = await request(buildApp()).get(
+      '/api/v1/verification/eligibility-proof/dec_testdecision',
+    );
+
+    expect(res.status).toBe(503);
+    expect(res.body.code).toBe('ELIGIBILITY_RECEIPT_EVIDENCE_INVALID');
+    expect(mockPrisma.auditLog.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the audit entry is missing or unsealed', async () => {
+    mockPrisma.auditLog.findFirst.mockResolvedValueOnce({
+      id: 'audit-unsealed',
+      timestamp: new Date('2026-06-23T10:00:02.000Z'),
+      entryHash: null,
+    });
+
+    const res = await request(buildApp()).get(
+      '/api/v1/verification/eligibility-proof/dec_testdecision',
+    );
+
+    expect(res.status).toBe(503);
+    expect(res.body.code).toBe('ELIGIBILITY_AUDIT_SEAL_REQUIRED');
+    expect(res.body.data).toBeUndefined();
+  });
+
+  it('fails closed when stored proof bytes do not re-verify', async () => {
+    mockZkProofService.verifyProof.mockResolvedValueOnce({ valid: false });
+
+    const res = await request(buildApp()).get(
+      '/api/v1/verification/eligibility-proof/dec_testdecision',
+    );
+
+    expect(res.status).toBe(503);
+    expect(res.body.code).toBe('ELIGIBILITY_RECEIPT_PROOF_INVALID');
+    expect(mockPrisma.auditLog.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('returns only sealed, verified production Groth16 evidence', async () => {
     const res = await request(buildApp()).get(
       '/api/v1/verification/eligibility-proof/dec_testdecision',
     );
@@ -480,54 +549,31 @@ describe('GET /api/v1/verification/eligibility-proof/:receiptId', () => {
       status: 'ALLOWED',
       policyId: POLICY_ID,
       proof: {
-        proofId: 'zkp_testproof',
+        proofId: '123e4567-e89b-42d3-a456-426614174000',
         circuitName: 'eligibility_policy_context_v1',
-        manifestDigest: TEST_MANIFEST_DIGEST,
+        proofSystem: 'groth16',
+        cryptographicallyVerified: true,
+        groth16Proof: {
+          protocol: 'groth16',
+          curve: 'bn128',
+        },
       },
       evidence: {
         auditLogId: 'audit-1',
         auditHash:
           '0x9f2f6c5804f31959e424bd0a624987887fe0c2ba5f5e77c49020a66a9f2dd904',
+        artifactStatus: 'PINNED_PRODUCTION_ARTIFACTS',
         receiptHash: TEST_RECEIPT_HASH,
-        artifactStatus: 'SOURCE_VALIDATED_ARTIFACTS_PENDING',
       },
     });
-    expect(res.body.data.evidence.auditDetails).toMatchObject({
-      receiptHash: TEST_RECEIPT_HASH,
-      decisionId: 'dec_testdecision',
-      proofId: 'zkp_testproof',
-    });
-    expect(mockPrisma.verification.findFirst).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: expect.objectContaining({
-          verificationType: 'ELIGIBILITY_PROOF',
-          AND: expect.arrayContaining([
-            expect.objectContaining({
-              OR: expect.arrayContaining([
-                { verifierId: SUBJECT_ID },
-                { subjectId: SUBJECT_ID },
-              ]),
-            }),
-            expect.objectContaining({
-              OR: expect.arrayContaining([
-                { id: 'dec_testdecision' },
-                {
-                  resultDetails: {
-                    path: ['decisionId'],
-                    equals: 'dec_testdecision',
-                  },
-                },
-                {
-                  zkProofData: {
-                    path: ['proofId'],
-                    equals: 'dec_testdecision',
-                  },
-                },
-              ]),
-            }),
-          ]),
-        }),
-      }),
+    const serialized = JSON.stringify(res.body.data);
+    expect(serialized).not.toContain('computedAge');
+    expect(serialized).not.toContain('provedPredicates');
+    expect(serialized).not.toContain('auditDetails');
+    expect(mockZkProofService.verifyProof).toHaveBeenCalledWith(
+      expect.objectContaining({ protocol: 'groth16', curve: 'bn128' }),
+      ['1', '21', '78473', '1782208801', '5', '6'],
+      'eligibility_policy_context_v1',
     );
     expect(mockPrisma.auditLog.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -535,19 +581,12 @@ describe('GET /api/v1/verification/eligibility-proof/:receiptId', () => {
           resourceType: 'eligibility_proof',
           resourceId: 'verification-1',
         },
+        select: {
+          id: true,
+          timestamp: true,
+          entryHash: true,
+        },
       }),
     );
-  });
-
-  it('returns a controlled 404 when an eligibility proof receipt is missing', async () => {
-    mockPrisma.verification.findFirst.mockResolvedValueOnce(null);
-
-    const res = await request(buildApp()).get(
-      '/api/v1/verification/eligibility-proof/dec_missing',
-    );
-
-    expect(res.status).toBe(404);
-    expect(res.body.code).toBe('ELIGIBILITY_RECEIPT_NOT_FOUND');
-    expect(mockPrisma.auditLog.findFirst).not.toHaveBeenCalled();
   });
 });

@@ -865,7 +865,12 @@ describe('POST /api/eligibility/proof', () => {
     const route = await import('@/app/api/eligibility/proof/route');
     const model = await import('@/lib/eligibility/kycCredential');
     POST = route.POST as unknown as (request: Request) => Promise<Response>;
-    validBody = model.createEligibilityProofRequest('edge-secure-data-room');
+    validBody = model.createEligibilityProofRequest({
+      subjectDid: 'did:aethelred:testnet:holder-1',
+      credentialId: 'credential-test-1',
+      relyingAppId: 'relying-app-test-1',
+      contextNonce: 'context-nonce-test-001',
+    });
   });
 
   beforeEach(() => {
@@ -880,7 +885,7 @@ describe('POST /api/eligibility/proof', () => {
     }
   });
 
-  it('returns an eligibility receipt for the v1 hero workflow', async () => {
+  it('requires authenticated backend evaluation in every runtime', async () => {
     const request = new Request('http://localhost/api/eligibility/proof', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -890,56 +895,13 @@ describe('POST /api/eligibility/proof', () => {
     const response = await POST(request);
     const payload = await response.json();
 
-    expect(response.status).toBe(200);
-    expect(payload.success).toBe(true);
-    expect(payload.data.status).toBe('ALLOWED');
-    expect(payload.data.policyVersion).toBe('2026.06.1');
-    expect(payload.data.proof.circuitId).toBe(
-      'zkc_eligibility_policy_context_v1',
-    );
-    expect(payload.data.proof.disclosurePolicy.rawFieldsDisclosed).toEqual([]);
-    expect(payload.data.proof.disclosurePolicy.disclosureBudget).toMatchObject({
-      rawFieldCount: 0,
-      publicSignalCount: 6,
-    });
-    expect(payload.data.proof.disclosurePolicy.provedPredicates).toEqual(
-      expect.arrayContaining(['AGE_OVER_THRESHOLD', 'TEE_ATTESTED']),
-    );
-    expect(payload.data.evidence.receiptHash).toMatch(/^0x[0-9a-f]{64}$/);
-    expect(payload.data.evidence.manifestDigest).toMatch(/^0x[0-9a-f]{64}$/);
-    expect(payload.data.evidence.policyBindingDigest).toMatch(
-      /^0x[0-9a-f]{64}$/,
-    );
+    expect(response.status).toBe(401);
+    expect(payload.code).toBe('ELIGIBILITY_BACKEND_AUTH_REQUIRED');
+    expect(mockFetch).not.toHaveBeenCalled();
     expect(response.headers.get('Cache-Control')).toBe(
       'private, no-store, no-cache, must-revalidate, proxy-revalidate',
     );
     expect(response.headers.get('Vary')).toContain('Authorization');
-  });
-
-  it('fails closed in production when backend mode is not explicit', async () => {
-    const originalZeroIdEnv = process.env.ZEROID_ENV;
-    process.env.ZEROID_ENV = 'production';
-
-    try {
-      const request = new Request('http://localhost/api/eligibility/proof', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(validBody),
-      });
-
-      const response = await POST(request);
-      const payload = await response.json();
-
-      expect(response.status).toBe(503);
-      expect(payload.code).toBe('ELIGIBILITY_BACKEND_REQUIRED');
-      expect(mockFetch).not.toHaveBeenCalled();
-    } finally {
-      if (originalZeroIdEnv === undefined) {
-        delete process.env.ZEROID_ENV;
-      } else {
-        process.env.ZEROID_ENV = originalZeroIdEnv;
-      }
-    }
   });
 
   it('returns 400 when required proof context is missing', async () => {
@@ -1008,10 +970,20 @@ describe('POST /api/eligibility/proof', () => {
     );
   });
 
-  it('maps unavailable policies to a structured 404 response', async () => {
+  it('returns an unavailable policy only when the backend reports it', async () => {
+    process.env.ZEROID_BACKEND_API_URL = 'http://backend.zeroid.test';
+    mockFetch.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ error: 'Requested policy is unavailable' }),
+        { status: 404, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
     const request = new Request('http://localhost/api/eligibility/proof', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer prod-token',
+      },
       body: JSON.stringify({
         ...validBody,
         policyId: 'zeroid://policy/unknown',
@@ -1022,10 +994,11 @@ describe('POST /api/eligibility/proof', () => {
     const payload = await response.json();
 
     expect(response.status).toBe(404);
-    expect(payload.code).toBe('POLICY_NOT_FOUND');
+    expect(payload.code).toBe('ELIGIBILITY_BACKEND_ERROR');
+    expect(payload.error).toBe('Requested policy is unavailable');
   });
 
-  it('proxies the v1 request to the backend endpoint when backend mode is explicit', async () => {
+  it('proxies every authenticated request to the backend endpoint', async () => {
     process.env.ZEROID_BACKEND_API_URL = 'http://backend.zeroid.test';
     mockFetch.mockResolvedValueOnce(
       new Response(
@@ -1033,8 +1006,26 @@ describe('POST /api/eligibility/proof', () => {
           data: {
             status: 'ALLOWED',
             policyId: validBody.policyId,
+            policyVersion: '2026.06.1',
+            subjectDid: validBody.subjectDid,
+            credentialId: validBody.credentialId,
+            relyingAppId: validBody.relyingAppId,
             proof: {
               proofId: 'zkp_backend',
+              verified: true,
+              groth16Proof: {
+                pi_a: ['1', '2', '1'],
+                pi_b: [
+                  ['3', '4'],
+                  ['5', '6'],
+                  ['1', '0'],
+                ],
+                pi_c: ['7', '8', '1'],
+                protocol: 'groth16',
+                curve: 'bn128',
+              },
+              contextHash:
+                '0x5bdba5e484eebe81a1c96024e2bddaf3ed174f120da6141ac40ee7db67162e49',
               manifestDigest:
                 '0x1f48ddf10a370c1ab6af80f17e359f0c00700b5151a7ee1db835dfdb3cde25e5',
               policyBindingDigest:
@@ -1048,7 +1039,7 @@ describe('POST /api/eligibility/proof', () => {
                 policyVersionHash:
                   '0x3333333333333333333333333333333333333333333333333333333333333333',
                 contextCommitment:
-                  '0x2222222222222222222222222222222222222222222222222222222222222222',
+                  '0x5bdba5e484eebe81a1c96024e2bddaf3ed174f120da6141ac40ee7db67162e49',
               },
               disclosurePolicy: {
                 rawFieldsDisclosed: [],
@@ -1082,7 +1073,7 @@ describe('POST /api/eligibility/proof', () => {
                 '0xac4d4468fd32692373b5a5942a94588120bfbbda82b151da8aa92a12fd6393e3',
               policyBindingDigest:
                 '0xc339f81323c5288c23a30a0fcbc3140bdb60f79193101cbc8ee0fc42eda45e0c',
-              artifactStatus: 'SOURCE_VALIDATED_ARTIFACTS_PENDING',
+              artifactStatus: 'PINNED_PRODUCTION_ARTIFACTS',
             },
           },
           message: 'Eligibility proof evaluated successfully',
@@ -1099,7 +1090,6 @@ describe('POST /api/eligibility/proof', () => {
       headers: {
         'Content-Type': 'application/json',
         Authorization: 'Bearer prod-token',
-        'x-zeroid-use-backend': 'true',
         'x-request-id': 'req-eligibility-1',
       },
       body: JSON.stringify(validBody),
@@ -1127,6 +1117,61 @@ describe('POST /api/eligibility/proof', () => {
         body: JSON.stringify(validBody),
       }),
     );
+  });
+
+  it('rejects a structurally valid proof that is bound to another request', async () => {
+    process.env.ZEROID_BACKEND_API_URL = 'http://backend.zeroid.test';
+    const backend = backendEligibilityReceiptResponse();
+    Object.assign(backend.data, {
+      subjectDid: 'did:aethelred:testnet:another-holder',
+      credentialId: validBody.credentialId,
+      policyId: validBody.policyId,
+      policyVersion: '2026.06.1',
+      relyingAppId: validBody.relyingAppId,
+    });
+    Object.assign(backend.data.proof, {
+      verified: true,
+      groth16Proof: {
+        pi_a: ['1', '2', '1'],
+        pi_b: [
+          ['3', '4'],
+          ['5', '6'],
+          ['1', '0'],
+        ],
+        pi_c: ['7', '8', '1'],
+        protocol: 'groth16',
+        curve: 'bn128',
+      },
+      contextHash:
+        '0x5bdba5e484eebe81a1c96024e2bddaf3ed174f120da6141ac40ee7db67162e49',
+    });
+    backend.data.proof.publicSignals.contextCommitment =
+      '0x5bdba5e484eebe81a1c96024e2bddaf3ed174f120da6141ac40ee7db67162e49';
+    Object.assign(backend.data.evidence, {
+      artifactStatus: 'PINNED_PRODUCTION_ARTIFACTS',
+    });
+    mockFetch.mockResolvedValueOnce(
+      new Response(JSON.stringify(backend), {
+        status: 201,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+
+    const response = await POST(
+      new Request('http://localhost/api/eligibility/proof', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer prod-token',
+        },
+        body: JSON.stringify(validBody),
+      }),
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(502);
+    expect(payload.code).toBe('ELIGIBILITY_BACKEND_CONTRACT_INVALID');
+    expect(payload.details.violations).toContain('subjectDid:request_mismatch');
   });
 
   it('rejects backend eligibility responses that omit the disclosure contract', async () => {
@@ -1159,7 +1204,6 @@ describe('POST /api/eligibility/proof', () => {
       headers: {
         'Content-Type': 'application/json',
         Authorization: 'Bearer prod-token',
-        'x-zeroid-use-backend': 'true',
       },
       body: JSON.stringify(validBody),
     });
@@ -1335,6 +1379,18 @@ function backendEligibilityReceiptResponse() {
       relyingAppId: 'edge-secure-data-room',
       proof: {
         proofId: 'zkp_backend',
+        verified: true,
+        groth16Proof: {
+          pi_a: ['1', '2', '1'],
+          pi_b: [
+            ['3', '4'],
+            ['5', '6'],
+            ['1', '0'],
+          ],
+          pi_c: ['7', '8', '1'],
+          protocol: 'groth16',
+          curve: 'bn128',
+        },
         circuitId: 'zkc_eligibility_policy_context_v1',
         circuitName: 'eligibility_policy_context_v1',
         verificationKeyId: 'vk_eligibility_policy_context_v1_2026_06_27',
@@ -1392,7 +1448,7 @@ function backendEligibilityReceiptResponse() {
           '0xac4d4468fd32692373b5a5942a94588120bfbbda82b151da8aa92a12fd6393e3',
         policyBindingDigest:
           '0xc339f81323c5288c23a30a0fcbc3140bdb60f79193101cbc8ee0fc42eda45e0c',
-        artifactStatus: 'SOURCE_VALIDATED_ARTIFACTS_PENDING',
+        artifactStatus: 'PINNED_PRODUCTION_ARTIFACTS',
       },
       evaluation: {
         ageOverThreshold: true,
@@ -1403,7 +1459,7 @@ function backendEligibilityReceiptResponse() {
         credentialActive: true,
         credentialNotExpired: true,
         nonRevocationChecked: true,
-        onchainAttested: true,
+        onchainAttested: false,
         teeAttested: true,
       },
       deniedReasons: [],

@@ -31,9 +31,9 @@ export const FEATURE_READINESS: Record<string, FeatureReadiness> = {
   },
   "/eligibility": {
     href: "/eligibility",
-    status: "Configured",
+    status: "Unavailable",
     evidence:
-      "Hero eligibility receipt is backend-backed; compiled ZK artifacts remain required for Live production.",
+      "Eligibility proof issuance fails closed until signed credential witnesses, audited context-bound ZK artifacts, one-time relying-party challenges, and durable evidence dependencies are integrated.",
   },
   "/verification": {
     href: "/verification",

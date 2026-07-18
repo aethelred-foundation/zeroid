@@ -1,11 +1,6 @@
 import { NextRequest, type NextResponse } from 'next/server';
-import {
-  EligibilityProofContractError,
-  ZEROID_ELIGIBILITY_POLICY_V1,
-  ZEROID_SAMPLE_KYC_CREDENTIAL,
-  evaluateEligibilityProof,
-  type EligibilityProofRequest,
-} from '@/lib/eligibility/kycCredential';
+import { createHash } from 'node:crypto';
+import type { EligibilityProofRequest } from '@/lib/eligibility/kycCredential';
 import {
   BackendProxyConfigError,
   apiJson,
@@ -14,7 +9,6 @@ import {
   getBackendApiBaseUrl,
   isBackendFetchTimeout,
   JsonBodyReadError,
-  isProductionRuntime,
   readBackendError,
   readJsonObjectBody,
   requireAuthorization,
@@ -27,7 +21,6 @@ const MAX_POLICY_ID_LENGTH = 256;
 const MAX_RELYING_APP_ID_LENGTH = 128;
 const MIN_CONTEXT_NONCE_LENGTH = 8;
 const MAX_CONTEXT_NONCE_LENGTH = 128;
-const USE_BACKEND_HEADER = 'x-zeroid-use-backend';
 
 export const dynamic = 'force-dynamic';
 
@@ -57,58 +50,22 @@ export async function POST(request: NextRequest) {
     }
 
     const authorization = requireAuthorization(request);
-    const useBackend = request.headers.get(USE_BACKEND_HEADER) === 'true';
-    if (useBackend) {
-      if (!authorization) {
-        return apiJson(
-          {
-            error: 'Authorization bearer token required for backend mode',
-            code: 'ELIGIBILITY_BACKEND_AUTH_REQUIRED',
-          },
-          { status: 401 },
-        );
-      }
-      return await proxyEligibilityProofToBackend(
-        request,
-        parsed.request,
-        authorization,
-      );
-    }
-
-    if (isProductionRuntime()) {
+    if (!authorization) {
       return apiJson(
         {
           error:
-            'Eligibility proof requests must use the authenticated backend in production',
-          code: 'ELIGIBILITY_BACKEND_REQUIRED',
+            'Authorization bearer token required for eligibility proof requests',
+          code: 'ELIGIBILITY_BACKEND_AUTH_REQUIRED',
         },
-        { status: 503 },
+        { status: 401 },
       );
     }
-
-    const result = await evaluateEligibilityProof(
+    return await proxyEligibilityProofToBackend(
+      request,
       parsed.request,
-      ZEROID_SAMPLE_KYC_CREDENTIAL,
-      ZEROID_ELIGIBILITY_POLICY_V1,
+      authorization,
     );
-
-    return apiJson({
-      success: true,
-      data: result,
-      timestamp: new Date().toISOString(),
-    });
   } catch (error) {
-    if (error instanceof EligibilityProofContractError) {
-      return apiJson(
-        {
-          error: error.message,
-          code: error.code,
-          details: error.details,
-        },
-        { status: error.statusCode },
-      );
-    }
-
     if (error instanceof JsonBodyReadError) {
       return apiJson(
         {
@@ -236,7 +193,7 @@ function parseEligibilityRequest(
       options: {
         requireOnchainAttestation: options.requireOnchainAttestation === true,
         requireNonRevocationProof: options.requireNonRevocationProof !== false,
-        dryRun: options.dryRun !== false,
+        dryRun: options.dryRun === true,
       },
     },
   };
@@ -298,7 +255,29 @@ async function proxyEligibilityProofToBackend(
   }
 
   const result = await response.json();
-  const contractViolations = validateBackendEligibilityResult(result);
+  const policyVersion = payload.policyId.includes('@')
+    ? payload.policyId.slice(payload.policyId.lastIndexOf('@') + 1)
+    : '';
+  const contextHash = `0x${createHash('sha256')
+    .update(
+      stableSerialize({
+        subjectDid: payload.subjectDid,
+        credentialId: payload.credentialId,
+        policyId: payload.policyId,
+        policyVersion,
+        relyingAppId: payload.relyingAppId,
+        contextNonce: payload.contextNonce,
+      }),
+    )
+    .digest('hex')}` as `0x${string}`;
+  const contractViolations = validateBackendEligibilityResult(result, {
+    subjectDid: payload.subjectDid,
+    credentialId: payload.credentialId,
+    policyId: payload.policyId,
+    policyVersion,
+    relyingAppId: payload.relyingAppId,
+    contextHash,
+  });
   if (contractViolations.length > 0) {
     return apiJson(
       {
@@ -319,4 +298,19 @@ async function proxyEligibilityProofToBackend(
     },
     { status: response.status },
   );
+}
+
+function stableSerialize(value: unknown): string {
+  if (value === null || typeof value !== 'object') {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableSerialize(item)).join(',')}]`;
+  }
+
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${stableSerialize(record[key])}`)
+    .join(',')}}`;
 }

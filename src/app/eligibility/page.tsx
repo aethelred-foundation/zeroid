@@ -1,190 +1,228 @@
-'use client';
+"use client";
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { motion } from 'framer-motion';
+import { useEffect, useMemo, useState } from "react";
+import { motion } from "framer-motion";
 import {
   AlertTriangle,
-  BadgeCheck,
   Check,
   CheckCircle2,
-  ChevronRight,
   ClipboardCheck,
   Copy,
-  Cpu,
   Database,
   FileJson,
   Fingerprint,
-  Globe2,
+  Loader2,
   LockKeyhole,
   RefreshCw,
-  ScanEye,
-  ShieldCheck,
-  Terminal,
   XCircle,
-} from 'lucide-react';
-import AppLayout from '@/components/layout/AppLayout';
-import { getIdentityAuthToken } from '@/lib/identity/registration';
-import { generateUUID } from '@/lib/utils';
+} from "lucide-react";
+import { useAccount } from "wagmi";
+import AppLayout from "@/components/layout/AppLayout";
+import { useIdentity } from "@/contexts/IdentityContext";
+import { getIdentityAuthToken } from "@/lib/identity/registration";
+import { generateUUID } from "@/lib/utils";
 import {
-  RELYING_APP_PROFILES,
   ZEROID_ELIGIBILITY_POLICY_V1,
-  ZEROID_KYC_CREDENTIAL_SCHEMA_FIELDS,
-  ZEROID_SAMPLE_KYC_CREDENTIAL,
   createEligibilityProofRequest,
   formatEligibilityReceipt,
   formatEligibilityRequest,
-  getRelyingAppProfile,
+  type EligibilityProofRequest,
   type EligibilityProofResponse,
-  type RelyingAppId,
-} from '@/lib/eligibility/kycCredential';
+} from "@/lib/eligibility/kycCredential";
+import type { CredentialSummary } from "@/lib/credentials/summary";
 
-type ConsoleMode = 'receipt' | 'request' | 'sdk';
-type ReceiptSource = 'local' | 'backend';
+type ConsoleMode = "receipt" | "request" | "sdk";
 
-const workflowSteps = [
-  {
-    label: 'DID',
-    title: 'Subject identity',
-    description: 'Holder-controlled DID resolves before proof generation.',
-    icon: Fingerprint,
-  },
-  {
-    label: 'VC',
-    title: 'KYC credential',
-    description: 'Compact ZeroIDKycCredentialV1 issued by trusted KYC node.',
-    icon: BadgeCheck,
-  },
-  {
-    label: 'ZK',
-    title: 'Eligibility proof',
-    description: 'Age and jurisdiction are proven without exposing raw fields.',
-    icon: ScanEye,
-  },
-  {
-    label: 'Policy',
-    title: 'Decision engine',
-    description: 'Policy version, app context, and nonce bind the proof.',
-    icon: ShieldCheck,
-  },
-  {
-    label: 'Receipt',
-    title: 'Evidence record',
-    description:
-      'Audit hash, circuit manifest, and TEE evidence are inspectable.',
-    icon: ClipboardCheck,
-  },
-];
+type ApiEnvelope = {
+  data?: EligibilityProofResponse;
+  source?: string;
+  error?: string;
+  message?: string;
+};
+
+function profileDid(
+  identity: ReturnType<typeof useIdentity>["identity"],
+): string {
+  const value = identity.profile?.did;
+  if (typeof value === "string") return value;
+  return value?.uri ?? "";
+}
+
+function errorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message ? error.message : fallback;
+}
 
 export default function EligibilityPage() {
-  const [selectedAppId, setSelectedAppId] = useState<RelyingAppId>(
-    RELYING_APP_PROFILES[0].id,
-  );
-  const [requireNonRevocation, setRequireNonRevocation] = useState(true);
-  const [requireOnchain, setRequireOnchain] = useState(false);
-  const [dryRun, setDryRun] = useState(true);
-  const [consoleMode, setConsoleMode] = useState<ConsoleMode>('receipt');
+  const { isConnected } = useAccount();
+  const { identity, did, sessionStatus, sessionError, signIn } = useIdentity();
+  const [credentialId, setCredentialId] = useState("");
+  const [relyingAppId, setRelyingAppId] = useState("");
+  const [lastRequest, setLastRequest] =
+    useState<EligibilityProofRequest | null>(null);
   const [receipt, setReceipt] = useState<EligibilityProofResponse | null>(null);
-  const [receiptSource, setReceiptSource] = useState<ReceiptSource | null>(
-    null,
-  );
+  const [receiptLookupId, setReceiptLookupId] = useState("");
+  const [consoleMode, setConsoleMode] = useState<ConsoleMode>("receipt");
   const [isRunning, setIsRunning] = useState(false);
-  const [isRefreshingReceipt, setIsRefreshingReceipt] = useState(false);
+  const [isLoadingReceipt, setIsLoadingReceipt] = useState(false);
+  const [signInFailure, setSignInFailure] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState<ConsoleMode | null>(null);
 
-  const selectedApp = useMemo(
-    () => getRelyingAppProfile(selectedAppId),
-    [selectedAppId],
+  const authenticated = Boolean(
+    isConnected &&
+    identity.isRegistered &&
+    sessionStatus === "authenticated" &&
+    getIdentityAuthToken(),
   );
-
-  const requestBody = useMemo(
+  const subjectDid = profileDid(identity) || did?.uri || "";
+  const activeCredentials = useMemo(
     () =>
-      createEligibilityProofRequest(selectedAppId, {
-        requireNonRevocationProof: requireNonRevocation,
-        requireOnchainAttestation: requireOnchain,
-        dryRun,
-      }),
-    [dryRun, requireNonRevocation, requireOnchain, selectedAppId],
+      identity.credentials.filter(
+        (credential) => credential.status === "active",
+      ),
+    [identity.credentials],
+  );
+  const selectedCredential = activeCredentials.find(
+    (credential) => credential.id === credentialId,
+  );
+  const proofIssuanceAvailable =
+    ZEROID_ELIGIBILITY_POLICY_V1.circuitManifest.artifactStatus ===
+    "PINNED_PRODUCTION_ARTIFACTS";
+
+  useEffect(() => {
+    if (
+      credentialId &&
+      activeCredentials.some((credential) => credential.id === credentialId)
+    ) {
+      return;
+    }
+    setCredentialId(activeCredentials[0]?.id ?? "");
+  }, [activeCredentials, credentialId]);
+
+  const canRequest = Boolean(
+    authenticated &&
+    subjectDid &&
+    selectedCredential &&
+    proofIssuanceAvailable &&
+    relyingAppId.trim().length >= 3 &&
+    relyingAppId.trim().length <= 128 &&
+    !isRunning,
   );
 
-  const runProof = useCallback(async () => {
-    setIsRunning(true);
-    setError(null);
-    try {
-      const authToken = getIdentityAuthToken();
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-      };
-      if (authToken) {
-        headers.Authorization = `Bearer ${authToken}`;
-        headers['x-zeroid-use-backend'] = 'true';
-      }
-
-      const response = await fetch('/api/eligibility/proof', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(requestBody),
-      });
-      const payload = await response.json();
-      if (!response.ok) {
-        throw new Error(payload.error ?? 'Eligibility proof failed');
-      }
-      setReceipt(payload.data);
-      setReceiptSource(payload.source === 'backend' ? 'backend' : 'local');
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Eligibility proof failed');
-    } finally {
-      setIsRunning(false);
-    }
-  }, [requestBody]);
-
-  const refreshDurableReceipt = useCallback(async () => {
-    if (!receipt) return;
-
+  const runEligibility = async () => {
     const authToken = getIdentityAuthToken();
-    if (!authToken) {
-      setError(
-        'Backend receipt lookup requires an authenticated ZeroID identity token.',
-      );
+    if (!authenticated || !authToken) {
+      setError("An authenticated ZeroID identity session is required.");
+      return;
+    }
+    if (!subjectDid || !selectedCredential) {
+      setError("Select an active credential owned by this identity.");
+      return;
+    }
+    const normalizedAppId = relyingAppId.trim();
+    if (normalizedAppId.length < 3 || normalizedAppId.length > 128) {
+      setError("Relying application ID must be between 3 and 128 characters.");
       return;
     }
 
-    setIsRefreshingReceipt(true);
+    const requestBody = createEligibilityProofRequest(
+      {
+        subjectDid,
+        credentialId: selectedCredential.id,
+        relyingAppId: normalizedAppId,
+        contextNonce: `eligibility-${generateUUID()}`,
+      },
+      {
+        requireNonRevocationProof: true,
+        requireOnchainAttestation: false,
+        dryRun: false,
+      },
+    );
+
+    setLastRequest(requestBody);
+    setReceipt(null);
+    setIsRunning(true);
     setError(null);
     try {
-      const receiptId = receipt.decisionId || receipt.proof.proofId;
-      const response = await fetch(
-        `/api/eligibility/proof/${encodeURIComponent(receiptId)}`,
-        {
-          method: 'GET',
-          headers: { Authorization: `Bearer ${authToken}` },
+      const response = await fetch("/api/eligibility/proof", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
         },
-      );
-      const payload = await response.json();
+        body: JSON.stringify(requestBody),
+      });
+      const payload = (await response.json()) as ApiEnvelope;
       if (!response.ok) {
-        throw new Error(payload.error ?? 'Receipt lookup failed');
+        throw new Error(
+          payload.message ?? payload.error ?? "Eligibility request failed.",
+        );
+      }
+      if (payload.source !== "backend" || !payload.data) {
+        throw new Error(
+          "Eligibility response did not contain authenticated backend evidence.",
+        );
       }
       setReceipt(payload.data);
-      setReceiptSource(payload.source === 'backend' ? 'backend' : 'local');
-      setConsoleMode('receipt');
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Receipt lookup failed');
+      setReceiptLookupId(payload.data.decisionId);
+      setConsoleMode("receipt");
+    } catch (requestError) {
+      setError(errorMessage(requestError, "Eligibility request failed."));
     } finally {
-      setIsRefreshingReceipt(false);
+      setIsRunning(false);
     }
-  }, [receipt]);
+  };
 
-  useEffect(() => {
-    void runProof();
-  }, [runProof]);
+  const loadReceipt = async () => {
+    const authToken = getIdentityAuthToken();
+    const normalizedReceiptId = receiptLookupId.trim();
+    if (!authenticated || !authToken) {
+      setError("An authenticated ZeroID identity session is required.");
+      return;
+    }
+    if (!/^[A-Za-z0-9._:-]{3,128}$/.test(normalizedReceiptId)) {
+      setError("Enter a valid decision, proof, or verification receipt ID.");
+      return;
+    }
+
+    setIsLoadingReceipt(true);
+    setError(null);
+    try {
+      const response = await fetch(
+        `/api/eligibility/proof/${encodeURIComponent(normalizedReceiptId)}`,
+        { headers: { Authorization: `Bearer ${authToken}` } },
+      );
+      const payload = (await response.json()) as ApiEnvelope;
+      if (!response.ok) {
+        throw new Error(
+          payload.message ?? payload.error ?? "Receipt lookup failed.",
+        );
+      }
+      if (payload.source !== "backend" || !payload.data) {
+        throw new Error(
+          "Receipt lookup did not contain authenticated backend evidence.",
+        );
+      }
+      setReceipt(payload.data);
+      setConsoleMode("receipt");
+    } catch (lookupError) {
+      setError(errorMessage(lookupError, "Receipt lookup failed."));
+    } finally {
+      setIsLoadingReceipt(false);
+    }
+  };
 
   const consoleText = useMemo(() => {
-    if (consoleMode === 'request') return formatEligibilityRequest(requestBody);
-    if (consoleMode === 'sdk') return buildSdkSnippet();
+    if (consoleMode === "request") {
+      return lastRequest
+        ? formatEligibilityRequest(lastRequest)
+        : "No eligibility request has been sent in this session.";
+    }
+    if (consoleMode === "sdk") return buildSdkSnippet();
     return receipt
       ? formatEligibilityReceipt(receipt)
-      : 'Run the eligibility proof to produce an evidence receipt.';
-  }, [consoleMode, receipt, requestBody]);
+      : "No backend eligibility receipt has been loaded.";
+  }, [consoleMode, lastRequest, receipt]);
 
   const copyConsole = async () => {
     await copyText(consoleText);
@@ -194,567 +232,417 @@ export default function EligibilityPage() {
 
   return (
     <AppLayout>
-      <div className="space-y-5 overflow-hidden pt-1">
-        <section
-          className="relative max-w-full overflow-hidden rounded-[28px] border p-5 sm:p-7 lg:p-8"
-          style={{
-            background:
-              'linear-gradient(180deg, rgba(17,18,22,0.96), rgba(10,11,13,0.98))',
-            borderColor: 'rgba(255,255,255,0.06)',
-            boxShadow:
-              '0 30px 100px -40px rgba(0,0,0,0.85), inset 0 1px 0 rgba(255,255,255,0.05)',
-          }}
+      <div className="space-y-6">
+        <motion.header
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="border-b border-white/[0.06] pb-6"
         >
-          <div
-            className="absolute inset-x-0 top-0 h-px"
-            style={{
-              background:
-                'linear-gradient(90deg, transparent, rgba(212,215,222,0.45), transparent)',
-            }}
-          />
-
-          <div className="grid min-w-0 grid-cols-1 gap-7 lg:grid-cols-[1.15fr_0.85fr] lg:items-end">
-            <div className="min-w-0">
-              <div className="mb-5 flex flex-wrap items-center gap-2">
-                <span className="badge-chrome">Core v1 hero workflow</span>
-                <span className="badge-verified">Manifest validated</span>
-                <span className="badge-pending">Artifacts pending</span>
-                <span className="badge-verified">EDGE</span>
-                <span className="badge-verified">Presight</span>
-                <span className="badge-verified">TII</span>
-              </div>
-              <h1 className="max-w-4xl break-words text-[30px] font-semibold leading-[1.08] text-white font-display sm:text-display-lg">
-                Eligibility proof command center
+          <div className="flex flex-wrap items-start justify-between gap-5">
+            <div>
+              <p className="text-label-sm uppercase text-zero-500">
+                Policy-bound evidence
+              </p>
+              <h1 className="mt-2 text-2xl font-semibold text-white font-display">
+                Eligibility
               </h1>
-              <p className="mt-3 max-w-2xl text-[14px] leading-7 text-zero-400 font-body sm:text-[15px]">
-                One production-shaped flow for regulated enterprise demos:
-                ZeroID issues a compact KYC credential, generates an age and
-                jurisdiction ZK proof, runs policy, and returns an evidence
-                receipt that consultants can inspect line by line.
+              <p className="mt-2 max-w-2xl text-sm leading-6 text-zero-400">
+                Request an eligibility decision for an active credential, or
+                inspect a durable receipt already recorded by the backend.
               </p>
             </div>
-
-            <DecisionPanel receipt={receipt} isRunning={isRunning} />
+            <div className="flex items-center gap-2">
+              <span className="badge-pending">
+                {ZEROID_ELIGIBILITY_POLICY_V1.circuitManifest.artifactStatus ===
+                "PINNED_PRODUCTION_ARTIFACTS"
+                  ? "Artifacts pinned"
+                  : "Artifacts pending"}
+              </span>
+              <span className="badge-chrome">
+                {ZEROID_ELIGIBILITY_POLICY_V1.version}
+              </span>
+            </div>
           </div>
-        </section>
+        </motion.header>
 
-        <section className="grid grid-cols-1 gap-4 xl:grid-cols-[0.82fr_1.18fr]">
-          <div className="space-y-4">
-            <Panel>
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <p className="text-label-sm uppercase text-zero-500 font-body">
-                    Relying application
-                  </p>
-                  <h2 className="mt-2 text-heading-sm font-display text-white">
-                    Enterprise pilot target
-                  </h2>
+        <EvidenceBoundary />
+
+        {!isConnected ? (
+          <AccessState
+            icon={LockKeyhole}
+            title="Connect your wallet"
+            description="Eligibility records are protected identity data."
+          />
+        ) : identity.isLoading ? (
+          <AccessState
+            icon={Loader2}
+            title="Checking ZeroID identity"
+            description="Waiting for the registered identity record."
+            spinning
+          />
+        ) : !identity.isRegistered ? (
+          <AccessState
+            icon={AlertTriangle}
+            title="ZeroID identity required"
+            description="Register this wallet before requesting eligibility evidence."
+          />
+        ) : sessionStatus !== "authenticated" ? (
+          <section className="border-b border-white/[0.06] py-8">
+            <LockKeyhole className="h-7 w-7 text-brand-400" />
+            <h2 className="mt-3 text-lg font-semibold text-white">
+              Sign in to ZeroID
+            </h2>
+            <p className="mt-1 max-w-xl text-sm text-zero-400">
+              A wallet signature creates the session used to load credentials
+              and submit the eligibility request.
+            </p>
+            {(signInFailure ?? sessionError) && (
+              <p role="alert" className="mt-3 text-sm text-red-300">
+                {signInFailure ?? sessionError}
+              </p>
+            )}
+            <button
+              type="button"
+              className="btn-primary mt-4"
+              disabled={sessionStatus === "signing"}
+              onClick={() => {
+                setSignInFailure(null);
+                void signIn().catch((signInError) =>
+                  setSignInFailure(
+                    errorMessage(signInError, "ZeroID sign-in failed."),
+                  ),
+                );
+              }}
+            >
+              {sessionStatus === "signing" ? "Signing…" : "Sign in"}
+            </button>
+          </section>
+        ) : (
+          <div className="grid gap-8 xl:grid-cols-[0.82fr_1.18fr]">
+            <section className="space-y-6">
+              <div>
+                <h2 className="text-base font-semibold text-white">
+                  Request context
+                </h2>
+                <p className="mt-1 text-xs leading-5 text-zero-500">
+                  The authenticated DID, credential, policy, relying party, and
+                  fresh nonce are bound into one backend request.
+                </p>
+              </div>
+
+              <Field label="Authenticated subject DID">
+                <div className="input break-all text-sm text-zero-300">
+                  {subjectDid || "Unavailable"}
                 </div>
-                <Globe2 className="h-5 w-5 text-chrome-300" />
-              </div>
+              </Field>
 
-              <div className="mt-5 grid gap-2">
-                {RELYING_APP_PROFILES.map((profile) => {
-                  const active = selectedAppId === profile.id;
-                  return (
-                    <button
-                      key={profile.id}
-                      onClick={() => setSelectedAppId(profile.id)}
-                      className={`group w-full rounded-2xl border p-4 text-left transition-colors ${
-                        active
-                          ? 'border-chrome-300/30 bg-white/[0.065]'
-                          : 'border-white/[0.04] bg-white/[0.02] hover:border-white/[0.08] hover:bg-white/[0.04]'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-2">
-                            <span className="text-[13px] font-semibold text-white font-body">
-                              {profile.name}
-                            </span>
-                            {active && (
-                              <Check className="h-3.5 w-3.5 text-emerald-400" />
-                            )}
-                          </div>
-                          <p className="mt-1 text-[11px] text-zero-500 font-body">
-                            {profile.sector}
-                          </p>
-                        </div>
-                        <ChevronRight className="h-4 w-4 shrink-0 text-zero-600 group-hover:text-chrome-300" />
-                      </div>
-                      <p className="mt-3 text-[12px] leading-5 text-zero-400 font-body">
-                        {profile.purpose}
-                      </p>
-                    </button>
-                  );
-                })}
-              </div>
-            </Panel>
-
-            <Panel>
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <p className="text-label-sm uppercase text-zero-500 font-body">
-                    Proof options
-                  </p>
-                  <h2 className="mt-2 text-heading-sm font-display text-white">
-                    Assurance controls
-                  </h2>
-                </div>
-                <LockKeyhole className="h-5 w-5 text-chrome-300" />
-              </div>
-
-              <div className="mt-5 space-y-3">
-                <ToggleRow
-                  label="Require non-revocation"
-                  description="Checks active status and revocation nonce."
-                  checked={requireNonRevocation}
-                  onChange={setRequireNonRevocation}
-                />
-                <ToggleRow
-                  label="Require on-chain attestation"
-                  description="Live mode must anchor the receipt on verifier contract."
-                  checked={requireOnchain}
-                  onChange={setRequireOnchain}
-                />
-                <ToggleRow
-                  label="Deterministic local evaluation"
-                  description="Uses the local evaluator only outside production backend mode."
-                  checked={dryRun}
-                  onChange={setDryRun}
-                />
-              </div>
-
-              <div className="mt-5 flex flex-wrap items-center gap-2">
-                <button
-                  onClick={runProof}
-                  disabled={isRunning}
-                  className="btn-primary"
+              <Field label="Active credential">
+                <select
+                  aria-label="Active credential"
+                  className="input"
+                  value={credentialId}
+                  onChange={(event) => setCredentialId(event.target.value)}
                 >
-                  <RefreshCw
-                    className={`h-4 w-4 ${isRunning ? 'animate-spin' : ''}`}
-                  />
-                  {isRunning ? 'Running proof' : 'Run eligibility proof'}
+                  <option value="">Select an active credential</option>
+                  {activeCredentials.map((credential) => (
+                    <option key={credential.id} value={credential.id}>
+                      {credential.typeLabel} · {credential.id}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+
+              {selectedCredential ? (
+                <CredentialEvidence credential={selectedCredential} />
+              ) : (
+                <p className="text-xs text-amber-200">
+                  No active credential is selected. Private KYC claims are not
+                  read or rendered by this page.
+                </p>
+              )}
+
+              <Field label="Relying application ID">
+                <input
+                  aria-label="Relying application ID"
+                  className="input"
+                  value={relyingAppId}
+                  maxLength={128}
+                  placeholder="Configured verifier or application identifier"
+                  onChange={(event) => setRelyingAppId(event.target.value)}
+                />
+              </Field>
+
+              <div className="flex items-start gap-3 text-sm text-zero-300">
+                <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
+                <span>
+                  Non-revocation evidence required
+                  <span className="mt-1 block text-xs text-zero-500">
+                    This policy cannot be weakened by the requesting client. The
+                    backend must validate credential state and revocation
+                    evidence before an allowed decision.
+                  </span>
+                </span>
+              </div>
+
+              <button
+                type="button"
+                className="btn-primary"
+                disabled={!canRequest}
+                onClick={() => void runEligibility()}
+              >
+                <RefreshCw
+                  className={`h-4 w-4 ${isRunning ? "animate-spin" : ""}`}
+                />
+                {isRunning ? "Requesting…" : "Request eligibility evidence"}
+              </button>
+
+              {!proofIssuanceAvailable && (
+                <p role="status" className="text-xs leading-5 text-amber-200">
+                  Proof issuance is unavailable. The signed credential witness,
+                  audited Groth16 artifacts, and verification path must be
+                  integrated before this action can be enabled.
+                </p>
+              )}
+
+              {activeCredentials.length === 0 && (
+                <p className="text-xs text-amber-200">
+                  The authenticated backend returned no active credentials for
+                  this identity.
+                </p>
+              )}
+            </section>
+
+            <section className="space-y-6 xl:border-l xl:border-white/[0.06] xl:pl-8">
+              <div className="flex flex-wrap items-end justify-between gap-3">
+                <div>
+                  <h2 className="text-base font-semibold text-white">
+                    Durable receipt
+                  </h2>
+                  <p className="mt-1 text-xs text-zero-500">
+                    Only authenticated backend evidence is rendered here.
+                  </p>
+                </div>
+                <ConsoleTabs value={consoleMode} onChange={setConsoleMode} />
+              </div>
+
+              <div className="flex gap-2">
+                <input
+                  aria-label="Receipt ID"
+                  className="input min-w-0 flex-1"
+                  value={receiptLookupId}
+                  placeholder="Decision, proof, or verification ID"
+                  onChange={(event) => setReceiptLookupId(event.target.value)}
+                />
+                <button
+                  type="button"
+                  className="btn-secondary shrink-0"
+                  disabled={isLoadingReceipt || !receiptLookupId.trim()}
+                  onClick={() => void loadReceipt()}
+                >
+                  <Database className="h-4 w-4" />
+                  {isLoadingReceipt ? "Loading…" : "Load"}
                 </button>
-                <button onClick={copyConsole} className="btn-secondary">
+              </div>
+
+              <motion.pre
+                key={consoleMode}
+                initial={{ opacity: 0, y: 4 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="max-h-[360px] overflow-auto border-y border-white/[0.06] bg-black/20 px-1 py-5 text-[11px] leading-5 text-chrome-200 whitespace-pre-wrap break-all font-mono"
+              >
+                {consoleText}
+              </motion.pre>
+
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => void copyConsole()}
+                >
                   {copied === consoleMode ? (
                     <Check className="h-4 w-4 text-emerald-400" />
                   ) : (
                     <Copy className="h-4 w-4" />
                   )}
-                  {copied === consoleMode ? 'Copied' : 'Copy console'}
-                </button>
-                <button
-                  onClick={refreshDurableReceipt}
-                  disabled={!receipt || isRunning || isRefreshingReceipt}
-                  className="btn-secondary disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  <Database
-                    className={`h-4 w-4 ${
-                      isRefreshingReceipt ? 'animate-pulse' : ''
-                    }`}
-                  />
-                  {receiptSource === 'backend'
-                    ? 'Refresh receipt'
-                    : 'Sync backend receipt'}
+                  {copied === consoleMode ? "Copied" : "Copy"}
                 </button>
               </div>
 
-              <p className="mt-3 text-[11px] leading-5 text-zero-500 font-body">
-                Receipt source:{' '}
-                <span className="text-zero-300">
-                  {receiptSource === 'backend'
-                    ? 'authenticated backend'
-                    : 'deterministic demo'}
-                </span>
-              </p>
-
-              {error && (
-                <div className="mt-4 flex items-start gap-3 rounded-2xl border border-rose-400/15 bg-rose-400/8 p-4 text-[12px] text-rose-200">
-                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-                  <span>{error}</span>
-                </div>
-              )}
-            </Panel>
-          </div>
-
-          <div className="space-y-4">
-            <Panel>
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
-                {workflowSteps.map((step, index) => (
-                  <motion.div
-                    key={step.label}
-                    initial={{ opacity: 0, y: 8 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: index * 0.04 }}
-                    className="relative rounded-2xl border border-white/[0.04] bg-white/[0.025] p-4"
-                  >
-                    <div className="mb-4 flex items-center justify-between">
-                      <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-zero-500 font-body">
-                        {step.label}
-                      </span>
-                      <step.icon className="h-4 w-4 text-chrome-300" />
-                    </div>
-                    <h3 className="text-[13px] font-semibold text-white font-body">
-                      {step.title}
-                    </h3>
-                    <p className="mt-2 text-[11px] leading-5 text-zero-500 font-body">
-                      {step.description}
-                    </p>
-                  </motion.div>
-                ))}
-              </div>
-            </Panel>
-
-            <section className="grid grid-cols-1 gap-4 lg:grid-cols-[0.9fr_1.1fr]">
-              <Panel>
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <p className="text-label-sm uppercase text-zero-500 font-body">
-                      Credential
-                    </p>
-                    <h2 className="mt-2 text-heading-sm font-display text-white">
-                      ZeroIDKycCredentialV1
-                    </h2>
-                  </div>
-                  <BadgeCheck className="h-5 w-5 text-emerald-400" />
-                </div>
-
-                <div className="mt-5 space-y-3">
-                  <KeyValue
-                    label="Subject DID"
-                    value={ZEROID_SAMPLE_KYC_CREDENTIAL.subjectDid}
-                  />
-                  <KeyValue
-                    label="Issuer"
-                    value={ZEROID_SAMPLE_KYC_CREDENTIAL.issuerId}
-                  />
-                  <KeyValue
-                    label="Residence"
-                    value={
-                      ZEROID_SAMPLE_KYC_CREDENTIAL.attributes.countryOfResidence
-                    }
-                  />
-                  <KeyValue
-                    label="Sanctions"
-                    value={
-                      ZEROID_SAMPLE_KYC_CREDENTIAL.attributes
-                        .sanctionsScreeningResult
-                    }
-                    positive
-                  />
-                  <KeyValue
-                    label="Risk tier"
-                    value={`${ZEROID_SAMPLE_KYC_CREDENTIAL.attributes.riskTier} / ${ZEROID_SAMPLE_KYC_CREDENTIAL.riskProfile.score}`}
-                    positive
-                  />
-                </div>
-
-                <div className="mt-5 rounded-2xl border border-white/[0.04] bg-black/20 p-4">
-                  <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.12em] text-zero-500">
-                    Schema fields
-                  </p>
-                  <div className="flex flex-wrap gap-1.5">
-                    {ZEROID_KYC_CREDENTIAL_SCHEMA_FIELDS.map((field) => (
-                      <code
-                        key={field}
-                        className="rounded-lg border border-white/[0.05] bg-white/[0.03] px-2 py-1 text-[10px] text-zero-400"
-                      >
-                        {field}
-                      </code>
-                    ))}
-                  </div>
-                </div>
-              </Panel>
-
-              <Panel>
-                <div className="flex flex-wrap items-start justify-between gap-4">
-                  <div>
-                    <p className="text-label-sm uppercase text-zero-500 font-body">
-                      Evidence console
-                    </p>
-                    <h2 className="mt-2 text-heading-sm font-display text-white">
-                      Inspectable proof receipt
-                    </h2>
-                  </div>
-                  <ConsoleTabs value={consoleMode} onChange={setConsoleMode} />
-                </div>
-
-                <pre className="mt-5 max-h-[360px] overflow-auto rounded-2xl border border-white/[0.05] bg-black/35 p-4 text-[11px] leading-5 text-chrome-200 whitespace-pre-wrap break-all font-mono">
-                  {consoleText}
-                </pre>
-
-                <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                  <EvidenceMetric
-                    icon={FileJson}
-                    label="Receipt hash"
-                    value={receipt?.evidence.receiptHash ?? 'pending'}
-                  />
-                  <EvidenceMetric
-                    icon={Database}
-                    label="Audit hash"
-                    value={receipt?.evidence.auditHash ?? 'pending'}
-                  />
-                  <EvidenceMetric
-                    icon={Cpu}
-                    label="TEE evidence"
-                    value={receipt?.evidence.teeAttestationId ?? 'not linked'}
-                  />
-                  <EvidenceMetric
-                    icon={ShieldCheck}
-                    label="Manifest digest"
-                    value={receipt?.evidence.manifestDigest ?? 'pending'}
-                  />
-                </div>
-
-                <div className="mt-4 rounded-2xl border border-white/[0.05] bg-black/20 p-4">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-zero-500">
-                        Disclosure policy
-                      </p>
-                      <p className="mt-2 text-[12px] leading-5 text-zero-400">
-                        Raw KYC fields remain in credential custody; the
-                        verifier receives bounded public signals and proved
-                        predicates only.
-                      </p>
-                    </div>
-                    <LockKeyhole className="h-5 w-5 shrink-0 text-emerald-400" />
-                  </div>
-                  <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
-                    <KeyValue
-                      label="Raw fields disclosed"
-                      value={String(
-                        receipt?.proof.disclosurePolicy.disclosureBudget
-                          .rawFieldCount ?? 0,
-                      )}
-                      positive
-                    />
-                    <KeyValue
-                      label="Public signals"
-                      value={String(
-                        receipt?.proof.disclosurePolicy.disclosureBudget
-                          .publicSignalCount ?? 0,
-                      )}
-                    />
-                    <KeyValue
-                      label="Proved predicates"
-                      value={String(
-                        receipt?.proof.disclosurePolicy.disclosureBudget
-                          .provedPredicateCount ?? 0,
-                      )}
-                    />
-                  </div>
-                </div>
-              </Panel>
+              <DecisionEvidence receipt={receipt} />
             </section>
-
-            <Panel>
-              <div className="grid grid-cols-1 gap-5 lg:grid-cols-[0.9fr_1.1fr]">
-                <div>
-                  <p className="text-label-sm uppercase text-zero-500 font-body">
-                    Policy manifest
-                  </p>
-                  <h2 className="mt-2 text-heading-sm font-display text-white">
-                    {ZEROID_ELIGIBILITY_POLICY_V1.label}
-                  </h2>
-                  <p className="mt-3 text-[12px] leading-6 text-zero-400 font-body">
-                    {selectedApp.name} receives only a boolean decision, proof
-                    metadata, and evidence hashes. The credential holder never
-                    reveals birth date, raw nationality, revocation nonce, or
-                    sanctions artifacts to the verifier.
-                  </p>
-                </div>
-
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <KeyValue
-                    label="Policy version"
-                    value={ZEROID_ELIGIBILITY_POLICY_V1.version}
-                  />
-                  <KeyValue
-                    label="Minimum age"
-                    value={`${ZEROID_ELIGIBILITY_POLICY_V1.minimumAge}+`}
-                  />
-                  <KeyValue
-                    label="Allowed residence"
-                    value={ZEROID_ELIGIBILITY_POLICY_V1.allowedResidencies.join(
-                      ', ',
-                    )}
-                  />
-                  <KeyValue
-                    label="Circuit"
-                    value={
-                      ZEROID_ELIGIBILITY_POLICY_V1.circuitManifest.circuitId
-                    }
-                  />
-                  <KeyValue
-                    label="Verification key"
-                    value={
-                      ZEROID_ELIGIBILITY_POLICY_V1.circuitManifest
-                        .verificationKeyId
-                    }
-                  />
-                  <KeyValue
-                    label="Manifest digest"
-                    value={
-                      receipt?.evidence.manifestDigest ??
-                      ZEROID_ELIGIBILITY_POLICY_V1.circuitManifest
-                        .manifestDigest
-                    }
-                  />
-                  <KeyValue
-                    label="Artifact status"
-                    value={
-                      receipt?.evidence.artifactStatus ??
-                      ZEROID_ELIGIBILITY_POLICY_V1.circuitManifest
-                        .artifactStatus
-                    }
-                  />
-                  <KeyValue
-                    label="Policy binding"
-                    value={
-                      receipt?.evidence.policyBindingDigest ??
-                      ZEROID_ELIGIBILITY_POLICY_V1.circuitManifest
-                        .policyBindingDigest
-                    }
-                  />
-                  <KeyValue
-                    label="Relying app"
-                    value={selectedApp.requiredAssurance}
-                  />
-                </div>
-              </div>
-            </Panel>
           </div>
+        )}
+
+        {error && (
+          <div
+            role="alert"
+            className="flex items-start gap-3 border-t border-red-500/20 pt-4 text-sm text-red-300"
+          >
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>{error}</span>
+          </div>
+        )}
+
+        <section className="grid gap-5 border-t border-white/[0.06] pt-6 lg:grid-cols-2">
+          <div>
+            <p className="text-label-sm uppercase text-zero-500">
+              Configured policy
+            </p>
+            <h2 className="mt-2 text-base font-semibold text-white">
+              {ZEROID_ELIGIBILITY_POLICY_V1.label}
+            </h2>
+            <p className="mt-2 text-xs leading-5 text-zero-500">
+              These values describe the client configuration. They are not
+              evidence of deployed artifacts; the backend validates circuit
+              availability before recording a decision.
+            </p>
+          </div>
+          <dl className="grid gap-x-5 gap-y-3 text-xs sm:grid-cols-2">
+            <Definition
+              label="Policy ID"
+              value={ZEROID_ELIGIBILITY_POLICY_V1.policyId}
+            />
+            <Definition
+              label="Circuit"
+              value={ZEROID_ELIGIBILITY_POLICY_V1.circuitManifest.circuitName}
+            />
+            <Definition
+              label="Manifest digest"
+              value={
+                receipt?.evidence.manifestDigest ?? "No backend receipt loaded"
+              }
+            />
+            <Definition
+              label="On-chain anchoring"
+              value="Unavailable without transaction-backed verifier evidence"
+            />
+          </dl>
         </section>
       </div>
     </AppLayout>
   );
 }
 
-function Panel({ children }: { children: React.ReactNode }) {
-  return <div className="bento p-5 sm:p-6">{children}</div>;
-}
-
-function DecisionPanel({
-  receipt,
-  isRunning,
-}: {
-  receipt: EligibilityProofResponse | null;
-  isRunning: boolean;
-}) {
-  const allowed = receipt?.status === 'ALLOWED';
-  const denied = receipt?.status === 'DENIED';
-
+function EvidenceBoundary() {
   return (
-    <div className="min-w-0 rounded-[24px] border border-white/[0.06] bg-white/[0.035] p-5">
-      <div className="flex min-w-0 flex-wrap items-start justify-between gap-4">
-        <div className="min-w-0">
-          <p className="text-label-sm uppercase text-zero-500 font-body">
-            Policy decision
-          </p>
-          <div className="mt-2 flex items-center gap-3">
-            {isRunning ? (
-              <RefreshCw className="h-6 w-6 animate-spin text-chrome-300" />
-            ) : allowed ? (
-              <CheckCircle2 className="h-6 w-6 text-emerald-400" />
-            ) : denied ? (
-              <XCircle className="h-6 w-6 text-rose-400" />
-            ) : (
-              <ShieldCheck className="h-6 w-6 text-chrome-300" />
-            )}
-            <span className="break-words text-[28px] font-semibold leading-none text-white font-display">
-              {isRunning ? 'Evaluating' : (receipt?.status ?? 'Ready')}
-            </span>
-          </div>
-        </div>
-        <span className={allowed ? 'badge-verified' : 'badge-chrome'}>
-          {receipt?.policyVersion ?? ZEROID_ELIGIBILITY_POLICY_V1.version}
-        </span>
-      </div>
-
-      <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <DecisionCheck
-          label="Age"
-          value={receipt?.evaluation.ageOverThreshold}
-        />
-        <DecisionCheck
-          label="Residency"
-          value={receipt?.evaluation.residencyAllowed}
-        />
-        <DecisionCheck
-          label="Sanctions"
-          value={receipt?.evaluation.sanctionsClear}
-        />
-        <DecisionCheck label="Risk" value={receipt?.evaluation.riskAccepted} />
-        <DecisionCheck
-          label="Non-revocation"
-          value={receipt?.evaluation.nonRevocationChecked}
-        />
-        <DecisionCheck label="TEE" value={receipt?.evaluation.teeAttested} />
-      </div>
-
-      <div className="mt-5 space-y-2 text-[11px] text-zero-500 font-mono">
-        <div className="break-all">
-          decision: {receipt?.decisionId ?? 'pending'}
-        </div>
-        <div className="break-all">
-          proof: {receipt?.proof.proofId ?? 'pending'}
-        </div>
-        <div className="break-all">
-          context: {receipt?.proof.contextHash ?? 'pending'}
-        </div>
-      </div>
-    </div>
+    <section className="border-l-2 border-amber-400/50 pl-4 text-sm">
+      <p className="font-medium text-amber-100">Evidence boundary</p>
+      <p className="mt-1 max-w-3xl text-xs leading-5 text-zero-400">
+        ZeroID does not run a browser-side KYC evaluator or create local proof
+        receipts. Context-bound circuit artifacts, credential integrity, TEE
+        evidence, and durable database writes are backend requirements. On-chain
+        anchoring is unavailable until a real verifier transaction integration
+        is configured.
+      </p>
+    </section>
   );
 }
 
-function DecisionCheck({ label, value }: { label: string; value?: boolean }) {
-  const ready = value !== undefined;
-  return (
-    <div className="rounded-2xl border border-white/[0.04] bg-black/15 p-3">
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-[11px] text-zero-500 font-body">{label}</span>
-        {ready && value ? (
-          <Check className="h-3.5 w-3.5 text-emerald-400" />
-        ) : ready ? (
-          <XCircle className="h-3.5 w-3.5 text-rose-400" />
-        ) : (
-          <span className="h-2 w-2 rounded-full bg-zero-700" />
-        )}
-      </div>
-    </div>
-  );
-}
-
-function ToggleRow({
-  label,
+function AccessState({
+  icon: Icon,
+  title,
   description,
-  checked,
-  onChange,
+  spinning = false,
+}: {
+  icon: typeof LockKeyhole;
+  title: string;
+  description: string;
+  spinning?: boolean;
+}) {
+  return (
+    <section className="border-y border-white/[0.06] py-10 text-center">
+      <Icon
+        className={`mx-auto h-8 w-8 text-zero-500 ${spinning ? "animate-spin" : ""}`}
+      />
+      <h2 className="mt-3 font-semibold text-white">{title}</h2>
+      <p className="mt-1 text-sm text-zero-400">{description}</p>
+    </section>
+  );
+}
+
+function Field({
+  label,
+  children,
 }: {
   label: string;
-  description: string;
-  checked: boolean;
-  onChange: (value: boolean) => void;
+  children: React.ReactNode;
 }) {
   return (
-    <label className="flex cursor-pointer items-center justify-between gap-4 rounded-2xl border border-white/[0.04] bg-white/[0.025] p-4">
-      <span>
-        <span className="block text-[13px] font-medium text-white font-body">
-          {label}
-        </span>
-        <span className="mt-1 block text-[11px] leading-5 text-zero-500 font-body">
-          {description}
-        </span>
+    <label className="block">
+      <span className="mb-2 block text-xs font-medium text-zero-400">
+        {label}
       </span>
-      <input
-        type="checkbox"
-        className="h-5 w-5 rounded-md border-white/10 bg-black/30 text-emerald-400 focus:ring-emerald-400/30"
-        checked={checked}
-        onChange={(event) => onChange(event.target.checked)}
-      />
+      {children}
     </label>
+  );
+}
+
+function CredentialEvidence({ credential }: { credential: CredentialSummary }) {
+  return (
+    <dl className="grid gap-x-4 gap-y-3 border-y border-white/[0.06] py-4 text-xs sm:grid-cols-2">
+      <Definition label="Type" value={credential.credentialType} />
+      <Definition label="Status" value={credential.status} />
+      <Definition label="Issuer record" value={credential.issuerId} />
+      <Definition label="Claims commitment" value={credential.claimsHash} />
+    </dl>
+  );
+}
+
+function DecisionEvidence({
+  receipt,
+}: {
+  receipt: EligibilityProofResponse | null;
+}) {
+  if (!receipt) {
+    return (
+      <div className="border-t border-white/[0.06] pt-5 text-sm text-zero-500">
+        No decision evidence loaded.
+      </div>
+    );
+  }
+
+  const allowed = receipt.status === "ALLOWED";
+  const disclosureBudget = receipt.proof.disclosurePolicy.disclosureBudget;
+  return (
+    <div className="space-y-5 border-t border-white/[0.06] pt-5">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          {allowed ? (
+            <CheckCircle2 className="h-5 w-5 text-emerald-400" />
+          ) : (
+            <XCircle className="h-5 w-5 text-red-400" />
+          )}
+          <span className="font-semibold text-white">{receipt.status}</span>
+        </div>
+        <span className="text-xs text-zero-500">Backend receipt</span>
+      </div>
+      <dl className="grid gap-x-5 gap-y-3 text-xs sm:grid-cols-2">
+        <Definition label="Decision" value={receipt.decisionId} />
+        <Definition label="Proof" value={receipt.proof.proofId} />
+        <Definition label="Receipt hash" value={receipt.evidence.receiptHash} />
+        <Definition label="Audit hash" value={receipt.evidence.auditHash} />
+        <Definition
+          label="Raw fields disclosed"
+          value={String(disclosureBudget.rawFieldCount)}
+        />
+        <Definition
+          label="Public signals"
+          value={String(disclosureBudget.publicSignalCount)}
+        />
+        <Definition
+          label="On-chain evidence"
+          value={
+            receipt.proof.onchainTxHash
+              ? receipt.proof.onchainTxHash
+              : "Not reported"
+          }
+        />
+        <Definition
+          label="TEE evidence"
+          value={receipt.evidence.teeAttestationId ?? "Not reported"}
+        />
+      </dl>
+    </div>
   );
 }
 
@@ -765,23 +653,22 @@ function ConsoleTabs({
   value: ConsoleMode;
   onChange: (value: ConsoleMode) => void;
 }) {
-  const tabs: Array<{ id: ConsoleMode; label: string; icon: typeof Terminal }> =
-    [
-      { id: 'receipt', label: 'Receipt', icon: ClipboardCheck },
-      { id: 'request', label: 'Request', icon: FileJson },
-      { id: 'sdk', label: 'SDK', icon: Terminal },
-    ];
-
+  const tabs = [
+    { id: "receipt" as const, label: "Receipt", icon: ClipboardCheck },
+    { id: "request" as const, label: "Request", icon: FileJson },
+    { id: "sdk" as const, label: "SDK", icon: Fingerprint },
+  ];
   return (
-    <div className="flex rounded-xl border border-white/[0.05] bg-black/20 p-1">
+    <div className="flex border-b border-white/[0.06]">
       {tabs.map((tab) => (
         <button
           key={tab.id}
+          type="button"
           onClick={() => onChange(tab.id)}
-          className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[11px] font-medium transition-colors ${
+          className={`flex items-center gap-1.5 px-3 py-2 text-xs transition-colors ${
             value === tab.id
-              ? 'bg-white/[0.08] text-white'
-              : 'text-zero-500 hover:text-zero-200'
+              ? "border-b border-white text-white"
+              : "text-zero-500 hover:text-zero-200"
           }`}
         >
           <tab.icon className="h-3.5 w-3.5" />
@@ -792,67 +679,31 @@ function ConsoleTabs({
   );
 }
 
-function KeyValue({
-  label,
-  value,
-  positive = false,
-}: {
-  label: string;
-  value: string;
-  positive?: boolean;
-}) {
+function Definition({ label, value }: { label: string; value: string }) {
   return (
-    <div className="min-w-0 rounded-2xl border border-white/[0.04] bg-white/[0.025] p-3">
-      <div className="text-[10px] uppercase tracking-[0.12em] text-zero-600 font-body">
-        {label}
-      </div>
-      <div
-        className={`mt-1 break-all text-[12px] font-medium font-body ${
-          positive ? 'text-emerald-300' : 'text-zero-200'
-        }`}
-      >
-        {value}
-      </div>
-    </div>
-  );
-}
-
-function EvidenceMetric({
-  icon: Icon,
-  label,
-  value,
-}: {
-  icon: typeof FileJson;
-  label: string;
-  value: string;
-}) {
-  return (
-    <div className="min-w-0 rounded-2xl border border-white/[0.04] bg-white/[0.025] p-3">
-      <div className="mb-2 flex items-center gap-2 text-[11px] text-zero-500">
-        <Icon className="h-3.5 w-3.5 text-chrome-300" />
-        {label}
-      </div>
-      <div className="truncate text-[11px] text-zero-300 font-mono">
-        {value}
-      </div>
+    <div className="min-w-0">
+      <dt className="text-zero-500">{label}</dt>
+      <dd className="mt-1 break-all text-zero-200">{value}</dd>
     </div>
   );
 }
 
 function buildSdkSnippet(): string {
-  return `import { apiClient } from "@aethelred/zeroid";
-
-const decision = await apiClient.generateEligibilityProof({
-  subjectDid: "did:aethelred:mainnet:0x8f4c2a1d6e7b9012cafe",
-  credentialId: "cred_kyc_v1_ae_000184",
-  policyId: "zeroid://policy/regulated-digital-services/age-jurisdiction@2026.06.1",
-  relyingAppId: "edge-secure-data-room",
-  contextNonce: generateUUID(),
-  options: {
-    requireNonRevocationProof: true,
-    requireOnchainAttestation: false
-  }
-});`;
+  return `const decision = await apiClient.generateEligibilityProof(
+  {
+    subjectDid: authenticatedIdentity.did,
+    credentialId: selectedCredential.id,
+    policyId: configuredPolicy.policyId,
+    relyingAppId: configuredVerifier.id,
+    contextNonce: verifierIssuedNonce,
+    options: {
+      requireNonRevocationProof: true,
+      requireOnchainAttestation: false,
+      dryRun: false
+    }
+  },
+  identitySessionToken
+);`;
 }
 
 async function copyText(value: string): Promise<void> {
@@ -861,13 +712,13 @@ async function copyText(value: string): Promise<void> {
     return;
   }
 
-  const textarea = document.createElement('textarea');
+  const textarea = document.createElement("textarea");
   textarea.value = value;
-  textarea.setAttribute('readonly', 'true');
-  textarea.style.position = 'fixed';
-  textarea.style.opacity = '0';
+  textarea.setAttribute("readonly", "true");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
   document.body.appendChild(textarea);
   textarea.select();
-  document.execCommand('copy');
+  document.execCommand("copy");
   document.body.removeChild(textarea);
 }

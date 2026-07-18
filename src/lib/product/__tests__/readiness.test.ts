@@ -6,11 +6,13 @@ import {
 } from "../readiness";
 
 describe("feature readiness registry", () => {
-  it("labels the hero eligibility workflow as configured until production ZK artifacts are pinned", () => {
+  it("keeps eligibility unavailable until the complete proof path is integrated", () => {
     const readiness = getFeatureReadiness("/eligibility");
 
-    expect(readiness.status).toBe("Configured");
-    expect(readiness.evidence).toContain("compiled ZK artifacts");
+    expect(readiness.status).toBe("Unavailable");
+    expect(readiness.evidence).toContain("context-bound ZK artifacts");
+    expect(readiness.evidence).toContain("fails closed");
+    expect(readiness.evidence).toContain("one-time relying-party challenges");
   });
 
   it("keeps future-facing modules out of Live status", () => {
