@@ -1,252 +1,150 @@
 /**
- * useGovernance — Hook for ZeroID DAO governance interactions.
+ * Authenticated ZeroID schema governance.
  *
- * Covers proposal creation, voting, execution, and voting power queries.
- * Uses on-chain reads for vote tallies and off-chain API for metadata.
+ * Governance in the current backend is a database-backed schema approval
+ * workflow. It is intentionally not combined with the separate Aethelred
+ * token-governor contracts: backend schema UUIDs are not on-chain proposal IDs.
  */
 
-import { useCallback } from "react";
-import { useAccount, useReadContract } from "wagmi";
-import { useSafeWriteContract } from "./useSafeWriteContract";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { type Address, type Hash, parseEther } from "viem";
-import { toast } from "sonner";
-import {
-  GOVERNANCE_ADDRESS,
-  GOVERNANCE_ABI,
-  GOVERNANCE_TOKEN_ADDRESS,
-  GOVERNANCE_TOKEN_ABI,
-} from "@/config/constants";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useAccount } from "wagmi";
 import { apiClient } from "@/lib/api/client";
+import { getIdentityAuthToken } from "@/lib/identity/registration";
 import type {
-  Proposal,
-  ProposalStatus,
-  VoteType,
-  CreateProposalParams,
-  VotingPower,
-} from "@/types";
+  CreateSchemaProposalInput,
+  SchemaGovernanceStatus,
+} from "@/lib/schemas/registry";
 
-// ---------------------------------------------------------------------------
-// Convenience wrapper — used by pages that need { proposals, votingPower }
-// ---------------------------------------------------------------------------
+export type GovernanceAccessState =
+  | "wallet-required"
+  | "sign-in-required"
+  | "ready";
 
-export function useGovernance() {
-  const proposalsQuery = useProposals();
-  const power = useVotingPower();
-  const voteMutation = useVote();
-
-  return {
-    proposals: proposalsQuery.data?.proposals ?? [],
-    votingPower: Number(power.votingPower),
-    delegatedTo: power.delegatee,
-    isLoading: proposalsQuery.isLoading || power.isLoading,
-    vote: async (proposalId: string, support: string) => {
-      const supportMap: Record<string, number> = {
-        for: 1,
-        against: 0,
-        abstain: 2,
-      };
-      await voteMutation.mutateAsync({
-        proposalId: BigInt(proposalId),
-        support: (supportMap[support] ?? 2) as any,
-      });
-    },
-    delegate: async (_address: string) => {
-      // Delegation handled via governance token contract
-    },
-  };
+export interface UseGovernanceOptions {
+  page?: number;
+  pageSize?: number;
+  status?: SchemaGovernanceStatus;
+  name?: string;
+  selectedSchemaId?: string | null;
+  enabled?: boolean;
 }
 
-// ---------------------------------------------------------------------------
-// Voting power (on-chain token balance + delegated weight)
-// ---------------------------------------------------------------------------
+const schemaListQueryKey = ["governance", "schemas"] as const;
+const schemaDetailQueryKey = (address: string, schemaId: string) =>
+  ["governance", "schema", address, schemaId] as const;
 
-export function useVotingPower() {
+function accessError(accessState: GovernanceAccessState): Error {
+  return new Error(
+    accessState === "wallet-required"
+      ? "Connect a wallet before using schema governance."
+      : "Sign in with the registered ZeroID wallet before using schema governance.",
+  );
+}
+
+export function useGovernance(options: UseGovernanceOptions = {}) {
+  const {
+    page = 1,
+    pageSize = 10,
+    status,
+    name,
+    selectedSchemaId = null,
+    enabled = true,
+  } = options;
   const { address } = useAccount();
+  const queryClient = useQueryClient();
+  const identityToken = getIdentityAuthToken();
+  const addressKey = address?.toLowerCase() ?? "no-wallet";
+  const accessState: GovernanceAccessState = !address
+    ? "wallet-required"
+    : !identityToken
+      ? "sign-in-required"
+      : "ready";
+  const workflowReady = accessState === "ready" && enabled;
 
-  const { data: balance, isLoading: isBalanceLoading } = useReadContract({
-    address: GOVERNANCE_TOKEN_ADDRESS as Address,
-    abi: GOVERNANCE_TOKEN_ABI,
-    functionName: "getVotes",
-    args: address ? [address] : undefined,
-    query: { enabled: !!address, refetchInterval: 30_000 },
-  });
-
-  const { data: delegatee } = useReadContract({
-    address: GOVERNANCE_TOKEN_ADDRESS as Address,
-    abi: GOVERNANCE_TOKEN_ABI,
-    functionName: "delegates",
-    args: address ? [address] : undefined,
-    query: { enabled: !!address },
-  });
-
-  return {
-    votingPower: (balance as bigint) ?? 0n,
-    delegatee: delegatee as Address | undefined,
-    isLoading: isBalanceLoading,
-    hasPower: !!balance && (balance as bigint) > 0n,
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Proposals list (off-chain metadata + on-chain status)
-// ---------------------------------------------------------------------------
-
-export function useProposals(status?: ProposalStatus, page = 1) {
-  return useQuery<{ proposals: Proposal[]; total: number }, Error>({
-    queryKey: ["proposals", status, page],
-    queryFn: async () => {
-      const result = await apiClient.listProposals(page, 10);
-      const proposals = status
-        ? result.items.filter((proposal) => proposal.status === status)
-        : result.items;
-      return { proposals, total: result.total };
-    },
+  const schemasQuery = useQuery({
+    queryKey: [
+      ...schemaListQueryKey,
+      addressKey,
+      page,
+      pageSize,
+      status ?? "ALL",
+      name?.trim() ?? "",
+    ],
+    queryFn: () =>
+      apiClient.listSchemas(page, pageSize, {
+        status,
+        name: name?.trim() || undefined,
+      }),
+    enabled: workflowReady,
     staleTime: 15_000,
-    refetchInterval: 60_000,
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Single proposal detail with on-chain vote tally
-// ---------------------------------------------------------------------------
-
-export function useProposalDetail(proposalId: bigint | undefined) {
-  const { data: votes, isLoading: isVotesLoading } = useReadContract({
-    address: GOVERNANCE_ADDRESS as Address,
-    abi: GOVERNANCE_ABI,
-    functionName: "proposalVotes",
-    args: proposalId !== undefined ? [proposalId] : undefined,
-    query: { enabled: proposalId !== undefined, refetchInterval: 15_000 },
+    retry: false,
   });
 
-  const apiQuery = useQuery<Proposal, Error>({
-    queryKey: ["proposal", proposalId?.toString()],
-    queryFn: async () => apiClient.getProposal(proposalId!.toString()),
-    enabled: proposalId !== undefined,
+  const detailQuery = useQuery({
+    queryKey: schemaDetailQueryKey(addressKey, selectedSchemaId ?? "none"),
+    queryFn: () => apiClient.getSchema(selectedSchemaId!),
+    enabled: workflowReady && Boolean(selectedSchemaId),
     staleTime: 10_000,
+    retry: false,
   });
 
-  const [againstVotes, forVotes, abstainVotes] = (votes as [
-    bigint,
-    bigint,
-    bigint,
-  ]) ?? [0n, 0n, 0n];
+  const createMutation = useMutation({
+    mutationFn: async (input: CreateSchemaProposalInput) => {
+      if (!workflowReady) throw accessError(accessState);
+      return apiClient.createSchemaProposal(input);
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: schemaListQueryKey });
+    },
+  });
+
+  const voteMutation = useMutation({
+    mutationFn: async (input: { schemaId: string; approve: boolean }) => {
+      if (!workflowReady) throw accessError(accessState);
+      return apiClient.voteOnSchema(input.schemaId, input.approve);
+    },
+    onSuccess: async (schema) => {
+      queryClient.setQueryData(
+        schemaDetailQueryKey(addressKey, schema.id),
+        schema,
+      );
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: schemaListQueryKey }),
+        queryClient.invalidateQueries({
+          queryKey: schemaDetailQueryKey(addressKey, schema.id),
+        }),
+      ]);
+    },
+  });
+
+  const canExposeProtectedData = workflowReady;
 
   return {
-    ...apiQuery,
-    onChainVotes: { againstVotes, forVotes, abstainVotes },
-    isVotesLoading,
+    schemas: canExposeProtectedData ? (schemasQuery.data?.items ?? []) : [],
+    total: canExposeProtectedData ? (schemasQuery.data?.total ?? 0) : 0,
+    page: schemasQuery.data?.page ?? page,
+    pageSize: schemasQuery.data?.pageSize ?? pageSize,
+    hasMore: canExposeProtectedData
+      ? (schemasQuery.data?.hasMore ?? false)
+      : false,
+    selectedSchema: canExposeProtectedData ? detailQuery.data : undefined,
+    accessState,
+    isLoading: workflowReady && schemasQuery.isPending,
+    isFetching: schemasQuery.isFetching,
+    error: schemasQuery.error,
+    refetch: schemasQuery.refetch,
+    isDetailLoading:
+      workflowReady && Boolean(selectedSchemaId) && detailQuery.isPending,
+    detailError: detailQuery.error,
+    refetchDetail: detailQuery.refetch,
+    createSchema: createMutation.mutateAsync,
+    isCreating: createMutation.isPending,
+    createError: createMutation.error,
+    resetCreate: createMutation.reset,
+    voteOnSchema: (schemaId: string, approve: boolean) =>
+      voteMutation.mutateAsync({ schemaId, approve }),
+    isVoting: voteMutation.isPending,
+    voteError: voteMutation.error,
+    resetVote: voteMutation.reset,
   };
-}
-
-// ---------------------------------------------------------------------------
-// Create proposal
-// ---------------------------------------------------------------------------
-
-export function useCreateProposal() {
-  const queryClient = useQueryClient();
-  const { writeContractAsync } = useSafeWriteContract();
-
-  return useMutation({
-    mutationFn: async (params: CreateProposalParams): Promise<Hash> => {
-      // Submit proposal on-chain
-      const hash = await writeContractAsync({
-        address: GOVERNANCE_ADDRESS as Address,
-        abi: GOVERNANCE_ABI,
-        functionName: "propose",
-        args: [
-          params.targets,
-          params.values,
-          params.calldatas,
-          params.description,
-        ],
-      });
-
-      return hash;
-    },
-    onSuccess: () => {
-      toast.success("Proposal created");
-      queryClient.invalidateQueries({ queryKey: ["proposals"] });
-    },
-    onError: (err: Error) => {
-      toast.error("Proposal creation failed", { description: err.message });
-    },
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Cast vote
-// ---------------------------------------------------------------------------
-
-export function useVote() {
-  const queryClient = useQueryClient();
-  const { writeContractAsync } = useSafeWriteContract();
-
-  return useMutation({
-    mutationFn: async (params: {
-      proposalId: bigint;
-      support: VoteType;
-      reason?: string;
-    }): Promise<Hash> => {
-      const fnName = params.reason ? "castVoteWithReason" : "castVote";
-      const args = (
-        params.reason
-          ? [params.proposalId, Number(params.support), params.reason]
-          : [params.proposalId, Number(params.support)]
-      ) as readonly [bigint, number] | readonly [bigint, number, string];
-
-      return writeContractAsync({
-        address: GOVERNANCE_ADDRESS as Address,
-        abi: GOVERNANCE_ABI,
-        functionName: fnName as "castVote" | "castVoteWithReason",
-        args,
-      });
-    },
-    onSuccess: () => {
-      toast.success("Vote cast successfully");
-      queryClient.invalidateQueries({ queryKey: ["proposal"] });
-      queryClient.invalidateQueries({ queryKey: ["proposals"] });
-    },
-    onError: (err: Error) => {
-      toast.error("Vote failed", { description: err.message });
-    },
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Execute a passed proposal
-// ---------------------------------------------------------------------------
-
-export function useExecuteProposal() {
-  const queryClient = useQueryClient();
-  const { writeContractAsync } = useSafeWriteContract();
-
-  return useMutation({
-    mutationFn: async (params: {
-      targets: Address[];
-      values: bigint[];
-      calldatas: `0x${string}`[];
-      descriptionHash: `0x${string}`;
-    }): Promise<Hash> => {
-      return writeContractAsync({
-        address: GOVERNANCE_ADDRESS as Address,
-        abi: GOVERNANCE_ABI,
-        functionName: "execute",
-        args: [
-          params.targets,
-          params.values,
-          params.calldatas,
-          params.descriptionHash,
-        ],
-      });
-    },
-    onSuccess: () => {
-      toast.success("Proposal executed");
-      queryClient.invalidateQueries({ queryKey: ["proposals"] });
-    },
-    onError: (err: Error) => {
-      toast.error("Execution failed", { description: err.message });
-    },
-  });
 }

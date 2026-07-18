@@ -1,273 +1,179 @@
 "use client";
 
-import { useState } from "react";
-import { motion } from "framer-motion";
 import {
-  ThumbsUp,
-  ThumbsDown,
-  Minus,
-  Clock,
-  CheckCircle2,
-  XCircle,
-  Timer,
-  Users,
   ArrowRight,
-  MessageSquare,
+  CheckCircle2,
+  Clock,
+  FileKey2,
+  ThumbsDown,
+  ThumbsUp,
+  Vote,
+  XCircle,
 } from "lucide-react";
-import type { Proposal, ProposalStatus } from "@/types";
+import type {
+  SchemaGovernanceStatus,
+  SchemaRegistryRecord,
+} from "@/lib/schemas/registry";
 
 interface ProposalCardProps {
-  proposal: Proposal;
-  onVote?: (proposalId: string, vote: "for" | "against" | "abstain") => void;
-  onViewDetails?: (proposalId: string) => void;
+  schema: SchemaRegistryRecord;
+  onViewDetails?: (schemaId: string) => void;
+  selected?: boolean;
 }
 
 const statusConfig: Record<
-  ProposalStatus,
-  { label: string; color: string; bgColor: string; icon: typeof Clock }
+  SchemaGovernanceStatus,
+  { label: string; color: string; background: string; icon: typeof Clock }
 > = {
-  active: {
-    label: "Active",
-    color: "text-status-verified",
-    bgColor: "bg-status-verified/10",
-    icon: Timer,
-  },
-  pending: {
-    label: "Pending",
-    color: "text-status-pending",
-    bgColor: "bg-status-pending/10",
+  DRAFT: {
+    label: "Draft",
+    color: "text-[var(--text-secondary)]",
+    background: "bg-[var(--surface-tertiary)]",
     icon: Clock,
   },
-  passed: {
-    label: "Passed",
+  PROPOSED: {
+    label: "Proposed",
+    color: "text-amber-300",
+    background: "bg-amber-500/10",
+    icon: Vote,
+  },
+  APPROVED: {
+    label: "Approved",
     color: "text-status-verified",
-    bgColor: "bg-status-verified/10",
+    background: "bg-status-verified/10",
     icon: CheckCircle2,
   },
-  rejected: {
-    label: "Rejected",
+  DEPRECATED: {
+    label: "Deprecated",
     color: "text-status-revoked",
-    bgColor: "bg-status-revoked/10",
+    background: "bg-status-revoked/10",
     icon: XCircle,
-  },
-  executed: {
-    label: "Executed",
-    color: "text-brand-500",
-    bgColor: "bg-brand-500/10",
-    icon: CheckCircle2,
   },
 };
 
-function formatVoteCount(count: number): string {
-  if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
-  if (count >= 1_000) return `${(count / 1_000).toFixed(1)}K`;
-  return count.toString();
-}
-
-function timeRemaining(endTime: string | number): string {
-  const ms = new Date(endTime).getTime() - Date.now();
-  if (ms <= 0) return "Ended";
-  const hours = Math.floor(ms / (1000 * 60 * 60));
-  const days = Math.floor(hours / 24);
-  if (days > 0) return `${days}d ${hours % 24}h remaining`;
-  return `${hours}h remaining`;
+function formatDate(value: string): string {
+  return new Intl.DateTimeFormat("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  }).format(new Date(value));
 }
 
 export default function ProposalCard({
-  proposal,
-  onVote,
+  schema,
   onViewDetails,
+  selected = false,
 }: ProposalCardProps) {
-  const [hasVoted, setHasVoted] = useState<
-    "for" | "against" | "abstain" | null
-  >(null);
-
-  const proposalId = String(proposal.id);
-  const proposalStatus = proposal.status ?? "pending";
-  const votesFor = proposal.votesFor ?? Number(proposal.forVotes ?? 0n);
-  const votesAgainst =
-    proposal.votesAgainst ?? Number(proposal.againstVotes ?? 0n);
-  const votesAbstain =
-    proposal.votesAbstain ?? Number(proposal.abstainVotes ?? 0n);
-  const quorum =
-    proposal.quorum ?? Math.max(votesFor + votesAgainst + votesAbstain, 1);
-  const status = statusConfig[proposalStatus] ?? statusConfig.pending;
+  const status = statusConfig[schema.status];
   const StatusIcon = status.icon;
-
-  const totalVotes = votesFor + votesAgainst + votesAbstain;
-  const forPercentage = totalVotes > 0 ? (votesFor / totalVotes) * 100 : 0;
-  const againstPercentage =
-    totalVotes > 0 ? (votesAgainst / totalVotes) * 100 : 0;
-  const abstainPercentage =
-    totalVotes > 0 ? (votesAbstain / totalVotes) * 100 : 0;
-  const quorumPercentage =
-    quorum > 0 ? Math.min((totalVotes / quorum) * 100, 100) : 0;
-
-  const handleVote = (vote: "for" | "against" | "abstain") => {
-    setHasVoted(vote);
-    onVote?.(proposalId, vote);
-  };
+  const totalVotes = schema.approvalVotes + schema.rejectionVotes;
+  const approvalPercentage =
+    totalVotes > 0 ? (schema.approvalVotes / totalVotes) * 100 : 0;
+  const rejectionPercentage =
+    totalVotes > 0 ? (schema.rejectionVotes / totalVotes) * 100 : 0;
+  const fieldCount = Object.keys(schema.schemaDefinition.properties).length;
 
   return (
-    <motion.div
-      className="card overflow-hidden"
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.3 }}
+    <article
+      className={`card overflow-hidden transition-colors ${
+        selected ? "border-brand-500/50" : ""
+      }`}
     >
       <div className="p-5">
-        {/* Header */}
-        <div className="flex items-start justify-between gap-3 mb-3">
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 mb-1">
-              <span className="text-xs font-mono text-[var(--text-tertiary)]">
-                #{proposalId.slice(0, 8)}
-              </span>
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <div className="mb-2 flex flex-wrap items-center gap-2">
               <span
-                className={`badge ${status.bgColor} ${status.color} border-0`}
+                className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-wide ${status.background} ${status.color}`}
               >
-                <StatusIcon className="w-3 h-3" />
+                <StatusIcon className="h-3 w-3" />
                 {status.label}
               </span>
+              <span className="font-mono text-xs text-[var(--text-tertiary)]">
+                v{schema.version}
+              </span>
             </div>
-            <h3 className="font-semibold text-[var(--text-primary)] line-clamp-2">
-              {proposal.title}
-            </h3>
+            <h2 className="text-base font-semibold text-[var(--text-primary)]">
+              {schema.name}
+            </h2>
           </div>
+          <FileKey2 className="h-5 w-5 shrink-0 text-brand-400" />
         </div>
 
-        {/* Description */}
-        <p className="text-sm text-[var(--text-secondary)] line-clamp-2 mb-4">
-          {proposal.description}
+        <p className="mt-2 line-clamp-2 text-sm leading-6 text-[var(--text-secondary)]">
+          {schema.description}
         </p>
 
-        {/* Voting progress bar */}
-        <div className="mb-4">
-          <div className="flex items-center justify-between text-xs text-[var(--text-tertiary)] mb-1.5">
-            <span>Votes</span>
-            <span>{formatVoteCount(totalVotes)} total</span>
+        <dl className="mt-4 grid grid-cols-2 gap-3 text-xs">
+          <div>
+            <dt className="text-[var(--text-tertiary)]">Proposer identity</dt>
+            <dd
+              className="mt-1 truncate font-mono text-[var(--text-secondary)]"
+              title={schema.proposedBy}
+            >
+              {schema.proposedBy}
+            </dd>
           </div>
-          <div className="h-2.5 rounded-full bg-[var(--surface-tertiary)] flex overflow-hidden">
-            {forPercentage > 0 && (
-              <motion.div
+          <div>
+            <dt className="text-[var(--text-tertiary)]">Declared fields</dt>
+            <dd className="mt-1 text-[var(--text-secondary)]">{fieldCount}</dd>
+          </div>
+          <div>
+            <dt className="text-[var(--text-tertiary)]">Created</dt>
+            <dd className="mt-1 text-[var(--text-secondary)]">
+              {formatDate(schema.createdAt)}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-[var(--text-tertiary)]">Identity voters</dt>
+            <dd className="mt-1 text-[var(--text-secondary)]">
+              {schema.voters.length}
+            </dd>
+          </div>
+        </dl>
+
+        <div className="mt-4 border-t border-[var(--border-primary)] pt-4">
+          <div className="mb-2 flex items-center justify-between text-xs">
+            <span className="inline-flex items-center gap-1 text-status-verified">
+              <ThumbsUp className="h-3.5 w-3.5" />
+              {schema.approvalVotes} approve
+            </span>
+            <span className="inline-flex items-center gap-1 text-status-revoked">
+              <ThumbsDown className="h-3.5 w-3.5" />
+              {schema.rejectionVotes} reject
+            </span>
+          </div>
+          <div
+            className="flex h-2 overflow-hidden rounded-full bg-[var(--surface-tertiary)]"
+            aria-label={`${approvalPercentage.toFixed(0)}% approve, ${rejectionPercentage.toFixed(0)}% reject`}
+          >
+            {approvalPercentage > 0 && (
+              <div
                 className="h-full bg-status-verified"
-                initial={{ width: 0 }}
-                animate={{ width: `${forPercentage}%` }}
-                transition={{ duration: 0.6, ease: "easeOut" }}
+                style={{ width: `${approvalPercentage}%` }}
               />
             )}
-            {againstPercentage > 0 && (
-              <motion.div
+            {rejectionPercentage > 0 && (
+              <div
                 className="h-full bg-status-revoked"
-                initial={{ width: 0 }}
-                animate={{ width: `${againstPercentage}%` }}
-                transition={{ duration: 0.6, ease: "easeOut", delay: 0.1 }}
-              />
-            )}
-            {abstainPercentage > 0 && (
-              <motion.div
-                className="h-full bg-[var(--text-tertiary)]"
-                initial={{ width: 0 }}
-                animate={{ width: `${abstainPercentage}%` }}
-                transition={{ duration: 0.6, ease: "easeOut", delay: 0.2 }}
+                style={{ width: `${rejectionPercentage}%` }}
               />
             )}
           </div>
-          <div className="flex items-center gap-4 mt-2 text-xs">
-            <span className="flex items-center gap-1 text-status-verified">
-              <ThumbsUp className="w-3 h-3" />
-              {forPercentage.toFixed(1)}%
-            </span>
-            <span className="flex items-center gap-1 text-status-revoked">
-              <ThumbsDown className="w-3 h-3" />
-              {againstPercentage.toFixed(1)}%
-            </span>
-            <span className="flex items-center gap-1 text-[var(--text-tertiary)]">
-              <Minus className="w-3 h-3" />
-              {abstainPercentage.toFixed(1)}%
-            </span>
-          </div>
         </div>
 
-        {/* Quorum progress */}
-        <div className="mb-4">
-          <div className="flex items-center justify-between text-xs text-[var(--text-tertiary)] mb-1">
-            <span className="flex items-center gap-1">
-              <Users className="w-3 h-3" />
-              Quorum
-            </span>
-            <span>{quorumPercentage.toFixed(0)}%</span>
-          </div>
-          <div className="h-1.5 rounded-full bg-[var(--surface-tertiary)] overflow-hidden">
-            <motion.div
-              className={`h-full rounded-full ${
-                quorumPercentage >= 100 ? "bg-status-verified" : "bg-brand-500"
-              }`}
-              initial={{ width: 0 }}
-              animate={{ width: `${quorumPercentage}%` }}
-              transition={{ duration: 0.8, ease: "easeOut" }}
-            />
-          </div>
-        </div>
-
-        {/* Time remaining */}
-        {proposal.endTime && (
-          <p className="text-xs text-[var(--text-tertiary)] flex items-center gap-1 mb-4">
-            <Clock className="w-3 h-3" />
-            {timeRemaining(proposal.endTime)}
-          </p>
-        )}
-
-        {/* Vote buttons */}
-        {proposalStatus === "active" && !hasVoted && (
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => handleVote("for")}
-              className="btn-sm flex-1 btn bg-status-verified/10 text-status-verified hover:bg-status-verified/20 border border-status-verified/20"
-            >
-              <ThumbsUp className="w-3.5 h-3.5" />
-              For
-            </button>
-            <button
-              onClick={() => handleVote("against")}
-              className="btn-sm flex-1 btn bg-status-revoked/10 text-status-revoked hover:bg-status-revoked/20 border border-status-revoked/20"
-            >
-              <ThumbsDown className="w-3.5 h-3.5" />
-              Against
-            </button>
-            <button
-              onClick={() => handleVote("abstain")}
-              className="btn-sm flex-1 btn-secondary"
-            >
-              <Minus className="w-3.5 h-3.5" />
-              Abstain
-            </button>
-          </div>
-        )}
-
-        {hasVoted && (
-          <div className="flex items-center gap-2 p-2 rounded-lg bg-brand-500/5 text-sm">
-            <CheckCircle2 className="w-4 h-4 text-brand-500" />
-            <span className="text-[var(--text-secondary)]">
-              You voted{" "}
-              <strong className="text-[var(--text-primary)] capitalize">
-                {hasVoted}
-              </strong>
-            </span>
-          </div>
-        )}
-
-        {/* View details */}
         {onViewDetails && (
           <button
-            onClick={() => onViewDetails(proposalId)}
-            className="btn-ghost w-full mt-3 text-sm"
+            type="button"
+            onClick={() => onViewDetails(schema.id)}
+            className="btn-ghost mt-4 w-full text-sm"
           >
-            View Details
-            <ArrowRight className="w-3.5 h-3.5" />
+            {schema.status === "PROPOSED" ? "Review and vote" : "View record"}
+            <ArrowRight className="h-3.5 w-3.5" />
           </button>
         )}
       </div>
-    </motion.div>
+    </article>
   );
 }

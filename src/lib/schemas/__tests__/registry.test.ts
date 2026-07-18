@@ -1,6 +1,8 @@
 import {
+  normalizeCreateSchemaProposalInput,
   normalizeSchemaRegistryPage,
   normalizeSchemaRegistryRecord,
+  requireSchemaRegistryId,
   SchemaRegistryResponseContractError,
 } from "@/lib/schemas/registry";
 
@@ -101,5 +103,44 @@ describe("schema registry response normalization", () => {
         "APPROVED",
       ),
     ).toThrow(/list item 1/);
+  });
+
+  it("normalizes the exact create-schema body", () => {
+    expect(
+      normalizeCreateSchemaProposalInput({
+        name: "  Verified Organization  ",
+        version: " 1.2.0 ",
+        description: "  Approved organization credential schema.  ",
+        schemaDefinition: schemaRecord.schemaDefinition,
+        unsupportedProposalType: "TOKEN_PARAMETER",
+      }),
+    ).toEqual({
+      name: "Verified Organization",
+      version: "1.2.0",
+      description: "Approved organization credential schema.",
+      schemaDefinition: schemaRecord.schemaDefinition,
+    });
+  });
+
+  it.each([
+    [{ name: "A" }, /name/],
+    [{ version: "latest" }, /version/],
+    [{ description: "short" }, /description/],
+    [{ schemaDefinition: { type: "object" } }, /properties/],
+  ])("rejects malformed create-schema input", (override, message) => {
+    expect(() =>
+      normalizeCreateSchemaProposalInput({
+        name: schemaRecord.name,
+        version: schemaRecord.version,
+        description: schemaRecord.description,
+        schemaDefinition: schemaRecord.schemaDefinition,
+        ...override,
+      }),
+    ).toThrow(message);
+  });
+
+  it("validates backend schema UUIDs before they enter route paths", () => {
+    expect(requireSchemaRegistryId(schemaRecord.id)).toBe(schemaRecord.id);
+    expect(() => requireSchemaRegistryId("1")).toThrow(/must be a UUID/);
   });
 });

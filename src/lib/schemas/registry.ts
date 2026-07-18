@@ -24,6 +24,15 @@ export interface SchemaRegistryRecord {
   updatedAt: string;
 }
 
+export interface CreateSchemaProposalInput {
+  name: string;
+  version: string;
+  description: string;
+  schemaDefinition: Record<string, unknown> & {
+    properties: Record<string, unknown>;
+  };
+}
+
 export interface SchemaRegistryPagination {
   page: number;
   limit: number;
@@ -48,6 +57,10 @@ const GOVERNANCE_STATUSES = new Set<SchemaGovernanceStatus>([
   "APPROVED",
   "DEPRECATED",
 ]);
+
+export function requireSchemaRegistryId(value: unknown): string {
+  return requireUuid(value, "id");
+}
 
 function requireRecord(
   value: unknown,
@@ -177,6 +190,48 @@ export function normalizeSchemaRegistryRecord(
     voters,
     createdAt: requireIsoDate(record.createdAt, "createdAt"),
     updatedAt: requireIsoDate(record.updatedAt, "updatedAt"),
+  };
+}
+
+export function normalizeCreateSchemaProposalInput(
+  value: unknown,
+): CreateSchemaProposalInput {
+  const record = requireRecord(value, "Schema proposal input");
+  const name = requireString(record.name, "name").trim();
+  if (name.length < 3 || name.length > 100) {
+    throw new SchemaRegistryResponseContractError(
+      'Schema registry field "name" must contain 3 to 100 characters',
+    );
+  }
+
+  const version = requireString(record.version, "version").trim();
+  if (!SEMVER_PATTERN.test(version)) {
+    throw new SchemaRegistryResponseContractError(
+      'Schema registry field "version" must use major.minor.patch format',
+    );
+  }
+
+  const description = requireString(record.description, "description").trim();
+  if (description.length < 10 || description.length > 1000) {
+    throw new SchemaRegistryResponseContractError(
+      'Schema registry field "description" must contain 10 to 1000 characters',
+    );
+  }
+
+  const schemaDefinition = requireRecord(
+    record.schemaDefinition,
+    'Schema registry field "schemaDefinition"',
+  );
+  const properties = requireRecord(
+    schemaDefinition.properties,
+    'Schema registry field "schemaDefinition.properties"',
+  );
+
+  return {
+    name,
+    version,
+    description,
+    schemaDefinition: { ...schemaDefinition, properties },
   };
 }
 

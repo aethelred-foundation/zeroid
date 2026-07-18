@@ -982,6 +982,83 @@ describe("apiClient.getSchema()", () => {
       `/api/v1/governance/schemas/${backendSchemaRecord.id}`,
     );
   });
+
+  it("rejects a non-UUID schema id before sending a request", async () => {
+    await expect(apiClient.getSchema("42")).rejects.toThrow(/must be a UUID/);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+});
+
+describe("apiClient.createSchemaProposal()", () => {
+  const proposalInput = {
+    name: "  Verified Organization  ",
+    version: " 1.2.0 ",
+    description: "  An approved organization credential schema.  ",
+    schemaDefinition: backendSchemaRecord.schemaDefinition,
+  };
+
+  it("posts the exact backend create-schema body and validates the response", async () => {
+    const proposedRecord = { ...backendSchemaRecord, status: "PROPOSED" };
+    mockFetch.mockResolvedValue(jsonResponse(proposedRecord, true, 201));
+
+    await expect(
+      apiClient.createSchemaProposal(proposalInput),
+    ).resolves.toEqual(proposedRecord);
+
+    const [url, init] = mockFetch.mock.calls[0];
+    expect(url).toContain("/api/v1/governance/schemas");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body)).toEqual({
+      name: "Verified Organization",
+      version: "1.2.0",
+      description: "An approved organization credential schema.",
+      schemaDefinition: backendSchemaRecord.schemaDefinition,
+    });
+  });
+
+  it("fails closed if creation does not return a proposed record", async () => {
+    mockFetch.mockResolvedValue(jsonResponse(backendSchemaRecord, true, 201));
+
+    await expect(apiClient.createSchemaProposal(proposalInput)).rejects.toThrow(
+      /while "PROPOSED" was requested/,
+    );
+  });
+});
+
+describe("apiClient.voteOnSchema()", () => {
+  it.each([
+    [true, true],
+    [false, false],
+  ])("posts the exact approve=%s vote body", async (_label, approve) => {
+    const votedRecord = {
+      ...backendSchemaRecord,
+      status: "PROPOSED",
+      approvalVotes: approve ? 1 : 0,
+      rejectionVotes: approve ? 0 : 1,
+    };
+    mockFetch.mockResolvedValue(jsonResponse(votedRecord));
+
+    await expect(
+      apiClient.voteOnSchema(backendSchemaRecord.id, approve),
+    ).resolves.toEqual(votedRecord);
+
+    const [url, init] = mockFetch.mock.calls[0];
+    expect(url).toContain(
+      `/api/v1/governance/schemas/${backendSchemaRecord.id}/vote`,
+    );
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body)).toEqual({ approve });
+  });
+
+  it("rejects invalid schema ids and vote choices before sending a request", async () => {
+    await expect(apiClient.voteOnSchema("42", true)).rejects.toThrow(
+      /must be a UUID/,
+    );
+    await expect(
+      apiClient.voteOnSchema(backendSchemaRecord.id, "abstain" as any),
+    ).rejects.toMatchObject({ code: "SCHEMA_VOTE_INVALID" });
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
 });
 
 describe("apiClient.submitProof()", () => {
@@ -1570,76 +1647,6 @@ describe("apiClient.respondToVerification()", () => {
       reason: "User declined verification",
     });
     expect(mockFetch).not.toHaveBeenCalled();
-  });
-});
-
-describe("apiClient.listProposals()", () => {
-  it("maps schema-governance records into proposal metadata", async () => {
-    mockFetch.mockResolvedValue({
-      ok: true,
-      status: 200,
-      statusText: "OK",
-      json: jest.fn().mockResolvedValue({
-        success: true,
-        data: [
-          {
-            id: "schema-1",
-            name: "KYC",
-            version: "1.0.0",
-            description: "KYC credential schema",
-            proposedBy: "identity-1",
-            status: "PROPOSED",
-            approvalVotes: 2,
-            rejectionVotes: 1,
-            createdAt: "2026-06-23T00:00:00.000Z",
-          },
-        ],
-        pagination: { page: 1, limit: 10, total: 1, totalPages: 1 },
-        requestId: "zid-server-abc",
-      }),
-    });
-
-    const result = await apiClient.listProposals(1, 10);
-
-    expect(result.items[0]).toMatchObject({
-      id: "schema-1",
-      title: "KYC 1.0.0",
-      votesFor: 2,
-      votesAgainst: 1,
-      status: "active",
-    });
-    expect(result.total).toBe(1);
-    expect(mockFetch.mock.calls[0][0]).toContain("/api/v1/governance/schemas");
-  });
-});
-
-describe("apiClient.getProposal()", () => {
-  it("maps a schema-governance detail record into a proposal", async () => {
-    mockFetch.mockResolvedValue(
-      jsonResponse({
-        id: "42",
-        name: "KYC",
-        version: "1.0.0",
-        description: "KYC credential schema",
-        status: "APPROVED",
-        approvalVotes: 3,
-        rejectionVotes: 0,
-        createdAt: "2026-06-23T00:00:00.000Z",
-        updatedAt: "2026-06-24T00:00:00.000Z",
-      }),
-    );
-
-    const proposal = await apiClient.getProposal(42);
-
-    expect(proposal).toMatchObject({
-      id: "42",
-      title: "KYC 1.0.0",
-      status: "passed",
-      votesFor: 3,
-    });
-    expect(mockFetch.mock.calls[0][0]).toContain(
-      "/api/v1/governance/schemas/42",
-    );
   });
 });
 

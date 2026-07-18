@@ -1,572 +1,207 @@
-/**
- * useGovernance — Unit Tests
- *
- * Tests for governance hooks: proposals, voting power, proposal detail,
- * create proposal, vote, execute, and the convenience wrapper.
- */
-
-import { renderHook, waitFor, act } from "@testing-library/react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import React from "react";
+import { act, renderHook, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { useGovernance } from "@/hooks/useGovernance";
 
-// ---------------------------------------------------------------------------
-// Mocks
-// ---------------------------------------------------------------------------
-
-const mockAddress = "0x1234567890abcdef1234567890abcdef12345678";
-const mockWriteContractAsync = jest.fn();
+const mockUseAccount = jest.fn();
+const mockGetIdentityAuthToken = jest.fn();
+const mockListSchemas = jest.fn();
+const mockGetSchema = jest.fn();
+const mockCreateSchemaProposal = jest.fn();
+const mockVoteOnSchema = jest.fn();
 
 jest.mock("wagmi", () => ({
-  useAccount: jest.fn(() => ({ address: mockAddress, isConnected: true })),
-  useReadContract: jest.fn(() => ({ data: undefined, isLoading: false })),
-  usePublicClient: jest.fn(() => undefined),
-  useWriteContract: jest.fn(() => ({
-    writeContractAsync: mockWriteContractAsync,
-  })),
+  useAccount: () => mockUseAccount(),
 }));
 
-jest.mock("sonner", () => ({
-  toast: {
-    success: jest.fn(),
-    error: jest.fn(),
-    warning: jest.fn(),
-  },
+jest.mock("@/lib/identity/registration", () => ({
+  getIdentityAuthToken: () => mockGetIdentityAuthToken(),
 }));
-const mockToast = jest.requireMock("sonner").toast;
 
 jest.mock("@/lib/api/client", () => ({
   apiClient: {
-    get: jest.fn(),
-    post: jest.fn(),
-    put: jest.fn(),
-    del: jest.fn(),
-    listProposals: jest.fn(),
-    getProposal: jest.fn(),
+    listSchemas: (...args: unknown[]) => mockListSchemas(...args),
+    getSchema: (...args: unknown[]) => mockGetSchema(...args),
+    createSchemaProposal: (...args: unknown[]) =>
+      mockCreateSchemaProposal(...args),
+    voteOnSchema: (...args: unknown[]) => mockVoteOnSchema(...args),
   },
 }));
-const mockApiClient = jest.requireMock("@/lib/api/client").apiClient;
 
-jest.mock("@/config/constants", () => ({
-  GOVERNANCE_ADDRESS: "0xGovAddress",
-  GOVERNANCE_ABI: [],
-  GOVERNANCE_TOKEN_ADDRESS: "0xGovTokenAddress",
-  GOVERNANCE_TOKEN_ABI: [],
-}));
+const schema = {
+  id: "12345678-1234-4234-8234-123456789abc",
+  name: "Verified Organization",
+  version: "1.0.0",
+  description: "A proposed organization credential schema.",
+  schemaDefinition: {
+    type: "object",
+    properties: { legalName: { type: "string" } },
+  },
+  proposedBy: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  status: "PROPOSED" as const,
+  approvalVotes: 0,
+  rejectionVotes: 0,
+  voters: [],
+  createdAt: "2026-07-18T00:00:00.000Z",
+  updatedAt: "2026-07-18T00:00:00.000Z",
+};
 
-import { useAccount, useReadContract } from "wagmi";
-import {
-  useGovernance,
-  useVotingPower,
-  useProposals,
-  useProposalDetail,
-  useCreateProposal,
-  useVote,
-  useExecuteProposal,
-} from "@/hooks/useGovernance";
+const schemaPage = {
+  items: [schema],
+  total: 1,
+  page: 1,
+  pageSize: 10,
+  hasMore: false,
+};
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function createWrapper() {
+function createHarness() {
   const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    defaultOptions: {
+      queries: { retry: false, gcTime: 0 },
+      mutations: { retry: false },
+    },
   });
-  return ({ children }: { children: React.ReactNode }) =>
+  const wrapper = ({ children }: { children: React.ReactNode }) =>
     React.createElement(QueryClientProvider, { client: queryClient }, children);
+  return { queryClient, wrapper };
 }
 
 beforeEach(() => {
   jest.clearAllMocks();
-  mockWriteContractAsync.mockReset();
-  (Object.values(mockApiClient) as jest.Mock[]).forEach((mock) =>
-    mock.mockReset(),
-  );
-  mockApiClient.listProposals.mockResolvedValue({
-    items: [],
-    total: 0,
-    page: 1,
-    pageSize: 10,
-    hasMore: false,
+  mockUseAccount.mockReturnValue({
+    address: "0x1234567890abcdef1234567890abcdef12345678",
   });
-  mockApiClient.getProposal.mockResolvedValue({
-    id: "1",
-    title: "KYC 1.0.0",
-    status: "active",
-  });
-  (useAccount as jest.Mock).mockReturnValue({
-    address: mockAddress,
-    isConnected: true,
-  });
-  (useReadContract as jest.Mock).mockReturnValue({
-    data: undefined,
-    isLoading: false,
+  mockGetIdentityAuthToken.mockReturnValue("identity-session");
+  mockListSchemas.mockResolvedValue(schemaPage);
+  mockGetSchema.mockResolvedValue(schema);
+  mockCreateSchemaProposal.mockResolvedValue(schema);
+  mockVoteOnSchema.mockResolvedValue({
+    ...schema,
+    approvalVotes: 1,
+    voters: ["bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"],
   });
 });
-
-// ===========================================================================
-// useVotingPower
-// ===========================================================================
-
-describe("useVotingPower", () => {
-  it("returns votingPower from on-chain balance", () => {
-    (useReadContract as jest.Mock)
-      .mockReturnValueOnce({ data: 1000n, isLoading: false })
-      .mockReturnValueOnce({ data: "0xdelegatee" });
-
-    const { result } = renderHook(() => useVotingPower(), {
-      wrapper: createWrapper(),
-    });
-
-    expect(result.current.votingPower).toBe(1000n);
-    expect(result.current.delegatee).toBe("0xdelegatee");
-    expect(result.current.hasPower).toBe(true);
-  });
-
-  it("returns 0n when no balance", () => {
-    (useReadContract as jest.Mock)
-      .mockReturnValueOnce({ data: undefined, isLoading: false })
-      .mockReturnValueOnce({ data: undefined });
-
-    const { result } = renderHook(() => useVotingPower(), {
-      wrapper: createWrapper(),
-    });
-
-    expect(result.current.votingPower).toBe(0n);
-    expect(result.current.hasPower).toBe(false);
-  });
-
-  it("passes undefined args when address is not connected", () => {
-    (useAccount as jest.Mock).mockReturnValue({
-      address: undefined,
-      isConnected: false,
-    });
-    (useReadContract as jest.Mock)
-      .mockReturnValueOnce({ data: undefined, isLoading: false })
-      .mockReturnValueOnce({ data: undefined });
-
-    const { result } = renderHook(() => useVotingPower(), {
-      wrapper: createWrapper(),
-    });
-
-    expect(result.current.votingPower).toBe(0n);
-    expect(result.current.hasPower).toBe(false);
-    // Verify useReadContract was called with undefined args
-    expect(useReadContract).toHaveBeenCalledWith(
-      expect.objectContaining({ args: undefined }),
-    );
-  });
-
-  it("returns false for hasPower when balance is 0n", () => {
-    (useReadContract as jest.Mock)
-      .mockReturnValueOnce({ data: 0n, isLoading: false })
-      .mockReturnValueOnce({ data: undefined });
-
-    const { result } = renderHook(() => useVotingPower(), {
-      wrapper: createWrapper(),
-    });
-
-    expect(result.current.hasPower).toBe(false);
-  });
-});
-
-// ===========================================================================
-// useProposals
-// ===========================================================================
-
-describe("useProposals", () => {
-  it("loads proposal metadata from the API client", async () => {
-    mockApiClient.listProposals.mockResolvedValue({
-      items: [
-        {
-          id: "proposal-1",
-          title: "KYC 1.0.0",
-          status: "active",
-        },
-      ],
-      total: 1,
-      page: 1,
-      pageSize: 10,
-      hasMore: false,
-    });
-
-    const { result } = renderHook(() => useProposals(), {
-      wrapper: createWrapper(),
-    });
-
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(result.current.data).toEqual({
-      proposals: [
-        {
-          id: "proposal-1",
-          title: "KYC 1.0.0",
-          status: "active",
-        },
-      ],
-      total: 1,
-    });
-    expect(mockApiClient.listProposals).toHaveBeenCalledWith(1, 10);
-  });
-
-  it("filters proposals by status after loading the requested page", async () => {
-    mockApiClient.listProposals.mockResolvedValue({
-      items: [
-        { id: "proposal-1", status: "active" },
-        { id: "proposal-2", status: "passed" },
-      ],
-      total: 2,
-      page: 2,
-      pageSize: 10,
-      hasMore: false,
-    });
-
-    const { result } = renderHook(() => useProposals("active" as any, 2), {
-      wrapper: createWrapper(),
-    });
-
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(result.current.data?.proposals).toEqual([
-      { id: "proposal-1", status: "active" },
-    ]);
-    expect(mockApiClient.listProposals).toHaveBeenCalledWith(2, 10);
-  });
-});
-
-// ===========================================================================
-// useProposalDetail
-// ===========================================================================
-
-describe("useProposalDetail", () => {
-  it("returns API proposal metadata with on-chain votes", async () => {
-    (useReadContract as jest.Mock).mockReturnValue({
-      data: [100n, 200n, 50n],
-      isLoading: false,
-    });
-    mockApiClient.getProposal.mockResolvedValue({
-      id: "1",
-      title: "KYC 1.0.0",
-      status: "active",
-    });
-
-    const { result } = renderHook(() => useProposalDetail(1n), {
-      wrapper: createWrapper(),
-    });
-
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(result.current.data).toMatchObject({
-      id: "1",
-      title: "KYC 1.0.0",
-    });
-    expect(result.current.onChainVotes).toEqual({
-      againstVotes: 100n,
-      forVotes: 200n,
-      abstainVotes: 50n,
-    });
-    expect(mockApiClient.getProposal).toHaveBeenCalledWith("1");
-  });
-
-  it("returns default votes when no on-chain data", () => {
-    (useReadContract as jest.Mock).mockReturnValue({
-      data: undefined,
-      isLoading: false,
-    });
-
-    const { result } = renderHook(() => useProposalDetail(undefined), {
-      wrapper: createWrapper(),
-    });
-
-    expect(result.current.onChainVotes).toEqual({
-      againstVotes: 0n,
-      forVotes: 0n,
-      abstainVotes: 0n,
-    });
-  });
-});
-
-// ===========================================================================
-// useCreateProposal
-// ===========================================================================
-
-describe("useCreateProposal", () => {
-  it("submits proposal on-chain without calling stale metadata API", async () => {
-    mockWriteContractAsync.mockResolvedValue("0xproposaltx");
-    const { result } = renderHook(() => useCreateProposal(), {
-      wrapper: createWrapper(),
-    });
-
-    await act(async () => {
-      await result.current.mutateAsync({
-        targets: ["0x1"] as any,
-        values: [0n],
-        calldatas: ["0x00"] as any,
-        description: "Upgrade contract",
-        title: "Upgrade",
-        summary: "Upgrading the contract",
-        discussionUrl: "https://forum.example.com",
-      } as any);
-    });
-
-    expect(mockWriteContractAsync).toHaveBeenCalled();
-    expect(mockApiClient.post).not.toHaveBeenCalled();
-    expect(mockToast.success).toHaveBeenCalledWith("Proposal created");
-  });
-
-  it("shows error toast on failure", async () => {
-    mockWriteContractAsync.mockRejectedValue(new Error("Rejected"));
-    const { result } = renderHook(() => useCreateProposal(), {
-      wrapper: createWrapper(),
-    });
-
-    await act(async () => {
-      try {
-        await result.current.mutateAsync({
-          targets: [],
-          values: [],
-          calldatas: [],
-          description: "x",
-        } as any);
-      } catch {}
-    });
-
-    expect(mockToast.error).toHaveBeenCalledWith("Proposal creation failed", {
-      description: "Rejected",
-    });
-  });
-});
-
-// ===========================================================================
-// useVote
-// ===========================================================================
-
-describe("useVote", () => {
-  it("casts vote on-chain and shows success toast", async () => {
-    mockWriteContractAsync.mockResolvedValue("0xvotetx");
-    const { result } = renderHook(() => useVote(), {
-      wrapper: createWrapper(),
-    });
-
-    await act(async () => {
-      await result.current.mutateAsync({ proposalId: 1n, support: 1 as any });
-    });
-
-    expect(mockWriteContractAsync).toHaveBeenCalled();
-    expect(mockToast.success).toHaveBeenCalledWith("Vote cast successfully");
-  });
-
-  it("casts vote with reason when provided", async () => {
-    mockWriteContractAsync.mockResolvedValue("0xvotetx");
-    const { result } = renderHook(() => useVote(), {
-      wrapper: createWrapper(),
-    });
-
-    await act(async () => {
-      await result.current.mutateAsync({
-        proposalId: 1n,
-        support: 1 as any,
-        reason: "Good proposal",
-      });
-    });
-
-    expect(mockWriteContractAsync).toHaveBeenCalledWith(
-      expect.objectContaining({ functionName: "castVoteWithReason" }),
-    );
-  });
-
-  it("shows error toast on failure", async () => {
-    mockWriteContractAsync.mockRejectedValue(new Error("Already voted"));
-    const { result } = renderHook(() => useVote(), {
-      wrapper: createWrapper(),
-    });
-
-    await act(async () => {
-      try {
-        await result.current.mutateAsync({ proposalId: 1n, support: 0 as any });
-      } catch {}
-    });
-
-    expect(mockToast.error).toHaveBeenCalledWith("Vote failed", {
-      description: "Already voted",
-    });
-  });
-});
-
-// ===========================================================================
-// useExecuteProposal
-// ===========================================================================
-
-describe("useExecuteProposal", () => {
-  it("executes proposal on-chain and shows success toast", async () => {
-    mockWriteContractAsync.mockResolvedValue("0xexectx");
-    const { result } = renderHook(() => useExecuteProposal(), {
-      wrapper: createWrapper(),
-    });
-
-    await act(async () => {
-      await result.current.mutateAsync({
-        targets: ["0x1"] as any,
-        values: [0n],
-        calldatas: ["0x00"] as any,
-        descriptionHash: "0xdesc" as any,
-      });
-    });
-
-    expect(mockToast.success).toHaveBeenCalledWith("Proposal executed");
-  });
-
-  it("shows error toast on failure", async () => {
-    mockWriteContractAsync.mockRejectedValue(new Error("Not passed"));
-    const { result } = renderHook(() => useExecuteProposal(), {
-      wrapper: createWrapper(),
-    });
-
-    await act(async () => {
-      try {
-        await result.current.mutateAsync({
-          targets: [],
-          values: [],
-          calldatas: [],
-          descriptionHash: "0x" as any,
-        });
-      } catch {}
-    });
-
-    expect(mockToast.error).toHaveBeenCalledWith("Execution failed", {
-      description: "Not passed",
-    });
-  });
-});
-
-// ===========================================================================
-// useGovernance (convenience wrapper)
-// ===========================================================================
 
 describe("useGovernance", () => {
-  it("returns proposals and votingPower", async () => {
-    (useReadContract as jest.Mock).mockReturnValue({
-      data: 500n,
-      isLoading: false,
-    });
-    mockApiClient.listProposals.mockResolvedValue({
-      items: [{ id: "1" }],
-      total: 1,
-      page: 1,
-      pageSize: 10,
-      hasMore: false,
-    });
-
+  it("does not query without a connected wallet", () => {
+    mockUseAccount.mockReturnValue({ address: undefined });
     const { result } = renderHook(() => useGovernance(), {
-      wrapper: createWrapper(),
+      wrapper: createHarness().wrapper,
     });
 
-    await waitFor(() => expect(result.current.isLoading).toBe(false));
-    expect(result.current.votingPower).toBe(500);
+    expect(result.current.accessState).toBe("wallet-required");
+    expect(result.current.schemas).toEqual([]);
+    expect(mockListSchemas).not.toHaveBeenCalled();
   });
 
-  it("returns empty proposals when data is undefined", () => {
-    (useReadContract as jest.Mock).mockReturnValue({
-      data: undefined,
-      isLoading: true,
-    });
-    mockApiClient.listProposals.mockReturnValue(new Promise(() => {}));
-
+  it("does not query without an identity session", () => {
+    mockGetIdentityAuthToken.mockReturnValue(undefined);
     const { result } = renderHook(() => useGovernance(), {
-      wrapper: createWrapper(),
+      wrapper: createHarness().wrapper,
     });
 
-    expect(result.current.proposals).toEqual([]);
+    expect(result.current.accessState).toBe("sign-in-required");
+    expect(mockListSchemas).not.toHaveBeenCalled();
   });
 
-  it('vote() calls mutateAsync with correct support mapping for "for"', async () => {
-    (useReadContract as jest.Mock).mockReturnValue({
-      data: 500n,
-      isLoading: false,
-    });
-    mockWriteContractAsync.mockResolvedValue("0xvotetx");
-
-    const { result } = renderHook(() => useGovernance(), {
-      wrapper: createWrapper(),
+  it("waits for the IdentityContext readiness gate", () => {
+    const { result } = renderHook(() => useGovernance({ enabled: false }), {
+      wrapper: createHarness().wrapper,
     });
 
-    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(result.current.accessState).toBe("ready");
+    expect(result.current.schemas).toEqual([]);
+    expect(mockListSchemas).not.toHaveBeenCalled();
+  });
 
-    await act(async () => {
-      await result.current.vote("1", "for");
-    });
-
-    expect(mockWriteContractAsync).toHaveBeenCalledWith(
-      expect.objectContaining({
-        args: [1n, 1],
-      }),
+  it("loads schema records with the real backend filters", async () => {
+    const { result } = renderHook(
+      () =>
+        useGovernance({
+          page: 2,
+          pageSize: 25,
+          status: "PROPOSED",
+          name: "  Organization  ",
+        }),
+      { wrapper: createHarness().wrapper },
     );
+
+    await waitFor(() => expect(result.current.schemas).toEqual([schema]));
+    expect(mockListSchemas).toHaveBeenCalledWith(2, 25, {
+      status: "PROPOSED",
+      name: "Organization",
+    });
+    expect(result.current.total).toBe(1);
   });
 
-  it("vote() uses abstain (2) for unknown support values", async () => {
-    (useReadContract as jest.Mock).mockReturnValue({
-      data: 500n,
-      isLoading: false,
-    });
-    mockWriteContractAsync.mockResolvedValue("0xvotetx");
-
-    const { result } = renderHook(() => useGovernance(), {
-      wrapper: createWrapper(),
-    });
-
-    await waitFor(() => expect(result.current.isLoading).toBe(false));
-
-    await act(async () => {
-      await result.current.vote("2", "unknown");
-    });
-
-    expect(mockWriteContractAsync).toHaveBeenCalledWith(
-      expect.objectContaining({
-        args: [2n, 2],
-      }),
+  it("loads selected schema detail by backend UUID", async () => {
+    const { result } = renderHook(
+      () => useGovernance({ selectedSchemaId: schema.id }),
+      { wrapper: createHarness().wrapper },
     );
+
+    await waitFor(() => expect(result.current.selectedSchema).toEqual(schema));
+    expect(mockGetSchema).toHaveBeenCalledWith(schema.id);
   });
 
-  it("delegate() is a no-op function", async () => {
-    (useReadContract as jest.Mock).mockReturnValue({
-      data: 0n,
-      isLoading: false,
-    });
-
+  it("creates the exact schema proposal and invalidates the list", async () => {
     const { result } = renderHook(() => useGovernance(), {
-      wrapper: createWrapper(),
+      wrapper: createHarness().wrapper,
     });
+    await waitFor(() => expect(result.current.schemas).toEqual([schema]));
 
-    await waitFor(() => expect(result.current.isLoading).toBe(false));
-
-    // Should not throw
+    const input = {
+      name: schema.name,
+      version: schema.version,
+      description: schema.description,
+      schemaDefinition: schema.schemaDefinition,
+    };
     await act(async () => {
-      await result.current.delegate("0xdelegatee");
+      await result.current.createSchema(input);
+    });
+
+    expect(mockCreateSchemaProposal).toHaveBeenCalledWith(input);
+    await waitFor(() => expect(mockListSchemas).toHaveBeenCalledTimes(2));
+  });
+
+  it("records an approve/reject vote and refreshes list and detail", async () => {
+    const { result } = renderHook(
+      () => useGovernance({ selectedSchemaId: schema.id }),
+      { wrapper: createHarness().wrapper },
+    );
+    await waitFor(() => expect(result.current.selectedSchema).toEqual(schema));
+
+    await act(async () => {
+      await result.current.voteOnSchema(schema.id, false);
+    });
+
+    expect(mockVoteOnSchema).toHaveBeenCalledWith(schema.id, false);
+    await waitFor(() => {
+      expect(mockListSchemas).toHaveBeenCalledTimes(2);
+      expect(mockGetSchema).toHaveBeenCalledTimes(2);
     });
   });
 
-  it("returns 0 votingPower when balance is undefined", () => {
-    (useReadContract as jest.Mock).mockReturnValue({
-      data: undefined,
-      isLoading: false,
-    });
-    mockApiClient.listProposals.mockReturnValue(new Promise(() => {}));
-
+  it("fails mutations closed when the session is unavailable", async () => {
+    mockGetIdentityAuthToken.mockReturnValue(undefined);
     const { result } = renderHook(() => useGovernance(), {
-      wrapper: createWrapper(),
+      wrapper: createHarness().wrapper,
     });
 
-    expect(result.current.votingPower).toBe(0);
+    await expect(result.current.voteOnSchema(schema.id, true)).rejects.toThrow(
+      /Sign in/,
+    );
+    expect(mockVoteOnSchema).not.toHaveBeenCalled();
   });
 
-  it("returns empty proposals from an empty API page", async () => {
-    (useReadContract as jest.Mock).mockReturnValue({
-      data: 500n,
-      isLoading: false,
-    });
-
+  it("exposes list errors for an explicit UI retry", async () => {
+    mockListSchemas.mockRejectedValue(new Error("Governance unavailable"));
     const { result } = renderHook(() => useGovernance(), {
-      wrapper: createWrapper(),
+      wrapper: createHarness().wrapper,
     });
 
-    await waitFor(() => expect(result.current.isLoading).toBe(false));
-    expect(result.current.proposals).toEqual([]);
+    await waitFor(() =>
+      expect(result.current.error).toEqual(new Error("Governance unavailable")),
+    );
   });
 });

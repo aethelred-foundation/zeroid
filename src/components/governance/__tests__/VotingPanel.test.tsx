@@ -1,313 +1,130 @@
 import React from "react";
-import {
-  render,
-  screen,
-  fireEvent,
-  waitFor,
-  act,
-} from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import VotingPanel from "@/components/governance/VotingPanel";
 
-jest.mock("framer-motion", () => ({
-  motion: {
-    div: ({ children, ...props }: any) => <div {...props}>{children}</div>,
-    button: ({ children, onClick, disabled, ...props }: any) => (
-      <button onClick={onClick} disabled={disabled} {...props}>
-        {children}
-      </button>
-    ),
+const schema = {
+  id: "12345678-1234-4234-8234-123456789abc",
+  name: "Verified Organization",
+  version: "1.0.0",
+  description: "A proposed organization credential schema.",
+  schemaDefinition: {
+    type: "object",
+    properties: { legalName: { type: "string" } },
   },
-  AnimatePresence: ({ children }: any) => children,
-}));
-
-jest.mock("lucide-react", () => ({
-  ThumbsUp: (props: any) => <div data-testid="icon-thumbs-up" {...props} />,
-  ThumbsDown: (props: any) => <div data-testid="icon-thumbs-down" {...props} />,
-  Minus: (props: any) => <div data-testid="icon-minus" {...props} />,
-  Loader2: (props: any) => <div data-testid="icon-loader" {...props} />,
-  CheckCircle2: (props: any) => <div data-testid="icon-check" {...props} />,
-  AlertCircle: (props: any) => <div data-testid="icon-alert" {...props} />,
-  Zap: (props: any) => <div data-testid="icon-zap" {...props} />,
-  Users: (props: any) => <div data-testid="icon-users" {...props} />,
-  ArrowUpRight: (props: any) => <div data-testid="icon-arrow-up" {...props} />,
-  Shield: (props: any) => <div data-testid="icon-shield" {...props} />,
-  Info: (props: any) => <div data-testid="icon-info" {...props} />,
-}));
-
-const mockVote = jest.fn().mockResolvedValue(undefined);
-const mockDelegate = jest.fn().mockResolvedValue(undefined);
-
-const mockGovernanceReturn: any = {
-  vote: mockVote,
-  delegate: mockDelegate,
-  votingPower: 15000,
-  delegatedTo: null,
-  isLoading: false,
-};
-
-jest.mock("@/hooks/useGovernance", () => ({
-  useGovernance: () => mockGovernanceReturn,
-}));
-
-const activeProposal = {
-  id: "prop-abc12345-rest",
-  status: "active" as const,
-  title: "Test Proposal",
-};
-
-const closedProposal = {
-  id: "prop-closed-123",
-  status: "closed" as const,
-  title: "Closed Proposal",
+  proposedBy: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  status: "PROPOSED" as const,
+  approvalVotes: 0,
+  rejectionVotes: 0,
+  voters: [],
+  createdAt: "2026-07-18T00:00:00.000Z",
+  updatedAt: "2026-07-18T00:00:00.000Z",
 };
 
 describe("VotingPanel", () => {
-  beforeEach(() => {
-    jest.clearAllMocks();
-    mockVote.mockResolvedValue(undefined);
-    mockDelegate.mockResolvedValue(undefined);
-    mockGovernanceReturn.vote = mockVote;
-    mockGovernanceReturn.delegate = mockDelegate;
-    mockGovernanceReturn.votingPower = 15000;
-    mockGovernanceReturn.delegatedTo = null;
-    mockGovernanceReturn.isLoading = false;
+  it("identifies the database-backed vote and exact schema record", () => {
+    render(<VotingPanel schema={schema} onVote={jest.fn()} />);
+
+    expect(screen.getByText(schema.id)).toBeInTheDocument();
+    expect(screen.getByText(/proposed by identity/)).toHaveTextContent(
+      schema.proposedBy,
+    );
+    expect(screen.getByText(schema.description)).toBeInTheDocument();
+    expect(
+      screen.getByText(/does not broadcast a wallet transaction/i),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/legalName/)).toBeInTheDocument();
   });
 
-  it("renders the panel header", () => {
-    render(<VotingPanel proposal={activeProposal as any} />);
-    expect(screen.getByText("Cast Your Vote")).toBeInTheDocument();
-    expect(screen.getByText("Proposal #prop-abc")).toBeInTheDocument();
+  it("exposes only approve and reject choices", () => {
+    render(<VotingPanel schema={schema} onVote={jest.fn()} />);
+
+    expect(
+      screen.getByRole("button", { name: /approve/i }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /reject/i })).toBeInTheDocument();
+    expect(screen.queryByText("Abstain")).not.toBeInTheDocument();
+    expect(screen.queryByText(/delegate/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/voting power/i)).not.toBeInTheDocument();
   });
 
-  it("displays voting power", () => {
-    render(<VotingPanel proposal={activeProposal as any} />);
-    expect(screen.getByText("15,000")).toBeInTheDocument();
-    expect(screen.getByText("AETH tokens")).toBeInTheDocument();
-  });
-
-  it("renders vote options for active proposal", () => {
-    render(<VotingPanel proposal={activeProposal as any} />);
-    expect(screen.getByText("Vote For")).toBeInTheDocument();
-    expect(screen.getByText("Vote Against")).toBeInTheDocument();
-    expect(screen.getByText("Abstain")).toBeInTheDocument();
-  });
-
-  it("renders submit button (initially disabled)", () => {
-    render(<VotingPanel proposal={activeProposal as any} />);
-    const submitButton = screen.getByText("Submit Vote");
-    expect(submitButton.closest("button")).toBeDisabled();
-  });
-
-  it("enables submit button when a vote is selected", () => {
-    render(<VotingPanel proposal={activeProposal as any} />);
-    fireEvent.click(screen.getByText("Vote For"));
-    const submitButton = screen.getByText("Submit Vote");
-    expect(submitButton.closest("button")).not.toBeDisabled();
-  });
-
-  it("submits vote and shows success state", async () => {
+  it("records an approve vote with the backend UUID", async () => {
+    const onVote = jest.fn().mockResolvedValue({
+      ...schema,
+      approvalVotes: 1,
+      voters: ["bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"],
+    });
     const onVoteSubmitted = jest.fn();
     render(
       <VotingPanel
-        proposal={activeProposal as any}
+        schema={schema}
+        onVote={onVote}
         onVoteSubmitted={onVoteSubmitted}
       />,
     );
-    fireEvent.click(screen.getByText("Vote For"));
-    fireEvent.click(screen.getByText("Submit Vote"));
 
-    await waitFor(() => {
-      expect(screen.getByText("Vote Submitted")).toBeInTheDocument();
-    });
-
-    expect(mockVote).toHaveBeenCalledWith("prop-abc12345-rest", "for");
-    expect(onVoteSubmitted).toHaveBeenCalled();
-  });
-
-  it("shows inactive message for non-active proposals", () => {
-    render(<VotingPanel proposal={closedProposal as any} />);
-    expect(
-      screen.getByText("Voting is not active for this proposal."),
-    ).toBeInTheDocument();
-  });
-
-  it("shows delegate button", () => {
-    render(<VotingPanel proposal={activeProposal as any} />);
-    expect(screen.getByText("Delegate")).toBeInTheDocument();
-  });
-
-  it("toggles delegation form", () => {
-    render(<VotingPanel proposal={activeProposal as any} />);
-    fireEvent.click(screen.getByText("Delegate"));
-    expect(
-      screen.getByPlaceholderText("0x... delegate address"),
-    ).toBeInTheDocument();
-    expect(screen.getByText("Delegate Power")).toBeInTheDocument();
-  });
-
-  it("calls delegate when delegate power is clicked", async () => {
-    render(<VotingPanel proposal={activeProposal as any} />);
-    fireEvent.click(screen.getByText("Delegate"));
-    const input = screen.getByPlaceholderText("0x... delegate address");
-    fireEvent.change(input, { target: { value: "0xabc123" } });
-    fireEvent.click(screen.getByText("Delegate Power"));
-
-    await waitFor(() => {
-      expect(mockDelegate).toHaveBeenCalledWith("0xabc123");
-    });
-  });
-
-  it("shows error when vote submission fails with Error instance", async () => {
-    mockVote.mockRejectedValueOnce(new Error("Insufficient gas"));
-    render(<VotingPanel proposal={activeProposal as any} />);
-    fireEvent.click(screen.getByText("Vote For"));
-    fireEvent.click(screen.getByText("Submit Vote"));
-
-    await waitFor(() => {
-      expect(screen.getByText("Insufficient gas")).toBeInTheDocument();
-    });
-  });
-
-  it("shows generic error when vote submission fails with non-Error", async () => {
-    mockVote.mockRejectedValueOnce("some string");
-    render(<VotingPanel proposal={activeProposal as any} />);
-    fireEvent.click(screen.getByText("Vote For"));
-    fireEvent.click(screen.getByText("Submit Vote"));
-
-    await waitFor(() => {
-      expect(screen.getByText("Vote submission failed")).toBeInTheDocument();
-    });
-  });
-
-  it("shows generic error when delegation fails with non-Error", async () => {
-    mockDelegate.mockRejectedValueOnce("delegate error");
-    render(<VotingPanel proposal={activeProposal as any} />);
-    fireEvent.click(screen.getByText("Delegate"));
-    const input = screen.getByPlaceholderText("0x... delegate address");
-    fireEvent.change(input, { target: { value: "0xabc123" } });
-    fireEvent.click(screen.getByText("Delegate Power"));
-
-    await waitFor(() => {
-      expect(screen.getByText("Delegation failed")).toBeInTheDocument();
-    });
-  });
-
-  it("shows error when delegation fails with Error instance", async () => {
-    mockDelegate.mockRejectedValueOnce(new Error("Not enough tokens"));
-    render(<VotingPanel proposal={activeProposal as any} />);
-    fireEvent.click(screen.getByText("Delegate"));
-    const input = screen.getByPlaceholderText("0x... delegate address");
-    fireEvent.change(input, { target: { value: "0xabc123" } });
-    fireEvent.click(screen.getByText("Delegate Power"));
-
-    await waitFor(() => {
-      expect(screen.getByText("Not enough tokens")).toBeInTheDocument();
-    });
-  });
-
-  it("does not submit vote when no vote is selected (handleSubmitVote guard)", async () => {
-    // Access the React fiber to get the onClick handler from a disabled button
-    const { container } = render(
-      <VotingPanel proposal={activeProposal as any} />,
-    );
-    const submitButton = screen.getByText("Submit Vote").closest("button")!;
-
-    // Get the React fiber to access the actual onClick prop
-    const fiberKey = Object.keys(submitButton).find((key) =>
-      key.startsWith("__reactFiber$"),
-    );
-    if (fiberKey) {
-      const fiber = (submitButton as any)[fiberKey];
-      const onClick = fiber?.memoizedProps?.onClick;
-      if (onClick) {
-        await act(async () => {
-          onClick();
-        });
-      }
-    }
-    expect(mockVote).not.toHaveBeenCalled();
-  });
-
-  it("does not delegate when address is empty", async () => {
-    render(<VotingPanel proposal={activeProposal as any} />);
-    fireEvent.click(screen.getByText("Delegate"));
-    // Don't enter address, click Delegate Power
-    fireEvent.click(screen.getByText("Delegate Power"));
-    expect(mockDelegate).not.toHaveBeenCalled();
-  });
-
-  it("shows Submitting Vote... while vote is being submitted", async () => {
-    let resolveVote: () => void;
-    mockVote.mockImplementation(
-      () =>
-        new Promise<void>((resolve) => {
-          resolveVote = resolve;
-        }),
+    fireEvent.click(screen.getByRole("button", { name: /approve/i }));
+    fireEvent.click(
+      screen.getByRole("button", { name: /record identity vote/i }),
     );
 
-    render(<VotingPanel proposal={activeProposal as any} />);
-    fireEvent.click(screen.getByText("Vote For"));
+    await waitFor(() => expect(onVote).toHaveBeenCalledWith(schema.id, true));
+    expect(await screen.findByText("Vote recorded")).toBeInTheDocument();
+    expect(onVoteSubmitted).toHaveBeenCalledWith(
+      expect.objectContaining({ approvalVotes: 1 }),
+    );
+  });
 
-    act(() => {
-      fireEvent.click(screen.getByText("Submit Vote"));
+  it("records a reject vote with approve=false", async () => {
+    const onVote = jest.fn().mockResolvedValue({
+      ...schema,
+      rejectionVotes: 1,
     });
+    render(<VotingPanel schema={schema} onVote={onVote} />);
 
-    expect(screen.getByText("Submitting Vote...")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /reject/i }));
+    fireEvent.click(
+      screen.getByRole("button", { name: /record identity vote/i }),
+    );
 
-    await act(async () => {
-      resolveVote!();
-    });
+    await waitFor(() => expect(onVote).toHaveBeenCalledWith(schema.id, false));
   });
 
-  it("selects Vote Against option", () => {
-    render(<VotingPanel proposal={activeProposal as any} />);
-    fireEvent.click(screen.getByText("Vote Against"));
-    // The submit button should be enabled
-    const submitButton = screen.getByText("Submit Vote").closest("button");
-    expect(submitButton).not.toBeDisabled();
+  it("surfaces backend vote rejection without claiming success", async () => {
+    const onVote = jest
+      .fn()
+      .mockRejectedValue(new Error("Already voted on this schema"));
+    render(<VotingPanel schema={schema} onVote={onVote} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /approve/i }));
+    fireEvent.click(
+      screen.getByRole("button", { name: /record identity vote/i }),
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Already voted on this schema",
+    );
+    expect(screen.queryByText("Vote recorded")).not.toBeInTheDocument();
   });
 
-  it("selects Abstain option", () => {
-    render(<VotingPanel proposal={activeProposal as any} />);
-    fireEvent.click(screen.getByText("Abstain"));
-    const submitButton = screen.getByText("Submit Vote").closest("button");
-    expect(submitButton).not.toBeDisabled();
-  });
+  it.each(["DRAFT", "APPROVED", "DEPRECATED"] as const)(
+    "closes voting for %s records",
+    (status) => {
+      render(<VotingPanel schema={{ ...schema, status }} onVote={jest.fn()} />);
 
-  it("toggles delegation form closed", () => {
-    render(<VotingPanel proposal={activeProposal as any} />);
-    fireEvent.click(screen.getByText("Delegate"));
+      expect(screen.getByText("Voting is not open")).toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: /record identity vote/i }),
+      ).not.toBeInTheDocument();
+    },
+  );
+
+  it("disables vote controls while the API mutation is pending", () => {
+    render(<VotingPanel schema={schema} onVote={jest.fn()} isSubmitting />);
+
+    expect(screen.getByRole("button", { name: /approve/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /reject/i })).toBeDisabled();
     expect(
-      screen.getByPlaceholderText("0x... delegate address"),
-    ).toBeInTheDocument();
-    fireEvent.click(screen.getByText("Delegate"));
-    expect(
-      screen.queryByPlaceholderText("0x... delegate address"),
-    ).not.toBeInTheDocument();
-  });
-
-  it("submits vote without onVoteSubmitted callback", async () => {
-    render(<VotingPanel proposal={activeProposal as any} />);
-    fireEvent.click(screen.getByText("Vote Against"));
-    fireEvent.click(screen.getByText("Submit Vote"));
-
-    await waitFor(() => {
-      expect(screen.getByText("Vote Submitted")).toBeInTheDocument();
-    });
-    expect(mockVote).toHaveBeenCalledWith("prop-abc12345-rest", "against");
-  });
-
-  it("displays delegatedTo address when present", () => {
-    mockGovernanceReturn.delegatedTo =
-      "0x1234567890abcdef1234567890abcdef12345678";
-    render(<VotingPanel proposal={activeProposal as any} />);
-    expect(screen.getByText(/Delegated to:/)).toBeInTheDocument();
-    expect(screen.getByText("0x1234...5678")).toBeInTheDocument();
-  });
-
-  it("displays 0 voting power when votingPower is null", () => {
-    mockGovernanceReturn.votingPower = null;
-    render(<VotingPanel proposal={activeProposal as any} />);
-    expect(screen.getByText("0")).toBeInTheDocument();
+      screen.getByRole("button", { name: /recording vote/i }),
+    ).toBeDisabled();
   });
 });

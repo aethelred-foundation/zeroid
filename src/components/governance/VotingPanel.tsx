@@ -1,308 +1,177 @@
 "use client";
 
-import { useState, useCallback } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { useState } from "react";
 import {
-  ThumbsUp,
-  ThumbsDown,
-  Minus,
-  Loader2,
-  CheckCircle2,
   AlertCircle,
-  Zap,
-  Users,
-  ArrowUpRight,
-  Shield,
-  Info,
+  CheckCircle2,
+  Database,
+  Loader2,
+  ThumbsDown,
+  ThumbsUp,
+  Vote,
 } from "lucide-react";
-import { useGovernance } from "@/hooks/useGovernance";
-import type { Proposal } from "@/types";
+import type { SchemaRegistryRecord } from "@/lib/schemas/registry";
 
 interface VotingPanelProps {
-  proposal: Proposal;
-  onVoteSubmitted?: () => void;
+  schema: SchemaRegistryRecord;
+  onVote: (schemaId: string, approve: boolean) => Promise<SchemaRegistryRecord>;
+  isSubmitting?: boolean;
+  onVoteSubmitted?: (schema: SchemaRegistryRecord) => void;
 }
 
-type VoteChoice = "for" | "against" | "abstain";
-
-const voteConfig: Record<
-  VoteChoice,
-  {
-    label: string;
-    icon: typeof ThumbsUp;
-    color: string;
-    bgColor: string;
-    hoverBg: string;
-  }
-> = {
-  for: {
-    label: "Vote For",
-    icon: ThumbsUp,
-    color: "text-status-verified",
-    bgColor: "bg-status-verified/10",
-    hoverBg: "hover:bg-status-verified/20",
-  },
-  against: {
-    label: "Vote Against",
-    icon: ThumbsDown,
-    color: "text-status-revoked",
-    bgColor: "bg-status-revoked/10",
-    hoverBg: "hover:bg-status-revoked/20",
-  },
-  abstain: {
-    label: "Abstain",
-    icon: Minus,
-    color: "text-[var(--text-tertiary)]",
-    bgColor: "bg-[var(--surface-tertiary)]",
-    hoverBg: "hover:bg-[var(--surface-tertiary)]",
-  },
-};
+type VoteChoice = "approve" | "reject";
 
 export default function VotingPanel({
-  proposal,
+  schema,
+  onVote,
+  isSubmitting = false,
   onVoteSubmitted,
 }: VotingPanelProps) {
   const [selectedVote, setSelectedVote] = useState<VoteChoice | null>(null);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [hasVoted, setHasVoted] = useState(false);
+  const [submittedVote, setSubmittedVote] = useState<VoteChoice | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [showDelegation, setShowDelegation] = useState(false);
-  const [delegateAddress, setDelegateAddress] = useState("");
 
-  const {
-    vote,
-    delegate,
-    votingPower,
-    delegatedTo,
-    isLoading: governanceLoading,
-  } = useGovernance();
-  const proposalId = String(proposal.id);
-
-  const handleSubmitVote = useCallback(async () => {
-    if (!selectedVote) return;
-    setIsSubmitting(true);
+  const submitVote = async () => {
+    if (!selectedVote || isSubmitting) return;
     setError(null);
     try {
-      await vote(proposalId, selectedVote);
-      setHasVoted(true);
-      onVoteSubmitted?.();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Vote submission failed");
-    } finally {
-      setIsSubmitting(false);
+      const updatedSchema = await onVote(schema.id, selectedVote === "approve");
+      setSubmittedVote(selectedVote);
+      onVoteSubmitted?.(updatedSchema);
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Schema vote submission failed",
+      );
     }
-  }, [selectedVote, proposalId, vote, onVoteSubmitted]);
-
-  const handleDelegate = useCallback(async () => {
-    if (!delegateAddress) return;
-    setError(null);
-    try {
-      await delegate(delegateAddress);
-      setShowDelegation(false);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Delegation failed");
-    }
-  }, [delegateAddress, delegate]);
-
-  const isActive = proposal.status === "active";
+  };
 
   return (
-    <div className="card overflow-hidden">
-      {/* Header */}
-      <div className="p-5 border-b border-[var(--border-primary)]">
-        <h3 className="font-semibold text-[var(--text-primary)] flex items-center gap-2">
-          <Shield className="w-4 h-4 text-brand-500" />
-          Cast Your Vote
-        </h3>
-        <p className="text-xs text-[var(--text-secondary)] mt-1">
-          Proposal #{proposalId.slice(0, 8)}
+    <section className="card overflow-hidden" aria-label="Schema voting panel">
+      <div className="border-b border-[var(--border-primary)] p-5">
+        <h2 className="flex items-center gap-2 font-semibold text-[var(--text-primary)]">
+          <Vote className="h-4 w-4 text-brand-500" />
+          Schema vote
+        </h2>
+        <p className="mt-1 break-all font-mono text-xs text-[var(--text-tertiary)]">
+          {schema.id}
         </p>
       </div>
 
-      {/* Voting power */}
-      <div className="p-5 border-b border-[var(--border-primary)]">
-        <div className="flex items-center justify-between mb-2">
-          <span className="text-xs text-[var(--text-tertiary)] uppercase tracking-wider">
-            Your Voting Power
-          </span>
-          <button
-            onClick={() => setShowDelegation(!showDelegation)}
-            className="text-xs text-brand-500 hover:text-brand-600 flex items-center gap-1"
+      <div className="border-b border-[var(--border-primary)] p-5">
+        <h3 className="text-sm font-semibold">{schema.name}</h3>
+        <p className="mt-1 text-xs leading-5 text-[var(--text-secondary)]">
+          Version {schema.version} · proposed by identity {schema.proposedBy}
+        </p>
+        <p className="mt-3 text-sm leading-6 text-[var(--text-secondary)]">
+          {schema.description}
+        </p>
+        <details className="mt-4 rounded-xl border border-[var(--border-primary)] bg-[var(--surface-secondary)] p-3">
+          <summary className="cursor-pointer text-xs font-semibold">
+            Inspect exact schema definition
+          </summary>
+          <pre className="mt-3 max-h-64 overflow-auto whitespace-pre-wrap break-words font-mono text-[10px] leading-5 text-[var(--text-secondary)]">
+            {JSON.stringify(schema.schemaDefinition, null, 2)}
+          </pre>
+        </details>
+        <div className="mt-4 flex items-start gap-2 rounded-xl border border-cyan-500/15 bg-cyan-500/5 p-3">
+          <Database className="mt-0.5 h-4 w-4 shrink-0 text-cyan-300" />
+          <p className="text-xs leading-5 text-[var(--text-secondary)]">
+            This records an authenticated identity vote in ZeroID&apos;s schema
+            governance database. It does not broadcast a wallet transaction or
+            spend AETH.
+          </p>
+        </div>
+      </div>
+
+      <div className="p-5">
+        {error && (
+          <div
+            className="mb-4 flex items-start gap-2 rounded-xl border border-red-500/20 bg-red-500/10 p-3"
+            role="alert"
           >
-            <ArrowUpRight className="w-3 h-3" />
-            Delegate
-          </button>
-        </div>
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-brand-500/10 flex items-center justify-center">
-            <Zap className="w-5 h-5 text-brand-500" />
-          </div>
-          <div>
-            <p className="text-2xl font-bold text-[var(--text-primary)]">
-              {votingPower?.toLocaleString() ?? "0"}
-            </p>
-            <p className="text-xs text-[var(--text-tertiary)]">AETH tokens</p>
-          </div>
-        </div>
-        {delegatedTo && (
-          <div className="mt-2 flex items-center gap-1 text-xs text-[var(--text-tertiary)]">
-            <Users className="w-3 h-3" />
-            Delegated to:{" "}
-            <span className="font-mono">
-              {delegatedTo.slice(0, 6)}...{delegatedTo.slice(-4)}
-            </span>
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
+            <p className="text-sm text-red-300">{error}</p>
           </div>
         )}
 
-        {/* Delegation form */}
-        <AnimatePresence>
-          {showDelegation && (
-            <motion.div
-              className="mt-4 space-y-3"
-              initial={{ opacity: 0, height: 0 }}
-              animate={{ opacity: 1, height: "auto" }}
-              exit={{ opacity: 0, height: 0 }}
-            >
-              <div className="p-3 rounded-xl bg-[var(--surface-secondary)] border border-[var(--border-primary)]">
-                <div className="flex items-start gap-2 mb-3">
-                  <Info className="w-3.5 h-3.5 text-brand-500 mt-0.5" />
-                  <p className="text-xs text-[var(--text-secondary)]">
-                    Delegate your voting power to another address. You can
-                    reclaim it at any time.
-                  </p>
-                </div>
-                <input
-                  type="text"
-                  value={delegateAddress}
-                  onChange={(e) => setDelegateAddress(e.target.value)}
-                  placeholder="0x... delegate address"
-                  className="input font-mono text-sm mb-2"
-                />
-                <button
-                  onClick={handleDelegate}
-                  className="btn-primary btn-sm w-full"
-                >
-                  <ArrowUpRight className="w-3.5 h-3.5" />
-                  Delegate Power
-                </button>
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </div>
-
-      {/* Vote options */}
-      <div className="p-5">
-        {/* Error */}
-        <AnimatePresence>
-          {error && (
-            <motion.div
-              className="mb-4 p-3 rounded-xl bg-red-500/10 border border-red-500/20 flex items-center gap-2"
-              initial={{ opacity: 0, y: -10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-            >
-              <AlertCircle className="w-4 h-4 text-red-400 flex-shrink-0" />
-              <p className="text-sm text-red-400">{error}</p>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        {hasVoted ? (
-          <motion.div
-            className="text-center py-6"
-            initial={{ opacity: 0, scale: 0.9 }}
-            animate={{ opacity: 1, scale: 1 }}
-          >
-            <motion.div
-              className="w-14 h-14 mx-auto mb-3 rounded-full bg-status-verified/10 flex items-center justify-center"
-              initial={{ scale: 0 }}
-              animate={{ scale: 1 }}
-              transition={{ type: "spring", stiffness: 200 }}
-            >
-              <CheckCircle2 className="w-7 h-7 text-status-verified" />
-            </motion.div>
-            <p className="text-sm font-semibold text-[var(--text-primary)]">
-              Vote Submitted
+        {submittedVote ? (
+          <div className="py-6 text-center" role="status">
+            <CheckCircle2 className="mx-auto mb-3 h-10 w-10 text-status-verified" />
+            <p className="font-semibold">Vote recorded</p>
+            <p className="mt-1 text-xs text-[var(--text-secondary)]">
+              Your identity voted to {submittedVote} this schema proposal.
             </p>
-            <p className="text-xs text-[var(--text-secondary)] mt-1">
-              You voted <strong className="capitalize">{selectedVote}</strong>{" "}
-              on this proposal.
-            </p>
-          </motion.div>
-        ) : !isActive ? (
-          <div className="text-center py-6">
-            <p className="text-sm text-[var(--text-tertiary)]">
-              Voting is not active for this proposal.
+          </div>
+        ) : schema.status !== "PROPOSED" ? (
+          <div className="py-6 text-center" role="status">
+            <p className="font-medium">Voting is not open</p>
+            <p className="mt-1 text-xs text-[var(--text-secondary)]">
+              Only records in the Proposed state accept approve or reject votes.
+              This record is {schema.status.toLowerCase()}.
             </p>
           </div>
         ) : (
           <div className="space-y-3">
-            {(
-              Object.entries(voteConfig) as [
-                VoteChoice,
-                typeof voteConfig.for,
-              ][]
-            ).map(([choice, config]) => {
-              const Icon = config.icon;
-              const isSelected = selectedVote === choice;
-              return (
-                <motion.button
-                  key={choice}
-                  onClick={() => setSelectedVote(choice)}
-                  className={`w-full p-4 rounded-xl border-2 transition-all flex items-center gap-3 ${
-                    isSelected
-                      ? `${config.bgColor} border-current ${config.color}`
-                      : `border-[var(--border-primary)] ${config.hoverBg} text-[var(--text-secondary)]`
-                  }`}
-                  whileTap={{ scale: 0.98 }}
-                >
-                  <div
-                    className={`w-8 h-8 rounded-lg flex items-center justify-center ${
-                      isSelected
-                        ? config.bgColor
-                        : "bg-[var(--surface-secondary)]"
-                    }`}
-                  >
-                    <Icon
-                      className={`w-4 h-4 ${isSelected ? config.color : ""}`}
-                    />
-                  </div>
-                  <span className="font-medium text-sm">{config.label}</span>
-                  {isSelected && (
-                    <motion.div
-                      className="ml-auto"
-                      initial={{ scale: 0 }}
-                      animate={{ scale: 1 }}
-                      transition={{ type: "spring", stiffness: 300 }}
-                    >
-                      <CheckCircle2 className={`w-5 h-5 ${config.color}`} />
-                    </motion.div>
-                  )}
-                </motion.button>
-              );
-            })}
+            <button
+              type="button"
+              disabled={isSubmitting}
+              onClick={() => setSelectedVote("approve")}
+              aria-pressed={selectedVote === "approve"}
+              className={`flex w-full items-center gap-3 rounded-xl border-2 p-4 text-left transition-colors disabled:opacity-60 ${
+                selectedVote === "approve"
+                  ? "border-status-verified bg-status-verified/10 text-status-verified"
+                  : "border-[var(--border-primary)] text-[var(--text-secondary)] hover:bg-status-verified/5"
+              }`}
+            >
+              <ThumbsUp className="h-5 w-5" />
+              <span>
+                <span className="block text-sm font-semibold">Approve</span>
+                <span className="mt-0.5 block text-xs opacity-80">
+                  Support this schema definition and version.
+                </span>
+              </span>
+            </button>
+            <button
+              type="button"
+              disabled={isSubmitting}
+              onClick={() => setSelectedVote("reject")}
+              aria-pressed={selectedVote === "reject"}
+              className={`flex w-full items-center gap-3 rounded-xl border-2 p-4 text-left transition-colors disabled:opacity-60 ${
+                selectedVote === "reject"
+                  ? "border-status-revoked bg-status-revoked/10 text-status-revoked"
+                  : "border-[var(--border-primary)] text-[var(--text-secondary)] hover:bg-status-revoked/5"
+              }`}
+            >
+              <ThumbsDown className="h-5 w-5" />
+              <span>
+                <span className="block text-sm font-semibold">Reject</span>
+                <span className="mt-0.5 block text-xs opacity-80">
+                  Oppose this schema definition and version.
+                </span>
+              </span>
+            </button>
 
             <button
-              onClick={handleSubmitVote}
+              type="button"
               disabled={!selectedVote || isSubmitting}
-              className="btn-primary w-full mt-4"
+              onClick={() => void submitVote()}
+              className="btn-primary mt-4 w-full disabled:cursor-not-allowed disabled:opacity-50"
             >
               {isSubmitting ? (
                 <>
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  Submitting Vote...
+                  <Loader2 className="h-4 w-4 animate-spin" /> Recording vote...
                 </>
               ) : (
                 <>
-                  <Shield className="w-4 h-4" />
-                  Submit Vote
+                  <Vote className="h-4 w-4" /> Record identity vote
                 </>
               )}
             </button>
           </div>
         )}
       </div>
-    </div>
+    </section>
   );
 }

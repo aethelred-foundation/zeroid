@@ -18,13 +18,12 @@ import type {
   ProofRequest,
   TEEAttestation,
   TEENode,
-  Proposal,
   VerificationRequest,
   VerificationResult,
   Bytes32,
   Address,
 } from "@/types";
-import { ProposalState, ProposalType, VerificationStatus } from "@/types";
+import { VerificationStatus } from "@/types";
 import { API_BASE_URL } from "@/config/constants";
 import { generateUUID, withRetry, withTimeout } from "@/lib/utils";
 import {
@@ -39,8 +38,11 @@ import {
   type CredentialSummary,
 } from "@/lib/credentials/summary";
 import {
+  normalizeCreateSchemaProposalInput,
   normalizeSchemaRegistryPage,
   normalizeSchemaRegistryRecord,
+  requireSchemaRegistryId,
+  type CreateSchemaProposalInput,
   type SchemaGovernanceStatus,
   type SchemaRegistryRecord,
 } from "@/lib/schemas/registry";
@@ -119,21 +121,6 @@ type BackendZkVerificationResult = {
 };
 
 type BackendVerificationRequestRecord = VerificationRequest;
-
-type BackendSchemaGovernanceRecord = {
-  id: string;
-  name: string;
-  version: string;
-  description: string;
-  schemaDefinition?: unknown;
-  proposedBy?: string;
-  status?: string;
-  approvalVotes?: number;
-  rejectionVotes?: number;
-  voters?: string[];
-  createdAt?: string | number | Date;
-  updatedAt?: string | number | Date;
-};
 
 // ============================================================================
 // Error Class
@@ -633,70 +620,6 @@ function verificationRequestToProofRequest(
   };
 }
 
-function bytes32FromStableString(value: string): Bytes32 {
-  const hex = Array.from(value)
-    .map((char) => char.charCodeAt(0).toString(16).padStart(2, "0"))
-    .join("")
-    .slice(0, 64)
-    .padEnd(64, "0");
-  return `0x${hex}` as Bytes32;
-}
-
-function addressOrZero(value: unknown): Address {
-  return typeof value === "string" && /^0x[0-9a-fA-F]{40}$/.test(value)
-    ? (value as Address)
-    : "0x0000000000000000000000000000000000000000";
-}
-
-function schemaStatusToProposalState(
-  status: string | undefined,
-): ProposalState {
-  if (status === "APPROVED") return ProposalState.Succeeded;
-  if (status === "DEPRECATED" || status === "REVOKED") {
-    return ProposalState.Defeated;
-  }
-  return ProposalState.Active;
-}
-
-function schemaStatusToLegacyStatus(
-  status: string | undefined,
-): Proposal["status"] {
-  if (status === "APPROVED") return "passed";
-  if (status === "DEPRECATED" || status === "REVOKED") return "rejected";
-  return "active";
-}
-
-function schemaGovernanceToProposal(
-  schema: BackendSchemaGovernanceRecord,
-): Proposal {
-  const approvalVotes = schema.approvalVotes ?? 0;
-  const rejectionVotes = schema.rejectionVotes ?? 0;
-  const createdAt = toUnixTimestamp(schema.createdAt);
-  return {
-    id: schema.id,
-    type: ProposalType.SchemaApproval,
-    state: schemaStatusToProposalState(schema.status),
-    proposer: addressOrZero(schema.proposedBy),
-    targetHash: bytes32FromStableString(`${schema.name}:${schema.version}`),
-    title: `${schema.name} ${schema.version}`,
-    description: schema.description,
-    forVotes: BigInt(approvalVotes),
-    againstVotes: BigInt(rejectionVotes),
-    abstainVotes: 0n,
-    startBlock: 0,
-    endBlock: 0,
-    createdAt,
-    executedAt:
-      schema.status === "APPROVED" ? toUnixTimestamp(schema.updatedAt) : 0,
-    status: schemaStatusToLegacyStatus(schema.status),
-    votesFor: approvalVotes,
-    votesAgainst: rejectionVotes,
-    votesAbstain: 0,
-    quorum: 3,
-    endTime: createdAt + 7 * 24 * 60 * 60,
-  };
-}
-
 // ============================================================================
 // Public API Client
 // ============================================================================
@@ -910,9 +833,42 @@ export const apiClient = {
 
   /** Get a single schema-governance record by backend UUID. */
   async getSchema(schemaId: string): Promise<SchemaRegistryRecord> {
+    const normalizedSchemaId = requireSchemaRegistryId(schemaId);
     return normalizeSchemaRegistryRecord(
       await get<unknown>(
-        `/api/v1/governance/schemas/${encodeURIComponent(schemaId)}`,
+        `/api/v1/governance/schemas/${encodeURIComponent(normalizedSchemaId)}`,
+      ),
+    );
+  },
+
+  /** Create a backend schema-governance proposal. This is not an on-chain transaction. */
+  async createSchemaProposal(
+    input: CreateSchemaProposalInput,
+  ): Promise<SchemaRegistryRecord> {
+    const payload = normalizeCreateSchemaProposalInput(input);
+    return normalizeSchemaRegistryRecord(
+      await post<unknown>("/api/v1/governance/schemas", payload),
+      "PROPOSED",
+    );
+  },
+
+  /** Cast one approve/reject identity vote against a proposed backend schema. */
+  async voteOnSchema(
+    schemaId: string,
+    approve: boolean,
+  ): Promise<SchemaRegistryRecord> {
+    const normalizedSchemaId = requireSchemaRegistryId(schemaId);
+    if (typeof approve !== "boolean") {
+      throw new ZeroIDApiError(
+        "Schema vote must be approve or reject.",
+        "SCHEMA_VOTE_INVALID",
+        400,
+      );
+    }
+    return normalizeSchemaRegistryRecord(
+      await post<unknown>(
+        `/api/v1/governance/schemas/${encodeURIComponent(normalizedSchemaId)}/vote`,
+        { approve },
       ),
     );
   },
@@ -1136,51 +1092,5 @@ export const apiClient = {
       txHash: proofResult.txHash,
       error: proofResult.error,
     };
-  },
-
-  // --------------------------------------------------------------------------
-  // Governance
-  // --------------------------------------------------------------------------
-
-  /** List governance proposals */
-  async listProposals(
-    page = 1,
-    pageSize = 10,
-  ): Promise<PaginatedResponse<Proposal>> {
-    const result = await withRetry(
-      () =>
-        request<BackendSchemaGovernanceRecord[]>(
-          "GET",
-          "/api/v1/governance/schemas",
-          {
-            params: { page, limit: pageSize },
-          },
-        ),
-      DEFAULT_RETRIES,
-    );
-    const items = (result.data ?? []).map(schemaGovernanceToProposal);
-    const pagination = (
-      result as ApiResponse<BackendSchemaGovernanceRecord[]> & {
-        pagination?: BackendPagination;
-      }
-    ).pagination;
-    const resolvedPage = pagination?.page ?? page;
-    const resolvedPageSize = pagination?.limit ?? pageSize;
-    const total = pagination?.total ?? items.length;
-    return {
-      items,
-      total,
-      page: resolvedPage,
-      pageSize: resolvedPageSize,
-      hasMore: resolvedPage * resolvedPageSize < total,
-    };
-  },
-
-  /** Get a single proposal by ID */
-  async getProposal(proposalId: number | string): Promise<Proposal> {
-    const schema = await get<BackendSchemaGovernanceRecord>(
-      `/api/v1/governance/schemas/${encodeURIComponent(String(proposalId))}`,
-    );
-    return schemaGovernanceToProposal(schema);
   },
 } as const;
