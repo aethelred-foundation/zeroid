@@ -82,74 +82,61 @@ describe('DataSovereigntyService sovereign guardrails', () => {
     );
   });
 
-  it('blocks restricted cross-border transfers until required safeguards are evidenced', () => {
-    const result = service.assessCrossBorderTransfer({
-      sourceJurisdiction: 'SA-SAMA',
-      targetJurisdiction: 'US-FINCEN',
-      dataCategories: ['financial'],
-      dataSubjectId: 'subject-1',
-      purpose: 'regulated cloud processing',
-      legalBasis: 'standard_contractual_clauses',
-      recipientInfo: {
-        organizationName: 'Regulated Processor',
-        safeguards: [],
-      },
-    });
-
-    expect(result.allowed).toBe(false);
-    expect(result.riskLevel).toBe('prohibited');
-    expect(result.requiredSafeguards).toEqual(
-      expect.arrayContaining(['SAMA approval for financial data transfers']),
-    );
-    expect(result.conditions).toEqual(
-      expect.arrayContaining([
-        'Required safeguards must be evidenced before transfer: SAMA approval for financial data transfers',
-      ]),
-    );
+  it('fails closed for cross-border approvals without tenant-scoped evidence', () => {
+    expect(() =>
+      service.assessCrossBorderTransfer({
+        sourceJurisdiction: 'SA-SAMA',
+        targetJurisdiction: 'US-FINCEN',
+        dataCategories: ['financial'],
+        dataSubjectId: 'subject-1',
+        purpose: 'regulated cloud processing',
+        legalBasis: 'standard_contractual_clauses',
+        recipientInfo: {
+          organizationName: 'Regulated Processor',
+          safeguards: ['SAMA approval for financial data transfers'],
+        },
+      }),
+    ).toThrow('A durable tenant-scoped data-sovereignty store is required');
   });
 
-  it('allows restricted cross-border transfers when legal basis and safeguards are evidenced', () => {
-    const result = service.assessCrossBorderTransfer({
-      sourceJurisdiction: 'SA-SAMA',
-      targetJurisdiction: 'US-FINCEN',
-      dataCategories: ['financial'],
-      dataSubjectId: 'subject-1',
-      purpose: 'regulated cloud processing',
-      legalBasis: 'standard_contractual_clauses',
-      recipientInfo: {
-        organizationName: 'Regulated Processor',
-        safeguards: ['SAMA approval for financial data transfers'],
-      },
-    });
+  it('fails closed for every globally keyed sovereignty mutation', () => {
+    const operations = [
+      () => service.withdrawConsent('subject-1', 'purpose-1'),
+      () => service.conductPIA({
+        projectName: 'Identity verification',
+        description: 'Assess regulated identity verification processing',
+        dataCategories: ['credential'],
+        processingPurposes: ['identity_verification'],
+        dataSubjectCategories: ['customers'],
+        jurisdictions: ['EU-GDPR'],
+        thirdPartyProcessors: [],
+        automaticDecisionMaking: false,
+        crossBorderTransfer: false,
+      }),
+      () => service.registerDPA('Processor', 'EU-GDPR', 365),
+      () => service.initiateBreachNotification({
+        detectedAt: new Date().toISOString(),
+        description:
+          'Credential export bucket was accessed by an unauthorized principal',
+        severity: 'high',
+        dataCategories: ['credential'],
+        estimatedAffected: 12,
+        jurisdictions: ['EU-GDPR'],
+        containmentActions: ['Disabled export credentials'],
+      }),
+      () => service.trackRetention(
+        'subject-1',
+        'credential',
+        'EU-GDPR',
+        365,
+      ),
+    ];
 
-    expect(result).toMatchObject({
-      allowed: true,
-      riskLevel: 'medium',
-      legalBasis: 'standard_contractual_clauses',
-    });
-  });
-
-  it('blocks sensitive exports without the required explicit consent legal basis', () => {
-    const result = service.assessCrossBorderTransfer({
-      sourceJurisdiction: 'AE-CBUAE',
-      targetJurisdiction: 'EU-GDPR',
-      dataCategories: ['biometric'],
-      dataSubjectId: 'subject-2',
-      purpose: 'remote identity verification',
-      legalBasis: 'standard_contractual_clauses',
-      recipientInfo: {
-        organizationName: 'Identity Processor',
-        safeguards: ['UAE PDPL consent for sensitive data cross-border transfer'],
-      },
-    });
-
-    expect(result.allowed).toBe(false);
-    expect(result.riskLevel).toBe('prohibited');
-    expect(result.conditions).toEqual(
-      expect.arrayContaining([
-        'UAE sensitive data transfers require explicit consent before export',
-      ]),
-    );
+    for (const operation of operations) {
+      expect(operation).toThrow(
+        'A durable tenant-scoped data-sovereignty store is required',
+      );
+    }
   });
 
   it('denies fields for purposes that do not have an approved minimization rule', () => {
@@ -167,45 +154,30 @@ describe('DataSovereigntyService sovereign guardrails', () => {
     });
   });
 
-  it('recovers consent, breach, and retention evidence from durable storage', () => {
+  it('does not accept a global file as tenant-scoped sovereignty evidence', () => {
     const storeFile = createTempStoreFile();
-    const writer = new DataSovereigntyService({ storeFile });
+    const legacyGlobalStore = new DataSovereigntyService({ storeFile });
 
-    writer.recordConsent({
-      dataSubjectId: 'subject-durable',
-      purposes: [{
-        purposeId: 'identity-verification',
-        name: 'Identity verification',
-        description: 'Verify regulated account access',
-        legalBasis: 'consent',
-        dataCategories: ['credential'],
-        retentionDays: 365,
-      }],
-      consentGiven: true,
-      collectedAt: new Date().toISOString(),
-      collectionMethod: 'explicit_form',
-      jurisdiction: 'EU-GDPR',
-      withdrawable: true,
-    });
-    const breach = writer.initiateBreachNotification({
-      detectedAt: new Date().toISOString(),
-      description: 'Credential export bucket was accessed by an unauthorized principal',
-      severity: 'high',
-      dataCategories: ['credential'],
-      estimatedAffected: 12,
-      jurisdictions: ['EU-GDPR'],
-      containmentActions: ['Disabled export credentials'],
-    });
-    writer.trackRetention('subject-durable', 'credential', 'EU-GDPR', 365);
+    expect(() =>
+      legacyGlobalStore.recordConsent({
+        dataSubjectId: 'subject-durable',
+        purposes: [{
+          purposeId: 'identity-verification',
+          name: 'Identity verification',
+          description: 'Verify regulated account access',
+          legalBasis: 'consent',
+          dataCategories: ['credential'],
+          retentionDays: 365,
+        }],
+        consentGiven: true,
+        collectedAt: new Date().toISOString(),
+        collectionMethod: 'explicit_form',
+        jurisdiction: 'EU-GDPR',
+        withdrawable: true,
+      }),
+    ).toThrow('A durable tenant-scoped data-sovereignty store is required');
 
-    const reader = new DataSovereigntyService({ storeFile });
-
-    expect(reader.getConsents('subject-durable')).toHaveLength(1);
-    expect(reader.getBreachTimeline(breach.breachId)).toMatchObject({
-      breachId: breach.breachId,
-      dataSubjectNotificationRequired: true,
-    });
-    expect(reader.getRetentionStatus('subject-durable')?.records).toHaveLength(1);
+    expect(legacyGlobalStore.getConsents('subject-durable')).toHaveLength(0);
   });
 
   it('fails closed for production mutations without durable storage', () => {
@@ -234,7 +206,7 @@ describe('DataSovereigntyService sovereign guardrails', () => {
         collectionMethod: 'api',
         jurisdiction: 'EU-GDPR',
         withdrawable: true,
-      })).toThrow('Durable data-sovereignty store is required in production');
+      })).toThrow('A durable tenant-scoped data-sovereignty store is required');
     } finally {
       if (originalNodeEnv === undefined) delete process.env.NODE_ENV;
       else process.env.NODE_ENV = originalNodeEnv;

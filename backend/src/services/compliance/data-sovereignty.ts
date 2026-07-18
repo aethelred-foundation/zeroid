@@ -776,11 +776,9 @@ export class DataSovereigntyService {
   }
 
   private assertStoreAvailable(): void {
-    if (!isProductionRuntime() || this.storeFile) return;
-
     throw new DataSovereigntyError(
-      'Durable data-sovereignty store is required in production',
-      'DATA_SOVEREIGNTY_STORE_REQUIRED',
+      'A durable tenant-scoped data-sovereignty store is required',
+      'TENANT_SCOPED_DATA_SOVEREIGNTY_STORE_REQUIRED',
       503,
     );
   }
