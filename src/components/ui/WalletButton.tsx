@@ -21,6 +21,7 @@ import {
   isAethelredWallet,
   orderWalletConnectors,
 } from "@/config/wallet-picker";
+import { useIdentity } from "@/contexts/IdentityContext";
 
 type VerificationLevel = "verified" | "pending" | "unverified";
 
@@ -79,6 +80,7 @@ export function WalletButton({ className = "" }: WalletButtonProps) {
     address,
     query: { enabled: Boolean(address) },
   });
+  const { identity, sessionStatus, sessionError, signIn } = useIdentity();
 
   const chain = SUPPORTED_CHAINS.find((candidate) => candidate.id === chainId);
   const wrongNetwork = isConnected && !chain;
@@ -176,9 +178,15 @@ export function WalletButton({ className = "" }: WalletButtonProps) {
     );
   }
 
-  const verificationLevel: VerificationLevel = wrongNetwork
-    ? "unverified"
-    : "verified";
+  const verificationLevel: VerificationLevel =
+    wrongNetwork || !identity.isRegistered
+      ? "unverified"
+      : sessionStatus === "authenticated"
+        ? "verified"
+        : "pending";
+  const requiresSignIn =
+    identity.isRegistered &&
+    (sessionStatus === "sign-in-required" || sessionStatus === "signing");
 
   return (
     <div className={`flex items-center gap-1.5 ${className}`}>
@@ -203,6 +211,32 @@ export function WalletButton({ className = "" }: WalletButtonProps) {
           }}
         >
           {chain?.name ?? "Aethelred"}
+        </button>
+      )}
+
+      {requiresSignIn && !wrongNetwork && (
+        <button
+          type="button"
+          disabled={sessionStatus === "signing"}
+          onClick={() => {
+            void signIn().catch(() => {
+              // IdentityContext exposes the actionable error and restores the
+              // sign-in-required state; avoid an unhandled click promise.
+            });
+          }}
+          className="px-2.5 py-1.5 rounded-lg text-[11px] font-semibold transition-colors text-cyan-300 disabled:cursor-wait disabled:opacity-60"
+          style={{
+            background: "rgba(34,211,238,0.08)",
+            border: "1px solid rgba(34,211,238,0.18)",
+          }}
+          title={sessionError ?? "Sign in to your registered ZeroID identity"}
+          aria-label={
+            sessionError
+              ? `Sign in to ZeroID. ${sessionError}`
+              : "Sign in to ZeroID"
+          }
+        >
+          {sessionStatus === "signing" ? "Signing..." : "Sign In"}
         </button>
       )}
 

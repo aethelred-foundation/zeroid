@@ -34,6 +34,7 @@ import {
   type BackendIdentityRegistrationPayload,
   type BackendIdentityRegistrationResult,
 } from '@/lib/identity/registration';
+import { expireIdentitySession } from '@/lib/identity/session';
 import type {
   EligibilityDisclosurePolicy,
   EligibilityProofRequest,
@@ -166,6 +167,24 @@ export interface GovernmentVerificationResult {
   verifiedFields: string[];
   verifiedAt: string;
   expiresAt: string;
+}
+
+export interface IdentityAuthChallenge {
+  challengeId: string;
+  message: string;
+  expiresAt: string;
+}
+
+export interface IdentitySessionPrincipal {
+  id: string;
+  did: string;
+  status: string;
+}
+
+export interface IdentityAuthSession {
+  identity: IdentitySessionPrincipal;
+  token: string;
+  sessionId: string;
 }
 
 export interface EligibilityProofReceipt {
@@ -341,13 +360,27 @@ async function request<T>(
                 : (payload.message ?? response.statusText),
             details: payload.details,
           };
-    throw new ZeroIDApiError(
+    const normalizedError = new ZeroIDApiError(
       error.message,
       error.code,
       response.status,
       error.details,
       payload.requestId || requestId,
     );
+
+    if (
+      response.status === 401 &&
+      resolvedAuthToken &&
+      getIdentityAuthToken() === resolvedAuthToken &&
+      shouldAttachStoredAuthToken(path)
+    ) {
+      // A protected endpoint rejected the session. Clear it before React (or
+      // any other caller) handles the error so no subsequent request can reuse
+      // the rejected bearer token.
+      expireIdentitySession();
+    }
+
+    throw normalizedError;
   }
 
   const hasDataEnvelope =
@@ -372,7 +405,7 @@ async function get<T>(
 ): Promise<T> {
   const result = await withRetry(
     () => request<T>('GET', path, { params, authToken }),
-    DEFAULT_RETRIES,
+    shouldAttachStoredAuthToken(path) ? 0 : DEFAULT_RETRIES,
   );
   return result.data as T;
 }
@@ -705,6 +738,34 @@ export const apiClient = {
     return post('/api/v1/identity/register', payload, authToken);
   },
 
+  /** Create a short-lived, one-time wallet sign-in challenge. */
+  async createIdentityAuthChallenge(
+    address: Address,
+  ): Promise<IdentityAuthChallenge> {
+    return post<IdentityAuthChallenge>('/api/v1/identity/auth/challenge', {
+      address,
+    });
+  },
+
+  /** Exchange a signed one-time challenge for an identity session. */
+  async loginWithWallet(payload: {
+    challengeId: string;
+    signature: `0x${string}`;
+  }): Promise<IdentityAuthSession> {
+    return post<IdentityAuthSession>('/api/v1/identity/auth/login', payload);
+  },
+
+  /** Resolve and validate the principal represented by a bearer session. */
+  async getCurrentIdentity(
+    authToken?: string,
+  ): Promise<IdentitySessionPrincipal> {
+    return get<IdentitySessionPrincipal>(
+      '/api/v1/identity/me',
+      undefined,
+      authToken,
+    );
+  },
+
   /** Start a UAE Pass OAuth verification session for the current identity */
   async startUAEPassVerification(
     redirectUri: string,
@@ -746,7 +807,10 @@ export const apiClient = {
 
   /** List credentials for a subject */
   async listCredentials(
-    _subjectDidHash: Bytes32,
+    // The backend scopes this endpoint exclusively from the authenticated
+    // bearer principal. This legacy hint remains optional for call-site
+    // compatibility and is intentionally never sent as a query parameter.
+    _subjectDidHash: Bytes32 | undefined,
     page = 1,
     pageSize = 12,
     authToken?: string,
@@ -757,7 +821,7 @@ export const apiClient = {
           params: { page, limit: pageSize, role: 'subject' },
           authToken,
         }),
-      DEFAULT_RETRIES,
+      0,
     );
     const pagination = (
       result as ApiResponse<Credential[]> & {

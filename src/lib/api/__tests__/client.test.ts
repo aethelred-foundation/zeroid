@@ -15,8 +15,10 @@
 import { ZeroIDApiError, apiClient, buildApiUrl } from '@/lib/api/client';
 import {
   clearIdentityAuthToken,
+  getIdentityAuthToken,
   storeIdentityAuthToken,
 } from '@/lib/identity/registration';
+import { IDENTITY_SESSION_EXPIRED_EVENT } from '@/lib/identity/session';
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -206,6 +208,44 @@ describe('request internals (tested via apiClient methods)', () => {
     expect(init.headers['Authorization']).toBeUndefined();
   });
 
+  it('clears and broadcasts a rejected protected session on 401', async () => {
+    const expired = jest.fn();
+    window.addEventListener(IDENTITY_SESSION_EXPIRED_EVENT, expired);
+    storeIdentityAuthToken('expired-token');
+    mockFetch.mockResolvedValue(
+      errorResponse('AUTH_TOKEN_INVALID', 'Session expired', 401),
+    );
+
+    try {
+      await expect(
+        apiClient.getCredential('0xcred' as `0x${string}`),
+      ).rejects.toMatchObject({ statusCode: 401 });
+      expect(getIdentityAuthToken()).toBeUndefined();
+      expect(expired).toHaveBeenCalledTimes(1);
+    } finally {
+      window.removeEventListener(IDENTITY_SESSION_EXPIRED_EVENT, expired);
+    }
+  });
+
+  it('does not let a stale request clear a newer wallet session', async () => {
+    const expired = jest.fn();
+    window.addEventListener(IDENTITY_SESSION_EXPIRED_EVENT, expired);
+    storeIdentityAuthToken('new-wallet-token');
+    mockFetch.mockResolvedValue(
+      errorResponse('AUTH_TOKEN_INVALID', 'Old session expired', 401),
+    );
+
+    try {
+      await expect(
+        apiClient.getCredential('0xcred' as `0x${string}`, 'old-wallet-token'),
+      ).rejects.toMatchObject({ statusCode: 401 });
+      expect(getIdentityAuthToken()).toBe('new-wallet-token');
+      expect(expired).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener(IDENTITY_SESSION_EXPIRED_EVENT, expired);
+    }
+  });
+
   it('throws ZeroIDApiError with PARSE_ERROR when response JSON is invalid', async () => {
     mockFetch.mockResolvedValue(parseFailResponse(200));
     await expect(apiClient.health()).rejects.toThrow(ZeroIDApiError);
@@ -386,6 +426,15 @@ describe('retry behaviour', () => {
     expect(mockWithRetry).toHaveBeenCalledWith(expect.any(Function), 2);
   });
 
+  it('does not retry authenticated reads with the same rejected bearer token', async () => {
+    storeIdentityAuthToken('session-token');
+    mockFetch.mockResolvedValue(jsonResponse({ hash: '0xcred' }));
+
+    await apiClient.getCredential('0xcred' as `0x${string}`);
+
+    expect(mockWithRetry).toHaveBeenCalledWith(expect.any(Function), 0);
+  });
+
   it('retries GET requests on failure', async () => {
     let attempt = 0;
     mockWithRetry.mockImplementation(
@@ -520,6 +569,74 @@ describe('apiClient.registerIdentity()', () => {
     expect(url).toContain('/api/v1/identity/register');
     expect(init.method).toBe('POST');
     expect(init.headers['Authorization']).toBe('Bearer auth-tok');
+  });
+});
+
+describe('apiClient wallet authentication', () => {
+  it('creates a wallet challenge without attaching an existing bearer token', async () => {
+    storeIdentityAuthToken('old-token');
+    mockFetch.mockResolvedValue(
+      jsonResponse({
+        challengeId: 'a'.repeat(64),
+        message: 'server sign-in message',
+        expiresAt: '2026-07-18T10:05:00.000Z',
+      }),
+    );
+
+    const result = await apiClient.createIdentityAuthChallenge(
+      '0x1234567890abcdef1234567890abcdef12345678',
+    );
+
+    const [url, init] = mockFetch.mock.calls[0];
+    expect(url).toContain('/api/v1/identity/auth/challenge');
+    expect(init.method).toBe('POST');
+    expect(init.headers['Authorization']).toBeUndefined();
+    expect(JSON.parse(init.body)).toEqual({
+      address: '0x1234567890abcdef1234567890abcdef12345678',
+    });
+    expect(result.message).toBe('server sign-in message');
+  });
+
+  it('exchanges the signed challenge without sending a stale bearer token', async () => {
+    storeIdentityAuthToken('old-token');
+    mockFetch.mockResolvedValue(
+      jsonResponse({
+        identity: {
+          id: 'identity-1',
+          did: 'did:aethelred:testnet:0x1234',
+          status: 'ACTIVE',
+        },
+        token: 'new-token',
+        sessionId: 'session-1',
+      }),
+    );
+
+    const result = await apiClient.loginWithWallet({
+      challengeId: 'b'.repeat(64),
+      signature: `0x${'c'.repeat(130)}`,
+    });
+
+    const [url, init] = mockFetch.mock.calls[0];
+    expect(url).toContain('/api/v1/identity/auth/login');
+    expect(init.headers['Authorization']).toBeUndefined();
+    expect(result.token).toBe('new-token');
+  });
+
+  it('validates the current bearer principal through identity/me', async () => {
+    mockFetch.mockResolvedValue(
+      jsonResponse({
+        id: 'identity-1',
+        did: 'did:aethelred:testnet:0x1234',
+        status: 'ACTIVE',
+      }),
+    );
+
+    const result = await apiClient.getCurrentIdentity('session-token');
+
+    const [url, init] = mockFetch.mock.calls[0];
+    expect(url).toContain('/api/v1/identity/me');
+    expect(init.headers['Authorization']).toBe('Bearer session-token');
+    expect(result.id).toBe('identity-1');
   });
 });
 

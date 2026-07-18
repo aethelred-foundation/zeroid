@@ -19,10 +19,12 @@ jest.mock("lucide-react", () => ({
 const mockConnect = jest.fn();
 const mockDisconnect = jest.fn();
 const mockSwitchChain = jest.fn();
+const mockSignIn = jest.fn();
 let mockAccountState: Record<string, unknown>;
 let mockConnectState: Record<string, unknown>;
 let mockChainId: number;
 let mockBalanceState: Record<string, unknown>;
+let mockIdentityState: Record<string, unknown>;
 
 jest.mock("wagmi", () => ({
   useAccount: () => mockAccountState,
@@ -33,6 +35,10 @@ jest.mock("wagmi", () => ({
   useBalance: () => mockBalanceState,
 }));
 
+jest.mock("@/contexts/IdentityContext", () => ({
+  useIdentity: () => mockIdentityState,
+}));
+
 import { WalletButton } from "@/components/ui/WalletButton";
 import { activeChain } from "@/config/chains";
 
@@ -41,6 +47,7 @@ describe("WalletButton", () => {
     mockConnect.mockClear();
     mockDisconnect.mockClear();
     mockSwitchChain.mockClear();
+    mockSignIn.mockClear();
     mockAccountState = {
       address: undefined,
       isConnected: false,
@@ -56,6 +63,12 @@ describe("WalletButton", () => {
     };
     mockChainId = activeChain.id;
     mockBalanceState = { data: undefined };
+    mockIdentityState = {
+      identity: { isRegistered: false },
+      sessionStatus: "anonymous",
+      sessionError: null,
+      signIn: mockSignIn,
+    };
   });
 
   it("renders loading skeleton when connecting", () => {
@@ -69,7 +82,12 @@ describe("WalletButton", () => {
     mockConnectState = {
       connectors: [
         { uid: "w0", id: "injected", name: "Injected" },
-        { uid: "w1", id: "io.metamask", name: "MetaMask", icon: "data:image/svg+xml,fox" },
+        {
+          uid: "w1",
+          id: "io.metamask",
+          name: "MetaMask",
+          icon: "data:image/svg+xml,fox",
+        },
         {
           uid: "w2",
           id: "org.aethelred.wallet",
@@ -128,6 +146,48 @@ describe("WalletButton", () => {
     expect(screen.getByText("0x1234...5678")).toBeInTheDocument();
     expect(screen.getByText(activeChain.name)).toBeInTheDocument();
     expect(screen.getByText("1.5 ETH")).toBeInTheDocument();
+  });
+
+  it("shows an explicit sign-in action for a registered wallet without a session", () => {
+    mockAccountState = {
+      address: "0x1234567890abcdef1234567890abcdef12345678",
+      isConnected: true,
+      isConnecting: false,
+    };
+    mockIdentityState = {
+      identity: { isRegistered: true },
+      sessionStatus: "sign-in-required",
+      sessionError: "Your session expired.",
+      signIn: mockSignIn,
+    };
+    mockSignIn.mockResolvedValue(undefined);
+
+    render(<WalletButton />);
+
+    const signInButton = screen.getByRole("button", {
+      name: /sign in to zeroid/i,
+    });
+    expect(signInButton).toHaveTextContent("Sign In");
+    fireEvent.click(signInButton);
+    expect(mockSignIn).toHaveBeenCalledTimes(1);
+  });
+
+  it("disables the sign-in action while the wallet signature is pending", () => {
+    mockAccountState = {
+      address: "0x1234567890abcdef1234567890abcdef12345678",
+      isConnected: true,
+      isConnecting: false,
+    };
+    mockIdentityState = {
+      identity: { isRegistered: true },
+      sessionStatus: "signing",
+      sessionError: null,
+      signIn: mockSignIn,
+    };
+
+    render(<WalletButton />);
+
+    expect(screen.getByText("Signing...")).toBeDisabled();
   });
 
   it("shows Wrong Network and switches to active chain", () => {
