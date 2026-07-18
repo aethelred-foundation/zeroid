@@ -89,10 +89,8 @@ const agent = {
   updatedAt: "2026-07-18T08:01:00.000Z",
   stats: {
     totalActions: 12,
-    actionsToday: 3,
     successRate: 0.75,
     averageLatencyMs: 18.5,
-    anomalyCount: 1,
   },
   metadata: {},
 };

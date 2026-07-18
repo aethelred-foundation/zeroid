@@ -71,10 +71,8 @@ const agent = {
   lastActiveAt: "2026-07-18T08:01:00.000Z",
   stats: {
     totalActions: 12,
-    actionsToday: 3,
     successRate: 0.75,
     averageLatencyMs: 18.5,
-    anomalyCount: 1,
   },
   metadata: {},
 };
@@ -157,7 +155,7 @@ describe("AgentIdentityPage", () => {
 
     expect(screen.getByText("Credential Verifier")).toBeInTheDocument();
     expect(screen.getByText("12 actions")).toBeInTheDocument();
-    expect(screen.getByText("Anomalies")).toBeInTheDocument();
+    expect(screen.queryByText("Anomalies")).not.toBeInTheDocument();
     expect(screen.queryByText("TradingAgent-Gamma")).toBeNull();
 
     fireEvent.change(screen.getByRole("searchbox", { name: "Search agents" }), {
@@ -167,6 +165,18 @@ describe("AgentIdentityPage", () => {
     await waitFor(() =>
       expect(screen.queryByText("Credential Verifier")).toBeNull(),
     );
+  });
+
+  it("shows derived performance statistics as unavailable without actions", () => {
+    const newAgent = { ...agent, stats: { totalActions: 0 } };
+    mockAgentsState.data = [newAgent];
+    mockDetailState.data = newAgent;
+    render(<AgentIdentityPage />);
+
+    fireEvent.click(screen.getByRole("button", { name: /Credential Verifier/i }));
+
+    expect(screen.getAllByText("Not available")).toHaveLength(2);
+    expect(screen.queryByText("100.0%")).not.toBeInTheDocument();
   });
 
   it("submits the exact backend registration fields with TEE disabled", async () => {
@@ -264,7 +274,6 @@ describe("AgentIdentityPage", () => {
         resourceType: "credential",
         resourceId: "cred-001",
         riskLevel: "medium",
-        riskScore: 50,
         context: {},
         status: "pending",
         requestedAt: "2026-07-18T08:00:00.000Z",

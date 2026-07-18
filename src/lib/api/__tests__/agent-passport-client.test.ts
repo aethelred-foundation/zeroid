@@ -1,6 +1,7 @@
 import { apiClient } from "@/lib/api/client";
 import {
   createAIAgent,
+  getAgentApprovals,
   getAIAgents,
   normalizeAIAgent,
   type RegisterAIAgentRequest,
@@ -41,10 +42,8 @@ const validAgent = {
   updatedAt: "2026-07-18T08:01:00.000Z",
   stats: {
     totalActions: 12,
-    actionsToday: 3,
     successRate: 0.75,
     averageLatencyMs: 18.5,
-    anomalyCount: 1,
   },
   metadata: {},
 };
@@ -54,6 +53,24 @@ describe("AI Agent Identity DTO normalization", () => {
 
   it("accepts a complete backend agent without inventing fields", () => {
     expect(normalizeAIAgent(validAgent)).toEqual(validAgent);
+  });
+
+  it("does not invent success or latency evidence for a new agent", () => {
+    const normalized = normalizeAIAgent({
+      ...validAgent,
+      stats: { totalActions: 0 },
+    });
+
+    expect(normalized.stats).toEqual({ totalActions: 0 });
+  });
+
+  it("rejects derived statistics when no action evidence exists", () => {
+    expect(() =>
+      normalizeAIAgent({
+        ...validAgent,
+        stats: { totalActions: 0, successRate: 1, averageLatencyMs: 0 },
+      }),
+    ).toThrow("cannot report derived rates");
   });
 
   it.each([
@@ -80,6 +97,31 @@ describe("AI Agent Identity DTO normalization", () => {
       undefined,
       "identity-token",
     );
+  });
+
+  it("accepts durable approval evidence without a fabricated risk score", async () => {
+    const approval = {
+      id: "approval-001",
+      requestId: "approval-001",
+      agentId: validAgent.agentId,
+      operatorId: validAgent.operatorId,
+      action: "verify",
+      actionType: "verify",
+      actionDescription: "verify on credential:credential-001",
+      resourceType: "credential",
+      resourceId: "credential-001",
+      riskLevel: "medium",
+      context: {},
+      status: "pending",
+      requestedAt: "2026-07-18T08:00:00.000Z",
+      createdAt: "2026-07-18T08:00:00.000Z",
+      expiresAt: "2026-07-18T09:00:00.000Z",
+    };
+    mockedApi.get.mockResolvedValue([approval]);
+
+    await expect(getAgentApprovals("identity-token")).resolves.toEqual([
+      approval,
+    ]);
   });
 
   it("sends the exact registration DTO rather than passport scope fields", async () => {

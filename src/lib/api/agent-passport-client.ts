@@ -41,11 +41,8 @@ export interface AIAgentCapability {
 
 export interface AIAgentStats {
   totalActions: number;
-  actionsToday: number;
-  successRate: number;
-  averageLatencyMs: number;
-  anomalyCount: number;
-  lastAnomalyAt?: string;
+  successRate?: number;
+  averageLatencyMs?: number;
 }
 
 export interface AIAgentRecord {
@@ -117,7 +114,6 @@ export interface AgentApproval {
   resourceType: string;
   resourceId: string;
   riskLevel: AgentRiskLevel;
-  riskScore: number;
   context: Record<string, unknown>;
   status: "pending";
   requestedAt: string;
@@ -214,6 +210,22 @@ function requiredFiniteNumber(
   const value = record[key];
   if (typeof value !== "number" || !Number.isFinite(value) || value < minimum) {
     throw new Error(`${context}.${key} must be a finite number >= ${minimum}.`);
+  }
+  return value;
+}
+
+function optionalFiniteNumber(
+  record: Record<string, unknown>,
+  key: string,
+  context: string,
+  minimum = 0,
+): number | undefined {
+  const value = record[key];
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "number" || !Number.isFinite(value) || value < minimum) {
+    throw new Error(
+      `${context}.${key} must be a finite number >= ${minimum} when set.`,
+    );
   }
   return value;
 }
@@ -315,25 +327,31 @@ export function normalizeAIAgentCapability(
 function normalizeStats(value: unknown): AIAgentStats {
   const record = asRecord(value, "agent.stats");
   const totalActions = requiredInteger(record, "totalActions", "agent.stats");
-  const successRate = requiredFiniteNumber(
+  const successRate = optionalFiniteNumber(
     record,
     "successRate",
     "agent.stats",
   );
-  if (successRate > 1) {
+  if (successRate !== undefined && successRate > 1) {
     throw new Error("agent.stats.successRate must be between 0 and 1.");
+  }
+  const averageLatencyMs = optionalFiniteNumber(
+    record,
+    "averageLatencyMs",
+    "agent.stats",
+  );
+  if (
+    totalActions === 0 &&
+    (successRate !== undefined || averageLatencyMs !== undefined)
+  ) {
+    throw new Error(
+      "agent.stats cannot report derived rates without recorded actions.",
+    );
   }
   return {
     totalActions,
-    actionsToday: requiredInteger(record, "actionsToday", "agent.stats"),
-    successRate,
-    averageLatencyMs: requiredFiniteNumber(
-      record,
-      "averageLatencyMs",
-      "agent.stats",
-    ),
-    anomalyCount: requiredInteger(record, "anomalyCount", "agent.stats"),
-    lastAnomalyAt: optionalIsoDate(record, "lastAnomalyAt", "agent.stats"),
+    ...(successRate === undefined ? {} : { successRate }),
+    ...(averageLatencyMs === undefined ? {} : { averageLatencyMs }),
   };
 }
 
@@ -367,6 +385,8 @@ export function normalizeAIAgent(value: unknown): AIAgentRecord {
       reason: requiredString(suspensionRecord, "reason", "agent.suspension"),
     };
   }
+  const teeAttestationId = optionalString(record, "teeAttestationId", "agent");
+  const lastActiveAt = optionalIsoDate(record, "lastActiveAt", "agent");
 
   return {
     agentId: requiredString(record, "agentId", "agent"),
@@ -396,10 +416,10 @@ export function normalizeAIAgent(value: unknown): AIAgentRecord {
       5,
     ),
     teeAttested: requiredBoolean(record, "teeAttested", "agent"),
-    teeAttestationId: optionalString(record, "teeAttestationId", "agent"),
+    ...(teeAttestationId ? { teeAttestationId } : {}),
     createdAt: requiredIsoDate(record, "createdAt", "agent"),
     updatedAt: requiredIsoDate(record, "updatedAt", "agent"),
-    lastActiveAt: optionalIsoDate(record, "lastActiveAt", "agent"),
+    ...(lastActiveAt ? { lastActiveAt } : {}),
     stats: normalizeStats(record.stats),
     metadata: normalizeMetadata(record.metadata, "agent.metadata"),
     ...(suspension ? { suspension } : {}),
@@ -489,7 +509,6 @@ function normalizeApproval(value: unknown): AgentApproval {
     resourceType: requiredString(record, "resourceType", "approval"),
     resourceId: requiredString(record, "resourceId", "approval"),
     riskLevel: oneOf(record.riskLevel, AGENT_RISK_LEVELS, "approval.riskLevel"),
-    riskScore: requiredFiniteNumber(record, "riskScore", "approval"),
     context: normalizeMetadata(record.context, "approval.context"),
     status: oneOf(record.status, ["pending"] as const, "approval.status"),
     requestedAt: requiredIsoDate(record, "requestedAt", "approval"),

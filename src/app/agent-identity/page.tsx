@@ -583,19 +583,17 @@ function AgentInspector({ agentId }: { agentId: string }) {
         <div>
           <dt className="text-zero-500">Success rate</dt>
           <dd className="mt-1 text-zero-200">
-            {(record.stats.successRate * 100).toFixed(1)}%
+            {record.stats.successRate === undefined
+              ? "Not available"
+              : `${(record.stats.successRate * 100).toFixed(1)}%`}
           </dd>
         </div>
         <div>
           <dt className="text-zero-500">Average latency</dt>
           <dd className="mt-1 text-zero-200">
-            {record.stats.averageLatencyMs.toFixed(1)} ms
-          </dd>
-        </div>
-        <div>
-          <dt className="text-zero-500">Anomalies</dt>
-          <dd className="mt-1 text-zero-200">
-            {formatNumber(record.stats.anomalyCount)}
+            {record.stats.averageLatencyMs === undefined
+              ? "Not available"
+              : `${record.stats.averageLatencyMs.toFixed(1)} ms`}
           </dd>
         </div>
         <div>
@@ -747,10 +745,6 @@ export default function AgentIdentityPage() {
         (sum, agent) => sum + agent.stats.totalActions,
         0,
       ),
-      anomalies: records.reduce(
-        (sum, agent) => sum + agent.stats.anomalyCount,
-        0,
-      ),
     }),
     [records],
   );
@@ -808,13 +802,12 @@ export default function AgentIdentityPage() {
 
         <section
           aria-label="Agent totals"
-          className="grid grid-cols-2 divide-x divide-y divide-zero-800 border-y border-zero-800 sm:grid-cols-4 sm:divide-y-0"
+          className="grid grid-cols-1 divide-y divide-zero-800 border-y border-zero-800 sm:grid-cols-3 sm:divide-x sm:divide-y-0"
         >
           {[
             ["Registered", records.length],
             ["Active", totals.active],
             ["Total actions", totals.actions],
-            ["Anomalies", totals.anomalies],
           ].map(([label, value]) => (
             <div key={label} className="px-4 py-4 sm:px-6">
               <div className="text-xs text-zero-500">{label}</div>
