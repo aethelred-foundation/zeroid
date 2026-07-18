@@ -174,6 +174,14 @@ if (requireLive) {
     control: 'circuits:pinned-production-artifacts',
     ok: artifactValidation.ok,
   });
+
+  const eligibilityRoute = readText('backend/src/routes/verification.ts');
+  checks.push({
+    control: 'eligibility:signed-witness-prover-integrated',
+    ok:
+      eligibilityRoute.includes('eligibilityProofHandler') &&
+      !eligibilityRoute.includes('ZK_ELIGIBILITY_PROVER_NOT_INTEGRATED'),
+  });
 }
 
 const failed = checks.filter((check) => !check.ok);

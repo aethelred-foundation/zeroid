@@ -1,23 +1,30 @@
 # ZeroID — Deployment & Activation Runbook
 
-The operational checklist to take ZeroID from "implemented & tested" to "live on
-testnet". Each step is a concrete command; nothing here needs new code.
+The operational checklist for a hardened testnet deployment. Several cryptographic
+and evidence capabilities intentionally remain unavailable and require reviewed
+implementation work; running these commands alone does not make them live.
 
 ## Pilot critical path (priority order — consultant 2026-06-29)
 
 De-risk the December (ADFW) timeline by proving the **core ZK loop on-chain**
 first. Execute in this exact order; defer the esoteric tech.
 
-1. **Apply the DB migration** — §2 (`prisma migrate deploy`). *Blocked on: a
-   reachable Postgres.*
-2. **Deploy the foundational contracts** — §1 (`forge script Deploy.s.sol`),
-   then record addresses into `.env`. *Blocked on: a funded testnet key + RPC.*
-3. **Close the W2c (ZK verify) gate** — §3: produce a Groth16 proof from a
-   ZeroID circuit, verify via the chain precompile, confirm the snarkjs→arkworks
-   byte format, register vkeys, then set `NEXT_PUBLIC_CANONICAL_VERIFY=true`.
-   *Blocked on: deployed verifier + a real proof.*
-4. **Then** the conditional-disclosure path (escrow → quorum → reveal) on the
-   deployed `ConditionalDisclosure`.
+1. **Apply every reviewed DB migration** — §2 (`prisma migrate deploy`) against
+   a backed-up target database.
+2. **Complete the signed-witness eligibility pipeline** — validate a
+   provider-signed credential, run the real Groth16 prover, and verify the proof
+   against audited, digest-pinned artifacts.
+3. **Add durable relying-party challenges and atomic evidence persistence** —
+   challenge consumption, state revalidation, proof result, decision, and sealed
+   audit evidence must commit together. Agent flows also require a signed,
+   one-time agent-operation challenge.
+4. **Deploy the foundational contracts** — §1 (`forge script Deploy.s.sol`),
+   then record reviewed addresses and roles in deployment evidence.
+5. **Close the W2c on-chain verification gate** — verify a known Groth16 proof
+   via the target precompile, confirm byte compatibility, and register the exact
+   pinned verification key before changing client configuration.
+6. **Activate conditional disclosure only after** the persisted quorum escrow
+   and end-to-end authorization path are implemented and exercised.
 
 **Defer (keep flag-gated) until the base ZK + disclosure paths are stable:**
 W3c (TEE/DCAP), W4c (PQC), Phase 2b (zkML liveness). Stand up their real
@@ -111,11 +118,10 @@ npx jest && npx tsc --noEmit
 forge test
 # boundary guard
 cd .. && npm run boundary:check
-# partner endpoints (once DB + contracts live)
+# Partner eligibility must fail closed until the proof/challenge gate is complete.
+# Confirm the response is HTTP 503 with PARTNER_ELIGIBILITY_CHALLENGE_UNAVAILABLE
+# or the upstream ZK availability code; do not accept a decision or receipt.
 curl -XPOST $API/api/v1/partners/wallet/eligibility -H "authorization: Bearer $JWT" -d '{...}'
-# idempotent retry: same Idempotency-Key returns the prior result, no double side effect
-curl -XPOST $API/api/v1/partners/wallet/eligibility \
-  -H "authorization: Bearer $JWT" -H "Idempotency-Key: $(uuidgen)" -d '{...}'
 ```
 
 Each gate is independent and reversible (flip the flag back). The contracts ship
@@ -123,14 +129,11 @@ with `pause()` for incident response.
 
 ## 5. Integrator notes
 
-- **Idempotency** (opt-in): the write-bearing endpoints — `ai/agents/eligibility/proof`
-  and the partner POSTs (`partners/wallet/eligibility`, `partners/wallet/disclosure`,
-  `partners/cruzible/pools/:id/{eligibility,agent-scan}`) — accept an
-  `Idempotency-Key` header (1–255 chars). A retry with the same key returns the
-  prior terminal response instead of recording a second `AgentAction` /
-  re-running eligibility / re-deriving an escrow. Keys are namespaced per
-  operation; backed by the `idempotency_records` table. Memoization for
-  sequential retries — not a distributed lock (see `services/idempotency.ts`).
+- **Unavailable surfaces:** human, agent, and partner eligibility must not be
+  enabled by configuration alone. An `Idempotency-Key` does not replace either
+  one-time challenge and must not turn an unavailable response into cached proof
+  evidence. Wallet disclosure and partner evidence retrieval also fail closed
+  until their durable backing services exist.
 - **Errors**: every service maps to a stable `{ "error": <CODE>, "message": ... }`
   envelope via the shared taxonomy in `services/errors.ts`. Canonical codes
   (e.g. `AGENT_NOT_AUTHORIZED` 403, `POLICY_CONDITIONS_NOT_MET` 422,

@@ -72,6 +72,29 @@ credentials and are **not** required to boot or serve the core identity API.
 Leave their env vars unset on testnet; enable them per feature as credentials
 become available.
 
+### Eligibility availability
+
+Human, agent, and Wallet/Cruzible partner eligibility proof issuance currently
+fails closed. Database credentials and source-only circuit manifests are not
+proof evidence. Keep issuance disabled until provider-signed credential
+witnesses, audited and digest-pinned Groth16 artifacts, a real prover/verifier,
+durable one-time relying-party and agent challenges, and atomic evidence/audit
+persistence are integrated. See
+`docs/production/zeroid-v1-readiness-gate.md`.
+
+### OIDC claim boundary
+
+OIDC tokens omit profile, contact, address, and `verified_claims` values because
+identity profile metadata is client-mutable. Status-level government/TEE
+assurance claims require current authoritative evidence. Do not enable profile
+or contact scopes until provider-returned values have a dedicated encrypted,
+access-controlled evidence store with provenance and expiry.
+
+If an existing environment previously signed metadata-derived identity claims,
+coordinate an OIDC signing-key rotation and JWKS cache/overlap window during the
+hardened deployment. New production deployments still require managed signing
+keys and a tested rotation procedure.
+
 ## Migrations
 
 Prisma migrations live in `prisma/migrations/`. The Docker entrypoint runs

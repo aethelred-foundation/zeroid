@@ -65,3 +65,5 @@ npm run readiness:production
 ## Current Local Status
 
 This repository currently contains the source and manifest. Live production remains blocked until the artifact command is run with the approved toolchain and audited Powers of Tau file, and the resulting digest manifest is pinned.
+
+The ceremony is necessary but not sufficient for activation. Production also requires a provider-signed credential witness, a real prover and verifier, a durable one-time relying-party challenge (plus an agent-operation challenge for agent flows), and atomic persistence of challenge consumption, authorization, proof result, decision, and sealed evidence.

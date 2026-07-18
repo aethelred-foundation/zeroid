@@ -1,23 +1,35 @@
 # ZeroID v1 Production Readiness Gate
 
-ZeroID v1 is gated around one hero workflow: DID holder -> KYC credential -> UAE Pass/government-backed identity status -> eligibility proof -> durable evidence receipt.
+The target hero workflow is DID holder -> provider-backed KYC credential -> eligibility proof -> durable evidence receipt. The repository currently fails closed before eligibility proof issuance; it must not be described as a live proof service.
 
-## Release Modes
+## Release modes
 
-- Configured pre-production: `npm run readiness:check` must pass. This proves the repository has CI gates, manifest/source validation, consultant-required security/compliance documents, and visible product maturity labels.
-- Live production: `npm run readiness:production` must pass. This additionally requires compiled ZK artifacts and pinned SHA-256 digests for the eligibility circuit manifest, source, R1CS, WASM, zkey, and verification key.
+- `npm run readiness:check` validates repository controls, source manifests, required documents, and configured CI gates. Passing it does not activate eligibility issuance or establish production readiness.
+- `npm run readiness:production` additionally requires pinned circuit artifacts and checks that the explicit signed-witness prover block has been removed. Passing it is necessary, but the workflow acceptance criteria below must also be evidenced in the target environment.
 
-## Mandatory Gates
+## Mandatory technical gates
 
 - Frontend: `npm run type-check`, `npm run test:ci`, `npm run build`.
 - Backend: `npm --prefix backend run type-check`, `npm --prefix backend test`, `npm --prefix backend run build`.
-- Circuits: `npm run circuits:validate`; live production additionally requires `npm run circuits:eligibility:build` with the approved Circom/snarkjs/PTAU toolchain, then `npm run circuits:validate:artifacts`.
+- Circuits: `npm run circuits:validate`; production also requires an audited ceremony, `npm run circuits:eligibility:build`, and `npm run circuits:validate:artifacts`.
 - Contracts: `forge test`.
 - Security: `npm run security:audit:all`, Rust `cargo audit`, Go `govulncheck`.
-- Product scope: every primary route must have a readiness label from `src/lib/product/readiness.ts`.
+- Product scope: every primary route must have a readiness label in `src/lib/product/readiness.ts`.
 
-## Current Status
+## Eligibility issuance gate
 
-The v1 hero workflow is configured for enterprise demonstration and backend-backed evidence receipts. It is not Live production until the missing compiled Groth16 artifacts under `build/circuits/eligibility_context_v1/` are generated with `npm run circuits:eligibility:build`, reviewed, pinned in `ZK_CIRCUIT_ARTIFACT_DIGESTS_JSON`, and validated by `npm run readiness:production`.
+`POST /api/v1/verification/eligibility-proof` is intentionally unavailable in non-test deployments. Agent and Wallet/Cruzible partner eligibility paths are also unavailable. Do not enable any of them until all of the following are complete:
 
-Artifact ceremony details live in `docs/zk/eligibility-artifact-ceremony.md`.
+1. A provider-signed credential is validated and converted into the circuit's private witness without trusting client-mutable profile metadata.
+2. The R1CS, WASM, zkey, and verification key are produced from an audited Powers of Tau ceremony, independently reviewed, and pinned by digest.
+3. A real Groth16 prover runs and its output is cryptographically verified against the pinned verification key before any decision is returned.
+4. The relying party issues a durable, one-time challenge bound to the subject, credential, policy version, audience, and proof context. Agent requests additionally require a durable, one-time agent-operation challenge and agent signature.
+5. Challenge consumption, authorization state checks, proof verification result, decision, and sealed audit/evidence records commit atomically. A retry or partial failure must not create reusable or contradictory evidence.
+
+Stored legacy, pending-artifact, or unverified receipts must continue to fail closed. Ceremony instructions are in `docs/zk/eligibility-artifact-ceremony.md`.
+
+## OIDC claim gate
+
+OIDC tokens currently omit `name`, contact, address, and `verified_claims` values. Client-writable identity metadata is not authoritative; only current status-level government/TEE assurance claims may be emitted. Profile/contact claims remain unavailable until provider-returned values are stored in a dedicated encrypted, access-controlled evidence store with provenance, expiry, retention, and deletion controls.
+
+For an environment that previously signed metadata-derived identity claims, plan an OIDC signing-key rotation with a coordinated JWKS overlap/cache window before enabling production relying parties. A fresh environment must still use deploy-time managed signing keys and a documented rotation procedure.
