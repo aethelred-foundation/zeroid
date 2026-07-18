@@ -1,11 +1,20 @@
 import express from 'express';
 import request from 'supertest';
 
-const mockIdem = { findUnique: jest.fn(), upsert: jest.fn() };
+const mockIdem = {
+  findUnique: jest.fn(),
+  create: jest.fn(),
+  updateMany: jest.fn(),
+  deleteMany: jest.fn(),
+  upsert: jest.fn(),
+};
 jest.mock('../../src/runtime', () => ({
   prisma: {
     idempotencyRecord: {
       findUnique: (...a: unknown[]) => mockIdem.findUnique(...a),
+      create: (...a: unknown[]) => mockIdem.create(...a),
+      updateMany: (...a: unknown[]) => mockIdem.updateMany(...a),
+      deleteMany: (...a: unknown[]) => mockIdem.deleteMany(...a),
       upsert: (...a: unknown[]) => mockIdem.upsert(...a),
     },
   },
@@ -55,6 +64,9 @@ function makeApp() {
 beforeEach(() => {
   Object.values(mockSvc).forEach((f) => f.mockReset());
   mockIdem.findUnique.mockReset();
+  mockIdem.create.mockReset().mockResolvedValue(undefined);
+  mockIdem.updateMany.mockReset().mockResolvedValue({ count: 1 });
+  mockIdem.deleteMany.mockReset().mockResolvedValue({ count: 1 });
   mockIdem.upsert.mockReset().mockResolvedValue(undefined);
 });
 
@@ -132,6 +144,9 @@ describe('partner routes', () => {
   describe('idempotency', () => {
     it('returns the cached body on a repeated Idempotency-Key without re-running the service', async () => {
       const cached = { eligible: true, decision: { status: 'ALLOWED' } };
+      mockIdem.create.mockRejectedValue(
+        Object.assign(new Error('unique constraint'), { code: 'P2002' }),
+      );
       mockIdem.findUnique.mockResolvedValue({ response: cached });
       const r = await request(makeApp())
         .post('/api/v1/partners/wallet/eligibility')
@@ -150,7 +165,6 @@ describe('partner routes', () => {
     });
 
     it('runs the service and records the result on a fresh Idempotency-Key', async () => {
-      mockIdem.findUnique.mockResolvedValue(null);
       mockSvc.walletEligibility.mockResolvedValue({ eligible: true, decision: {} });
       const r = await request(makeApp())
         .post('/api/v1/partners/wallet/eligibility')
@@ -158,13 +172,26 @@ describe('partner routes', () => {
         .send({ ownerDid: 'did:partner', credentialId: 'c', policyId: 'P', relyingAppId: 'w' });
       expect(r.status).toBe(200);
       expect(mockSvc.walletEligibility).toHaveBeenCalledTimes(1);
-      expect(mockIdem.upsert).toHaveBeenCalledWith(
+      expect(mockIdem.create).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: {
+          data: expect.objectContaining({
             key: expect.stringMatching(
               /^partner\.wallet\.eligibility:p1:[a-f0-9]{64}:k2$/,
             ),
-          },
+            response: expect.objectContaining({
+              __zeroidIdempotency: 'zeroid.idempotency.pending.v1',
+            }),
+          }),
+        }),
+      );
+      expect(mockIdem.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            key: expect.stringMatching(
+              /^partner\.wallet\.eligibility:p1:[a-f0-9]{64}:k2$/,
+            ),
+          }),
+          data: { response: { eligible: true, decision: {} } },
         }),
       );
     });
