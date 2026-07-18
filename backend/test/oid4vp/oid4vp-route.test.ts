@@ -106,12 +106,23 @@ describe("OpenID4VP routes", () => {
     expect(r.body.decision.status).toBe("ALLOWED");
   });
 
-  it("POST /verify (stateless) returns the decision", async () => {
-    mockVerify.mockResolvedValue({ status: "ALLOWED" });
+  it("POST /verify fails closed until an actor-scoped one-time challenge is durable", async () => {
     const r = await request(makeApp())
       .post("/api/v1/oid4vp/verify")
       .send({ policyId: POLICY_ID, vpToken: "iss~d~kb", nonce: "n", audience: "rp" });
-    expect(r.status).toBe(200);
-    expect(r.body.status).toBe("ALLOWED");
+    expect(r.status).toBe(503);
+    expect(r.body).toEqual({
+      error: "OID4VP_VERIFIER_CHALLENGE_UNAVAILABLE",
+      message: "Same-device OpenID4VP verification is unavailable until durable verifier challenges are enabled",
+    });
+    expect(mockVerify).not.toHaveBeenCalled();
+  });
+
+  it("POST /verify still validates the request before reporting the unavailable verifier", async () => {
+    const r = await request(makeApp())
+      .post("/api/v1/oid4vp/verify")
+      .send({ policyId: POLICY_ID, vpToken: "iss~d~kb", nonce: "n" });
+    expect(r.status).toBe(400);
+    expect(mockVerify).not.toHaveBeenCalled();
   });
 });

@@ -120,6 +120,11 @@ OpenID4VP presentation request — no divergence.
 - `POST /oid4vp/callback` — `direct_post` endpoint; verifies the `vp_token`, runs policy, returns/redirects with the decision.
 - `GET /oid4vp/result/:state` — poll for the decision (cross-device).
 
+`POST /oid4vp/verify` is intentionally unavailable (`503
+OID4VP_VERIFIER_CHALLENGE_UNAVAILABLE`). It must not be integrated until the
+server issues and atomically consumes a durable, authenticated-verifier-scoped
+challenge and resolves the audience from a trusted relying-party registry.
+
 **Reuses:** `verification.ts` (`eligibilityProofHandler` — the exact policy engine, unchanged), the conformance boundary (`verify.ts`, `vkeys.ts`, `encoding.ts`) for the ZK predicate format, anti-replay/nonce, `issuer-trust-service`, `AccumulatorRevocation`, `PolicyDecisionLedger` (receipt).
 
 ---
@@ -179,7 +184,7 @@ All additive (the established migration pattern: tracked SQL in `docs/`).
 ## 10. Phased implementation plan (TDD, behind the existing patterns)
 
 1. **Spec + version pin** (this doc → reviewed) + `presentation_definition`/DCQL compiler from `policyId` (pure, unit-tested). *No infra.*
-2. **Verifier MVP (OpenID4VP, SD-JWT VC):** `/oid4vp/authorize` + `/oid4vp/callback`; verify SD-JWT VC; run `eligibilityProofHandler`; receipt. Same-device first.
+2. **Verifier MVP (OpenID4VP, SD-JWT VC):** `/oid4vp/authorize` + `/oid4vp/callback`; verify SD-JWT VC; run `eligibilityProofHandler`; receipt. Cross-device is the only live flow until durable same-device verifier challenges are implemented.
 3. **ZK predicate format** (`zeroid-zk-eligibility+jwt`) verified via the conformance boundary — the moat, standard-compatible. *Activates with W2c.*
 4. **Issuer (OpenID4VCI):** metadata + pre-authorized-code + credential endpoint; issue the AI Agent Passport + eligibility credentials.
 5. **Cross-device** (`request_uri` + QR) + `direct_post.jwt` encryption.

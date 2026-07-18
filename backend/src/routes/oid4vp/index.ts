@@ -2,7 +2,7 @@
  * ZeroID — OpenID4VP verifier routes.
  *
  * Same-device / B2B:
- *   POST /api/v1/oid4vp/verify             -> verify a vp_token, evaluate the policy (stateless)
+ *   POST /api/v1/oid4vp/verify             -> unavailable until verifier-issued challenges are durable
  * Cross-device (request_uri + direct_post):
  *   POST /api/v1/oid4vp/authorize          -> persist a request (state + one-time nonce); return request_uri + DCQL
  *   GET  /api/v1/oid4vp/request/:state      -> the Authorization Request the Wallet fetches
@@ -21,7 +21,6 @@ import { AuthenticatedRequest, authMiddleware } from '../../middleware/auth';
 import { apiRateLimiter } from '../../middleware/rateLimit';
 import { validate } from '../../middleware/validation';
 import { ServiceError, sendServiceError } from '../../services/errors';
-import { verifyPresentation, type PresentationVerifierDeps } from '../../services/oid4vp/verifier';
 import { createJoseSdJwtDeps, type IssuerKeyResolver } from '../../services/oid4vp/sd-jwt-jose';
 import { createJoseZkDeps } from '../../services/oid4vp/zk-predicate-jose';
 import { createZkProofServiceVerifier } from '../../services/oid4vp/zk-proofservice-verifier';
@@ -85,10 +84,6 @@ function resolveIssuerKeyFromEnv(): IssuerKeyResolver {
   };
 }
 
-export function buildVerifierDeps(): PresentationVerifierDeps {
-  return { sdJwt: createJoseSdJwtDeps(resolveIssuerKeyFromEnv()), zk: buildZkDeps(), recordDecision: createPrismaPresentationAuditRecorder(prisma) };
-}
-
 function buildCrossDeviceDeps(): CrossDeviceDeps {
   return {
     store: createPrismaOid4vpRequestStore(prisma),
@@ -122,13 +117,22 @@ router.post(
   '/verify',
   authMiddleware,
   validate({ body: VerifySchema }),
-  async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      const decision = await verifyPresentation(buildVerifierDeps(), req.body);
-      res.status(200).json(decision);
-    } catch (error) {
-      sendServiceError(res, error, logger);
-    }
+  async (_req: AuthenticatedRequest, res: Response) => {
+    // Same-device requests currently let the caller choose nonce, audience,
+    // and relyingAppId. Until those values come from a durable, one-time,
+    // actor-scoped verifier challenge, returning a decision would make replay
+    // protection and audit attribution unenforceable. Cross-device verification
+    // remains available through /authorize + /callback and consumes its stored
+    // nonce atomically.
+    sendServiceError(
+      res,
+      new ServiceError(
+        'Same-device OpenID4VP verification is unavailable until durable verifier challenges are enabled',
+        'OID4VP_VERIFIER_CHALLENGE_UNAVAILABLE',
+        503,
+      ),
+      logger,
+    );
   },
 );
 
