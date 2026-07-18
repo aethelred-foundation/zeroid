@@ -30,6 +30,7 @@ jest.mock("@/components/layout/AppLayout", () => ({
 
 const mockRevokeCredential = jest.fn();
 const mockUseCredentials = jest.fn();
+const mockRefetch = jest.fn();
 
 jest.mock("@/hooks/useCredentials", () => ({
   useCredentials: (...args: unknown[]) => mockUseCredentials(...args),
@@ -84,7 +85,12 @@ describe("RevocationPage", () => {
     jest.clearAllMocks();
     mockUseCredentials.mockReturnValue({
       data: { credentials },
-      isLoading: false,
+      credentials,
+      accessState: "ready",
+      isPending: false,
+      isFetching: false,
+      error: null,
+      refetch: mockRefetch,
     });
   });
 
@@ -107,7 +113,9 @@ describe("RevocationPage", () => {
     render(<RevocationPage />);
     expect(screen.getByText("KYC Level 2")).toBeInTheDocument();
     expect(screen.getByText("Employment")).toBeInTheDocument();
-    expect(screen.getByText(/Previously Revoked/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Revoked records in returned page/),
+    ).toBeInTheDocument();
     expect(screen.getByTestId("status-badge")).toHaveTextContent("revoked");
   });
 
@@ -171,11 +179,101 @@ describe("RevocationPage", () => {
   });
 
   it("handles an absent credential response", () => {
-    mockUseCredentials.mockReturnValue({ data: undefined, isLoading: false });
+    mockUseCredentials.mockReturnValue({
+      data: undefined,
+      credentials: [],
+      accessState: "ready",
+      isPending: false,
+      isFetching: false,
+      error: null,
+      refetch: mockRefetch,
+    });
     render(<RevocationPage />);
-    expect(screen.getByText("Active Credentials (0)")).toBeInTheDocument();
     expect(
-      screen.getByText("No active credentials to revoke"),
+      screen.getByText("Active records in returned page (0)"),
     ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "No active credentials were returned for this issuer page",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it.each([
+    ["wallet-required", "Connect the issuer wallet"],
+    ["sign-in-required", "Issuer sign-in required"],
+  ])("gates issuer records for %s", (accessState, message) => {
+    mockUseCredentials.mockReturnValue({
+      credentials: [],
+      accessState,
+      isPending: false,
+      isFetching: false,
+      error: null,
+      refetch: mockRefetch,
+    });
+
+    render(<RevocationPage />);
+
+    expect(screen.getByText(message)).toBeInTheDocument();
+    expect(
+      screen.queryByPlaceholderText("Search credentials issued by you..."),
+    ).not.toBeInTheDocument();
+  });
+
+  it("distinguishes loading from an empty issuer inventory", () => {
+    mockUseCredentials.mockReturnValue({
+      credentials: [],
+      accessState: "ready",
+      isPending: true,
+      isFetching: true,
+      error: null,
+      refetch: mockRefetch,
+    });
+
+    render(<RevocationPage />);
+
+    expect(
+      screen.getByText("Loading issuer credential records..."),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/No active credentials were returned/),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows inventory failures and retries the authenticated request", () => {
+    mockUseCredentials.mockReturnValue({
+      credentials: [],
+      accessState: "ready",
+      isPending: false,
+      isFetching: false,
+      error: new Error("issuer inventory offline"),
+      refetch: mockRefetch,
+    });
+
+    render(<RevocationPage />);
+    expect(screen.getByText("issuer inventory offline")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("Retry"));
+    expect(mockRefetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not render invalid credential dates as evidence", () => {
+    mockUseCredentials.mockReturnValue({
+      credentials: [
+        {
+          ...credentials[0],
+          issuedAt: "not-a-date",
+          expiresAt: "also-not-a-date",
+        },
+      ],
+      accessState: "ready",
+      isPending: false,
+      isFetching: false,
+      error: null,
+      refetch: mockRefetch,
+    });
+
+    render(<RevocationPage />);
+    expect(screen.getByText(/Issued Unavailable/)).toBeInTheDocument();
+    expect(screen.queryByText(/Invalid Date/)).not.toBeInTheDocument();
   });
 });

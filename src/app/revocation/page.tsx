@@ -17,12 +17,24 @@ import { useCredentials, useRevokeCredential } from "@/hooks/useCredentials";
 import { Modal } from "@/components/ui/Modal";
 import { toast } from "sonner";
 
+function formatCredentialDate(value: string | null | undefined): string {
+  if (!value) return "Unavailable";
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp)
+    ? new Intl.DateTimeFormat("en-US", {
+        dateStyle: "medium",
+        timeZone: "UTC",
+      }).format(new Date(timestamp))
+    : "Unavailable";
+}
+
 export default function RevocationPage() {
   // Revocation is an issuer authority. Holder inventory surfaces never expose
   // this action, and this page explicitly queries credentials issued by the
   // authenticated identity.
   const credentialsQuery = useCredentials(undefined, "issuer");
-  const credentials = credentialsQuery.data?.credentials ?? [];
+  const credentials = credentialsQuery.credentials;
+  const accessState = credentialsQuery.accessState;
   const revokeCredentialMutation = useRevokeCredential();
   const [searchQuery, setSearchQuery] = useState("");
   const [confirmRevoke, setConfirmRevoke] = useState<string | null>(null);
@@ -86,96 +98,144 @@ export default function RevocationPage() {
           </div>
         </div>
 
-        {/* Search */}
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-tertiary)]" />
-          <input
-            type="text"
-            placeholder="Search credentials issued by you..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="input pl-10"
-          />
-        </div>
-
-        {/* Active Credentials */}
-        <div>
-          <h2 className="text-lg font-semibold mb-3">
-            Active Credentials ({activeCredentials.length})
-          </h2>
-          {activeCredentials.length > 0 ? (
-            <div className="space-y-3">
-              {activeCredentials.map((cred) => (
-                <div
-                  key={cred.id}
-                  className="card p-4 flex items-center justify-between"
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-status-verified/10 flex items-center justify-center">
-                      <ShieldCheck className="w-5 h-5 text-status-verified" />
-                    </div>
-                    <div>
-                      <div className="font-medium text-sm">
-                        {cred.typeLabel}
-                      </div>
-                      <div className="text-xs text-[var(--text-tertiary)]">
-                        Issued {new Date(cred.issuedAt).toLocaleDateString()} ·{" "}
-                        {cred.expiresAt
-                          ? `Expires ${new Date(cred.expiresAt).toLocaleDateString()}`
-                          : "No expiry"}
-                      </div>
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => setConfirmRevoke(cred.id)}
-                    className="btn-ghost btn-sm text-status-revoked hover:bg-status-revoked/10"
-                  >
-                    <Ban className="w-4 h-4" />
-                    Revoke
-                  </button>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="card p-8 text-center">
-              <Shield className="w-10 h-10 mx-auto mb-2 text-[var(--text-tertiary)]" />
-              <p className="text-sm text-[var(--text-secondary)]">
-                No active credentials to revoke
-              </p>
-            </div>
-          )}
-        </div>
-
-        {/* Revoked Credentials */}
-        {revokedCredentials.length > 0 && (
-          <div>
-            <h2 className="text-lg font-semibold mb-3">
-              Previously Revoked ({revokedCredentials.length})
+        {accessState !== "ready" ? (
+          <div className="card p-8 text-center" role="status">
+            <Shield className="mx-auto h-10 w-10 text-[var(--text-tertiary)]" />
+            <h2 className="mt-3 text-sm font-semibold">
+              {accessState === "wallet-required"
+                ? "Connect the issuer wallet"
+                : "Issuer sign-in required"}
             </h2>
-            <div className="space-y-2">
-              {revokedCredentials.map((cred) => (
-                <div
-                  key={cred.id}
-                  className="card p-4 flex items-center justify-between opacity-60"
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-status-revoked/10 flex items-center justify-center">
-                      <XCircle className="w-5 h-5 text-status-revoked" />
-                    </div>
-                    <div>
-                      <div className="font-medium text-sm line-through">
-                        {cred.typeLabel}
-                      </div>
-                      <div className="text-xs text-[var(--text-tertiary)]">
-                        Revocation recorded in the ZeroID registry
-                      </div>
-                    </div>
-                  </div>
-                  <StatusBadge status="revoked" />
-                </div>
-              ))}
-            </div>
+            <p className="mt-1 text-sm text-[var(--text-secondary)]">
+              {accessState === "wallet-required"
+                ? "Connect the wallet that owns the issuing ZeroID identity."
+                : "Sign in from the header before loading issuer-controlled credential records."}
+            </p>
           </div>
+        ) : credentialsQuery.isPending ? (
+          <div
+            className="card flex items-center justify-center gap-3 p-8 text-sm text-[var(--text-secondary)]"
+            role="status"
+          >
+            <RefreshCw className="h-5 w-5 animate-spin" />
+            Loading issuer credential records...
+          </div>
+        ) : credentialsQuery.error ? (
+          <div className="card p-6" role="alert">
+            <h2 className="text-sm font-semibold text-red-200">
+              Issuer credential inventory unavailable
+            </h2>
+            <p className="mt-1 text-sm text-[var(--text-secondary)]">
+              {credentialsQuery.error instanceof Error
+                ? credentialsQuery.error.message
+                : "The credential request failed."}
+            </p>
+            <button
+              type="button"
+              onClick={() => void credentialsQuery.refetch()}
+              className="btn-secondary mt-4"
+              disabled={credentialsQuery.isFetching}
+            >
+              <RefreshCw
+                className={`h-4 w-4 ${credentialsQuery.isFetching ? "animate-spin" : ""}`}
+              />
+              Retry
+            </button>
+          </div>
+        ) : (
+          <>
+            {/* Search */}
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-tertiary)]" />
+              <input
+                type="text"
+                placeholder="Search credentials issued by you..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="input pl-10"
+              />
+            </div>
+
+            {/* Active Credentials */}
+            <div>
+              <h2 className="text-lg font-semibold mb-3">
+                Active records in returned page ({activeCredentials.length})
+              </h2>
+              {activeCredentials.length > 0 ? (
+                <div className="space-y-3">
+                  {activeCredentials.map((cred) => (
+                    <div
+                      key={cred.id}
+                      className="card p-4 flex items-center justify-between"
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-xl bg-status-verified/10 flex items-center justify-center">
+                          <ShieldCheck className="w-5 h-5 text-status-verified" />
+                        </div>
+                        <div>
+                          <div className="font-medium text-sm">
+                            {cred.typeLabel}
+                          </div>
+                          <div className="text-xs text-[var(--text-tertiary)]">
+                            Issued {formatCredentialDate(cred.issuedAt)} ·{" "}
+                            {cred.expiresAt
+                              ? `Expires ${formatCredentialDate(cred.expiresAt)}`
+                              : "No expiry returned"}
+                          </div>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => setConfirmRevoke(cred.id)}
+                        className="btn-ghost btn-sm text-status-revoked hover:bg-status-revoked/10"
+                      >
+                        <Ban className="w-4 h-4" />
+                        Revoke
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="card p-8 text-center">
+                  <Shield className="w-10 h-10 mx-auto mb-2 text-[var(--text-tertiary)]" />
+                  <p className="text-sm text-[var(--text-secondary)]">
+                    No active credentials were returned for this issuer page
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {/* Revoked Credentials */}
+            {revokedCredentials.length > 0 && (
+              <div>
+                <h2 className="text-lg font-semibold mb-3">
+                  Revoked records in returned page ({revokedCredentials.length})
+                </h2>
+                <div className="space-y-2">
+                  {revokedCredentials.map((cred) => (
+                    <div
+                      key={cred.id}
+                      className="card p-4 flex items-center justify-between opacity-60"
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-xl bg-status-revoked/10 flex items-center justify-center">
+                          <XCircle className="w-5 h-5 text-status-revoked" />
+                        </div>
+                        <div>
+                          <div className="font-medium text-sm line-through">
+                            {cred.typeLabel}
+                          </div>
+                          <div className="text-xs text-[var(--text-tertiary)]">
+                            Revocation recorded in the ZeroID registry
+                          </div>
+                        </div>
+                      </div>
+                      <StatusBadge status="revoked" />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </>
         )}
       </div>
 
