@@ -2,7 +2,6 @@ import { Router, Request, Response } from 'express';
 import { z } from 'zod';
 import { createLogger, format, transports } from 'winston';
 import {
-  webhookSystem,
   WebhookRegistrationSchema,
   WebhookUpdateSchema,
 } from '../../services/enterprise/webhook-system';
@@ -500,6 +499,37 @@ function sendEnterpriseControlPlaneUnavailable(
       'Enterprise API access is unavailable until runtime credential authentication and durable request metering are integrated',
     code: 'ENTERPRISE_API_CONTROL_PLANE_UNAVAILABLE',
     capability,
+    status: 'configuration_required',
+  });
+}
+
+/**
+ * Webhook configuration and delivery evidence are not authoritative until
+ * domain mutations are committed to a durable outbox. Keep every mounted
+ * webhook surface fail closed so synthetic test deliveries cannot be
+ * mistaken for an operational event pipeline.
+ */
+function sendWebhookEventOutboxUnavailable(
+  req: Request,
+  res: Response,
+): void {
+  try {
+    // Defense in depth: preserve the tenant boundary even though the route's
+    // enterprise middleware has already resolved the caller's organization.
+    getClientId(req);
+  } catch (err) {
+    const error = err as Error & { statusCode?: number; code?: string };
+    res.status(error.statusCode ?? 403).json({
+      error: error.message,
+      code: error.code ?? 'ENTERPRISE_CONTEXT_REQUIRED',
+    });
+    return;
+  }
+
+  res.status(503).json({
+    error:
+      'Enterprise webhooks are unavailable until authoritative domain mutations are connected to a durable event outbox',
+    code: 'WEBHOOK_EVENT_OUTBOX_UNAVAILABLE',
     status: 'configuration_required',
   });
 }
@@ -1282,28 +1312,8 @@ router.post(
   '/webhooks',
   requireEnterpriseContext(ENTERPRISE_OPERATOR_ROLES),
   validate({ body: WebhookRegistrationSchema }),
-  async (req: Request, res: Response): Promise<void> => {
-    try {
-      const clientId = getClientId(req);
-      const webhook = await webhookSystem.register(clientId, req.body);
-      res.status(201).json({
-        data: {
-          id: webhook.id,
-          url: webhook.url,
-          events: webhook.events,
-          secret: webhook.secret,
-          active: webhook.active,
-          createdAt: webhook.createdAt,
-        },
-        message: 'Webhook registered successfully',
-      });
-    } catch (err) {
-      const error = err as Error & { statusCode?: number; code?: string };
-      logger.error('webhook_register_error', { error: error.message });
-      res
-        .status(error.statusCode ?? 500)
-        .json({ error: error.message, code: error.code ?? 'WEBHOOK_ERROR' });
-    }
+  (req: Request, res: Response): void => {
+    sendWebhookEventOutboxUnavailable(req, res);
   },
 );
 
@@ -1313,28 +1323,8 @@ router.post(
 router.get(
   '/webhooks',
   requireEnterpriseContext(ENTERPRISE_READ_ROLES),
-  async (req: Request, res: Response): Promise<void> => {
-    try {
-      const clientId = getClientId(req);
-      const webhooks = await webhookSystem.list(clientId);
-      res.status(200).json({
-        data: webhooks.map((w) => ({
-          id: w.id,
-          url: w.url,
-          events: w.events,
-          active: w.active,
-          health: w.health,
-          createdAt: w.createdAt,
-          updatedAt: w.updatedAt,
-        })),
-      });
-    } catch (err) {
-      const error = err as Error;
-      logger.error('webhook_list_error', { error: error.message });
-      res
-        .status(500)
-        .json({ error: error.message, code: 'WEBHOOK_LIST_ERROR' });
-    }
+  (req: Request, res: Response): void => {
+    sendWebhookEventOutboxUnavailable(req, res);
   },
 );
 
@@ -1344,35 +1334,9 @@ router.get(
 router.patch(
   '/webhooks/:id',
   requireEnterpriseContext(ENTERPRISE_OPERATOR_ROLES),
-  validate({ body: WebhookUpdateSchema }),
-  async (req: Request, res: Response): Promise<void> => {
-    try {
-      const clientId = getClientId(req);
-      const webhook = await webhookSystem.update(
-        req.params.id as string,
-        clientId,
-        req.body,
-      );
-      res.status(200).json({
-        data: {
-          id: webhook.id,
-          url: webhook.url,
-          events: webhook.events,
-          active: webhook.active,
-          health: webhook.health,
-          createdAt: webhook.createdAt,
-          updatedAt: webhook.updatedAt,
-        },
-        message: 'Webhook updated',
-      });
-    } catch (err) {
-      const error = err as Error & { statusCode?: number; code?: string };
-      logger.error('webhook_update_error', { error: error.message });
-      res.status(error.statusCode ?? 500).json({
-        error: error.message,
-        code: error.code ?? 'WEBHOOK_UPDATE_ERROR',
-      });
-    }
+  validate({ params: RouteIdParamSchema, body: WebhookUpdateSchema }),
+  (req: Request, res: Response): void => {
+    sendWebhookEventOutboxUnavailable(req, res);
   },
 );
 
@@ -1383,19 +1347,8 @@ router.delete(
   '/webhooks/:id',
   requireEnterpriseContext(ENTERPRISE_OPERATOR_ROLES),
   validate({ params: RouteIdParamSchema }),
-  async (req: Request, res: Response): Promise<void> => {
-    try {
-      const clientId = getClientId(req);
-      await webhookSystem.remove(req.params.id as string, clientId);
-      res.status(204).send();
-    } catch (err) {
-      const error = err as Error & { statusCode?: number; code?: string };
-      logger.error('webhook_delete_error', { error: error.message });
-      res.status(error.statusCode ?? 500).json({
-        error: error.message,
-        code: error.code ?? 'WEBHOOK_DELETE_ERROR',
-      });
-    }
+  (req: Request, res: Response): void => {
+    sendWebhookEventOutboxUnavailable(req, res);
   },
 );
 
@@ -1406,25 +1359,8 @@ router.get(
   '/webhooks/:id/deliveries',
   requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES),
   validate({ params: RouteIdParamSchema, query: LimitedListQuerySchema }),
-  async (req: Request, res: Response): Promise<void> => {
-    try {
-      const clientId = getClientId(req);
-      const { limit } = req.query as unknown as z.infer<
-        typeof LimitedListQuerySchema
-      >;
-      const deliveries = await webhookSystem.getDeliveries(
-        req.params.id as string,
-        clientId,
-        limit,
-      );
-      res.status(200).json({ data: deliveries });
-    } catch (err) {
-      const error = err as Error;
-      logger.error('webhook_deliveries_error', { error: error.message });
-      res
-        .status(500)
-        .json({ error: error.message, code: 'DELIVERY_LOG_ERROR' });
-    }
+  (req: Request, res: Response): void => {
+    sendWebhookEventOutboxUnavailable(req, res);
   },
 );
 
@@ -1435,26 +1371,8 @@ router.post(
   '/webhooks/:id/test',
   requireEnterpriseContext(ENTERPRISE_OPERATOR_ROLES),
   validate({ params: RouteIdParamSchema }),
-  async (req: Request, res: Response): Promise<void> => {
-    try {
-      const clientId = getClientId(req);
-      const result = await webhookSystem.testDelivery(
-        req.params.id as string,
-        clientId,
-      );
-      res.status(200).json({
-        data: result,
-        message: result.delivered
-          ? 'Webhook test delivered'
-          : 'Webhook test attempted',
-      });
-    } catch (err) {
-      const error = err as Error & { statusCode?: number; code?: string };
-      logger.error('webhook_test_error', { error: error.message });
-      res
-        .status(error.statusCode ?? 500)
-        .json({ error: error.message, code: error.code ?? 'WEBHOOK_TEST_ERROR' });
-    }
+  (req: Request, res: Response): void => {
+    sendWebhookEventOutboxUnavailable(req, res);
   },
 );
 
@@ -1465,24 +1383,8 @@ router.post(
   '/webhooks/:id/replay',
   requireEnterpriseContext(ENTERPRISE_OPERATOR_ROLES),
   validate({ params: RouteIdParamSchema, body: WebhookReplaySchema }),
-  async (req: Request, res: Response): Promise<void> => {
-    try {
-      const { since, until } = req.body;
-      const clientId = getClientId(req);
-      const result = await webhookSystem.replayEvents(
-        req.params.id as string,
-        since,
-        until,
-        clientId,
-      );
-      res.status(200).json({ data: result, message: 'Events replayed' });
-    } catch (err) {
-      const error = err as Error & { statusCode?: number; code?: string };
-      logger.error('webhook_replay_error', { error: error.message });
-      res
-        .status(error.statusCode ?? 500)
-        .json({ error: error.message, code: error.code ?? 'REPLAY_ERROR' });
-    }
+  (req: Request, res: Response): void => {
+    sendWebhookEventOutboxUnavailable(req, res);
   },
 );
 

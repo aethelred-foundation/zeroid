@@ -16,6 +16,15 @@ const mockGetAlerts = jest.fn();
 const mockGenerateReport = jest.fn();
 const mockRegisterSLA = jest.fn();
 const mockUpdateGovernanceSchemaSafeParse = jest.fn();
+const mockWebhookRegister = jest.fn();
+const mockWebhookList = jest.fn();
+const mockWebhookUpdate = jest.fn();
+const mockWebhookRemove = jest.fn();
+const mockWebhookGetDeliveries = jest.fn();
+const mockWebhookTestDelivery = jest.fn();
+const mockWebhookReplayEvents = jest.fn();
+const mockWebhookRegistrationSchemaSafeParse = jest.fn();
+const mockWebhookUpdateSchemaSafeParse = jest.fn();
 
 jest.mock(
   'express',
@@ -123,12 +132,21 @@ jest.mock('../src/middleware/rateLimit', () => ({
 }));
 
 jest.mock('../src/services/enterprise/webhook-system', () => ({
-  webhookSystem: {},
+  webhookSystem: {
+    register: mockWebhookRegister,
+    list: mockWebhookList,
+    update: mockWebhookUpdate,
+    remove: mockWebhookRemove,
+    getDeliveries: mockWebhookGetDeliveries,
+    testDelivery: mockWebhookTestDelivery,
+    replayEvents: mockWebhookReplayEvents,
+  },
   WebhookRegistrationSchema: {
-    safeParse: (value: unknown) => ({ success: true, data: value }),
+    safeParse: (value: unknown) =>
+      mockWebhookRegistrationSchemaSafeParse(value),
   },
   WebhookUpdateSchema: {
-    safeParse: (value: unknown) => ({ success: true, data: value }),
+    safeParse: (value: unknown) => mockWebhookUpdateSchemaSafeParse(value),
   },
 }));
 
@@ -245,7 +263,7 @@ jest.mock('../src/runtime', () => ({
 import '../src/routes/enterprise/integration';
 
 async function invokeRoute(
-  method: 'GET' | 'PATCH' | 'POST',
+  method: 'DELETE' | 'GET' | 'PATCH' | 'POST',
   path: string,
   options: {
     body?: Record<string, unknown>;
@@ -357,6 +375,13 @@ describe('enterprise organization governance routes', () => {
         data: value,
       }),
     );
+    mockWebhookRegistrationSchemaSafeParse.mockImplementation(
+      (value: unknown) => ({ success: true, data: value }),
+    );
+    mockWebhookUpdateSchemaSafeParse.mockImplementation((value: unknown) => ({
+      success: true,
+      data: value,
+    }));
   });
 
   it('returns organization governance settings', async () => {
@@ -522,6 +547,85 @@ describe('enterprise organization governance routes', () => {
     expect(mockGetSDKMetadata).not.toHaveBeenCalled();
   });
 
+  it('keeps every webhook surface unavailable without a durable event outbox', async () => {
+    const responses = [
+      await invokeRoute('POST', '/webhooks', {
+        body: {
+          url: 'https://enterprise.example/hooks/zeroid',
+          events: ['credential.issued'],
+        },
+      }),
+      await invokeRoute('GET', '/webhooks'),
+      await invokeRoute('PATCH', '/webhooks/:id', {
+        params: { id: 'webhook-1' },
+        body: { active: false },
+      }),
+      await invokeRoute('DELETE', '/webhooks/:id', {
+        params: { id: 'webhook-1' },
+      }),
+      await invokeRoute('GET', '/webhooks/:id/deliveries', {
+        params: { id: 'webhook-1' },
+        query: { limit: '10' },
+      }),
+      await invokeRoute('POST', '/webhooks/:id/test', {
+        params: { id: 'webhook-1' },
+      }),
+      await invokeRoute('POST', '/webhooks/:id/replay', {
+        params: { id: 'webhook-1' },
+        body: { since: '2026-04-21T00:00:00.000Z' },
+      }),
+    ];
+
+    for (const response of responses) {
+      expect(response.statusCode).toBe(503);
+      expect(response.body).toEqual({
+        error:
+          'Enterprise webhooks are unavailable until authoritative domain mutations are connected to a durable event outbox',
+        code: 'WEBHOOK_EVENT_OUTBOX_UNAVAILABLE',
+        status: 'configuration_required',
+      });
+    }
+
+    for (const serviceMethod of [
+      mockWebhookRegister,
+      mockWebhookList,
+      mockWebhookUpdate,
+      mockWebhookRemove,
+      mockWebhookGetDeliveries,
+      mockWebhookTestDelivery,
+      mockWebhookReplayEvents,
+    ]) {
+      expect(serviceMethod).not.toHaveBeenCalled();
+    }
+  });
+
+  it('validates webhook inputs before returning the capability gate', async () => {
+    mockWebhookRegistrationSchemaSafeParse.mockReturnValueOnce({
+      success: false,
+      error: {
+        flatten: () => ({
+          fieldErrors: { url: ['A valid HTTPS URL is required'] },
+          formErrors: [],
+        }),
+      },
+    });
+
+    const registrationResponse = await invokeRoute('POST', '/webhooks', {
+      body: { url: 'not-a-url', events: [] },
+    });
+    const replayResponse = await invokeRoute('POST', '/webhooks/:id/replay', {
+      params: { id: 'webhook-1' },
+      body: { since: 'not-a-date' },
+    });
+
+    expect(registrationResponse.statusCode).toBe(400);
+    expect(registrationResponse.body.code).toBe('VALIDATION_ERROR');
+    expect(replayResponse.statusCode).toBe(400);
+    expect(replayResponse.body.code).toBe('VALIDATION_ERROR');
+    expect(mockWebhookRegister).not.toHaveBeenCalled();
+    expect(mockWebhookReplayEvents).not.toHaveBeenCalled();
+  });
+
   it('keeps every SLA evidence endpoint unavailable without a telemetry adapter', async () => {
     const reportResponse = await invokeRoute('GET', '/sla/report', {
       query: { period: '30' },
@@ -604,5 +708,17 @@ describe('enterprise organization governance routes', () => {
       code: 'ENTERPRISE_CONTEXT_REQUIRED',
     });
     expect(mockGetAnalytics).not.toHaveBeenCalled();
+  });
+
+  it('does not bypass the webhook tenant boundary while unavailable', async () => {
+    const response = await invokeRoute('GET', '/webhooks', {
+      headers: { 'x-test-skip-enterprise-context': 'true' },
+    });
+
+    expect(response.statusCode).toBe(403);
+    expect(response.body).toMatchObject({
+      code: 'ENTERPRISE_CONTEXT_REQUIRED',
+    });
+    expect(mockWebhookList).not.toHaveBeenCalled();
   });
 });

@@ -1,11 +1,9 @@
 import React from "react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 
 const mockApiKeysRefetch = jest.fn();
 const mockCreateAPIKeyMutateAsync = jest.fn();
 const mockRevokeAPIKeyMutate = jest.fn();
-const mockRegisterWebhookMutateAsync = jest.fn();
-const mockTestWebhookMutate = jest.fn();
 
 const mockApiKeys = [
   {
@@ -41,29 +39,6 @@ const mockApiKeys = [
     revokedAt: null,
     revokedReason: null,
     metadata: {},
-  },
-];
-
-const mockWebhooks = [
-  {
-    id: "w1",
-    url: "https://api.example.com/webhooks/zeroid",
-    events: ["credential.issued", "verification.completed"],
-    createdAt: "2026-01-15T00:00:00.000Z",
-    active: true,
-    enabled: true,
-    health: {
-      status: "healthy",
-      successRate: 99.8,
-      lastDeliveryAt: "2026-06-26T10:00:00.000Z",
-    },
-  },
-  {
-    id: "w2",
-    url: "https://edge.example.com/webhooks/zeroid",
-    events: ["credential.revoked"],
-    createdAt: "2026-01-16T00:00:00.000Z",
-    active: true,
   },
 ];
 
@@ -135,26 +110,13 @@ jest.mock("@/hooks/useEnterprise", () => ({
     mutate: mockRevokeAPIKeyMutate,
     isPending: false,
   }),
-  useRegisterWebhook: () => ({
-    mutateAsync: mockRegisterWebhookMutateAsync,
-    isPending: false,
-  }),
   useSLAReport: () => ({
     data: mockSlaReport,
     isLoading: false,
     error: null,
   }),
-  useTestWebhook: () => ({
-    mutate: mockTestWebhookMutate,
-    isPending: false,
-  }),
   useUsageMetrics: () => ({
     data: mockUsageMetrics,
-    isLoading: false,
-    error: null,
-  }),
-  useWebhooks: () => ({
-    data: mockWebhooks,
     isLoading: false,
     error: null,
   }),
@@ -199,7 +161,6 @@ describe("EnterprisePage", () => {
       name: "Created production key",
       secret: "zid_live_secret_created",
     });
-    mockRegisterWebhookMutateAsync.mockResolvedValue(mockWebhooks[0]);
   });
 
   it("renders only backend-backed enterprise capabilities", () => {
@@ -248,41 +209,30 @@ describe("EnterprisePage", () => {
     expect(screen.queryByTitle("Revoke API key")).not.toBeInTheDocument();
   });
 
-  it("shows unreported webhook health honestly", () => {
+  it("keeps webhooks unavailable without live registration or delivery controls", () => {
     render(<EnterprisePage />);
     selectTab("Webhooks");
 
-    expect(screen.getByText("99.8% success")).toBeInTheDocument();
-    expect(screen.getByText("Success rate not reported")).toBeInTheDocument();
-  });
-
-  it("registers and tests webhooks through enterprise hooks", async () => {
-    render(<EnterprisePage />);
-    selectTab("Webhooks");
-    fireEvent.click(screen.getByRole("button", { name: "Add Endpoint" }));
-    fireEvent.change(
-      screen.getByPlaceholderText("https://enterprise.example/hooks/zeroid"),
-      { target: { value: "https://edge.example/hooks/zeroid" } },
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Register Endpoint" }));
-
-    await waitFor(() =>
-      expect(mockRegisterWebhookMutateAsync).toHaveBeenCalledWith(
-        expect.objectContaining({
-          url: "https://edge.example/hooks/zeroid",
-          events: expect.arrayContaining([
-            "credential.issued",
-            "verification.completed",
-          ]),
-          active: true,
-        }),
-      ),
-    );
-
-    fireEvent.click(
-      screen.getAllByRole("button", { name: "Test delivery" })[0],
-    );
-    expect(mockTestWebhookMutate).toHaveBeenCalledWith("w1");
+    expect(
+      screen.getByText("Webhook delivery unavailable"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Awaiting durable event outbox"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Authoritative event source")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Add Endpoint" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Test delivery" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("https://api.example.com/webhooks/zeroid"),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText(/% success/)).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("dialog", { name: "Add webhook endpoint" }),
+    ).not.toBeInTheDocument();
   });
 
   it("shows usage as unavailable without durable runtime metering", () => {
