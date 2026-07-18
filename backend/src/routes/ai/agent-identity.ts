@@ -21,18 +21,23 @@ const AgentCapabilitySchema = z.object({
   actions: z.array(z.string().min(1).max(50)).min(1).max(20),
   riskLevel: z.enum(['low', 'medium', 'high', 'critical']),
   requiresApproval: z.boolean(),
-  rateLimit: z.object({
-    maxPerHour: z.number().int().min(1).max(10000),
-    maxPerDay: z.number().int().min(1).max(100000),
-  }).optional(),
+  rateLimit: z
+    .object({
+      maxPerHour: z.number().int().min(1).max(10000),
+      maxPerDay: z.number().int().min(1).max(100000),
+    })
+    .optional(),
 });
 
 const RegisterAgentSchema = z.object({
   agentName: z.string().min(3).max(100),
   agentDescription: z.string().min(10).max(1000),
   agentProtocol: z.enum([
-    'openai_functions', 'anthropic_tool_use', 'google_genai',
-    'aethelred_native', 'custom',
+    'openai_functions',
+    'anthropic_tool_use',
+    'google_genai',
+    'aethelred_native',
+    'custom',
   ]),
   capabilities: z.array(AgentCapabilitySchema).min(1).max(50),
   publicKey: z.string().min(32).max(512),
@@ -49,35 +54,148 @@ const UpdateCapabilitiesSchema = z.object({
   capabilities: z.array(AgentCapabilitySchema).min(1).max(50),
 });
 
-const DelegationConstraintSchema = z.object({
-  type: z.enum([
-    'time_bounded', 'action_scoped', 'resource_scoped',
-    'rate_limited', 'approval_required',
-  ]),
-  parameters: z.record(z.unknown()),
+const DelegationScopeListSchema = z
+  .array(z.string().trim().min(1).max(200))
+  .min(1)
+  .max(50)
+  .refine((values) => new Set(values).size === values.length, {
+    message: 'Constraint values must be unique',
+  });
+
+const DelegationConstraintSchema = z.discriminatedUnion('type', [
+  z
+    .object({
+      type: z.literal('time_bounded'),
+      parameters: z
+        .object({
+          notBefore: z.string().datetime().optional(),
+          notAfter: z.string().datetime().optional(),
+        })
+        .strict()
+        .refine(({ notBefore, notAfter }) => Boolean(notBefore || notAfter), {
+          message: 'notBefore or notAfter is required',
+        }),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal('action_scoped'),
+      parameters: z
+        .object({
+          actions: DelegationScopeListSchema,
+        })
+        .strict(),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal('resource_scoped'),
+      parameters: z
+        .object({
+          resourceIds: DelegationScopeListSchema.optional(),
+          resourceTypes: DelegationScopeListSchema.optional(),
+        })
+        .strict()
+        .refine(
+          ({ resourceIds, resourceTypes }) =>
+            Boolean(resourceIds || resourceTypes),
+          { message: 'resourceIds or resourceTypes is required' },
+        ),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal('risk_bounded'),
+      parameters: z
+        .object({
+          maxRiskLevel: z.enum(['low', 'medium', 'high', 'critical']),
+        })
+        .strict(),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal('rate_limited'),
+      parameters: z
+        .object({
+          maxPerHour: z.number().int().min(1).max(10000).optional(),
+          maxPerDay: z.number().int().min(1).max(100000).optional(),
+        })
+        .strict()
+        .refine(
+          ({ maxPerHour, maxPerDay }) =>
+            maxPerHour !== undefined || maxPerDay !== undefined,
+          { message: 'maxPerHour or maxPerDay is required' },
+        ),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal('approval_required'),
+      parameters: z
+        .object({
+          reason: z.string().trim().min(1).max(500).optional(),
+        })
+        .strict(),
+    })
+    .strict(),
+]);
+
+const CreateDelegationSchema = z
+  .object({
+    toAgentId: z.string().min(1),
+    capabilities: z.array(z.string().min(1).max(100)).min(1),
+    constraints: z.array(DelegationConstraintSchema).max(10).default([]),
+    durationHours: z.number().min(0.1).max(8760), // max 1 year
+  })
+  .strict();
+
+const DelegationPathParamsSchema = z.object({
+  agentId: z.string().min(1),
+  delegationId: z.string().regex(/^del-[0-9a-f-]{36}$/i),
 });
 
-const CreateDelegationSchema = z.object({
-  toAgentId: z.string().min(1),
-  capabilities: z.array(z.string().min(1).max(100)).min(1),
-  constraints: z.array(DelegationConstraintSchema).max(10).default([]),
-  durationHours: z.number().min(0.1).max(8760), // max 1 year
-});
+const AgentOperationContextSchema = z
+  .object({
+    operationId: z.string().trim().min(1).max(200),
+    callerAgentId: z.string().trim().min(1).max(200).optional(),
+    callerProtocol: z
+      .enum([
+        'openai_functions',
+        'anthropic_tool_use',
+        'google_genai',
+        'aethelred_native',
+        'custom',
+      ])
+      .optional(),
+    purpose: z.string().trim().min(3).max(500),
+    resourceId: z.string().trim().min(1).max(500),
+    resourceType: z.string().trim().min(1).max(200),
+    action: z.string().trim().min(1).max(200),
+  })
+  .strict();
 
-const VerifyAgentSchema = z.object({
-  challenge: z.string().min(32).max(512),
-  signature: z.string().min(64).max(1024),
-  requestedCapabilities: z.array(z.string().min(1).max(100)).min(1).max(20),
-  context: z.object({
-    callerAgentId: z.string().optional(),
-    callerProtocol: z.enum([
-      'openai_functions', 'anthropic_tool_use', 'google_genai',
-      'aethelred_native', 'custom',
-    ]).optional(),
-    purpose: z.string().min(3).max(500),
-    resourceId: z.string().optional(),
-  }),
-});
+const IssueChallengeSchema = z
+  .object({
+    requestedCapabilities: z.array(z.string().min(1).max(100)).min(1).max(20),
+    context: AgentOperationContextSchema,
+    approvalGroupId: z.string().trim().min(1).max(200).optional(),
+  })
+  .strict();
+
+const VerifyAgentSchema = z
+  .object({
+    challengeId: z.string().regex(/^ach-[0-9a-f-]{36}$/i),
+    nonce: z.string().regex(/^[A-Za-z0-9_-]{43}$/),
+    issuedAt: z.string().datetime(),
+    expiresAt: z.string().datetime(),
+    audience: z.string().trim().min(1).max(200),
+    signature: z.string().min(64).max(1024),
+    requestedCapabilities: z.array(z.string().min(1).max(100)).min(1).max(20),
+    context: AgentOperationContextSchema,
+    approvalGroupId: z.string().trim().min(1).max(200).optional(),
+  })
+  .strict();
 
 const SuspendAgentSchema = z.object({
   reason: z.string().min(5).max(1000),
@@ -87,21 +205,16 @@ const AuditQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(200).default(50),
 });
 
-const ApprovalResponseSchema = z.object({
-  requestId: z.string().min(1),
-  approved: z.boolean(),
-  note: z.string().min(1).max(1000),
-});
-
 const ApprovalIdParamsSchema = z.object({
   requestId: z.string().min(1),
 });
 
-const ApprovalPathResponseSchema = z.object({
-  approved: z.boolean(),
-  note: z.string().min(1).max(1000).optional(),
-  reason: z.string().min(1).max(1000).optional(),
-});
+const ApprovalPathResponseSchema = z
+  .object({
+    approved: z.boolean(),
+    note: z.string().trim().min(1).max(1000),
+  })
+  .strict();
 
 // ---------------------------------------------------------------------------
 // Router
@@ -145,11 +258,15 @@ router.get(
   async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
       if (!req.identity) {
-        res.status(401).json({ error: 'AUTH_REQUIRED', message: 'Authentication required' });
+        res
+          .status(401)
+          .json({ error: 'AUTH_REQUIRED', message: 'Authentication required' });
         return;
       }
 
-      const agents = await agentIdentityService.listAgentsForOperator(req.identity.id);
+      const agents = await agentIdentityService.listAgentsForOperator(
+        req.identity.id,
+      );
 
       res.json({
         success: true,
@@ -190,11 +307,15 @@ router.get(
   async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
       if (!req.identity) {
-        res.status(401).json({ error: 'AUTH_REQUIRED', message: 'Authentication required' });
+        res
+          .status(401)
+          .json({ error: 'AUTH_REQUIRED', message: 'Authentication required' });
         return;
       }
 
-      const approvals = await agentIdentityService.listPendingApprovals(req.identity.id);
+      const approvals = await agentIdentityService.listPendingApprovals(
+        req.identity.id,
+      );
 
       res.json({
         success: true,
@@ -221,16 +342,17 @@ router.post(
   async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
       if (!req.identity) {
-        res.status(401).json({ error: 'AUTH_REQUIRED', message: 'Authentication required' });
+        res
+          .status(401)
+          .json({ error: 'AUTH_REQUIRED', message: 'Authentication required' });
         return;
       }
 
-      const note = req.body.note ?? req.body.reason ?? 'No note provided';
       const result = await agentIdentityService.respondToApproval(
         req.params.requestId as string,
         req.identity.id,
         req.body.approved,
-        note,
+        req.body.note,
       );
 
       res.json({
@@ -252,6 +374,41 @@ router.post(
 );
 
 // ---------------------------------------------------------------------------
+// DELETE /ai/agents/:agentId/delegations/:delegationId — Revoke one tree
+// ---------------------------------------------------------------------------
+router.delete(
+  '/:agentId/delegations/:delegationId',
+  validate({ params: DelegationPathParamsSchema }),
+  async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    try {
+      if (!req.identity) {
+        res
+          .status(401)
+          .json({ error: 'AUTH_REQUIRED', message: 'Authentication required' });
+        return;
+      }
+      const result = await agentIdentityService.revokeDelegation(
+        req.params.delegationId as string,
+        req.identity.id,
+        req.params.agentId as string,
+      );
+      res.json({
+        success: true,
+        data: {
+          delegationId: result.delegation.delegationId,
+          status: result.delegation.status,
+          revokedAt: result.delegation.revokedAt,
+          revokedBy: result.delegation.revokedBy,
+          revokedDelegationIds: result.revokedDelegationIds,
+        },
+      });
+    } catch (error) {
+      handleError(error, res);
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
 // POST /ai/agents — Register a new agent identity
 // ---------------------------------------------------------------------------
 router.post(
@@ -260,7 +417,9 @@ router.post(
   async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
       if (!req.identity) {
-        res.status(401).json({ error: 'AUTH_REQUIRED', message: 'Authentication required' });
+        res
+          .status(401)
+          .json({ error: 'AUTH_REQUIRED', message: 'Authentication required' });
         return;
       }
 
@@ -352,7 +511,9 @@ router.post(
   async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
       if (!req.identity) {
-        res.status(401).json({ error: 'AUTH_REQUIRED', message: 'Authentication required' });
+        res
+          .status(401)
+          .json({ error: 'AUTH_REQUIRED', message: 'Authentication required' });
         return;
       }
 
@@ -393,7 +554,9 @@ router.post(
   async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
       if (!req.identity) {
-        res.status(401).json({ error: 'AUTH_REQUIRED', message: 'Authentication required' });
+        res
+          .status(401)
+          .json({ error: 'AUTH_REQUIRED', message: 'Authentication required' });
         return;
       }
 
@@ -429,7 +592,36 @@ router.post(
 );
 
 // ---------------------------------------------------------------------------
-// POST /ai/agents/:agentId/verify — Verify agent identity for M2M
+// POST /ai/agents/:agentId/challenges — Issue a durable operation challenge
+// ---------------------------------------------------------------------------
+router.post(
+  '/:agentId/challenges',
+  validate({
+    params: AgentIdParamsSchema,
+    body: IssueChallengeSchema,
+  }),
+  async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    try {
+      if (!req.identity) {
+        res
+          .status(401)
+          .json({ error: 'AUTH_REQUIRED', message: 'Authentication required' });
+        return;
+      }
+      const challenge = await agentIdentityService.issueVerificationChallenge(
+        req.params.agentId as string,
+        req.identity.id,
+        req.body,
+      );
+      res.status(201).json({ success: true, data: challenge });
+    } catch (error) {
+      handleError(error, res);
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// POST /ai/agents/:agentId/verify — Verify and authorize one issued operation
 // ---------------------------------------------------------------------------
 router.post(
   '/:agentId/verify',
@@ -439,10 +631,19 @@ router.post(
   }),
   async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
-      const result = await agentIdentityService.verifyAgent({
-        agentId: req.params.agentId as string,
-        ...req.body,
-      });
+      if (!req.identity) {
+        res
+          .status(401)
+          .json({ error: 'AUTH_REQUIRED', message: 'Authentication required' });
+        return;
+      }
+      const result = await agentIdentityService.verifyAgent(
+        {
+          agentId: req.params.agentId as string,
+          ...req.body,
+        },
+        req.identity.id,
+      );
 
       res.json({
         success: true,
@@ -502,7 +703,9 @@ router.post(
   async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
       if (!req.identity) {
-        res.status(401).json({ error: 'AUTH_REQUIRED', message: 'Authentication required' });
+        res
+          .status(401)
+          .json({ error: 'AUTH_REQUIRED', message: 'Authentication required' });
         return;
       }
 
@@ -521,47 +724,8 @@ router.post(
           suspendedBy: agent.suspendedBy,
           reason: agent.suspensionReason,
         },
-        message: 'Agent has been suspended. All active delegations have been revoked.',
-      });
-    } catch (error) {
-      handleError(error, res);
-    }
-  },
-);
-
-// ---------------------------------------------------------------------------
-// POST /ai/agents/approvals/respond — Respond to human-in-the-loop approval
-// ---------------------------------------------------------------------------
-router.post(
-  '/approvals/respond',
-  validate({ body: ApprovalResponseSchema }),
-  async (req: AuthenticatedRequest, res: Response): Promise<void> => {
-    try {
-      if (!req.identity) {
-        res.status(401).json({ error: 'AUTH_REQUIRED', message: 'Authentication required' });
-        return;
-      }
-
-      const { requestId, approved, note } = req.body;
-
-      const result = await agentIdentityService.respondToApproval(
-        requestId,
-        req.identity.id,
-        approved,
-        note,
-      );
-
-      res.json({
-        success: true,
-        data: {
-          requestId: result.requestId,
-          agentId: result.agentId,
-          action: result.action,
-          status: result.status,
-          respondedAt: result.respondedAt,
-          respondedBy: result.respondedBy,
-        },
-        message: `Approval request ${approved ? 'approved' : 'rejected'}`,
+        message:
+          'Agent has been suspended. All active delegations have been revoked.',
       });
     } catch (error) {
       handleError(error, res);
@@ -602,20 +766,27 @@ function formatApprovalQueueItem(approval: {
   context: Record<string, unknown>;
   status: string;
   createdAt: Date;
+  expiresAt: Date;
   operatorId: string;
+  approvalGroupId: string;
+  operationId: string;
+  operationDigest: string;
+  authorizationSnapshotDigest: string;
+  requestedCapabilities: string[];
+  requiredApproverIds: string[];
+  audienceId: string;
 }) {
-  const riskScoreByLevel: Record<string, number> = {
-    low: 25,
-    medium: 50,
-    high: 75,
-    critical: 95,
-  };
-  const expiresAt = new Date(approval.createdAt.getTime() + 24 * 3600_000);
-
   return {
     id: approval.requestId,
     requestId: approval.requestId,
     agentId: approval.agentId,
+    approvalGroupId: approval.approvalGroupId,
+    operationId: approval.operationId,
+    operationDigest: approval.operationDigest,
+    authorizationSnapshotDigest: approval.authorizationSnapshotDigest,
+    requestedCapabilities: approval.requestedCapabilities,
+    requiredApproverIds: approval.requiredApproverIds,
+    audienceId: approval.audienceId,
     operatorId: approval.operatorId,
     action: approval.action,
     actionType: approval.action,
@@ -623,12 +794,11 @@ function formatApprovalQueueItem(approval: {
     resourceType: approval.resourceType,
     resourceId: approval.resourceId,
     riskLevel: approval.riskLevel,
-    riskScore: riskScoreByLevel[approval.riskLevel] ?? 75,
     context: approval.context,
     status: approval.status,
     requestedAt: approval.createdAt,
     createdAt: approval.createdAt,
-    expiresAt,
+    expiresAt: approval.expiresAt,
   };
 }
 
