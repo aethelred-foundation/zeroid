@@ -131,26 +131,6 @@ function labelCredentialType(credentialType: string): string {
     .join(' ');
 }
 
-function inferKycLevel(requiredCredentials: string[]): number {
-  if (
-    requiredCredentials.some((credential) =>
-      ['source_of_funds', 'source_of_wealth', 'kyc_enhanced'].includes(
-        credential,
-      ),
-    )
-  ) {
-    return 3;
-  }
-  if (
-    requiredCredentials.some((credential) =>
-      ['aml_clearance', 'sanctions_clearance'].includes(credential),
-    )
-  ) {
-    return 2;
-  }
-  return 1;
-}
-
 // ---------------------------------------------------------------------------
 // Middleware: validate request targets with Zod schemas
 // ---------------------------------------------------------------------------
@@ -4299,47 +4279,28 @@ router.get(
         data: {
           jurisdictionId: jurisdictionMeta.code,
           operationType,
+          evidenceStatus: 'configured_policy_only',
+          policySource: {
+            kind: 'internal_configuration',
+            externalAuthorityVerified: false,
+          },
           requiredCredentials: requiredCredentials.map((credentialType) => ({
-            schemaId: credentialType,
-            schemaName: labelCredentialType(credentialType),
+            credentialType,
+            label: labelCredentialType(credentialType),
             mandatory: true,
-            validityPeriodDays: retentionPolicy.retentionDays,
-            acceptedIssuers: [jurisdictionMeta.regulatoryBody],
-            renewalBufferDays: 90,
           })),
-          dataRetentionDays: retentionPolicy.retentionDays,
-          consentRequirements: [
-            {
-              type:
-                retentionPolicy.consentModel === 'opt-out'
-                  ? 'opt_out'
-                  : retentionPolicy.consentModel === 'explicit'
-                    ? 'explicit'
-                    : 'implicit',
-              purpose: `${jurisdictionMeta.name} identity and compliance processing`,
-              retentionDays: retentionPolicy.retentionDays,
-              withdrawalEnabled: retentionPolicy.consentModel !== 'opt-out',
-              granularity: 'per_credential',
-            },
+          retentionPolicy: {
+            retentionDays: retentionPolicy.retentionDays,
+            dataResidencyRequired: retentionPolicy.dataResidencyRequired,
+            consentModel: retentionPolicy.consentModel,
+          },
+          regulatoryBodyLabel: jurisdictionMeta.regulatoryBody,
+          unavailableCapabilities: [
+            'accepted_issuer_verification',
+            'statutory_filing_deadlines',
+            'reporting_obligation_verification',
+            'aml_threshold_legal_determination',
           ],
-          reportingObligations: [
-            {
-              type: `${operationType}_compliance`,
-              frequency:
-                operationType === 'transaction' ? 'real_time' : 'quarterly',
-              authority: jurisdictionMeta.regulatoryBody,
-              format: 'zeroid.policy_receipt.v1',
-            },
-          ],
-          kycLevel: inferKycLevel(requiredCredentials),
-          amlThresholds: [
-            {
-              transactionType: 'transfer',
-              amountUSD: 10_000,
-              action: 'enhanced_due_diligence',
-            },
-          ],
-          updateFrequency: 'quarterly',
         },
       });
     } catch (err) {
@@ -4362,24 +4323,12 @@ router.get(
   '/regulatory-changes',
   requireEnterpriseContext(ENTERPRISE_COMPLIANCE_READ_ROLES),
   validate({ query: RegulatoryChangesQuerySchema }),
-  (req: Request, res: Response): void => {
-    try {
-      const { jurisdiction, since } = req.query as z.infer<
-        typeof RegulatoryChangesQuerySchema
-      >;
-      const changes = jurisdictionEngine.getRegulatoryChanges(
-        jurisdiction,
-        since ? new Date(since) : undefined,
-      );
-      res.status(200).json({ data: changes });
-    } catch (err) {
-      const error = err as Error & { statusCode?: number; code?: string };
-      logger.error('regulatory_changes_error', { error: error.message });
-      res.status(error.statusCode ?? 500).json({
-        error: error.message,
-        code: error.code ?? 'REGULATORY_CHANGES_ERROR',
-      });
-    }
+  (_req: Request, res: Response): void => {
+    res.status(501).json({
+      error:
+        'An authoritative, source-attributed regulatory feed is not configured.',
+      code: 'AUTHORITATIVE_REGULATORY_FEED_UNAVAILABLE',
+    });
   },
 );
 
@@ -4591,30 +4540,20 @@ router.get(
             .map((entry) => entry.currentRegion),
         ),
       ];
-      const hasActiveConsent = consentRecords.some(
-        (record) => record.consentGiven,
-      );
-
       res.status(200).json({
         data: {
+          evidenceStatus: 'recorded_workflow_evidence',
           compliantRegions,
           nonCompliantRegions,
           dataResidencyMap,
-          gdprStatus: {
-            dataProcessingAgreement: false,
-            dataProtectionOfficer: false,
-            privacyImpactAssessment: false,
-            consentManagement: hasActiveConsent,
-            rightToErasure: true,
-            dataPortability: true,
-            breachNotificationProcess: true,
-            overallCompliant:
-              nonCompliantRegions.length === 0 &&
-              (consentRecords.length === 0 || hasActiveConsent),
-          },
-          pendingTransfers: 0,
           consentRecords: consentRecords.length,
           retentionRecords: retentionStatus?.records.length ?? 0,
+          legalConclusionAvailable: false,
+          unavailableCapabilities: [
+            'gdpr_legal_conclusion',
+            'statutory_rights_attestation',
+            'pending_transfer_registry',
+          ],
         },
       });
     } catch (err) {
