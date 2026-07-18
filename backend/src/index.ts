@@ -6,6 +6,7 @@ import compression from 'compression';
 import { credentialRoutes } from './routes/credentials';
 import { verificationRoutes } from './routes/verification';
 import { identityRoutes } from './routes/identity';
+import { identityAuthRoutes } from './routes/identity-auth';
 import { governanceRoutes } from './routes/governance';
 import { auditRoutes } from './routes/audit';
 import partnersRoutes from './routes/partners';
@@ -373,6 +374,7 @@ const auditPrincipalLimiter = createAuthenticatedPrincipalLimiter(
   30,
 );
 
+app.use('/api/v1/identity/auth', apiRouteLimiter, identityAuthRoutes);
 app.use('/api/v1/identity', apiRouteLimiter, identityRoutes);
 app.use('/api/v1/partners', apiRouteLimiter, partnersRoutes);
 app.use('/api/v1/oid4vp', oid4vpRoutes); // OpenID4VP verifier (self-limited; per-route auth)

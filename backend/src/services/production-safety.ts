@@ -161,6 +161,7 @@ export function checkedProductionSafetyControls(): string[] {
     'TRUSTED_PROXY',
     'DIRECT_CLIENT_IP_MODE',
     'CORS_ORIGINS',
+    'ZEROID_AUTH_ORIGIN',
     'METRICS_PUBLIC_DISABLED_OR_METRICS_AUTH_TOKEN',
     'SANCTIONS_SCREENING_DISABLED_OR_SANCTIONS_LIST_SIGNATURE_PUBLIC_KEYS_JSON',
     'SANCTIONS_LIST_MAX_AGE_HOURS',
@@ -316,6 +317,29 @@ export function collectProductionSafetyViolations(
         risk: `Production CORS origin is not allowed: ${unsafeOrigin}`,
       });
     }
+  }
+
+  const authOrigin = env.ZEROID_AUTH_ORIGIN?.trim();
+  if (!authOrigin) {
+    violations.push({
+      control: 'ZEROID_AUTH_ORIGIN',
+      risk: 'Production wallet authentication requires an explicit HTTPS application origin for domain-bound sign-in messages',
+    });
+  } else if (!isTrustedCorsOrigin(authOrigin)) {
+    violations.push({
+      control: 'ZEROID_AUTH_ORIGIN',
+      risk: 'Production wallet authentication origin must be a public HTTPS origin without credentials, path, query, or fragment',
+    });
+  } else if (
+    Boolean(env.CORS_ORIGINS?.trim()) &&
+    Array.isArray(corsOrigins) &&
+    corsOrigins.every((origin) => isTrustedCorsOrigin(origin)) &&
+    !corsOrigins.includes(authOrigin)
+  ) {
+    violations.push({
+      control: 'ZEROID_AUTH_ORIGIN',
+      risk: 'Wallet authentication origin must also be present in the production CORS allowlist',
+    });
   }
 
   if (!isMetricsEndpointDisabled(env)) {

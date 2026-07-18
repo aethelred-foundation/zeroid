@@ -49,6 +49,7 @@ const PROD_BASE_ENV: NodeJS.ProcessEnv = {
   API_JWT_ALGORITHM: 'RS256',
   API_JWT_KEY_ID: 'api-jwt-key-1',
   CORS_ORIGINS: 'https://app.zeroid.example,https://admin.zeroid.example',
+  ZEROID_AUTH_ORIGIN: 'https://app.zeroid.example',
   SANCTIONS_SCREENING_DISABLED: 'false',
   SANCTIONS_LIST_SIGNATURE_PUBLIC_KEYS_JSON: JSON.stringify({
     sovereign_list_signer: '-----BEGIN PUBLIC KEY-----trusted-sanctions-list-key-----END PUBLIC KEY-----',
@@ -269,6 +270,32 @@ describe('production safety controls', () => {
       METRICS_PUBLIC_DISABLED: 'true',
     })).toEqual([
       expect.objectContaining({ control: 'CORS_ORIGINS' }),
+    ]);
+  });
+
+  it('requires a trusted wallet authentication origin included in CORS', () => {
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      ZEROID_AUTH_ORIGIN: '',
+      METRICS_PUBLIC_DISABLED: 'true',
+    })).toEqual([
+      expect.objectContaining({ control: 'ZEROID_AUTH_ORIGIN' }),
+    ]);
+
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      ZEROID_AUTH_ORIGIN: 'http://localhost:3003',
+      METRICS_PUBLIC_DISABLED: 'true',
+    })).toEqual([
+      expect.objectContaining({ control: 'ZEROID_AUTH_ORIGIN' }),
+    ]);
+
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      ZEROID_AUTH_ORIGIN: 'https://wallet.zeroid.example',
+      METRICS_PUBLIC_DISABLED: 'true',
+    })).toEqual([
+      expect.objectContaining({ control: 'ZEROID_AUTH_ORIGIN' }),
     ]);
   });
 
