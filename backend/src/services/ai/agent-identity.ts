@@ -680,20 +680,15 @@ export class AgentIdentityService {
   ): Promise<AgentIdentity> {
     const agent = await this.getAgent(agentId);
 
-    // Verify authority: operator or system admin
+    // Only the owning operator may suspend an agent. A platform-admin role is
+    // not modeled yet, so treating any active identity as an administrator
+    // would allow cross-tenant suspension.
     if (agent.operatorId !== suspendedBy) {
-      // Check if suspendedBy is a valid identity (admin)
-      const suspender = await prisma.identity.findUnique({
-        where: { id: suspendedBy },
-        select: { id: true, status: true },
-      });
-      if (!suspender || suspender.status !== 'ACTIVE') {
-        throw new AgentIdentityError(
-          'Not authorized to suspend this agent',
-          'UNAUTHORIZED_SUSPENSION',
-          403,
-        );
-      }
+      throw new AgentIdentityError(
+        'Not authorized to suspend this agent',
+        'UNAUTHORIZED_SUSPENSION',
+        403,
+      );
     }
 
     agent.status = 'suspended';

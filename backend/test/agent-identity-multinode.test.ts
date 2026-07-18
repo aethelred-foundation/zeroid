@@ -315,4 +315,74 @@ describe('Agent identity multi-node persistence', () => {
       { name: 'credential.verify', reason: 'Challenge has already been used' },
     ]);
   });
+
+  it('rejects suspension by an unrelated active identity', async () => {
+    const service = new AgentIdentityService();
+    const signing = createSigningMaterial();
+    const agent = await registerServiceAgent(
+      service,
+      'Protected Agent',
+      [delegatedCapability],
+      signing.publicKey,
+    );
+
+    mockIdentityFindUnique.mockResolvedValue({
+      id: 'identity-unrelated-active',
+      did: 'did:aethelred:unrelated',
+      status: 'ACTIVE',
+    });
+
+    await expect(
+      service.suspendAgent(
+        agent.agentId,
+        'identity-unrelated-active',
+        'Cross-tenant suspension attempt',
+      ),
+    ).rejects.toMatchObject({
+      code: 'UNAUTHORIZED_SUSPENSION',
+      statusCode: 403,
+    });
+
+    const unchangedAgent = await service.getAgent(agent.agentId);
+    expect(unchangedAgent.status).toBe('active');
+    expect(unchangedAgent).not.toHaveProperty('suspendedBy');
+    expect(mockAuditLogCreate).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ action: 'AGENT_SUSPENDED' }),
+      }),
+    );
+  });
+
+  it('allows the owning operator to suspend an agent', async () => {
+    const service = new AgentIdentityService();
+    const signing = createSigningMaterial();
+    const agent = await registerServiceAgent(
+      service,
+      'Operator Controlled Agent',
+      [delegatedCapability],
+      signing.publicKey,
+    );
+
+    const suspended = await service.suspendAgent(
+      agent.agentId,
+      operatorId,
+      'Operator requested suspension',
+    );
+
+    expect(suspended).toMatchObject({
+      agentId: agent.agentId,
+      operatorId,
+      status: 'suspended',
+      suspendedBy: operatorId,
+      suspensionReason: 'Operator requested suspension',
+    });
+    expect(mockAuditLogCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        identityId: operatorId,
+        action: 'AGENT_SUSPENDED',
+        resourceType: 'agent_identity',
+        resourceId: agent.agentId,
+      }),
+    });
+  });
 });
