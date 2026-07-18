@@ -24,6 +24,9 @@ const LOCAL_WEBHOOK_SECRET_PREFIX = 'local:v1:';
 const WEBHOOK_REPLAY_EVENT_LOG_KEY_PREFIX = 'enterprise:webhook-events';
 const MAX_WEBHOOK_REPLAY_EVENTS = 10_000;
 const WEBHOOK_RESPONSE_PREVIEW_BYTES = 1024;
+const WEBHOOK_RETRY_WORKER_INTERVAL_MS = 5_000;
+const WEBHOOK_RETRY_LEASE_MS = 2 * 60_000;
+const WEBHOOK_RETRY_BATCH_SIZE = 5;
 const SAFE_WEBHOOK_ENDPOINT_MESSAGE =
   'Webhook URL must use HTTPS and must not target localhost or private network addresses in production.';
 const UNSAFE_WEBHOOK_RESOLUTION_MESSAGE =
@@ -385,10 +388,60 @@ export class WebhookSystem {
   private batchBuffers: Map<string, WebhookEvent[]> = new Map();
   private rateLimiter: SubscriberRateLimiter;
   private readonly maxRetries = 5;
+  private retryWorkerTimer: ReturnType<typeof setInterval> | null = null;
+  private activeRetryWorkerTick: Promise<number> | null = null;
 
   constructor() {
     this.rateLimiter = new SubscriberRateLimiter(100, 60000);
     logger.info('WebhookSystem initialized');
+  }
+
+  /**
+   * Start the bounded durable retry worker. Calling this more than once is a
+   * no-op, which keeps hot-reload and repeated bootstrap paths safe.
+   */
+  startRetryWorker(intervalMs = WEBHOOK_RETRY_WORKER_INTERVAL_MS): void {
+    if (this.retryWorkerTimer) return;
+    if (!Number.isSafeInteger(intervalMs) || intervalMs < 100) {
+      throw new Error('Webhook retry worker interval must be at least 100ms');
+    }
+
+    const trigger = () => {
+      void this.triggerRetryWorkerTick();
+    };
+
+    this.retryWorkerTimer = setInterval(trigger, intervalMs);
+    this.retryWorkerTimer.unref?.();
+    trigger();
+    logger.info('webhook_retry_worker_started', { intervalMs });
+  }
+
+  /** Stop scheduling work and wait for the currently bounded tick to finish. */
+  async stopRetryWorker(): Promise<void> {
+    if (this.retryWorkerTimer) {
+      clearInterval(this.retryWorkerTimer);
+      this.retryWorkerTimer = null;
+    }
+    await this.activeRetryWorkerTick?.catch(() => undefined);
+    logger.info('webhook_retry_worker_stopped');
+  }
+
+  private triggerRetryWorkerTick(): Promise<number> {
+    if (this.activeRetryWorkerTick) return this.activeRetryWorkerTick;
+
+    const tick = this.runRetryWorkerTick().catch((error) => {
+      logger.error('webhook_retry_worker_tick_failed', {
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
+      return 0;
+    });
+    this.activeRetryWorkerTick = tick;
+    void tick.finally(() => {
+      if (this.activeRetryWorkerTick === tick) {
+        this.activeRetryWorkerTick = null;
+      }
+    });
+    return tick;
   }
 
   private webhookConfigKey(webhookId: string): string {
@@ -644,6 +697,110 @@ export class WebhookSystem {
   }
 
   // -------------------------------------------------------------------------
+  // Durable retry worker
+  // -------------------------------------------------------------------------
+  async runRetryWorkerTick(now = new Date()): Promise<number> {
+    if (Number.isNaN(now.getTime())) {
+      throw new Error('Webhook retry worker requires a valid clock value');
+    }
+
+    const dueDeliveries = await prisma.webhookDelivery.findMany({
+      where: {
+        success: false,
+        nextRetryAt: { lte: now },
+      },
+      orderBy: [{ nextRetryAt: 'asc' }, { id: 'asc' }],
+      take: WEBHOOK_RETRY_BATCH_SIZE,
+    });
+
+    const results = await Promise.all(
+      dueDeliveries.map((record) => this.claimAndRetryDelivery(record, now)),
+    );
+    const claimed = results.filter(Boolean).length;
+
+    if (dueDeliveries.length > 0) {
+      logger.info('webhook_retry_worker_tick_completed', {
+        due: dueDeliveries.length,
+        claimed,
+      });
+    }
+    return claimed;
+  }
+
+  private async claimAndRetryDelivery(record: any, now: Date): Promise<boolean> {
+    const priorRetryAt = record.nextRetryAt
+      ? new Date(record.nextRetryAt)
+      : null;
+    if (!priorRetryAt || Number.isNaN(priorRetryAt.getTime())) return false;
+
+    const leaseUntil = new Date(now.getTime() + WEBHOOK_RETRY_LEASE_MS);
+    const claim = await prisma.webhookDelivery.updateMany({
+      where: {
+        id: record.id,
+        success: false,
+        attempt: record.attempt,
+        nextRetryAt: priorRetryAt,
+      },
+      data: { nextRetryAt: leaseUntil },
+    });
+    if (claim.count !== 1) return false;
+
+    const parsedEventType = WebhookEventTypeSchema.safeParse(record.eventType);
+    const payloadIsObject =
+      record.payload !== null &&
+      typeof record.payload === 'object' &&
+      !Array.isArray(record.payload);
+    const webhook = await this.getWebhook(record.webhookId);
+
+    if (
+      record.attempt >= this.maxRetries ||
+      !parsedEventType.success ||
+      !payloadIsObject ||
+      !webhook ||
+      !webhook.active ||
+      webhook.health.disabled
+    ) {
+      await this.releaseClaimToDeadLetter(record.id, leaseUntil);
+      logger.warn('webhook_retry_claim_terminal', {
+        deliveryId: record.id,
+        webhookId: record.webhookId,
+        attempt: record.attempt,
+        reason:
+          record.attempt >= this.maxRetries
+            ? 'attempts_exhausted'
+            : !parsedEventType.success || !payloadIsObject
+              ? 'persisted_delivery_invalid'
+              : 'webhook_inactive',
+      });
+      return true;
+    }
+
+    const delivery = this.hydratePersistedDelivery(
+      record,
+      webhook,
+      'pending',
+    );
+    delivery.nextRetryAt = leaseUntil.toISOString();
+    this.deliveries.set(delivery.deliveryId, delivery);
+    await this.attemptDelivery(delivery, webhook);
+    return true;
+  }
+
+  private async releaseClaimToDeadLetter(
+    deliveryId: string,
+    leaseUntil: Date,
+  ): Promise<void> {
+    await prisma.webhookDelivery.updateMany({
+      where: {
+        id: deliveryId,
+        success: false,
+        nextRetryAt: leaseUntil,
+      },
+      data: { nextRetryAt: null },
+    });
+  }
+
+  // -------------------------------------------------------------------------
   // Emit event — dispatches to all matching webhooks
   // -------------------------------------------------------------------------
   async emit(
@@ -793,7 +950,11 @@ export class WebhookSystem {
       status: 'pending',
       attempts: 0,
       maxAttempts: this.maxRetries,
-      nextRetryAt: null,
+      // Persist a durable lease before the first network call. If this process
+      // dies during delivery, another worker can recover it after the lease.
+      nextRetryAt: new Date(
+        Date.now() + WEBHOOK_RETRY_LEASE_MS,
+      ).toISOString(),
       request: { url: webhook.url, headers, body },
       response: null,
       createdAt: new Date().toISOString(),
@@ -801,12 +962,14 @@ export class WebhookSystem {
     };
 
     this.deliveries.set(deliveryId, delivery);
+    await this.persistDelivery(delivery, true);
     await this.attemptDelivery(delivery, webhook);
     return deliveryId;
   }
 
   private async attemptDelivery(delivery: WebhookDelivery, webhook: RegisteredWebhook): Promise<void> {
     delivery.attempts++;
+    delivery.response = null;
     const startTime = Date.now();
 
     try {
@@ -832,6 +995,7 @@ export class WebhookSystem {
 
       if (response.ok) {
         delivery.status = 'delivered';
+        delivery.nextRetryAt = null;
         delivery.completedAt = new Date().toISOString();
         this.updateHealth(webhook, true, response.status, latencyMs);
         logger.info('webhook_delivered', { deliveryId: delivery.deliveryId, webhookId: webhook.id, latencyMs });
@@ -852,6 +1016,7 @@ export class WebhookSystem {
 
       if (this.isNonRetryableDeliveryError(error)) {
         delivery.status = 'dead_letter';
+        delivery.nextRetryAt = null;
         delivery.completedAt = new Date().toISOString();
         this.deadLetterQueue.push({
           deliveryId: delivery.deliveryId,
@@ -880,11 +1045,9 @@ export class WebhookSystem {
           nextRetryMs: delayMs,
           error: errorMessage,
         });
-
-        // Schedule retry
-        setTimeout(() => this.attemptDelivery(delivery, webhook), delayMs);
       } else {
         delivery.status = 'dead_letter';
+        delivery.nextRetryAt = null;
         delivery.completedAt = new Date().toISOString();
         this.deadLetterQueue.push({
           deliveryId: delivery.deliveryId,
@@ -1260,7 +1423,10 @@ export class WebhookSystem {
     );
   }
 
-  private async persistDelivery(delivery: WebhookDelivery): Promise<void> {
+  private async persistDelivery(
+    delivery: WebhookDelivery,
+    required = false,
+  ): Promise<void> {
     try {
       const completedAt = delivery.completedAt
         ? new Date(delivery.completedAt)
@@ -1296,6 +1462,14 @@ export class WebhookSystem {
         webhookId: delivery.webhookId,
         error: error instanceof Error ? error.message : 'Unknown error',
       });
+      if (required) {
+        this.deliveries.delete(delivery.deliveryId);
+        throw new WebhookError(
+          'Webhook delivery could not be durably scheduled',
+          'WEBHOOK_DELIVERY_PERSIST_FAILED',
+          503,
+        );
+      }
     }
   }
 
@@ -1310,6 +1484,21 @@ export class WebhookSystem {
     const webhook = await this.getWebhook(record.webhookId);
     if (!webhook || !webhook.active || webhook.health.disabled) return null;
 
+    const delivery = this.hydratePersistedDelivery(
+      record,
+      webhook,
+      'dead_letter',
+    );
+    this.deliveries.set(delivery.deliveryId, delivery);
+
+    return { delivery, webhook };
+  }
+
+  private hydratePersistedDelivery(
+    record: any,
+    webhook: RegisteredWebhook,
+    status: 'pending' | 'dead_letter',
+  ): WebhookDelivery {
     const delivery = this.hydrateDeliveryLog(record);
     const payload = delivery.payload ?? {};
     const body = JSON.stringify(payload);
@@ -1318,7 +1507,7 @@ export class WebhookSystem {
       ? payload.timestamp
       : new Date().toISOString();
 
-    delivery.status = 'dead_letter';
+    delivery.status = status;
     delivery.request = {
       url: webhook.url,
       headers: {
@@ -1332,15 +1521,9 @@ export class WebhookSystem {
       },
       body,
     };
-    delivery.response = {
-      statusCode: record.statusCode ?? 0,
-      body: record.responseBody ?? '',
-      latencyMs: record.responseTimeMs ?? 0,
-    };
     delivery.maxAttempts = this.maxRetries;
-    this.deliveries.set(delivery.deliveryId, delivery);
-
-    return { delivery, webhook };
+    delivery.completedAt = status === 'pending' ? null : delivery.completedAt;
+    return delivery;
   }
 
   private hydrateDeliveryLog(record: any): WebhookDelivery {

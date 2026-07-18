@@ -34,6 +34,7 @@ import {
   parseExpectedCircuitArtifactDigests,
   validateCircuitArtifacts,
 } from './services/circuit-artifacts';
+import { webhookSystem } from './services/enterprise/webhook-system';
 
 // ---------------------------------------------------------------------------
 // Shared runtime singletons (logger, Prisma, Redis, Prometheus metrics) live in
@@ -573,6 +574,7 @@ async function bootstrap(): Promise<void> {
     await redis.connect();
     await prisma.$connect();
     logger.info('Database connected');
+    webhookSystem.startRetryWorker();
 
     app.listen(PORT, () => {
       logger.info(`ZeroID API server listening on port ${PORT}`, {
@@ -588,6 +590,7 @@ async function bootstrap(): Promise<void> {
 // Graceful shutdown
 async function shutdown(signal: string): Promise<void> {
   logger.info(`Received ${signal}, shutting down gracefully`);
+  await webhookSystem.stopRetryWorker();
   await prisma.$disconnect();
   redis.disconnect();
   process.exit(0);
