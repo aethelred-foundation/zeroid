@@ -20,9 +20,7 @@ const PAGE_TITLES: Record<string, { title: string; subtitle: string }> = {
   "/enterprise": { title: "Enterprise", subtitle: "Console" },
   "/cross-chain": { title: "Cross-Chain", subtitle: "Bridge" },
   "/marketplace": { title: "Marketplace", subtitle: "Discover" },
-  "/integrations": { title: "Integrations", subtitle: "Connect" },
   "/revocation": { title: "Revocation", subtitle: "Manage" },
-  "/admin": { title: "Admin", subtitle: "System" },
 };
 
 interface HeaderProps {

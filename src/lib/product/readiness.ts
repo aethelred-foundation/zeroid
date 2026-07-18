@@ -82,12 +82,6 @@ export const FEATURE_READINESS: Record<string, FeatureReadiness> = {
     evidence:
       "Issuer marketplace needs production trust-framework onboarding before Live.",
   },
-  "/integrations": {
-    href: "/integrations",
-    status: "Configured",
-    evidence:
-      "OIDC, API, and webhook integration surfaces are present with backend contract coverage.",
-  },
   "/governance": {
     href: "/governance",
     status: "Preview",
@@ -105,12 +99,6 @@ export const FEATURE_READINESS: Record<string, FeatureReadiness> = {
     status: "Configured",
     evidence:
       "Revocation state is implemented; production issuer SLAs determine Live status.",
-  },
-  "/admin": {
-    href: "/admin",
-    status: "Preview",
-    evidence:
-      "Admin workflows need RBAC/SoD review before production enterprise exposure.",
   },
   "/settings": {
     href: "/settings",

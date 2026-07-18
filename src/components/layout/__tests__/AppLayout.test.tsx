@@ -412,6 +412,21 @@ describe("AppLayout", () => {
       expect(screen.getByText("No results found")).toBeInTheDocument();
     });
 
+    it("does not advertise retired static admin or integration surfaces", () => {
+      render(
+        <AppLayout>
+          <div>Content</div>
+        </AppLayout>,
+      );
+
+      fireEvent.click(screen.getByText("Search"));
+      const input = screen.getByPlaceholderText("Search pages, actions...");
+      fireEvent.change(input, { target: { value: "integrations" } });
+
+      expect(screen.getByText("No results found")).toBeInTheDocument();
+      expect(screen.queryByText("Integrations")).not.toBeInTheDocument();
+    });
+
     it("resets query when search is reopened", () => {
       render(
         <AppLayout>
@@ -583,6 +598,12 @@ describe("NAV_ITEMS", () => {
   it("is the flattened version of NAV_SECTIONS", () => {
     const expected = NAV_SECTIONS.flatMap((s) => s.items);
     expect(NAV_ITEMS).toEqual(expected);
+  });
+
+  it("does not link to retired static admin or integration pages", () => {
+    const destinations = NAV_ITEMS.map((item) => item.href);
+    expect(destinations).not.toContain("/admin");
+    expect(destinations).not.toContain("/integrations");
   });
 });
 

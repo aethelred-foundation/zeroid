@@ -24,8 +24,6 @@ import {
   GitBranch,
   BarChart3,
   ShieldAlert,
-  Puzzle,
-  UserCog,
 } from "lucide-react";
 
 import { Sidebar } from "./Sidebar";
@@ -126,11 +124,6 @@ export const NAV_SECTIONS: NavSection[] = [
         href: "/marketplace",
         icon: <Store className={ICON_SIZE} />,
       },
-      {
-        label: "Integrations",
-        href: "/integrations",
-        icon: <Puzzle className={ICON_SIZE} />,
-      },
     ],
   },
   {
@@ -150,11 +143,6 @@ export const NAV_SECTIONS: NavSection[] = [
         label: "Revocation",
         href: "/revocation",
         icon: <ShieldAlert className={ICON_SIZE} />,
-      },
-      {
-        label: "Admin",
-        href: "/admin",
-        icon: <UserCog className={ICON_SIZE} />,
       },
       {
         label: "Settings",
@@ -245,12 +233,6 @@ const SEARCH_ITEMS = [
     icon: <Store className="w-4 h-4" />,
   },
   {
-    label: "Integrations",
-    href: "/integrations",
-    section: "Enterprise",
-    icon: <Puzzle className="w-4 h-4" />,
-  },
-  {
     label: "Governance",
     href: "/governance",
     section: "System",
@@ -267,12 +249,6 @@ const SEARCH_ITEMS = [
     href: "/revocation",
     section: "System",
     icon: <ShieldAlert className="w-4 h-4" />,
-  },
-  {
-    label: "Admin",
-    href: "/admin",
-    section: "System",
-    icon: <UserCog className="w-4 h-4" />,
   },
   {
     label: "Settings",

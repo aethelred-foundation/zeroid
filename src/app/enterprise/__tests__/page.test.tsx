@@ -1,30 +1,5 @@
 import React from "react";
-import {
-  render,
-  screen,
-  fireEvent,
-  act,
-  waitFor,
-} from "@testing-library/react";
-
-jest.mock("next/navigation", () => ({
-  useRouter: () => ({ push: jest.fn(), back: jest.fn() }),
-  usePathname: () => "/enterprise",
-  useSearchParams: () => new URLSearchParams(),
-}));
-
-jest.mock("wagmi", () => ({
-  useAccount: jest.fn(() => ({
-    address: "0x1234567890abcdef1234567890abcdef12345678",
-    isConnected: true,
-  })),
-  useReadContract: jest.fn(() => ({ data: undefined, isLoading: false })),
-  useWriteContract: jest.fn(() => ({
-    writeContractAsync: jest.fn(),
-    isPending: false,
-  })),
-  useWaitForTransactionReceipt: jest.fn(() => ({ isLoading: false })),
-}));
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 const mockApiKeysRefetch = jest.fn();
 const mockCreateAPIKeyMutateAsync = jest.fn();
@@ -48,7 +23,7 @@ const mockApiKeys = [
     active: true,
     revokedAt: null,
     revokedReason: null,
-    metadata: { calls: "142847" },
+    metadata: {},
   },
   {
     id: "k2",
@@ -65,14 +40,14 @@ const mockApiKeys = [
     active: true,
     revokedAt: null,
     revokedReason: null,
-    metadata: { calls: "3241" },
+    metadata: {},
   },
 ];
 
 const mockWebhooks = [
   {
     id: "w1",
-    url: "https://api.acme-corp.com/webhooks/zeroid",
+    url: "https://api.example.com/webhooks/zeroid",
     events: ["credential.issued", "verification.completed"],
     createdAt: "2026-01-15T00:00:00.000Z",
     active: true,
@@ -82,6 +57,13 @@ const mockWebhooks = [
       successRate: 99.8,
       lastDeliveryAt: "2026-06-26T10:00:00.000Z",
     },
+  },
+  {
+    id: "w2",
+    url: "https://edge.example.com/webhooks/zeroid",
+    events: ["credential.revoked"],
+    createdAt: "2026-01-16T00:00:00.000Z",
+    active: true,
   },
 ];
 
@@ -106,18 +88,18 @@ const mockUsageMetrics = {
   startDate: "2026-06-19T00:00:00.000Z",
   endDate: "2026-06-26T00:00:00.000Z",
   totalAPIRequests: 93_500,
-  uniqueIdentities: 1280,
-  credentialsIssued: 3200,
-  credentialsVerified: 18_400,
-  proofsGenerated: 4100,
+  uniqueIdentities: 0,
+  credentialsIssued: 0,
+  credentialsVerified: 0,
+  proofsGenerated: 0,
   agentActions: 0,
-  bandwidthMB: 820,
-  costEstimateUSD: 2847,
+  bandwidthMB: 0,
+  costEstimateUSD: 0,
   breakdownByEndpoint: [
     {
       endpoint: "/api/v1/credentials/{id}/verify",
       method: "POST",
-      requestCount: 48293,
+      requestCount: 48_293,
       avgResponseTimeMs: 38,
       errorCount: 5,
     },
@@ -125,14 +107,14 @@ const mockUsageMetrics = {
   breakdownByDay: [
     {
       date: "2026-06-22T00:00:00.000Z",
-      requests: 12400,
-      uniqueUsers: 140,
+      requests: 12_400,
+      uniqueUsers: 0,
       errors: 2,
     },
     {
       date: "2026-06-23T00:00:00.000Z",
-      requests: 15200,
-      uniqueUsers: 150,
+      requests: 15_200,
+      uniqueUsers: 0,
       errors: 4,
     },
   ],
@@ -182,27 +164,17 @@ jest.mock("framer-motion", () => ({
   motion: new Proxy(
     {},
     {
-      get: (_target: unknown, prop: string) => {
-        return React.forwardRef((props: any, ref: any) => {
-          const {
-            initial,
-            animate,
-            exit,
-            transition,
-            whileHover,
-            whileTap,
-            variants,
-            ...rest
-          } = props;
+      get: (_target: unknown, prop: string) =>
+        React.forwardRef((props: any, ref: any) => {
+          const { initial, animate, exit, transition, ...rest } = props;
           const Tag = prop as any;
           return <Tag ref={ref} {...rest} />;
-        });
-      },
+        }),
     },
   ),
-  AnimatePresence: ({ children }: any) => <>{children}</>,
-  useAnimation: () => ({ start: jest.fn() }),
-  useInView: () => true,
+  AnimatePresence: ({ children }: { children: React.ReactNode }) => (
+    <>{children}</>
+  ),
 }));
 
 jest.mock("@/components/layout/AppLayout", () => ({
@@ -213,6 +185,10 @@ jest.mock("@/components/layout/AppLayout", () => ({
 }));
 
 import EnterprisePage from "../page";
+
+function selectTab(name: string) {
+  fireEvent.click(screen.getByRole("button", { name }));
+}
 
 describe("EnterprisePage", () => {
   beforeEach(() => {
@@ -226,202 +202,134 @@ describe("EnterprisePage", () => {
     mockRegisterWebhookMutateAsync.mockResolvedValue(mockWebhooks[0]);
   });
 
-  it("renders without crashing", () => {
+  it("renders only backend-backed enterprise capabilities", () => {
     render(<EnterprisePage />);
+
     expect(screen.getByTestId("app-layout")).toBeInTheDocument();
+    expect(screen.getByText("Enterprise Console")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "API Keys" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Webhooks" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Team (RBAC)")).not.toBeInTheDocument();
+    expect(screen.queryByText("SDK & Docs")).not.toBeInTheDocument();
+    expect(screen.queryByText("OIDC Integration")).not.toBeInTheDocument();
+    expect(screen.queryByText("Enterprise Billing")).not.toBeInTheDocument();
   });
 
-  it("displays the page heading", () => {
+  it("shows exact SLA values without estimating missing percentiles", () => {
     render(<EnterprisePage />);
-    expect(screen.getByText("Enterprise Admin Console")).toBeInTheDocument();
-  });
 
-  it("shows metric cards", () => {
-    render(<EnterprisePage />);
-    expect(screen.getByText("Uptime")).toBeInTheDocument();
-    expect(screen.getByText("P95 Latency")).toBeInTheDocument();
-    expect(screen.getByText("Error Rate")).toBeInTheDocument();
-    expect(screen.getByText("API Calls/min")).toBeInTheDocument();
-    expect(screen.getByText("Team Members")).toBeInTheDocument();
-  });
+    expect(screen.getByText("P99 latency")).toBeInTheDocument();
+    expect(screen.getByText("412ms")).toBeInTheDocument();
+    expect(screen.queryByText("P50")).not.toBeInTheDocument();
+    expect(screen.queryByText("P95")).not.toBeInTheDocument();
 
-  it("shows API Keys tab content by default", () => {
-    render(<EnterprisePage />);
-    expect(screen.getAllByText("API Keys").length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText("Production - Main")).toBeInTheDocument();
-  });
-
-  it("switches to Webhooks tab", () => {
-    render(<EnterprisePage />);
-    const tabButtons = screen.getAllByRole("button");
-    const webhooksTab = tabButtons.find(
-      (btn) => btn.textContent === "Webhooks",
-    );
-    fireEvent.click(webhooksTab!);
-    expect(screen.getByText("Webhook Endpoints")).toBeInTheDocument();
-  });
-
-  it("switches to Team (RBAC) tab", () => {
-    render(<EnterprisePage />);
-    const tabButtons = screen.getAllByRole("button");
-    const teamTab = tabButtons.find((btn) => btn.textContent === "Team (RBAC)");
-    fireEvent.click(teamTab!);
-    expect(screen.getAllByText("Team Members").length).toBeGreaterThanOrEqual(
-      1,
-    );
-    expect(screen.getByText("Sarah Chen")).toBeInTheDocument();
-  });
-
-  it("toggles environment between production and sandbox and back", () => {
-    render(<EnterprisePage />);
-    const envButton = screen.getByText("Production");
-    fireEvent.click(envButton);
-    expect(screen.getByText("Sandbox")).toBeInTheDocument();
-    // Click again to toggle back to production
-    fireEvent.click(screen.getByText("Sandbox"));
-    expect(screen.getByText("Production")).toBeInTheDocument();
-  });
-
-  it("switches to SLA Monitor tab and shows uptime gauge", () => {
-    render(<EnterprisePage />);
-    const tabButtons = screen.getAllByRole("button");
-    const slaTab = tabButtons.find((btn) => btn.textContent === "SLA Monitor");
-    fireEvent.click(slaTab!);
-    expect(screen.getByText("Uptime (30d)")).toBeInTheDocument();
+    selectTab("SLA Report");
     expect(screen.getAllByText("99.97%").length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText("Latency Percentiles")).toBeInTheDocument();
-    expect(screen.getAllByText("Error Rate").length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText("Within SLA")).toBeInTheDocument();
+    expect(screen.getAllByText("4,100,000").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("1,230")).toBeInTheDocument();
+    expect(screen.getByText("SLA met")).toBeInTheDocument();
   });
 
-  it("switches to Usage Analytics tab and shows chart and endpoints", () => {
+  it("filters API keys by the selected environment", () => {
     render(<EnterprisePage />);
-    const tabButtons = screen.getAllByRole("button");
-    const usageTab = tabButtons.find(
-      (btn) => btn.textContent === "Usage Analytics",
+    expect(screen.getByText("Production - Main")).toBeInTheDocument();
+    expect(screen.queryByText("Sandbox - Testing")).not.toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Switch API key environment" }),
     );
-    fireEvent.click(usageTab!);
-    expect(screen.getByText("API Calls This Week")).toBeInTheDocument();
-    expect(screen.getByText("Top Endpoints")).toBeInTheDocument();
+    expect(screen.getByText("Sandbox - Testing")).toBeInTheDocument();
+    expect(screen.queryByText("Production - Main")).not.toBeInTheDocument();
+  });
+
+  it("never exposes secrets returned by the API key inventory", () => {
+    render(<EnterprisePage />);
+    expect(screen.getByText(/zid_live_\*{12}/)).toBeInTheDocument();
     expect(
-      screen.getByText(/\/api\/v1\/credentials\/\{id\}\/verify/),
-    ).toBeInTheDocument();
+      screen.queryByRole("button", { name: /copy secret/i }),
+    ).not.toBeInTheDocument();
   });
 
-  it("switches to SDK & Docs tab and shows SDK downloads", () => {
+  it("refreshes and revokes keys through enterprise hooks", () => {
     render(<EnterprisePage />);
-    const tabButtons = screen.getAllByRole("button");
-    const sdkTab = tabButtons.find((btn) => btn.textContent === "SDK & Docs");
-    fireEvent.click(sdkTab!);
-    expect(screen.getByText("SDK Downloads")).toBeInTheDocument();
-    expect(screen.getByText("TypeScript")).toBeInTheDocument();
-    expect(screen.getByText("Python")).toBeInTheDocument();
-    expect(screen.getByText("Rust")).toBeInTheDocument();
-    expect(screen.getByText("Go")).toBeInTheDocument();
-    // Check OIDC section
-    expect(screen.getByText("OIDC Integration")).toBeInTheDocument();
-    // Check billing section
-    expect(screen.getByText("Enterprise Billing")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /refresh/i }));
+    fireEvent.click(screen.getByTitle("Revoke API key"));
+
+    expect(mockApiKeysRefetch).toHaveBeenCalledTimes(1);
+    expect(mockRevokeAPIKeyMutate).toHaveBeenCalledWith("k1");
   });
 
-  it("toggles API key visibility", () => {
+  it("creates a key and keeps its one-time secret in an explicit confirmation", async () => {
     render(<EnterprisePage />);
-    // API keys are shown by default with masked values containing asterisks
-    const maskedKeys = screen.getAllByText(/\*{12}/);
-    expect(maskedKeys.length).toBeGreaterThanOrEqual(1);
-    expect(
-      screen.getAllByText("shown once at creation").length,
-    ).toBeGreaterThan(0);
-    expect(screen.queryByText(/zid_live_sk_/i)).not.toBeInTheDocument();
-  });
-
-  it("does not expose stored API key secrets for copying", () => {
-    const writeTextMock = jest.fn().mockResolvedValue(undefined);
-    Object.assign(navigator, { clipboard: { writeText: writeTextMock } });
-    render(<EnterprisePage />);
-    expect(
-      screen.getAllByText("shown once at creation").length,
-    ).toBeGreaterThan(0);
-    expect(writeTextMock).not.toHaveBeenCalled();
-  });
-
-  it("shows team RBAC permissions table", () => {
-    render(<EnterprisePage />);
-    const tabButtons = screen.getAllByRole("button");
-    const teamTab = tabButtons.find((btn) => btn.textContent === "Team (RBAC)");
-    fireEvent.click(teamTab!);
-    expect(screen.getByText("Role Permissions")).toBeInTheDocument();
-    expect(screen.getByText("Manage API Keys")).toBeInTheDocument();
-    expect(screen.getByText("View Credentials")).toBeInTheDocument();
-    expect(screen.getByText("Invite Member")).toBeInTheDocument();
-  });
-
-  it("switches SDK language when clicking SDK buttons", () => {
-    render(<EnterprisePage />);
-    const tabButtons = screen.getAllByRole("button");
-    const sdkTab = tabButtons.find((btn) => btn.textContent === "SDK & Docs");
-    fireEvent.click(sdkTab!);
-    // Click Python SDK
-    fireEvent.click(screen.getByText("Python"));
-    expect(screen.getByText(/Quick Start — Python/)).toBeInTheDocument();
-  });
-
-  it("opens create key modal when clicking Create Key button", () => {
-    render(<EnterprisePage />);
-    fireEvent.click(screen.getByText("Create Key"));
-    expect(
-      screen.getByRole("dialog", { name: "Create API key" }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByPlaceholderText("production identity verification"),
-    ).toBeInTheDocument();
-  });
-
-  it("submits create key requests to the enterprise hook", async () => {
-    render(<EnterprisePage />);
-    fireEvent.click(screen.getByText("Create Key"));
+    fireEvent.click(screen.getByRole("button", { name: "Create Key" }));
     fireEvent.change(
       screen.getByPlaceholderText("production identity verification"),
-      {
-        target: { value: "EDGE production verifier" },
-      },
+      { target: { value: "EDGE production verifier" } },
     );
-    fireEvent.click(screen.getAllByText("Create Key").at(-1)!);
+    fireEvent.click(
+      screen.getAllByRole("button", { name: "Create Key" }).at(-1)!,
+    );
 
-    await waitFor(() => {
+    await waitFor(() =>
       expect(mockCreateAPIKeyMutateAsync).toHaveBeenCalledWith(
         expect.objectContaining({
           name: "EDGE production verifier",
           environment: "production",
           scopes: ["credentials:read", "verification:write", "identity:read"],
         }),
-      );
-    });
-  });
-
-  it("revokes API keys through the enterprise hook", () => {
-    render(<EnterprisePage />);
-    fireEvent.click(screen.getByTitle("Revoke API key"));
-    expect(mockRevokeAPIKeyMutate).toHaveBeenCalledWith("k1");
-  });
-
-  it("registers webhook endpoints through the enterprise hook", async () => {
-    render(<EnterprisePage />);
-    const tabButtons = screen.getAllByRole("button");
-    const webhooksTab = tabButtons.find(
-      (btn) => btn.textContent === "Webhooks",
+      ),
     );
-    fireEvent.click(webhooksTab!);
-    fireEvent.click(screen.getByText("Add Endpoint"));
+    expect(
+      await screen.findByRole("dialog", { name: "API key created" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("zid_live_secret_created")).toBeInTheDocument();
+  });
+
+  it("copies only the newly created one-time secret", async () => {
+    const writeText = jest.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    render(<EnterprisePage />);
+    fireEvent.click(screen.getByRole("button", { name: "Create Key" }));
+    fireEvent.change(
+      screen.getByPlaceholderText("production identity verification"),
+      { target: { value: "EDGE production verifier" } },
+    );
+    fireEvent.click(
+      screen.getAllByRole("button", { name: "Create Key" }).at(-1)!,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Copy secret" }));
+    await waitFor(() =>
+      expect(writeText).toHaveBeenCalledWith("zid_live_secret_created"),
+    );
+  });
+
+  it("shows unreported webhook health honestly", () => {
+    render(<EnterprisePage />);
+    selectTab("Webhooks");
+
+    expect(screen.getByText("99.8% success")).toBeInTheDocument();
+    expect(screen.getByText("Success rate not reported")).toBeInTheDocument();
+  });
+
+  it("registers and tests webhooks through enterprise hooks", async () => {
+    render(<EnterprisePage />);
+    selectTab("Webhooks");
+    fireEvent.click(screen.getByRole("button", { name: "Add Endpoint" }));
     fireEvent.change(
       screen.getByPlaceholderText("https://enterprise.example/hooks/zeroid"),
-      {
-        target: { value: "https://edge.example/hooks/zeroid" },
-      },
+      { target: { value: "https://edge.example/hooks/zeroid" } },
     );
-    fireEvent.click(screen.getByText("Register Endpoint"));
+    fireEvent.click(screen.getByRole("button", { name: "Register Endpoint" }));
 
-    await waitFor(() => {
+    await waitFor(() =>
       expect(mockRegisterWebhookMutateAsync).toHaveBeenCalledWith(
         expect.objectContaining({
           url: "https://edge.example/hooks/zeroid",
@@ -431,46 +339,24 @@ describe("EnterprisePage", () => {
           ]),
           active: true,
         }),
-      );
-    });
-  });
-
-  it("tests webhook delivery through the enterprise hook", () => {
-    render(<EnterprisePage />);
-    const tabButtons = screen.getAllByRole("button");
-    const webhooksTab = tabButtons.find(
-      (btn) => btn.textContent === "Webhooks",
+      ),
     );
-    fireEvent.click(webhooksTab!);
-    fireEvent.click(screen.getByText("Test"));
+
+    fireEvent.click(
+      screen.getAllByRole("button", { name: "Test delivery" })[0],
+    );
     expect(mockTestWebhookMutate).toHaveBeenCalledWith("w1");
   });
 
-  it("toggles API key visibility off again (reveal then hide)", () => {
+  it("renders usage reported by the enterprise endpoint", () => {
     render(<EnterprisePage />);
-    expect(screen.getAllByText(/\*{12}/).length).toBeGreaterThanOrEqual(1);
-    expect(
-      screen.getAllByText("shown once at creation").length,
-    ).toBeGreaterThan(0);
-    expect(screen.queryByText(/zid_live_sk_/i)).not.toBeInTheDocument();
-  });
+    selectTab("Usage");
 
-  it("copies SDK snippet to clipboard and clears copied state after timeout", () => {
-    jest.useFakeTimers();
-    const writeTextMock = jest.fn().mockResolvedValue(undefined);
-    Object.assign(navigator, { clipboard: { writeText: writeTextMock } });
-    render(<EnterprisePage />);
-    const tabButtons = screen.getAllByRole("button");
-    const sdkTab = tabButtons.find((btn) => btn.textContent === "SDK & Docs");
-    fireEvent.click(sdkTab!);
-    // Click the Copy button next to Quick Start
-    const copyButtons = screen.getAllByText("Copy");
-    fireEvent.click(copyButtons[copyButtons.length - 1]);
-    expect(writeTextMock).toHaveBeenCalled();
-    // Advance timer to trigger setCopiedKey(null) callback
-    act(() => {
-      jest.advanceTimersByTime(2000);
-    });
-    jest.useRealTimers();
+    expect(screen.getByText("93,500 requests reported")).toBeInTheDocument();
+    expect(
+      screen.getByText("POST /api/v1/credentials/{id}/verify"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("48,293")).toBeInTheDocument();
+    expect(screen.getByText("38ms")).toBeInTheDocument();
   });
 });
