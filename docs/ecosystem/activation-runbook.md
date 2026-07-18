@@ -68,15 +68,19 @@ Record the two addresses into the app `.env` (above).
 
 ```bash
 cd backend
-npx prisma migrate deploy        # applies 20260629000000_ai_agent_passport_v1,
-                                 #         20260629010000_idempotency_v1,
-                                 #     and 20260629020000_oid4vp_oid4vci_v1
-# (or, to regenerate canonically:  npx prisma migrate dev)
+npx prisma migrate deploy        # applies the committed ZeroID baseline and
+                                 # every later reviewed migration
 ```
-All migrations are additive (new enum + nullable/defaulted columns; the
-`idempotency_records`, `oid4vp_presentation_requests`, `oid4vci_offers`,
-`oid4vci_token_sessions` tables). Tracked SQL copies live in
-`docs/ecosystem/*-migration.sql` since `prisma/migrations/` is gitignored.
+
+For a database previously provisioned with `prisma db push`, first take and
+verify a backup, compare it with `prisma/schema.prisma`, and mark the baseline
+as already applied exactly once:
+
+```bash
+npx prisma migrate resolve --applied 20260718000000_zeroid_baseline
+```
+
+Do not run `db push --accept-data-loss` in testnet or production.
 
 ## 3. Activation gates (flip only after end-to-end verification)
 

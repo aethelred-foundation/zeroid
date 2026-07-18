@@ -19,10 +19,6 @@ COPY prisma ./prisma
 RUN npm ci --omit=dev && npx prisma generate
 COPY --from=build /app/dist ./dist
 EXPOSE 4003
-# Sync the schema, then start. The committed migrations are incremental and
-# assume a baseline that was created with `db push`, so a fresh testnet DB is
-# provisioned with `db push` (creates all 35 models). For production, baseline
-# a proper migration set and switch this to `prisma migrate deploy`.
-# NODE_ENV is set by compose/.env — keep it non-production for testnet so local
-# credential signing is permitted.
-CMD ["sh", "-c", "npx prisma db push --skip-generate --accept-data-loss && node dist/index.js"]
+# Apply reviewed, versioned migrations before starting. Schema drift and unsafe
+# destructive changes now fail the deployment instead of being forced at boot.
+CMD ["sh", "-c", "npx prisma migrate deploy && exec node dist/index.js"]

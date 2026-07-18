@@ -55,7 +55,6 @@ public/circuits/
 
 # Prisma
 backend/prisma/*.db
-backend/prisma/migrations/
 
 # Vercel
 .vercel

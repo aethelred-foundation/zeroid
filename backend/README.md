@@ -33,16 +33,15 @@ Requires Node ≥20 and a reachable Postgres + Redis. Set `DATABASE_URL` /
 ```bash
 npm ci
 npx prisma generate
-npx prisma db push             # provision a fresh DB (creates all 35 models)
+npx prisma migrate deploy      # apply the reviewed baseline and later migrations
 npm run build && npm start     # or: npm run dev  (ts-node-dev, hot reload)
 ```
 
-> Schema note: the committed migrations in `prisma/migrations/` are
-> **incremental** and assume a baseline that was originally created with
-> `prisma db push`, so a fresh database must be provisioned with `db push`
-> (not `migrate deploy`, which errors on the missing baseline). Before mainnet,
-> baseline a full migration set and switch the Docker entrypoint back to
-> `prisma migrate deploy`.
+> Existing testnet databases that were previously created with `prisma db push`
+> already contain the baseline schema but have no Prisma migration history.
+> Back them up, verify that their schema matches `prisma/schema.prisma`, then run
+> `npx prisma migrate resolve --applied 20260718000000_zeroid_baseline` exactly
+> once before deploying this image. Fresh databases need no special handling.
 
 ## Boot requirements
 
@@ -77,4 +76,6 @@ become available.
 
 Prisma migrations live in `prisma/migrations/`. The Docker entrypoint runs
 `prisma migrate deploy` on start; for native runs apply them yourself. New schema
-changes: `npm run prisma:migrate` (dev) → commit the generated migration.
+changes: `npm run prisma:migrate` (dev), inspect the generated SQL, test it
+against a restored production snapshot, then commit it. Never use
+`db push --accept-data-loss` in a deployed environment.
