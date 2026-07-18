@@ -17,16 +17,13 @@ import { validate } from '../../middleware/validation';
 import {
   walletEligibility,
   poolEligibility,
-  poolAgentScan,
   initiateWalletDisclosure,
-  getPartnerEvidence,
+  partnerEligibilityChallengeUnavailableError,
+  partnerEligibilityEvidenceUnavailableError,
   type PartnerDeps,
 } from '../../services/partners/partner-service';
 import { invokeEligibility } from '../../services/eligibility-invoker';
-import {
-  agentEligibilityProof,
-} from '../../services/ai/agent-eligibility';
-import { buildAgentEligibilityDeps } from '../ai/agent-eligibility';
+import { agentEligibilityUnavailableError } from '../../services/ai/agent-eligibility';
 import {
   createPrismaIdempotencyStore,
   readIdempotencyKey,
@@ -87,19 +84,6 @@ function buildPartnerDeps(
     runEligibility(identity, input) {
       return invokeEligibility(identity, input);
     },
-    async runAgentScan(req) {
-      return agentEligibilityProof(
-        buildAgentEligibilityDeps(principal),
-        req,
-      );
-    },
-    async getEvidence(decisionId) {
-      const entry = await prisma.auditLog.findFirst({
-        where: { resourceId: decisionId, identityId: principal.id },
-        orderBy: { timestamp: 'desc' },
-      });
-      return entry?.details ?? null;
-    },
   };
 }
 
@@ -153,10 +137,8 @@ router.post(
   validate({ body: WalletEligibilitySchema }),
   async (req: AuthenticatedRequest, res: Response) => {
     try {
-      const result = await runIdempotent(req, 'partner.wallet.eligibility', () =>
-        walletEligibility(buildPartnerDeps(req.identity!), req.body),
-      );
-      res.status(200).json(result);
+      await walletEligibility(buildPartnerDeps(req.identity!), req.body);
+      sendError(res, partnerEligibilityChallengeUnavailableError());
     } catch (error) {
       sendError(res, error);
     }
@@ -181,17 +163,8 @@ router.post(
 router.get(
   '/wallet/evidence/:decisionId',
   validate({ params: EvidenceParamsSchema }),
-  async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      res.status(200).json(
-        await getPartnerEvidence(
-          buildPartnerDeps(req.identity!),
-          String(req.params.decisionId),
-        ),
-      );
-    } catch (error) {
-      sendError(res, error);
-    }
+  (_req: AuthenticatedRequest, res: Response) => {
+    sendError(res, partnerEligibilityEvidenceUnavailableError());
   },
 );
 
@@ -200,13 +173,11 @@ router.post(
   validate({ params: PoolParamsSchema, body: PoolEligibilitySchema }),
   async (req: AuthenticatedRequest, res: Response) => {
     try {
-      const result = await runIdempotent(req, 'partner.cruzible.pool.eligibility', () =>
-        poolEligibility(buildPartnerDeps(req.identity!), {
-          poolId: req.params.poolId,
-          ...req.body,
-        }),
-      );
-      res.status(200).json(result);
+      await poolEligibility(buildPartnerDeps(req.identity!), {
+        poolId: req.params.poolId,
+        ...req.body,
+      });
+      sendError(res, partnerEligibilityChallengeUnavailableError());
     } catch (error) {
       sendError(res, error);
     }
@@ -216,18 +187,8 @@ router.post(
 router.post(
   '/cruzible/pools/:poolId/agent-scan',
   validate({ params: PoolParamsSchema, body: PoolAgentScanSchema }),
-  async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      const result = await runIdempotent(req, 'partner.cruzible.pool.agent-scan', () =>
-        poolAgentScan(buildPartnerDeps(req.identity!), {
-          poolId: req.params.poolId,
-          ...req.body,
-        }),
-      );
-      res.status(200).json(result);
-    } catch (error) {
-      sendError(res, error);
-    }
+  (_req: AuthenticatedRequest, res: Response) => {
+    sendError(res, agentEligibilityUnavailableError());
   },
 );
 

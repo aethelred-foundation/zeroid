@@ -1,22 +1,17 @@
 /**
  * ZeroID — AI Agent Passport v1: agent → eligibility wrapper service.
  *
- * Lets an AI agent request an eligibility proof on behalf of its controller,
- * with scope + policy checks and a recorded AgentAction. The flagship v1
- * scenario. Built with dependency injection so the orchestration is unit-
- * testable without a database; the route wires the real Prisma + eligibility
- * implementations.
+ * This module retains the public request/response types needed by partner
+ * integrations, but proof orchestration is deliberately unavailable. Database
+ * credential state is not agent authentication: the operation must first be
+ * bound to a durable, one-time agent challenge and a relying-party challenge.
+ * It must then produce and verify a signed-witness Groth16 proof and persist
+ * the authorization, challenge consumption, and proof evidence atomically.
  */
 
-import {
-  evaluateAgentEligibilityPolicy,
-  POLICY_AGENT_ELIGIBILITY_VIEW_V1,
-  type RiskTier,
-  type AgentStatus,
-  type CredentialStatus,
-} from "./agent-passport";
+import type { RiskTier, AgentStatus, CredentialStatus } from "./agent-passport";
 import { ServiceError, type AnyServiceErrorCode } from "../errors";
-import { withIdempotency, type IdempotencyStore } from "../idempotency";
+import type { IdempotencyStore } from "../idempotency";
 
 export interface AgentEligibilityProofRequest {
   agentDid: string;
@@ -118,99 +113,23 @@ export class AgentEligibilityError extends ServiceError {
   }
 }
 
-const ACTION_TYPE = "ELIGIBILITY_PROOF_REQUEST";
+export const AGENT_ELIGIBILITY_UNAVAILABLE_CODE =
+  "AGENT_ELIGIBILITY_PROOF_UNAVAILABLE";
+
+export const AGENT_ELIGIBILITY_UNAVAILABLE_MESSAGE =
+  "Agent eligibility proof issuance is unavailable until requests use durable one-time agent and relying-party challenges, a signed credential witness, audited Groth16 generation and verification, and transactionally persisted evidence";
+
+export function agentEligibilityUnavailableError(): AgentEligibilityError {
+  return new AgentEligibilityError(
+    AGENT_ELIGIBILITY_UNAVAILABLE_MESSAGE,
+    AGENT_ELIGIBILITY_UNAVAILABLE_CODE,
+    503,
+  );
+}
 
 export async function agentEligibilityProof(
-  deps: AgentEligibilityDeps,
-  req: AgentEligibilityProofRequest,
-): Promise<AgentEligibilityProofResponse> {
-  // Idempotency: a repeated key returns the prior result without re-running
-  // eligibility or re-recording an AgentAction. Errors thrown inside propagate
-  // un-cached, so a transient failure stays retryable.
-  return withIdempotency(deps.idempotencyStore, req.idempotencyKey, async () => {
-    const agent = await deps.loadAgent(req.agentDid);
-    if (!agent) {
-      throw new AgentEligibilityError("agent not found", "AGENT_NOT_FOUND", 404);
-    }
-
-    // Controller binding — the agent may only act for its registered controller.
-    if (agent.controllerDid !== req.controllerDid) {
-      await deps.recordAgentAction({
-        agentDid: req.agentDid,
-        controllerDid: req.controllerDid,
-        actionType: ACTION_TYPE,
-        policyId: POLICY_AGENT_ELIGIBILITY_VIEW_V1,
-        status: "DENIED",
-      });
-      throw new AgentEligibilityError(
-        "agent not registered for this controller",
-        "CONTROLLER_MISMATCH",
-        403,
-      );
-    }
-
-    const controller = await deps.loadController(req.controllerDid);
-    if (!controller) {
-      throw new AgentEligibilityError("controller not found", "CREDENTIAL_NOT_FOUND", 404);
-    }
-
-    const decision = evaluateAgentEligibilityPolicy({
-      agentStatus: agent.agentStatus,
-      credentialStatus: agent.credentialStatus,
-      scopes: agent.scopes,
-      agentMaxRiskTier: agent.agentMaxRiskTier,
-      controllerStatus: controller.controllerStatus,
-      controllerKycValid: controller.controllerKycValid,
-      controllerRiskTier: controller.controllerRiskTier,
-    });
-
-    if (!decision.allowed) {
-      await deps.recordAgentAction({
-        agentDid: req.agentDid,
-        controllerDid: req.controllerDid,
-        actionType: ACTION_TYPE,
-        policyId: decision.policyId,
-        status: "DENIED",
-      });
-      const statusCode = decision.denyCode === "POLICY_CONDITIONS_NOT_MET" ? 422 : 403;
-      throw new AgentEligibilityError(
-        decision.reason ?? "denied",
-        decision.denyCode ?? "AGENT_NOT_AUTHORIZED",
-        statusCode,
-      );
-    }
-
-    const result = await deps.runEligibility({
-      subjectDid: req.subjectDid,
-      credentialId: req.credentialId,
-      policyId: req.policyId,
-      relyingAppId: req.relyingAppId,
-      contextNonce: req.contextNonce,
-    });
-
-    const agentActionId = await deps.recordAgentAction({
-      agentDid: req.agentDid,
-      controllerDid: req.controllerDid,
-      actionType: ACTION_TYPE,
-      resourceId: result.decisionId,
-      policyId: decision.policyId,
-      status: result.status === "ALLOWED" ? "ALLOWED" : "DENIED",
-    });
-
-    return {
-      status: result.status,
-      decisionId: result.decisionId,
-      policyId: result.policyId,
-      policyVersion: result.policyVersion,
-      actor: {
-        agentDid: agent.agentDid,
-        controllerDid: agent.controllerDid,
-        agentScopes: agent.scopes,
-      },
-      proof: result.proof,
-      evaluation: result.evaluation,
-      evidence: { ...result.evidence, agentActionId },
-      issuedAt: result.issuedAt,
-    };
-  });
+  _deps: AgentEligibilityDeps,
+  _req: AgentEligibilityProofRequest,
+): Promise<never> {
+  throw agentEligibilityUnavailableError();
 }

@@ -1,10 +1,10 @@
 /**
  * ZeroID — AI Agent Passport v1: agent eligibility route.
  *
- * POST /api/v1/ai/agents/eligibility/proof — an AI agent requests an
- * eligibility proof on behalf of its controller. Scope + policy checks and the
- * AgentAction audit live in the (unit-tested) service; this route wires real
- * Prisma + the eligibility delegation and maps errors to HTTP status codes.
+ * POST /api/v1/ai/agents/eligibility/proof — reserved for a future
+ * challenge-authenticated agent eligibility flow. It currently fails closed;
+ * a human bearer session plus database credential state is not sufficient to
+ * authenticate an agent operation or issue a ZK eligibility decision.
  */
 
 import { Router, Response } from 'express';
@@ -14,41 +14,34 @@ import { AuthenticatedRequest, authMiddleware } from '../../middleware/auth';
 import { apiRateLimiter } from '../../middleware/rateLimit';
 import { validate } from '../../middleware/validation';
 import {
-  agentEligibilityProof,
+  agentEligibilityUnavailableError,
   AgentEligibilityError,
   type AgentEligibilityDeps,
   type AgentEligibilityProofResponse,
-  type EligibilityResult,
 } from '../../services/ai/agent-eligibility';
-import {
-  createPrismaIdempotencyStore,
-  readIdempotencyKey,
-  type IdempotencyStore,
-} from '../../services/idempotency';
+import type { IdempotencyStore } from '../../services/idempotency';
 import { sendServiceError } from '../../services/errors';
 import type {
   AgentStatus,
   CredentialStatus,
   RiskTier,
 } from '../../services/ai/agent-passport';
-import { eligibilityProofHandler } from '../verification';
 
-/** Operation namespace for idempotency keys on this endpoint. */
-const ELIGIBILITY_IDEMPOTENCY_SCOPE = 'agent.eligibility.proof';
-
-const AgentEligibilityProofSchema = z.object({
-  agentDid: z.string().min(1),
-  controllerDid: z.string().min(1),
-  subjectDid: z.string().min(1),
-  credentialId: z.string().min(1),
-  policyId: z.string().min(1),
-  relyingAppId: z.string().min(1),
-  contextNonce: z.string().optional(),
-});
+const AgentEligibilityProofSchema = z
+  .object({
+    agentDid: z.string().min(1).max(256),
+    controllerDid: z.string().min(1).max(256),
+    subjectDid: z.string().min(1).max(256),
+    credentialId: z.string().min(1).max(128),
+    policyId: z.string().min(1).max(256),
+    relyingAppId: z.string().min(1).max(128),
+    contextNonce: z.string().min(8).max(128),
+  })
+  .strict();
 
 /** Wire the service's injected dependencies to real Prisma + eligibility. */
 export function buildAgentEligibilityDeps(
-  controllerIdentity: NonNullable<AuthenticatedRequest['identity']>,
+  _controllerIdentity: NonNullable<AuthenticatedRequest['identity']>,
   idempotencyStore?: IdempotencyStore<AgentEligibilityProofResponse>,
 ): AgentEligibilityDeps {
   return {
@@ -59,7 +52,7 @@ export function buildAgentEligibilityDeps(
         include: {
           operator: { select: { did: true } },
           agentCredentials: {
-            where: { status: 'ACTIVE' },
+            where: { status: 'ACTIVE', expiresAt: { gt: new Date() } },
             orderBy: { issuedAt: 'desc' },
             take: 1,
           },
@@ -78,58 +71,31 @@ export function buildAgentEligibilityDeps(
     },
 
     async loadController(controllerDid) {
-      const identity = await prisma.identity.findUnique({ where: { did: controllerDid } });
+      const identity = await prisma.identity.findUnique({
+        where: { did: controllerDid },
+      });
       if (!identity) return null;
+      const riskAssessment = await prisma.riskAssessment.findFirst({
+        where: { entityId: identity.id, entityType: 'identity' },
+        orderBy: { assessedAt: 'desc' },
+        select: { level: true },
+      });
+      if (!riskAssessment) {
+        throw new AgentEligibilityError(
+          'controller risk assessment is required',
+          'CONTROLLER_RISK_ASSESSMENT_REQUIRED',
+          503,
+        );
+      }
       return {
         controllerStatus: identity.status as string,
         controllerKycValid: identity.governmentVerified,
-        // TODO(v1): derive from RiskAssessment; LOW is the conservative default.
-        controllerRiskTier: 'LOW' as RiskTier,
+        controllerRiskTier: riskAssessment.level as RiskTier,
       };
     },
 
-    async runEligibility(input) {
-      // Reuse the EXACT human eligibility handler (no re-implementation) via an
-      // in-process response shim. `eligibilityProofHandler` is the extracted,
-      // behaviour-identical handler from routes/verification.ts.
-      const fakeReq = {
-        identity: controllerIdentity,
-        body: {
-          subjectDid: input.subjectDid,
-          credentialId: input.credentialId,
-          policyId: input.policyId,
-          relyingAppId: input.relyingAppId,
-          contextNonce:
-            input.contextNonce ??
-            `agent-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`,
-        },
-      } as unknown as AuthenticatedRequest;
-
-      let httpStatus = 200;
-      let payload:
-        | { data?: EligibilityResult; error?: string; code?: string }
-        | undefined;
-      const fakeRes = {
-        status(code: number) {
-          httpStatus = code;
-          return fakeRes;
-        },
-        json(value: unknown) {
-          payload = value as typeof payload;
-          return fakeRes;
-        },
-      } as unknown as Response;
-
-      await eligibilityProofHandler(fakeReq, fakeRes);
-
-      if (httpStatus !== 201 || !payload?.data) {
-        throw new AgentEligibilityError(
-          payload?.error ?? 'eligibility evaluation failed',
-          payload?.code ?? 'ELIGIBILITY_FAILED',
-          httpStatus >= 400 ? httpStatus : 502,
-        );
-      }
-      return payload.data;
+    async runEligibility(_input) {
+      throw agentEligibilityUnavailableError();
     },
 
     async recordAgentAction(action) {
@@ -138,7 +104,11 @@ export function buildAgentEligibilityDeps(
         select: { id: true },
       });
       if (!agent) {
-        throw new AgentEligibilityError('agent not found', 'AGENT_NOT_FOUND', 404);
+        throw new AgentEligibilityError(
+          'agent not found',
+          'AGENT_NOT_FOUND',
+          404,
+        );
       }
       const created = await prisma.agentAction.create({
         data: {
@@ -162,18 +132,9 @@ router.post(
   apiRateLimiter,
   authMiddleware,
   validate({ body: AgentEligibilityProofSchema }),
-  async (req: AuthenticatedRequest, res: Response) => {
+  async (_req: AuthenticatedRequest, res: Response) => {
     try {
-      const idempotencyKey = readIdempotencyKey(req.headers['idempotency-key']);
-      const store = createPrismaIdempotencyStore<AgentEligibilityProofResponse>(
-        prisma,
-        ELIGIBILITY_IDEMPOTENCY_SCOPE,
-      );
-      const result = await agentEligibilityProof(
-        buildAgentEligibilityDeps(req.identity!, store),
-        { ...req.body, idempotencyKey },
-      );
-      res.status(200).json(result);
+      throw agentEligibilityUnavailableError();
     } catch (error) {
       sendServiceError(res, error, logger);
     }
