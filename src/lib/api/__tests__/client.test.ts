@@ -1633,9 +1633,20 @@ describe("apiClient.respondToVerification()", () => {
     const [url, init] = mockFetch.mock.calls[0];
     expect(url).toContain("/api/v1/verification/zk-verify");
     expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body)).toMatchObject({ requestId: "req-1" });
   });
 
-  it("returns a local rejection result when consent is denied", async () => {
+  it("records a rejection through the durable request response endpoint", async () => {
+    mockFetch.mockResolvedValue(
+      jsonResponse({
+        requestId: "req-1",
+        verified: false,
+        attributeResults: [],
+        verifiedAt: 1760000000,
+        reason: "User declined verification",
+      }),
+    );
+
     const result = await apiClient.respondToVerification(
       "req-1",
       { consent: false },
@@ -1646,7 +1657,10 @@ describe("apiClient.respondToVerification()", () => {
       verified: false,
       reason: "User declined verification",
     });
-    expect(mockFetch).not.toHaveBeenCalled();
+    const [url, init] = mockFetch.mock.calls[0];
+    expect(url).toContain("/api/v1/verification/requests/req-1/respond");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body)).toEqual({ consent: false });
   });
 });
 

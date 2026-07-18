@@ -133,7 +133,7 @@ describe("useVerification hooks", () => {
       await act(async () => {
         created = await result.current.mutateAsync({
           subjectDid: "did:aethelred:testnet:0xsubject",
-          credentialHash: "0xcredential",
+          credentialHash: `0x${"ab".repeat(32)}`,
           circuitId: "selective_disclosure",
           requestedAttributes: ["fullName", "nationality"],
           purpose: "KYC verification",
@@ -145,7 +145,7 @@ describe("useVerification hooks", () => {
       expect(apiClient.createVerificationRequest).toHaveBeenCalledWith(
         expect.objectContaining({
           subjectDid: "did:aethelred:testnet:0xsubject",
-          credentialHash: "0xcredential",
+          credentialHash: `0x${"ab".repeat(32)}`,
           circuitId: "selective_disclosure",
           requestedAttributes: ["fullName", "nationality"],
           purpose: "KYC verification",
@@ -170,7 +170,7 @@ describe("useVerification hooks", () => {
         try {
           await result.current.mutateAsync({
             subjectDid: "did:aethelred:testnet:0xsubject",
-            credentialHash: "0xcredential",
+            credentialHash: `0x${"ab".repeat(32)}`,
             requestedAttributes: ["fullName"],
           } as any);
         } catch {
@@ -182,8 +182,7 @@ describe("useVerification hooks", () => {
       expect(toast.error).toHaveBeenCalledWith(
         "Failed to create verification request",
         {
-          description:
-            "An authenticated ZeroID identity session is required.",
+          description: "An authenticated ZeroID identity session is required.",
         },
       );
     });
@@ -254,6 +253,36 @@ describe("useVerification hooks", () => {
           "Verification response requires a generated ZK proof JSON payload.",
       });
       expect(apiClient.respondToVerification).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("useDeclineVerification", () => {
+    it("persists a holder decline through the response API", async () => {
+      (apiClient.respondToVerification as jest.Mock).mockResolvedValue({
+        requestId: "vreq-1",
+        verified: false,
+        attributeResults: [],
+        verifiedAt: 1700000000,
+        reason: "User declined verification",
+      });
+      const { useDeclineVerification } =
+        await import("@/hooks/useVerification");
+      const { result } = renderHook(() => useDeclineVerification(), {
+        wrapper: createQueryWrapper(),
+      });
+
+      await act(async () => {
+        await result.current.mutateAsync("vreq-1");
+      });
+
+      expect(apiClient.respondToVerification).toHaveBeenCalledWith(
+        "vreq-1",
+        { consent: false },
+        "identity-token",
+      );
+      expect(toast.success).toHaveBeenCalledWith(
+        "Verification request declined",
+      );
     });
   });
 

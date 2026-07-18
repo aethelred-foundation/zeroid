@@ -92,6 +92,7 @@ function makeDisclosureAttribute(key = "name") {
 function makeVerificationRequest(overrides: Record<string, unknown> = {}) {
   return {
     id: "req-1",
+    status: "pending",
     requestedAttributes: ["name"],
     purpose: "KYC verification",
     expiresAt: 1700003600,
@@ -155,7 +156,10 @@ describe("useCreateDisclosureRequest", () => {
       created = await result.current.mutateAsync({
         subjectDid: "did:aethelred:mainnet:0x1",
         requestedAttributes: [makeDisclosureAttribute()],
-        policy: { circuitId: "selective_disclosure" } as any,
+        policy: {
+          circuitId: "selective_disclosure",
+          credentialHash: attributeHash,
+        } as any,
         purpose: "KYC verification",
       });
     });
@@ -201,7 +205,7 @@ describe("useCreateDisclosureRequest", () => {
       "Failed to create disclosure request",
       {
         description:
-          "Disclosure request requires a credentialHash, schemaHash, or hashed requested attribute.",
+          "Disclosure request requires the holder credential's 32-byte credentialHash commitment.",
       },
     );
   });

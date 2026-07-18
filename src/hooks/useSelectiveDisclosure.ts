@@ -19,6 +19,7 @@ import type {
   VerificationRequest,
   ZKProof,
 } from "@/types";
+import { VerificationStatus } from "@/types";
 
 function requireIdentityAuthToken(): string {
   const token = getIdentityAuthToken();
@@ -32,26 +33,25 @@ function attributeKeys(attributes: DisclosureAttribute[]): string[] {
   return attributes.map((attribute) => attribute.key).filter(Boolean);
 }
 
-function policyString(policy: DisclosurePolicy, key: string): string | undefined {
+function policyString(
+  policy: DisclosurePolicy,
+  key: string,
+): string | undefined {
   const value = policy[key];
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
 function credentialHashForDisclosure(
-  attributes: DisclosureAttribute[],
+  _attributes: DisclosureAttribute[],
   policy: DisclosurePolicy,
 ): string {
-  const fromPolicy =
-    policyString(policy, "credentialHash") ?? policyString(policy, "schemaHash");
-  if (fromPolicy) return fromPolicy;
-
-  const attributeHash = attributes.find(
-    (attribute) => typeof attribute.hash === "string" && attribute.hash,
-  )?.hash;
-  if (attributeHash) return attributeHash;
+  const credentialHash = policyString(policy, "credentialHash");
+  if (/^0x[0-9a-fA-F]{64}$/.test(credentialHash ?? "")) {
+    return credentialHash as string;
+  }
 
   throw new Error(
-    "Disclosure request requires a credentialHash, schemaHash, or hashed requested attribute.",
+    "Disclosure request requires the holder credential's 32-byte credentialHash commitment.",
   );
 }
 
@@ -60,7 +60,9 @@ function parseGeneratedProof(proofData: string): ZKProof {
   try {
     parsed = JSON.parse(proofData);
   } catch {
-    throw new Error("Disclosure response requires a generated ZK proof JSON payload.");
+    throw new Error(
+      "Disclosure response requires a generated ZK proof JSON payload.",
+    );
   }
 
   if (
@@ -70,7 +72,9 @@ function parseGeneratedProof(proofData: string): ZKProof {
     typeof (parsed as { proofHash?: unknown }).proofHash !== "string" ||
     !(parsed as { proof?: unknown }).proof
   ) {
-    throw new Error("Disclosure response requires a complete generated ZK proof.");
+    throw new Error(
+      "Disclosure response requires a complete generated ZK proof.",
+    );
   }
 
   return parsed as ZKProof;
@@ -116,7 +120,8 @@ export function useCreateDisclosureRequest() {
             params.policy,
           ),
           requestedAttributes: attributeKeys(params.requestedAttributes),
-          circuitId: policyString(params.policy, "circuitId") ?? "selective_disclosure",
+          circuitId:
+            policyString(params.policy, "circuitId") ?? "selective_disclosure",
           expiresAt:
             Math.floor(Date.now() / 1000) + Number(params.expiresIn ?? 86_400),
           purpose: params.purpose,
@@ -197,7 +202,9 @@ export function usePendingDisclosures() {
       const requests = await apiClient.get<VerificationRequest[]>(
         "/api/v1/verification/requests?role=subject&result=PENDING&limit=100",
       );
-      return requests.map(verificationToDisclosureRequest);
+      return requests
+        .filter((request) => request.status === VerificationStatus.Pending)
+        .map(verificationToDisclosureRequest);
     },
     enabled: !!address,
     staleTime: 10_000,

@@ -13,6 +13,7 @@ import {
 } from "../../_lib/backend";
 
 const MAX_CREDENTIAL_ID_LENGTH = 128;
+const MAX_REQUEST_ID_LENGTH = 36;
 const MAX_CIRCUIT_NAME_LENGTH = 128;
 const MAX_AUDIENCE_LENGTH = 256;
 const MIN_NONCE_LENGTH = 8;
@@ -32,7 +33,14 @@ export async function POST(request: NextRequest) {
     }
 
     const rawInputs = body.inputs ?? body.publicInputs;
-    const credentialId = readBoundedString(body.credentialId, MAX_CREDENTIAL_ID_LENGTH);
+    const credentialId = readBoundedString(
+      body.credentialId,
+      MAX_CREDENTIAL_ID_LENGTH,
+    );
+    const requestId =
+      body.requestId === undefined
+        ? undefined
+        : readBoundedString(body.requestId, MAX_REQUEST_ID_LENGTH);
     const circuitName = readBoundedString(
       body.circuitName ?? body.circuitType,
       MAX_CIRCUIT_NAME_LENGTH,
@@ -75,6 +83,16 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    if (
+      body.requestId !== undefined &&
+      (!requestId ||
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+          requestId,
+        ))
+    ) {
+      return apiJson({ error: "requestId must be a UUID" }, { status: 400 });
+    }
+
     if (body.selectiveDisclosure !== undefined && !selectiveDisclosure) {
       return apiJson(
         {
@@ -100,6 +118,7 @@ export async function POST(request: NextRequest) {
       signal: buildBackendFetchSignal(),
       body: JSON.stringify({
         credentialId,
+        ...(requestId ? { requestId } : {}),
         circuitName,
         inputs,
         selectiveDisclosure,

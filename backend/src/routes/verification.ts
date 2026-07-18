@@ -112,6 +112,7 @@ type ProofNonceRecord = {
   nonce?: unknown;
   subjectId?: unknown;
   credentialId?: unknown;
+  requestId?: unknown;
   issuedAt?: unknown;
   claimsHashField?: unknown;
   contextCommitmentField?: unknown;
@@ -737,22 +738,86 @@ function didValue(value: unknown): string | undefined {
     : undefined;
 }
 
-function unixSeconds(value: Date | string | number | null | undefined): number {
-  if (typeof value === 'number') {
-    return value > 1_000_000_000_000 ? Math.floor(value / 1000) : value;
+const storedVerificationRequestDetailsSchema = z
+  .object({
+    verifierDid: z.string().min(1),
+    subjectDid: z.string().min(1),
+    credentialHash: z.string().min(1).max(256),
+    requestedAttributes: z.array(z.string().min(1).max(128)),
+    circuitId: z.string().min(1).max(128),
+    expiresAt: z.number().int().positive().safe(),
+    purpose: z.string().min(1).max(1000),
+    userConsent: z.boolean(),
+    verifierName: z.string().min(1).max(160).optional(),
+    requiredCredentials: z.array(z.string().min(1).max(160)).optional(),
+    requiredAttributes: z.array(z.unknown()).optional(),
+  })
+  .passthrough();
+
+type StoredVerificationRequestDetails = z.infer<
+  typeof storedVerificationRequestDetailsSchema
+>;
+
+type OwnedVerificationRequest = {
+  id: string;
+  verifierId: string;
+  subjectId: string;
+  verificationType: string;
+  result: unknown;
+  requestedAt: Date;
+  completedAt: Date | null;
+  resultDetails: unknown;
+  verifier: { id: string; did: string };
+  subject: { id: string; did: string };
+  details: StoredVerificationRequestDetails;
+};
+
+function parseStoredVerificationRequestDetails(
+  value: unknown,
+): StoredVerificationRequestDetails {
+  const parsed = storedVerificationRequestDetailsSchema.safeParse(value);
+  if (!parsed.success) {
+    throw buildRouteError(
+      'Stored verification request metadata is malformed',
+      'VERIFICATION_REQUEST_RECORD_INVALID',
+      500,
+    );
   }
-  if (!value) return Math.floor(Date.now() / 1000);
+  return parsed.data;
+}
+
+function unixSeconds(value: Date | string | number): number {
+  if (typeof value === 'number') {
+    const seconds =
+      value > 1_000_000_000_000 ? Math.floor(value / 1000) : value;
+    if (Number.isSafeInteger(seconds) && seconds > 0) return seconds;
+    throw buildRouteError(
+      'Stored verification request timestamp is invalid',
+      'VERIFICATION_REQUEST_RECORD_INVALID',
+      500,
+    );
+  }
   const date = value instanceof Date ? value : new Date(value);
-  return Number.isNaN(date.getTime())
-    ? Math.floor(Date.now() / 1000)
-    : Math.floor(date.getTime() / 1000);
+  if (Number.isNaN(date.getTime())) {
+    throw buildRouteError(
+      'Stored verification request timestamp is invalid',
+      'VERIFICATION_REQUEST_RECORD_INVALID',
+      500,
+    );
+  }
+  return Math.floor(date.getTime() / 1000);
 }
 
 function verificationStatusToClientStatus(result: unknown): string {
+  if (result === 'PENDING') return 'pending';
   if (result === 'VERIFIED') return 'completed';
   if (result === 'FAILED') return 'failed';
   if (result === 'EXPIRED') return 'expired';
-  return 'pending';
+  throw buildRouteError(
+    'Stored verification request status is invalid',
+    'VERIFICATION_REQUEST_RECORD_INVALID',
+    500,
+  );
 }
 
 function buildVerificationRequestResponse(record: {
@@ -764,39 +829,218 @@ function buildVerificationRequestResponse(record: {
   verifier?: { did: string } | null;
   subject?: { did: string } | null;
 }) {
-  const details = asRecord(record.resultDetails);
-  const expiresAt = Number(details.expiresAt);
+  const details = parseStoredVerificationRequestDetails(record.resultDetails);
+  const createdAt = unixSeconds(record.requestedAt);
+  const status =
+    record.result === 'PENDING' &&
+    details.expiresAt <= Math.floor(Date.now() / 1000)
+      ? 'expired'
+      : verificationStatusToClientStatus(record.result);
   return {
     id: record.id,
-    verifierDid: record.verifier?.did ?? String(details.verifierDid ?? ''),
-    subjectDid: record.subject?.did ?? String(details.subjectDid ?? ''),
-    credentialHash: String(details.credentialHash ?? ''),
-    requestedAttributes: Array.isArray(details.requestedAttributes)
-      ? details.requestedAttributes.filter(
-          (item): item is string => typeof item === 'string',
-        )
-      : [],
-    circuitId: String(details.circuitId ?? ''),
-    status: verificationStatusToClientStatus(record.result),
-    createdAt: unixSeconds(record.requestedAt),
-    expiresAt: Number.isSafeInteger(expiresAt)
-      ? expiresAt
-      : unixSeconds(record.requestedAt) + 24 * 60 * 60,
-    purpose: String(details.purpose ?? ''),
-    userConsent: Boolean(details.userConsent),
-    verifierName:
-      typeof details.verifierName === 'string'
-        ? details.verifierName
-        : undefined,
-    requiredCredentials: Array.isArray(details.requiredCredentials)
-      ? details.requiredCredentials.filter(
-          (item): item is string => typeof item === 'string',
-        )
-      : undefined,
-    requiredAttributes: Array.isArray(details.requiredAttributes)
-      ? details.requiredAttributes
-      : undefined,
+    verifierDid: record.verifier?.did ?? details.verifierDid,
+    subjectDid: record.subject?.did ?? details.subjectDid,
+    credentialHash: details.credentialHash,
+    requestedAttributes: details.requestedAttributes,
+    circuitId: details.circuitId,
+    status,
+    createdAt,
+    expiresAt: details.expiresAt,
+    purpose: details.purpose,
+    userConsent: details.userConsent,
+    verifierName: details.verifierName,
+    requiredCredentials: details.requiredCredentials,
+    requiredAttributes: details.requiredAttributes,
   };
+}
+
+async function expirePendingVerificationRequest(
+  request: Omit<OwnedVerificationRequest, 'details'>,
+  details: StoredVerificationRequestDetails,
+): Promise<boolean> {
+  const completedAt = new Date();
+  const resultDetails = {
+    ...details,
+    userConsent: false,
+    response: {
+      outcome: 'expired',
+      respondedAt: completedAt.toISOString(),
+    },
+  } as unknown as Prisma.InputJsonObject;
+
+  return prisma.$transaction(async (tx) => {
+    const updated = await tx.verification.updateMany({
+      where: {
+        id: request.id,
+        subjectId: request.subjectId,
+        verificationType: 'PROOF_REQUEST',
+        result: 'PENDING',
+      },
+      data: {
+        result: 'EXPIRED',
+        resultDetails,
+        completedAt,
+      },
+    });
+    if (updated.count !== 1) return false;
+
+    await tx.auditLog.create({
+      data: {
+        identityId: request.subjectId,
+        action: 'VERIFICATION_FAILED',
+        resourceType: 'verification_request',
+        resourceId: request.id,
+        details: {
+          outcome: 'expired',
+          verifierId: request.verifierId,
+          expiresAt: details.expiresAt,
+        },
+      },
+    });
+    return true;
+  });
+}
+
+async function getOwnedPendingVerificationRequest(
+  requestId: string,
+  subjectId: string,
+): Promise<OwnedVerificationRequest> {
+  const request = await prisma.verification.findUnique({
+    where: { id: requestId },
+    include: {
+      verifier: { select: { id: true, did: true } },
+      subject: { select: { id: true, did: true } },
+    },
+  });
+
+  if (
+    !request ||
+    request.verificationType !== 'PROOF_REQUEST' ||
+    request.subjectId !== subjectId
+  ) {
+    throw buildRouteError(
+      'Verification request was not found',
+      'VERIFICATION_REQUEST_NOT_FOUND',
+      404,
+    );
+  }
+
+  const details = parseStoredVerificationRequestDetails(request.resultDetails);
+  if (request.result === 'EXPIRED') {
+    throw buildRouteError(
+      'Verification request has expired',
+      'VERIFICATION_REQUEST_EXPIRED',
+      410,
+    );
+  }
+  if (request.result !== 'PENDING') {
+    throw buildRouteError(
+      'Verification request has already been resolved',
+      'VERIFICATION_REQUEST_ALREADY_RESOLVED',
+      409,
+    );
+  }
+
+  if (details.expiresAt <= Math.floor(Date.now() / 1000)) {
+    const expired = await expirePendingVerificationRequest(request, details);
+    throw buildRouteError(
+      expired
+        ? 'Verification request has expired'
+        : 'Verification request was resolved by another operation',
+      expired
+        ? 'VERIFICATION_REQUEST_EXPIRED'
+        : 'VERIFICATION_REQUEST_ALREADY_RESOLVED',
+      expired ? 410 : 409,
+    );
+  }
+
+  return { ...request, details };
+}
+
+async function finalizeBoundVerificationRequest(
+  request: OwnedVerificationRequest,
+  evidence: {
+    result: 'VERIFIED' | 'FAILED';
+    proofId: string;
+    credentialId: string;
+    circuitName: string;
+    nonce: string;
+    audience: string;
+    issuedAt: number;
+    contextCommitment: string;
+    publicSignals: string[];
+  },
+): Promise<Date> {
+  const completedAt = new Date();
+  const outcome = evidence.result === 'VERIFIED' ? 'verified' : 'proof_invalid';
+  const resultDetails = {
+    ...request.details,
+    userConsent: true,
+    response: {
+      outcome,
+      proofId: evidence.proofId,
+      respondedAt: completedAt.toISOString(),
+    },
+  } as unknown as Prisma.InputJsonObject;
+  const zkProofData = {
+    proofId: evidence.proofId,
+    requestId: request.id,
+    credentialId: evidence.credentialId,
+    circuitName: evidence.circuitName,
+    nonce: evidence.nonce,
+    audience: evidence.audience,
+    issuedAt: evidence.issuedAt,
+    contextCommitment: evidence.contextCommitment,
+    publicSignals: evidence.publicSignals,
+  } as Prisma.InputJsonObject;
+
+  await prisma.$transaction(async (tx) => {
+    const updated = await tx.verification.updateMany({
+      where: {
+        id: request.id,
+        subjectId: request.subjectId,
+        verifierId: request.verifierId,
+        verificationType: 'PROOF_REQUEST',
+        result: 'PENDING',
+      },
+      data: {
+        credentialId: evidence.credentialId,
+        result: evidence.result,
+        resultDetails,
+        zkProofData,
+        completedAt,
+      },
+    });
+    if (updated.count !== 1) {
+      throw buildRouteError(
+        'Verification request was resolved by another operation',
+        'VERIFICATION_REQUEST_ALREADY_RESOLVED',
+        409,
+      );
+    }
+
+    await tx.auditLog.create({
+      data: {
+        identityId: request.subjectId,
+        action:
+          evidence.result === 'VERIFIED'
+            ? 'VERIFICATION_COMPLETED'
+            : 'VERIFICATION_FAILED',
+        resourceType: 'verification_request',
+        resourceId: request.id,
+        details: {
+          outcome,
+          verifierId: request.verifierId,
+          credentialId: evidence.credentialId,
+          proofId: evidence.proofId,
+          circuitName: evidence.circuitName,
+          nonce: evidence.nonce,
+        },
+      },
+    });
+  });
+
+  return completedAt;
 }
 
 const router = Router();
@@ -807,6 +1051,7 @@ router.use(verificationLimiter);
 // ---------------------------------------------------------------------------
 const generateZKProofSchema = z.object({
   credentialId: uuidSchema,
+  requestId: uuidSchema.optional(),
   circuitName: z.string().min(1).max(100),
   inputs: z.record(z.union([z.string(), z.number()])),
   selectiveDisclosure: z.array(z.string()).optional(),
@@ -835,6 +1080,7 @@ router.post(
       const identity = req.identity!;
       const {
         credentialId,
+        requestId,
         circuitName,
         inputs,
         selectiveDisclosure,
@@ -844,6 +1090,49 @@ router.post(
 
       if (rejectUnboundCircuitIfNeeded(circuitName, res)) {
         return;
+      }
+
+      const boundRequest = requestId
+        ? await getOwnedPendingVerificationRequest(requestId, identity.id)
+        : undefined;
+      if (boundRequest) {
+        if (boundRequest.details.circuitId !== circuitName) {
+          res.status(400).json({
+            error:
+              'Proof circuit does not match the verification request circuit',
+            code: 'VERIFICATION_REQUEST_CIRCUIT_MISMATCH',
+          });
+          return;
+        }
+        if (
+          audience !== boundRequest.verifier.id &&
+          audience !== boundRequest.verifier.did
+        ) {
+          res.status(403).json({
+            error:
+              'Proof audience does not match the verification request verifier',
+            code: 'VERIFICATION_REQUEST_AUDIENCE_MISMATCH',
+          });
+          return;
+        }
+
+        const expectedAttributes = [
+          ...boundRequest.details.requestedAttributes,
+        ].sort();
+        const selectedAttributes = [...(selectiveDisclosure ?? [])].sort();
+        if (
+          expectedAttributes.length !== selectedAttributes.length ||
+          expectedAttributes.some(
+            (attribute, index) => attribute !== selectedAttributes[index],
+          )
+        ) {
+          res.status(400).json({
+            error:
+              'Selective disclosure fields do not match the verification request',
+            code: 'VERIFICATION_REQUEST_ATTRIBUTES_MISMATCH',
+          });
+          return;
+        }
       }
 
       // Verify the credential belongs to the requester
@@ -878,6 +1167,20 @@ router.post(
         res.status(409).json({
           error: 'Credential claims integrity mismatch',
           code: 'CRED_CLAIMS_HASH_MISMATCH',
+        });
+        return;
+      }
+      if (
+        boundRequest &&
+        boundRequest.details.credentialHash
+          .replace(/^0x/i, '')
+          .toLowerCase() !==
+          credential.claimsHash.replace(/^0x/i, '').toLowerCase()
+      ) {
+        res.status(400).json({
+          error:
+            'Credential commitment does not match the verification request',
+          code: 'VERIFICATION_REQUEST_CREDENTIAL_MISMATCH',
         });
         return;
       }
@@ -923,6 +1226,7 @@ router.post(
           audience,
           subjectId: identity.id,
           credentialId,
+          ...(boundRequest ? { requestId: boundRequest.id } : {}),
           issuedAt,
           claimsHashField,
           contextCommitmentField,
@@ -1014,6 +1318,7 @@ router.post(
           verificationType: 'ZK_PROOF',
           zkProofData: {
             proofId: result.proofId,
+            ...(boundRequest ? { requestId: boundRequest.id } : {}),
             circuitName: result.circuitName,
             publicSignals: result.publicSignals,
             nonce,
@@ -1033,6 +1338,7 @@ router.post(
       res.status(201).json({
         data: {
           proofId: result.proofId,
+          ...(boundRequest ? { requestId: boundRequest.id } : {}),
           proof: result.proof,
           publicSignals: result.publicSignals,
           circuitName: result.circuitName,
@@ -1070,6 +1376,7 @@ router.post(
 // POST /api/v1/verification/zk-verify — Verify a ZK proof
 // ---------------------------------------------------------------------------
 const verifyZKProofSchema = z.object({
+  requestId: uuidSchema.optional(),
   proof: z.object({
     pi_a: z.array(z.string().max(MAX_PUBLIC_SIGNAL_LENGTH)).max(8),
     pi_b: z
@@ -1116,12 +1423,26 @@ router.post(
         audience,
         contextCommitment,
         issuedAt,
+        requestId,
       } = req.body;
-      const verifier = req.identity!;
+      const actor = req.identity!;
 
       if (rejectUnboundCircuitIfNeeded(circuitName, res)) {
         return;
       }
+
+      const boundRequest = requestId
+        ? await getOwnedPendingVerificationRequest(requestId, actor.id)
+        : undefined;
+      if (boundRequest && boundRequest.details.circuitId !== circuitName) {
+        res.status(400).json({
+          error:
+            'Proof circuit does not match the verification request circuit',
+          code: 'VERIFICATION_REQUEST_CIRCUIT_MISMATCH',
+        });
+        return;
+      }
+      const intendedVerifier = boundRequest?.verifier ?? actor;
 
       // 1. Check proof age — reject expired proofs
       const proofAge = Date.now() - issuedAt;
@@ -1141,10 +1462,15 @@ router.post(
       }
 
       // 2. Audience check — verifier must be the intended audience
-      if (audience !== verifier.id && audience !== verifier.did) {
+      if (
+        audience !== intendedVerifier.id &&
+        audience !== intendedVerifier.did
+      ) {
         logger.warn('proof_audience_mismatch', {
           expected: audience,
-          actual: verifier.id,
+          actual: intendedVerifier.id,
+          actor: actor.id,
+          requestId,
           nonce,
         });
         res.status(403).json({
@@ -1158,7 +1484,7 @@ router.post(
       const replayKey = proofNonceScopedKey('proof:used', nonce);
       const alreadyUsed = await redis.get(replayKey);
       if (alreadyUsed) {
-        logger.warn('proof_replay_detected', { nonce, verifier: verifier.id });
+        logger.warn('proof_replay_detected', { nonce, actor: actor.id });
         res.status(409).json({
           error: 'Proof has already been verified (replay)',
           code: 'PROOF_REPLAY',
@@ -1173,7 +1499,9 @@ router.post(
       const lockResult = await redis.set(
         verificationLockKey,
         JSON.stringify({
-          verifier: verifier.id,
+          actor: actor.id,
+          verifier: intendedVerifier.id,
+          requestId,
           lockedAt: Date.now(),
         }),
         'EX',
@@ -1193,7 +1521,8 @@ router.post(
       if (replayAfterLock) {
         logger.warn('proof_replay_detected_after_lock', {
           nonce,
-          verifier: verifier.id,
+          actor: actor.id,
+          requestId,
         });
         res.status(409).json({
           error: 'Proof has already been verified (replay)',
@@ -1208,7 +1537,7 @@ router.post(
       const nonceKey = proofNonceScopedKey('proof:nonce', nonce);
       const nonceData = await redis.get(nonceKey);
       if (!nonceData) {
-        logger.warn('proof_nonce_unknown', { nonce, verifier: verifier.id });
+        logger.warn('proof_nonce_unknown', { nonce, actor: actor.id });
         res.status(400).json({
           error: 'Nonce not recognized or expired',
           code: 'PROOF_NONCE_INVALID',
@@ -1227,7 +1556,7 @@ router.post(
       } catch {
         logger.warn('proof_nonce_record_parse_failed', {
           nonce,
-          verifier: verifier.id,
+          actor: actor.id,
         });
         res.status(400).json({
           error: 'Nonce record is malformed',
@@ -1248,6 +1577,18 @@ router.post(
         res.status(400).json({
           error: 'Nonce record is malformed',
           code: 'PROOF_NONCE_RECORD_INVALID',
+        });
+        return;
+      }
+      if (
+        boundRequest &&
+        (nonceRecord.requestId !== boundRequest.id ||
+          nonceRecord.subjectId !== boundRequest.subjectId)
+      ) {
+        res.status(400).json({
+          error:
+            'Proof nonce is not bound to this verification request and subject',
+          code: 'VERIFICATION_REQUEST_NONCE_BINDING_INVALID',
         });
         return;
       }
@@ -1321,6 +1662,20 @@ router.post(
         });
         return;
       }
+      if (
+        boundRequest &&
+        boundRequest.details.credentialHash
+          .replace(/^0x/i, '')
+          .toLowerCase() !==
+          credential.claimsHash.replace(/^0x/i, '').toLowerCase()
+      ) {
+        res.status(400).json({
+          error:
+            'Credential commitment does not match the verification request',
+          code: 'VERIFICATION_REQUEST_CREDENTIAL_MISMATCH',
+        });
+        return;
+      }
 
       const expectedClaimsHashField = digestToFieldElement(
         credential.claimsHash,
@@ -1375,8 +1730,29 @@ router.post(
 
       if (!result.valid) {
         verificationCounter.inc({ result: 'failed' });
+        const completedAt = boundRequest
+          ? await finalizeBoundVerificationRequest(boundRequest, {
+              result: 'FAILED',
+              proofId: result.proofId,
+              credentialId: nonceRecord.credentialId,
+              circuitName,
+              nonce,
+              audience,
+              issuedAt,
+              contextCommitment,
+              publicSignals,
+            })
+          : new Date();
         res.json({
-          data: { valid: false, proofId: result.proofId, circuitName },
+          data: {
+            valid: false,
+            proofId: result.proofId,
+            circuitName,
+            verifiedAt: completedAt.toISOString(),
+            ...(boundRequest
+              ? { requestId: boundRequest.id, status: 'failed' }
+              : {}),
+          },
         });
         return;
       }
@@ -1404,11 +1780,27 @@ router.post(
         return;
       }
 
+      const completedAt = boundRequest
+        ? await finalizeBoundVerificationRequest(boundRequest, {
+            result: 'VERIFIED',
+            proofId: result.proofId,
+            credentialId: nonceRecord.credentialId,
+            circuitName,
+            nonce,
+            audience,
+            issuedAt,
+            contextCommitment,
+            publicSignals,
+          })
+        : undefined;
+
       // 9. Mark nonce as consumed — prevents replay
       await redis.set(
         replayKey,
         JSON.stringify({
-          verifier: verifier.id,
+          actor: actor.id,
+          verifier: intendedVerifier.id,
+          requestId,
           verifiedAt: Date.now(),
         }),
         'EX',
@@ -1426,7 +1818,10 @@ router.post(
           proofId: result.proofId,
           circuitName: result.circuitName,
           publicSignals: result.publicSignals,
-          verifiedAt: result.verifiedAt,
+          verifiedAt: completedAt ?? result.verifiedAt,
+          ...(boundRequest
+            ? { requestId: boundRequest.id, status: 'completed' }
+            : {}),
           contextBinding: {
             nonce,
             audience,
@@ -2098,7 +2493,12 @@ router.get(
 // ---------------------------------------------------------------------------
 const createVerificationRequestSchema = z.object({
   subjectDid: z.union([z.string(), z.object({ uri: z.string() })]),
-  credentialHash: z.string().min(1).max(256),
+  credentialHash: z
+    .string()
+    .regex(
+      /^0x[0-9a-fA-F]{64}$/,
+      'credentialHash must be a 32-byte 0x-prefixed commitment',
+    ),
   requestedAttributes: z.array(z.string().min(1).max(128)).default([]),
   circuitId: z.string().min(1).max(128),
   expiresAt: z.number().int().positive(),
@@ -2152,6 +2552,21 @@ router.post(
         res.status(400).json({
           error: 'Verification request expiry must be in the future',
           code: 'VERIFICATION_REQUEST_EXPIRY_INVALID',
+        });
+        return;
+      }
+      if (!zkProofService.getCircuitPublicSignalSchema(circuitId)) {
+        res.status(400).json({
+          error: 'Verification request circuit is not registered',
+          code: 'VERIFICATION_REQUEST_CIRCUIT_UNKNOWN',
+        });
+        return;
+      }
+      if (!zkProofService.isCircuitContextBound(circuitId)) {
+        res.status(503).json({
+          error:
+            'Verification requests require a context-bound production circuit',
+          code: 'VERIFICATION_REQUEST_CIRCUIT_UNSUPPORTED',
         });
         return;
       }
@@ -2214,6 +2629,106 @@ router.post(
         error: error.message,
       });
       sendRouteError(res, error, 'VERIFICATION_REQUEST_CREATE_FAILED');
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// POST /api/v1/verification/requests/:requestId/respond — Decline a request
+// ---------------------------------------------------------------------------
+const respondVerificationRequestParamsSchema = z.object({
+  requestId: uuidSchema,
+});
+const declineVerificationRequestSchema = z.object({
+  consent: z.literal(false),
+  reason: z.string().trim().min(1).max(500).optional(),
+});
+
+router.post(
+  '/requests/:requestId/respond',
+  verificationLimiter,
+  validate({
+    params: respondVerificationRequestParamsSchema,
+    body: declineVerificationRequestSchema,
+  }),
+  async (req: AuthenticatedRequest, res: Response): Promise<void> => {
+    try {
+      const subject = req.identity!;
+      const { requestId } = req.params as z.infer<
+        typeof respondVerificationRequestParamsSchema
+      >;
+      const { reason = 'User declined verification' } = req.body as z.infer<
+        typeof declineVerificationRequestSchema
+      >;
+      const verificationRequest = await getOwnedPendingVerificationRequest(
+        requestId,
+        subject.id,
+      );
+      const completedAt = new Date();
+      const resultDetails = {
+        ...verificationRequest.details,
+        userConsent: false,
+        response: {
+          outcome: 'declined',
+          reason,
+          respondedAt: completedAt.toISOString(),
+        },
+      } as unknown as Prisma.InputJsonObject;
+
+      await prisma.$transaction(async (tx) => {
+        const updated = await tx.verification.updateMany({
+          where: {
+            id: verificationRequest.id,
+            subjectId: subject.id,
+            verifierId: verificationRequest.verifierId,
+            verificationType: 'PROOF_REQUEST',
+            result: 'PENDING',
+          },
+          data: {
+            result: 'FAILED',
+            resultDetails,
+            completedAt,
+          },
+        });
+        if (updated.count !== 1) {
+          throw buildRouteError(
+            'Verification request was resolved by another operation',
+            'VERIFICATION_REQUEST_ALREADY_RESOLVED',
+            409,
+          );
+        }
+
+        await tx.auditLog.create({
+          data: {
+            identityId: subject.id,
+            action: 'VERIFICATION_FAILED',
+            resourceType: 'verification_request',
+            resourceId: verificationRequest.id,
+            details: {
+              outcome: 'declined',
+              verifierId: verificationRequest.verifierId,
+              reason,
+            },
+          },
+        });
+      });
+
+      res.json({
+        data: {
+          requestId: verificationRequest.id,
+          verified: false,
+          attributeResults: [],
+          verifiedAt: unixSeconds(completedAt),
+          reason,
+        },
+        message: 'Verification request declined',
+      });
+    } catch (err) {
+      const error = asRouteError(err);
+      logger.error('verification_request_decline_error', {
+        error: error.message,
+      });
+      sendRouteError(res, error, 'VERIFICATION_REQUEST_DECLINE_FAILED');
     }
   },
 );

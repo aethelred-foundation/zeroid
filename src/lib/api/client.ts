@@ -115,6 +115,8 @@ type BackendVerificationHistoryEntry = {
 type BackendZkVerificationResult = {
   valid?: boolean;
   proofId?: string;
+  requestId?: string;
+  status?: "completed" | "failed";
   circuitName?: string;
   verifiedAt?: string | number | Date;
   error?: string;
@@ -450,13 +452,18 @@ async function del<T>(
 
 function toUnixTimestamp(value: unknown): number {
   if (typeof value === "number") {
-    return value > 10_000_000_000 ? Math.floor(value / 1000) : value;
+    const seconds = value > 10_000_000_000 ? Math.floor(value / 1000) : value;
+    if (Number.isSafeInteger(seconds) && seconds > 0) return seconds;
   }
   if (typeof value === "string" || value instanceof Date) {
     const time = new Date(value).getTime();
     if (!Number.isNaN(time)) return Math.floor(time / 1000);
   }
-  return Math.floor(Date.now() / 1000);
+  throw new ZeroIDApiError(
+    "ZeroID returned an invalid verification timestamp.",
+    "VERIFICATION_RESPONSE_INVALID",
+    502,
+  );
 }
 
 function asStringArray(value: unknown): string[] | undefined {
@@ -509,7 +516,7 @@ function getProofContextField(
   return undefined;
 }
 
-function buildZkVerifyPayload(proof: ZKProof) {
+function buildZkVerifyPayload(proof: ZKProof, requestId?: string) {
   const nonce = getProofContextField(proof, "nonce");
   const audience = getProofContextField(proof, "audience");
   const contextCommitment = getProofContextField(proof, "contextCommitment");
@@ -533,6 +540,7 @@ function buildZkVerifyPayload(proof: ZKProof) {
   }
 
   return {
+    ...(requestId ? { requestId } : {}),
     proof: toBackendGroth16Proof(proof),
     publicSignals,
     circuitName: proof.circuitName,
@@ -546,10 +554,11 @@ function buildZkVerifyPayload(proof: ZKProof) {
 async function submitZkProof(
   proof: ZKProof,
   authToken: string,
+  requestId?: string,
 ): Promise<ProofVerification> {
   const result = await post<BackendZkVerificationResult>(
     "/api/v1/verification/zk-verify",
-    buildZkVerifyPayload(proof),
+    buildZkVerifyPayload(proof, requestId),
     authToken,
   );
 
@@ -895,7 +904,9 @@ export const apiClient = {
       { role: "subject", result: "PENDING", limit: 100 },
       authToken,
     );
-    return requests.map(verificationRequestToProofRequest);
+    return requests
+      .filter((request) => request.status === VerificationStatus.Pending)
+      .map(verificationRequestToProofRequest);
   },
 
   /** Get a verification result by request ID */
@@ -1066,13 +1077,11 @@ export const apiClient = {
     authToken: string,
   ): Promise<VerificationResult> {
     if (!payload.consent) {
-      return {
-        requestId,
-        verified: false,
-        attributeResults: [],
-        verifiedAt: Math.floor(Date.now() / 1000),
-        reason: "User declined verification",
-      };
+      return post<VerificationResult>(
+        `/api/v1/verification/requests/${encodeURIComponent(requestId)}/respond`,
+        { consent: false },
+        authToken,
+      );
     }
     if (!payload.proof) {
       throw new ZeroIDApiError(
@@ -1082,7 +1091,11 @@ export const apiClient = {
       );
     }
 
-    const proofResult = await submitZkProof(payload.proof, authToken);
+    const proofResult = await submitZkProof(
+      payload.proof,
+      authToken,
+      requestId,
+    );
     return {
       requestId,
       verified: proofResult.valid,

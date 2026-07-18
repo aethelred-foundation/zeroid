@@ -10,7 +10,6 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { apiClient } from "@/lib/api/client";
 import { getIdentityAuthToken } from "@/lib/identity/registration";
-import { stringToBytes32 } from "@/lib/utils";
 import type {
   VerificationRequest,
   VerificationResponse,
@@ -68,7 +67,9 @@ function parseGeneratedProof(proofData: string): ZKProof {
   try {
     parsed = JSON.parse(proofData);
   } catch {
-    throw new Error("Verification response requires a generated ZK proof JSON payload.");
+    throw new Error(
+      "Verification response requires a generated ZK proof JSON payload.",
+    );
   }
 
   if (
@@ -78,7 +79,9 @@ function parseGeneratedProof(proofData: string): ZKProof {
     typeof (parsed as { proofHash?: unknown }).proofHash !== "string" ||
     !(parsed as { proof?: unknown }).proof
   ) {
-    throw new Error("Verification response requires a complete generated ZK proof.");
+    throw new Error(
+      "Verification response requires a complete generated ZK proof.",
+    );
   }
 
   return parsed as ZKProof;
@@ -92,14 +95,16 @@ function buildVerificationRequestPayload(params: CreateVerificationParams) {
   if (!requestedAttributes.length) {
     throw new Error("Verification request requires at least one attribute.");
   }
+  if (!/^0x[0-9a-fA-F]{64}$/.test(params.credentialHash ?? "")) {
+    throw new Error(
+      "Verification request requires the holder credential's 32-byte credentialHash commitment.",
+    );
+  }
 
   return {
     verifierDid: params.verifierDid,
     subjectDid: params.subjectDid,
-    credentialHash:
-      params.credentialHash ??
-      params.requiredCredentials?.[0] ??
-      stringToBytes32(`zeroid:verification:${params.subjectDid}:${requestedAttributes.join(",")}`),
+    credentialHash: params.credentialHash,
     requestedAttributes,
     circuitId: String(params.circuitId ?? "selective_disclosure"),
     expiresAt:
@@ -175,6 +180,29 @@ export function useRespondToVerification() {
     },
     onError: (err: Error) => {
       toast.error("Verification response failed", { description: err.message });
+    },
+  });
+}
+
+export function useDeclineVerification() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (requestId: string) =>
+      apiClient.respondToVerification(
+        requestId,
+        { consent: false },
+        requireIdentityAuthToken(),
+      ),
+    onSuccess: () => {
+      toast.success("Verification request declined");
+      queryClient.invalidateQueries({ queryKey: ["verificationHistory"] });
+      queryClient.invalidateQueries({ queryKey: ["pendingVerifications"] });
+    },
+    onError: (err: Error) => {
+      toast.error("Failed to decline verification request", {
+        description: err.message,
+      });
     },
   });
 }

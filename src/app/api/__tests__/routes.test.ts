@@ -586,6 +586,7 @@ describe('POST /api/proof/generate', () => {
       headers: authHeaders,
       body: JSON.stringify({
         ...validProofBody,
+        requestId: '11111111-1111-4111-8111-111111111111',
         nonce: 'nonce-1234567890123456',
         selectiveDisclosure: ['age'],
       }),
@@ -608,6 +609,7 @@ describe('POST /api/proof/generate', () => {
     );
     expect(JSON.parse(init.body as string)).toEqual({
       ...validProofBody,
+      requestId: '11111111-1111-4111-8111-111111111111',
       nonce: 'nonce-1234567890123456',
       selectiveDisclosure: ['age'],
     });
