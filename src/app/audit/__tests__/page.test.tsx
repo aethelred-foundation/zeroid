@@ -1,217 +1,279 @@
 import React from "react";
-import { render, screen, fireEvent } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 
-// Mock next/navigation
-jest.mock("next/navigation", () => ({
-  useRouter: () => ({ push: jest.fn(), back: jest.fn() }),
-  usePathname: () => "/audit",
-  useSearchParams: () => new URLSearchParams(),
-}));
-
-// Mock framer-motion
-jest.mock("framer-motion", () => ({
-  motion: new Proxy(
-    {},
-    {
-      get: (_target: any, prop: string) => {
-        return React.forwardRef((props: any, ref: any) => {
-          const {
-            initial,
-            animate,
-            exit,
-            transition,
-            whileHover,
-            whileTap,
-            variants,
-            layout,
-            layoutId,
-            ...rest
-          } = props;
-          const Tag = prop as any;
-          return <Tag ref={ref} {...rest} />;
-        });
-      },
-    },
-  ),
-  AnimatePresence: ({ children }: any) => <>{children}</>,
-}));
-
-// Mock AppLayout
 jest.mock("@/components/layout/AppLayout", () => ({
   __esModule: true,
-  default: ({ children }: any) => (
+  default: ({ children }: { children: React.ReactNode }) => (
     <div data-testid="app-layout">{children}</div>
   ),
 }));
 
-// Mock hooks
 jest.mock("@/hooks/useAudit", () => ({
-  useAudit: jest.fn(() => ({
-    auditLog: [
-      {
-        id: "1",
-        action: "credential_issued",
-        category: "credentials",
-        timestamp: new Date().toISOString(),
-      },
-      {
-        id: "2",
-        action: "proof_generated",
-        category: "verifications",
-        timestamp: new Date().toISOString(),
-      },
-      {
-        id: "3",
-        action: "credential_revoked",
-        category: "credentials",
-        timestamp: new Date().toISOString(),
-      },
-    ],
-    isLoading: false,
-  })),
+  useAudit: jest.fn(),
+  exportAuditLog: jest.fn(() => Promise.resolve()),
 }));
 
-// Mock components
+const mockSignIn = jest.fn();
+const mockUseIdentity = jest.fn();
+
+jest.mock("@/contexts/IdentityContext", () => ({
+  useIdentity: () => mockUseIdentity(),
+}));
+
 jest.mock("@/components/audit/AuditTimeline", () => ({
   __esModule: true,
-  default: () => <div data-testid="audit-timeline">AuditTimeline</div>,
-}));
-
-jest.mock("@/components/ui/StatusBadge", () => ({
-  StatusBadge: ({ status }: any) => (
-    <span data-testid="status-badge">{status}</span>
+  default: ({
+    events,
+    isLoading,
+    error,
+    emptyMessage,
+  }: {
+    events: unknown[];
+    isLoading: boolean;
+    error: Error | null;
+    emptyMessage: string;
+  }) => (
+    <div
+      data-testid="audit-timeline"
+      data-event-count={events.length}
+      data-loading={String(isLoading)}
+      data-error={error?.message ?? ""}
+    >
+      {emptyMessage}
+    </div>
   ),
 }));
 
-import { useAudit } from "@/hooks/useAudit";
+import { exportAuditLog, useAudit } from "@/hooks/useAudit";
 import AuditPage from "../page";
 
-describe("AuditPage", () => {
-  it("renders without crashing", () => {
-    render(<AuditPage />);
-    expect(screen.getByTestId("app-layout")).toBeInTheDocument();
-  });
+const mockUseAudit = useAudit as jest.Mock;
+const mockExportAuditLog = exportAuditLog as jest.Mock;
 
-  it("displays the page heading", () => {
+const records = [
+  {
+    id: "audit-1",
+    action: "CREDENTIAL_ISSUED",
+    type: "CREDENTIAL_ISSUED",
+    entityType: "credential",
+    entityId: "credential-1",
+    timestamp: "2026-07-18T08:00:00.000Z",
+  },
+  {
+    id: "audit-2",
+    action: "AUTH_LOGIN",
+    type: "AUTH_LOGIN",
+    entityType: "identity",
+    entityId: "identity-1",
+    timestamp: "2026-07-18T09:00:00.000Z",
+  },
+  {
+    id: "audit-3",
+    action: "AUTH_LOGIN",
+    type: "AUTH_LOGIN",
+    entityType: "identity",
+    entityId: "identity-1",
+    timestamp: undefined,
+  },
+];
+
+function defaultHookResult() {
+  return {
+    auditLog: records,
+    events: records,
+    total: records.length,
+    isConnected: true,
+    isLoading: false,
+    isSuccess: true,
+    error: null,
+  };
+}
+
+beforeEach(() => {
+  jest.clearAllMocks();
+  mockSignIn.mockResolvedValue(undefined);
+  mockUseIdentity.mockReturnValue({
+    identity: { isLoading: false, isRegistered: true },
+    sessionStatus: "authenticated",
+    sessionError: null,
+    signIn: mockSignIn,
+  });
+  mockUseAudit.mockReturnValue(defaultHookResult());
+  mockExportAuditLog.mockResolvedValue(undefined);
+});
+
+describe("AuditPage", () => {
+  it("renders a bounded server-backed audit view", () => {
     render(<AuditPage />);
+
     expect(screen.getByText("Audit Trail")).toBeInTheDocument();
     expect(
-      screen.getByText(/Complete history of identity actions/),
+      screen.getByText(/Server-backed identity audit records/),
     ).toBeInTheDocument();
-  });
-
-  it("shows Export Log button", () => {
-    render(<AuditPage />);
-    expect(screen.getByText("Export Log")).toBeInTheDocument();
-  });
-
-  it("renders audit timeline component", () => {
-    render(<AuditPage />);
-    expect(screen.getByTestId("audit-timeline")).toBeInTheDocument();
-  });
-
-  it("allows switching category tabs", () => {
-    render(<AuditPage />);
-    const credentialsTab = screen.getByRole("button", { name: /Credentials/i });
-    fireEvent.click(credentialsTab);
-    expect(credentialsTab).toBeInTheDocument();
-  });
-
-  it("filters audit log by search query", () => {
-    render(<AuditPage />);
-    const searchInput = screen.getByPlaceholderText("Search audit events...");
-    fireEvent.change(searchInput, { target: { value: "credential_issued" } });
-    // Should filter to only matching entries
-    expect(searchInput).toHaveValue("credential_issued");
-  });
-
-  it("filters audit log with non-matching search query", () => {
-    render(<AuditPage />);
-    const searchInput = screen.getByPlaceholderText("Search audit events...");
-    fireEvent.change(searchInput, { target: { value: "nonexistent_action" } });
-    expect(searchInput).toHaveValue("nonexistent_action");
-  });
-
-  it("switches date range buttons", () => {
-    render(<AuditPage />);
-    // Click each date range button
-    fireEvent.click(screen.getByRole("button", { name: "24h" }));
-    expect(screen.getByRole("button", { name: "24h" })).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "30d" }));
-    expect(screen.getByRole("button", { name: "30d" })).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "All" }));
-    expect(screen.getByRole("button", { name: "All" })).toBeInTheDocument();
-  });
-
-  it("switches to different category tabs", () => {
-    render(<AuditPage />);
-    // Click Verifications tab
-    fireEvent.click(screen.getByRole("button", { name: /Verifications/i }));
     expect(
-      screen.getByRole("button", { name: /Verifications/i }),
+      screen.getByText(/at most 100 returned records/),
     ).toBeInTheDocument();
-
-    // Click Governance tab
-    fireEvent.click(screen.getByRole("button", { name: /Governance/i }));
-    expect(
-      screen.getByRole("button", { name: /Governance/i }),
-    ).toBeInTheDocument();
-
-    // Click Identity tab
-    fireEvent.click(screen.getByRole("button", { name: /Identity/i }));
-    expect(
-      screen.getByRole("button", { name: /Identity/i }),
-    ).toBeInTheDocument();
-
-    // Click All Events tab
-    fireEvent.click(screen.getByRole("button", { name: /All Events/i }));
-    expect(
-      screen.getByRole("button", { name: /All Events/i }),
-    ).toBeInTheDocument();
+    expect(screen.queryByText(/Complete history/)).not.toBeInTheDocument();
   });
 
-  it("shows summary stats for audit log", () => {
+  it("uses one page-level audit source and passes its records to the timeline", () => {
     render(<AuditPage />);
-    expect(screen.getByText("Total Events")).toBeInTheDocument();
-    expect(screen.getByText("Credentials Issued")).toBeInTheDocument();
-    expect(screen.getByText("Proofs Generated")).toBeInTheDocument();
-    expect(screen.getByText("Revocations")).toBeInTheDocument();
+
+    expect(mockUseAudit).toHaveBeenCalled();
+    expect(screen.getByTestId("audit-timeline")).toHaveAttribute(
+      "data-event-count",
+      "3",
+    );
+    const filters = mockUseAudit.mock.calls[0][0];
+    expect(mockUseAudit.mock.calls[0][1]).toBe(true);
+    expect(filters).toMatchObject({ page: 1, pageSize: 100 });
+    expect(filters.entityType).toBeUndefined();
+    expect(filters.startDate).toEqual(expect.any(String));
+    expect(filters.endDate).toEqual(expect.any(String));
   });
 
-  it("filters by category and then searches within filtered results", () => {
+  it("does not enable the audit query before wallet session sign-in", () => {
+    mockUseIdentity.mockReturnValue({
+      identity: { isLoading: false, isRegistered: true },
+      sessionStatus: "sign-in-required",
+      sessionError: null,
+      signIn: mockSignIn,
+    });
+
     render(<AuditPage />);
-    // First filter by category
+    fireEvent.click(
+      screen.getByRole("button", { name: "Sign in with wallet" }),
+    );
+
+    expect(mockUseAudit.mock.calls[0][1]).toBe(false);
+    expect(mockSignIn).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId("audit-timeline")).not.toBeInTheDocument();
+  });
+
+  it("sends resource selection to the server filter", () => {
+    render(<AuditPage />);
+
     fireEvent.click(screen.getByRole("button", { name: /Credentials/i }));
-    // Then search within
-    const searchInput = screen.getByPlaceholderText("Search audit events...");
-    fireEvent.change(searchInput, { target: { value: "credential_issued" } });
-    expect(searchInput).toHaveValue("credential_issued");
+
+    const filters = mockUseAudit.mock.calls.at(-1)?.[0];
+    expect(filters).toMatchObject({
+      entityType: "credential",
+      page: 1,
+      pageSize: 100,
+    });
   });
 
-  it("handles null auditLog gracefully", () => {
-    (useAudit as jest.Mock).mockReturnValue({
-      auditLog: null,
+  it("sends the selected date range to the server filter", () => {
+    render(<AuditPage />);
+
+    fireEvent.click(screen.getByRole("button", { name: "24h" }));
+
+    const filters = mockUseAudit.mock.calls.at(-1)?.[0];
+    const rangeMs =
+      new Date(filters.endDate).getTime() -
+      new Date(filters.startDate).getTime();
+    expect(rangeMs).toBe(24 * 60 * 60 * 1000);
+  });
+
+  it("derives summaries only from returned records", () => {
+    render(<AuditPage />);
+
+    const summary = screen.getByRole("region", {
+      name: "Returned record summary",
+    });
+    expect(within(summary).getByText("Returned records")).toBeInTheDocument();
+    expect(within(summary).getByText("Dated records")).toBeInTheDocument();
+    expect(
+      within(summary).getByText("Distinct action codes"),
+    ).toBeInTheDocument();
+    expect(within(summary).getByText("Distinct resources")).toBeInTheDocument();
+    expect(within(summary).getByText("3")).toBeInTheDocument();
+    expect(within(summary).getAllByText("2")).toHaveLength(3);
+    expect(screen.queryByText("Proofs Generated")).not.toBeInTheDocument();
+  });
+
+  it("exports the active server filter through the audit export endpoint helper", async () => {
+    render(<AuditPage />);
+    fireEvent.click(
+      screen.getByRole("button", { name: /Governance schemas/i }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "30d" }));
+    fireEvent.click(screen.getByRole("button", { name: "Export JSON" }));
+
+    await waitFor(() => expect(mockExportAuditLog).toHaveBeenCalled());
+    expect(mockExportAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entityType: "schema",
+        page: 1,
+        pageSize: 100,
+        startDate: expect.any(String),
+        endDate: expect.any(String),
+      }),
+      "json",
+    );
+  });
+
+  it("keeps loading, error, and empty states honest", () => {
+    mockUseAudit.mockReturnValue({
+      ...defaultHookResult(),
+      auditLog: [],
+      total: 0,
+      isLoading: true,
+      isSuccess: false,
+      error: null,
+    });
+    const { rerender } = render(<AuditPage />);
+    expect(screen.getByTestId("audit-timeline")).toHaveAttribute(
+      "data-loading",
+      "true",
+    );
+    expect(
+      screen.queryByRole("region", { name: "Returned record summary" }),
+    ).not.toBeInTheDocument();
+
+    mockUseAudit.mockReturnValue({
+      ...defaultHookResult(),
+      auditLog: [],
+      total: 0,
       isLoading: false,
+      isSuccess: false,
+      error: new Error("Audit API offline"),
+    });
+    rerender(<AuditPage />);
+    expect(screen.getByTestId("audit-timeline")).toHaveAttribute(
+      "data-error",
+      "Audit API offline",
+    );
+
+    mockUseAudit.mockReturnValue({
+      ...defaultHookResult(),
+      auditLog: [],
+      total: 0,
+      isSuccess: true,
+    });
+    rerender(<AuditPage />);
+    expect(screen.getByTestId("audit-timeline")).toHaveTextContent(
+      "No audit records were returned for these server filters.",
+    );
+  });
+
+  it("requires a connected session before export", () => {
+    mockUseAudit.mockReturnValue({
+      ...defaultHookResult(),
+      auditLog: [],
+      total: 0,
+      isConnected: false,
+      isSuccess: false,
     });
     render(<AuditPage />);
-    expect(screen.getByTestId("app-layout")).toBeInTheDocument();
-    expect(screen.getByText("Total Events")).toBeInTheDocument();
-  });
 
-  it("handles undefined auditLog gracefully", () => {
-    (useAudit as jest.Mock).mockReturnValue({
-      auditLog: undefined,
-      isLoading: false,
-    });
-    render(<AuditPage />);
-    expect(screen.getByTestId("app-layout")).toBeInTheDocument();
-  });
-
-  it("handles empty auditLog", () => {
-    (useAudit as jest.Mock).mockReturnValue({ auditLog: [], isLoading: false });
-    render(<AuditPage />);
-    expect(screen.getByText("Total Events")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Export JSON" })).toBeDisabled();
+    expect(screen.getByText(/Connect your wallet/)).toBeInTheDocument();
   });
 });
