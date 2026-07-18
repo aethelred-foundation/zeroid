@@ -1,8 +1,8 @@
 /**
  * useIdentity — Hook for managing self-sovereign identity (DID) lifecycle.
  *
- * Handles DID creation, profile reads/updates, delegate control,
- * and recovery via on-chain registry + API layer.
+ * Handles DID creation, profile reads/updates, and controller-authorized
+ * delegate transactions against the on-chain registry.
  */
 
 import { useCallback } from "react";
@@ -36,7 +36,6 @@ import {
 import type {
   IdentityProfile,
   DIDDocument,
-  DelegateRecord,
   CreateIdentityParams,
   UpdateProfileParams,
   Bytes32,
@@ -44,6 +43,21 @@ import type {
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000" as Address;
 const EMPTY_BYTES32 = `0x${"0".repeat(64)}` as Bytes32;
+const MAX_DELEGATION_DURATION_SECONDS = 365n * 24n * 60n * 60n;
+
+function isNonZeroDidHash(value: unknown): value is Bytes32 {
+  return (
+    typeof value === "string" &&
+    /^0x[0-9a-fA-F]{64}$/.test(value) &&
+    value.toLowerCase() !== EMPTY_BYTES32
+  );
+}
+
+function finiteRecordCount(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+    ? value
+    : undefined;
+}
 
 // ---------------------------------------------------------------------------
 // On-chain DID resolution
@@ -62,13 +76,9 @@ export function useOnChainIdentity() {
 
   return {
     didHash: didHash as string | undefined,
-    // ZeroID.sol has no enumerable delegate getter (only isValidDelegate);
-    // the delegate list is sourced from the backend/events, not this read.
-    delegates: [] as DelegateRecord[],
     isLoading: isDIDLoading,
-    // resolveByController returns bytes32(0) for an unregistered wallet — the
-    // zero hash is truthy and !== "0x", so it must be excluded explicitly.
-    hasIdentity: !!didHash && didHash !== "0x" && didHash !== EMPTY_BYTES32,
+    // Only an actual non-zero bytes32 response is registration evidence.
+    hasIdentity: isNonZeroDidHash(didHash),
   };
 }
 
@@ -291,11 +301,14 @@ function toBackendProfileUpdate(params: UpdateProfileParams): {
 // ---------------------------------------------------------------------------
 
 export function useIdentity() {
-  const { didHash, hasIdentity, delegates, isLoading } = useOnChainIdentity();
+  const { didHash, hasIdentity, isLoading } = useOnChainIdentity();
   const profileQuery = useIdentityProfile();
   const profile = profileQuery.data;
   const createMutation = useCreateIdentity();
-  const { delegateControl, revokeDelegate } = useDelegateControl();
+  const {
+    delegateControl: submitDelegateTransaction,
+    revokeDelegate: submitRevokeDelegateTransaction,
+  } = useDelegateControl();
   const { address } = useAccount();
 
   const createIdentity = useCallback(
@@ -315,21 +328,55 @@ export function useIdentity() {
     typeof profile?.did === "string"
       ? profile.did
       : (profile?.did?.uri ?? didHash);
+  const profileEvidence = profile as unknown as
+    | Record<string, unknown>
+    | null
+    | undefined;
+
+  const delegateControl = useCallback(
+    async (delegateAddress: Address, durationSeconds: bigint) => {
+      if (!isNonZeroDidHash(didHash)) {
+        throw new Error(
+          "A confirmed on-chain DID is required before adding a delegate.",
+        );
+      }
+      return submitDelegateTransaction(
+        didHash,
+        delegateAddress,
+        durationSeconds,
+      );
+    },
+    [didHash, submitDelegateTransaction],
+  );
+
+  const revokeDelegate = useCallback(
+    async (delegateAddress: Address) => {
+      if (!isNonZeroDidHash(didHash)) {
+        throw new Error(
+          "A confirmed on-chain DID is required before revoking a delegate.",
+        );
+      }
+      return submitRevokeDelegateTransaction(didHash, delegateAddress);
+    },
+    [didHash, submitRevokeDelegateTransaction],
+  );
 
   return {
     identity: {
       did: normalizedDid,
       didHash,
       hasIdentity,
-      delegates,
       isRegistered: hasIdentity,
       profile: profile ?? null,
-      credentialCount: profile?.credentialCount ?? 0,
-      verificationCount: profile?.verificationCount ?? 0,
-      verificationStatus: profile?.verificationStatus ?? "unverified",
+      credentialCount: finiteRecordCount(profile?.credentialCount),
+      verificationCount: finiteRecordCount(profile?.verificationCount),
+      verificationStatus: profile?.verificationStatus,
+      status: profileEvidence?.status,
+      teeAttested: profileEvidence?.teeAttested,
+      governmentVerified: profileEvidence?.governmentVerified,
+      verificationEvidence: profileEvidence?.verificationEvidence,
       createdAt: profile?.createdAt,
     },
-    delegates,
     isLoading: isLoading || profileQuery.isLoading,
     error: profileQuery.error as Error | null,
     createIdentity,
@@ -344,12 +391,27 @@ export function useDelegateControl() {
   const { writeContractAsync } = useSafeWriteContract();
 
   const delegateControl = useCallback(
-    async (delegateAddress: Address, expirySeconds: bigint): Promise<Hash> => {
+    async (
+      didHash: Bytes32,
+      delegateAddress: Address,
+      durationSeconds: bigint,
+    ): Promise<Hash> => {
+      if (!isNonZeroDidHash(didHash)) {
+        throw new Error("Delegation requires a non-zero DID hash.");
+      }
+      if (
+        durationSeconds <= 0n ||
+        durationSeconds > MAX_DELEGATION_DURATION_SECONDS
+      ) {
+        throw new Error(
+          "Delegation duration must be between 1 second and 365 days.",
+        );
+      }
       const hash = await writeContractAsync({
         address: IDENTITY_REGISTRY_ADDRESS as Address,
         abi: IDENTITY_REGISTRY_ABI,
         functionName: "addDelegate",
-        args: [delegateAddress, expirySeconds],
+        args: [didHash, delegateAddress, durationSeconds],
       });
       toast.success("Delegate added");
       queryClient.invalidateQueries({ queryKey: ["identity"] });
@@ -359,12 +421,15 @@ export function useDelegateControl() {
   );
 
   const revokeDelegate = useCallback(
-    async (delegateAddress: Address): Promise<Hash> => {
+    async (didHash: Bytes32, delegateAddress: Address): Promise<Hash> => {
+      if (!isNonZeroDidHash(didHash)) {
+        throw new Error("Delegation revocation requires a non-zero DID hash.");
+      }
       const hash = await writeContractAsync({
         address: IDENTITY_REGISTRY_ADDRESS as Address,
         abi: IDENTITY_REGISTRY_ABI,
         functionName: "revokeDelegate",
-        args: [delegateAddress],
+        args: [didHash, delegateAddress],
       });
       toast.success("Delegate revoked");
       queryClient.invalidateQueries({ queryKey: ["identity"] });

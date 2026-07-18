@@ -28,7 +28,8 @@ type IdentityVerificationState =
   | "pending"
   | "revoked"
   | "expired"
-  | "unverified";
+  | "unverified"
+  | "unavailable";
 
 const statusConfig: Record<
   IdentityVerificationState,
@@ -64,7 +65,46 @@ const statusConfig: Record<
     icon: Shield,
     color: "#fbbf24",
   },
+  unavailable: {
+    label: "Evidence unavailable",
+    badge: "badge-expired",
+    icon: Shield,
+    color: "#9ca3af",
+  },
 };
+
+function getVerificationState(value: unknown): IdentityVerificationState {
+  return typeof value === "string" && value in statusConfig
+    ? (value as IdentityVerificationState)
+    : "unavailable";
+}
+
+function displayCount(value: unknown): string {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+    ? value.toLocaleString()
+    : "—";
+}
+
+function displayCreatedAt(value: unknown): string {
+  if (
+    typeof value !== "string" &&
+    typeof value !== "number" &&
+    !(value instanceof Date)
+  ) {
+    return "—";
+  }
+  const raw =
+    typeof value === "number" && value > 0 && value < 10_000_000_000
+      ? value * 1_000
+      : value;
+  const date = new Date(raw);
+  return Number.isNaN(date.getTime())
+    ? "—"
+    : date.toLocaleDateString("en-US", {
+        month: "short",
+        year: "numeric",
+      });
+}
 
 function truncateDID(did: string, chars = 8): string {
   if (did.length <= chars * 2 + 3) return did;
@@ -90,10 +130,9 @@ export default function IdentityCard({
   const { identity: contextIdentity, isLoading, error } = useIdentity();
   const identity = identityProp ?? contextIdentity;
   const did = getDidString(identity?.did);
-  const verificationStatus = (identity?.verificationStatus ??
-    "unverified") as IdentityVerificationState;
-  const credentialCount = identity?.credentialCount ?? 0;
-  const verificationCount = identity?.verificationCount ?? 0;
+  const verificationStatus = getVerificationState(identity?.verificationStatus);
+  const credentialCount = displayCount(identity?.credentialCount);
+  const verificationCount = displayCount(identity?.verificationCount);
   const createdAt = identity?.createdAt;
   const [copied, setCopied] = useState(false);
 
@@ -106,7 +145,7 @@ export default function IdentityCard({
     } catch {}
   };
 
-  if (isLoading) {
+  if (identityProp === undefined && isLoading) {
     return (
       <div className="titanium-card p-7 animate-pulse h-full">
         <div className="flex items-center gap-4 mb-6">
@@ -129,7 +168,7 @@ export default function IdentityCard({
     );
   }
 
-  if (error) {
+  if (identityProp === undefined && error) {
     return (
       <div
         className="bento p-7"
@@ -192,7 +231,7 @@ export default function IdentityCard({
     );
   }
 
-  const status = statusConfig[verificationStatus] ?? statusConfig.unverified;
+  const status = statusConfig[verificationStatus];
   const StatusIcon = status.icon;
 
   if (compact) {
@@ -208,7 +247,7 @@ export default function IdentityCard({
           </div>
           <div className="flex-1 min-w-0">
             <p className="engraved text-[13px] font-mono truncate">
-              {truncateDID(did)}
+              {did ? truncateDID(did) : "DID unavailable"}
             </p>
             <span className={status.badge}>{status.label}</span>
           </div>
@@ -254,10 +293,11 @@ export default function IdentityCard({
           </p>
           <div className="flex items-center gap-2.5">
             <p className="engraved font-mono text-[15px] tracking-[0.06em] tnum">
-              {truncateDID(did, 14)}
+              {did ? truncateDID(did, 14) : "DID unavailable"}
             </p>
             <button
               onClick={handleCopyDID}
+              disabled={!did}
               className="p-1.5 rounded-lg hover:bg-white/5 transition-colors"
               aria-label="Copy DID"
             >
@@ -282,13 +322,7 @@ export default function IdentityCard({
             { value: credentialCount, label: "Credentials" },
             { value: verificationCount, label: "Verifications" },
             {
-              value: createdAt
-                ? // Full year: "Jul 26" (2-digit year) reads as a day of month.
-                  new Date(createdAt).toLocaleDateString("en-US", {
-                    month: "short",
-                    year: "numeric",
-                  })
-                : "--",
+              value: displayCreatedAt(createdAt),
               label: "Created",
             },
           ].map((stat, i) => (

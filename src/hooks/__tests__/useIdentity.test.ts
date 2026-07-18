@@ -132,7 +132,7 @@ describe("useIdentity hooks", () => {
 
   describe("useOnChainIdentity", () => {
     it("reads the controller→DID hash from the registry (resolveByController)", async () => {
-      const didHashValue = "0xdid_hash_001";
+      const didHashValue = `0x${"1".repeat(64)}`;
 
       // Single read: resolveByController. Must use the deployed getter name.
       mockUseReadContract.mockReturnValue({
@@ -149,8 +149,9 @@ describe("useIdentity hooks", () => {
         expect.objectContaining({ functionName: "resolveByController" }),
       );
       expect(result.current.didHash).toBe(didHashValue);
-      // No on-chain enumerable delegate getter exists — always [] from-chain.
-      expect(result.current.delegates).toEqual([]);
+      // No enumerable delegate getter exists, so no authoritative list is
+      // returned from this hook.
+      expect(result.current).not.toHaveProperty("delegates");
       expect(result.current.isLoading).toBe(false);
       expect(result.current.hasIdentity).toBe(true);
     });
@@ -171,6 +172,20 @@ describe("useIdentity hooks", () => {
 
     it("returns hasIdentity false when didHash is 0x", async () => {
       mockUseReadContract.mockReturnValue({ data: "0x", isLoading: false });
+
+      const { useOnChainIdentity } = await import("@/hooks/useIdentity");
+      const { result } = renderHook(() => useOnChainIdentity(), {
+        wrapper: createQueryWrapper(),
+      });
+
+      expect(result.current.hasIdentity).toBe(false);
+    });
+
+    it("does not accept a malformed registry response as an identity", async () => {
+      mockUseReadContract.mockReturnValue({
+        data: "0xnot-a-bytes32",
+        isLoading: false,
+      });
 
       const { useOnChainIdentity } = await import("@/hooks/useIdentity");
       const { result } = renderHook(() => useOnChainIdentity(), {
@@ -225,15 +240,18 @@ describe("useIdentity hooks", () => {
       }
     });
 
-    it("always returns an empty delegates array (no on-chain getter)", async () => {
-      mockUseReadContract.mockReturnValue({ data: "0xdid", isLoading: false });
+    it("does not fabricate an empty delegate list", async () => {
+      mockUseReadContract.mockReturnValue({
+        data: `0x${"3".repeat(64)}`,
+        isLoading: false,
+      });
 
       const { useOnChainIdentity } = await import("@/hooks/useIdentity");
       const { result } = renderHook(() => useOnChainIdentity(), {
         wrapper: createQueryWrapper(),
       });
 
-      expect(result.current.delegates).toEqual([]);
+      expect(result.current).not.toHaveProperty("delegates");
     });
   });
 
@@ -606,10 +624,12 @@ describe("useIdentity hooks", () => {
       const { result } = renderHook(() => useDelegateControl(), {
         wrapper: createQueryWrapper(),
       });
+      const didHash = `0x${"1".repeat(64)}` as `0x${string}`;
 
       let hash: string | undefined;
       await act(async () => {
         hash = await result.current.delegateControl(
+          didHash,
           "0xdelegate1" as `0x${string}`,
           BigInt(86400),
         );
@@ -619,7 +639,7 @@ describe("useIdentity hooks", () => {
       expect(mockWriteContractAsync).toHaveBeenCalledWith(
         expect.objectContaining({
           functionName: "addDelegate",
-          args: ["0xdelegate1", BigInt(86400)],
+          args: [didHash, "0xdelegate1", BigInt(86400)],
         }),
       );
       expect(toast.success).toHaveBeenCalledWith("Delegate added");
@@ -630,10 +650,12 @@ describe("useIdentity hooks", () => {
       const { result } = renderHook(() => useDelegateControl(), {
         wrapper: createQueryWrapper(),
       });
+      const didHash = `0x${"2".repeat(64)}` as `0x${string}`;
 
       let hash: string | undefined;
       await act(async () => {
         hash = await result.current.revokeDelegate(
+          didHash,
           "0xdelegate1" as `0x${string}`,
         );
       });
@@ -642,10 +664,43 @@ describe("useIdentity hooks", () => {
       expect(mockWriteContractAsync).toHaveBeenCalledWith(
         expect.objectContaining({
           functionName: "revokeDelegate",
-          args: ["0xdelegate1"],
+          args: [didHash, "0xdelegate1"],
         }),
       );
       expect(toast.success).toHaveBeenCalledWith("Delegate revoked");
+    });
+
+    it("rejects delegation without a non-zero DID hash", async () => {
+      const { useDelegateControl } = await import("@/hooks/useIdentity");
+      const { result } = renderHook(() => useDelegateControl(), {
+        wrapper: createQueryWrapper(),
+      });
+
+      await expect(
+        result.current.delegateControl(
+          `0x${"0".repeat(64)}` as `0x${string}`,
+          "0xdelegate1" as `0x${string}`,
+          60n,
+        ),
+      ).rejects.toThrow("non-zero DID hash");
+      expect(mockWriteContractAsync).not.toHaveBeenCalled();
+    });
+
+    it("enforces the contract delegation-duration bounds client-side", async () => {
+      const { useDelegateControl } = await import("@/hooks/useIdentity");
+      const { result } = renderHook(() => useDelegateControl(), {
+        wrapper: createQueryWrapper(),
+      });
+      const didHash = `0x${"5".repeat(64)}` as `0x${string}`;
+
+      await expect(
+        result.current.delegateControl(
+          didHash,
+          "0xdelegate1" as `0x${string}`,
+          365n * 24n * 60n * 60n + 1n,
+        ),
+      ).rejects.toThrow("between 1 second and 365 days");
+      expect(mockWriteContractAsync).not.toHaveBeenCalled();
     });
   });
 
@@ -655,7 +710,7 @@ describe("useIdentity hooks", () => {
 
   describe("useIdentity (wrapper)", () => {
     it("combines on-chain and profile data", async () => {
-      const didHashValue = "0xdid_hash_combined";
+      const didHashValue = `0x${"4".repeat(64)}`;
       const profile = {
         did: "did:aethelred:testnet:0xabc",
         displayName: "Combined",
@@ -680,8 +735,9 @@ describe("useIdentity hooks", () => {
       expect(result.current.identity.didHash).toBe(didHashValue);
       expect(result.current.identity.hasIdentity).toBe(true);
       expect(result.current.identity.isRegistered).toBe(true);
-      // Delegates come from backend/events, not on-chain enumeration.
-      expect(result.current.delegates).toEqual([]);
+      // The contract has no enumerable getter, so the wrapper must not expose
+      // an invented empty delegate list as authoritative state.
+      expect(result.current).not.toHaveProperty("delegates");
       expect(typeof result.current.createIdentity).toBe("function");
       expect(typeof result.current.revokeDelegate).toBe("function");
     });

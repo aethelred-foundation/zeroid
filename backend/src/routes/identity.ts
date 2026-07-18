@@ -362,6 +362,12 @@ router.get(
           createdAt: true,
           updatedAt: true,
           displayName: true,
+          _count: {
+            select: {
+              credentials: true,
+              verificationsSubject: true,
+            },
+          },
         },
       });
 
@@ -388,6 +394,8 @@ router.get(
           publicKey: identity.publicKey,
           status: identity.status,
           displayName: identity.displayName,
+          credentialCount: identity._count.credentials,
+          verificationCount: identity._count.verificationsSubject,
           teeAttested,
           governmentVerified,
           verificationEvidence: {

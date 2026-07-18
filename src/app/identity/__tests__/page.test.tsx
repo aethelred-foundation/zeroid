@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 jest.mock("next/navigation", () => ({
   useRouter: () => ({ push: jest.fn(), back: jest.fn() }),
@@ -7,27 +7,17 @@ jest.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(),
 }));
 
-const mockUseAccount = jest.fn(() => ({
-  address: "0x1234567890abcdef1234567890abcdef12345678",
-  isConnected: true,
-}));
-
+const mockUseAccount = jest.fn();
 jest.mock("wagmi", () => ({
   useAccount: () => mockUseAccount(),
-  useReadContract: jest.fn(() => ({ data: undefined, isLoading: false })),
-  useWriteContract: jest.fn(() => ({
-    writeContractAsync: jest.fn(),
-    isPending: false,
-  })),
-  useWaitForTransactionReceipt: jest.fn(() => ({ isLoading: false })),
 }));
 
 jest.mock("framer-motion", () => ({
   motion: new Proxy(
     {},
     {
-      get: (_target: unknown, prop: string) => {
-        return React.forwardRef((props: any, ref: any) => {
+      get: (_target: unknown, prop: string) =>
+        React.forwardRef((props: any, ref: any) => {
           const {
             initial,
             animate,
@@ -40,13 +30,9 @@ jest.mock("framer-motion", () => ({
           } = props;
           const Tag = prop as any;
           return <Tag ref={ref} {...rest} />;
-        });
-      },
+        }),
     },
   ),
-  AnimatePresence: ({ children }: any) => <>{children}</>,
-  useAnimation: () => ({ start: jest.fn() }),
-  useInView: () => true,
 }));
 
 jest.mock("@/components/layout/AppLayout", () => ({
@@ -54,25 +40,6 @@ jest.mock("@/components/layout/AppLayout", () => ({
   default: ({ children }: { children: React.ReactNode }) => (
     <div data-testid="app-layout">{children}</div>
   ),
-}));
-
-const mockUseIdentity = jest.fn(() => ({
-  identity: {
-    did: "did:aethelred:zeroid:0x1234",
-    status: "Active",
-    createdAt: "2025-01-01",
-    credentialCount: 5,
-    verificationCount: 12,
-    registrationBlock: "4,521,089",
-  },
-  delegates: [],
-  isLoading: false,
-  createIdentity: jest.fn(),
-  revokeDelegate: jest.fn(),
-}));
-
-jest.mock("@/hooks/useIdentity", () => ({
-  useIdentity: () => mockUseIdentity(),
 }));
 
 jest.mock("@/components/identity/IdentityCard", () => ({
@@ -85,261 +52,217 @@ jest.mock("@/components/identity/IdentityCreation", () => ({
   default: () => <div data-testid="identity-creation">Identity Creation</div>,
 }));
 
-jest.mock("@/components/ui/StatusBadge", () => ({
-  StatusBadge: ({ status }: any) => (
-    <span data-testid="status-badge">{status}</span>
-  ),
+const mockUseIdentity = jest.fn();
+jest.mock("@/hooks/useIdentity", () => ({
+  useIdentity: () => mockUseIdentity(),
 }));
 
 jest.mock("sonner", () => ({
   toast: { success: jest.fn(), error: jest.fn() },
 }));
 
+import { toast } from "sonner";
 import IdentityPage from "../page";
+
+const ADDRESS = "0x1234567890abcdef1234567890abcdef12345678";
+const DID = `did:aethelred:testnet:${ADDRESS}`;
+const DID_HASH = `0x${"1".repeat(64)}`;
+
+function registeredIdentity(overrides: Record<string, unknown> = {}) {
+  const profile = {
+    did: DID,
+    controller: ADDRESS,
+    status: "ACTIVE",
+    createdAt: "2026-07-17T08:00:00.000Z",
+    credentialCount: 5,
+    verificationCount: 12,
+    teeAttested: true,
+    governmentVerified: false,
+  };
+
+  return {
+    identity: {
+      did: DID,
+      didHash: DID_HASH,
+      hasIdentity: true,
+      isRegistered: true,
+      profile,
+      credentialCount: 5,
+      verificationCount: 12,
+      createdAt: profile.createdAt,
+      ...overrides,
+    },
+    isLoading: false,
+    error: null,
+    createIdentity: jest.fn(),
+    registerOnChain: jest.fn(),
+    delegateControl: jest.fn(),
+    revokeDelegate: jest.fn(),
+  };
+}
 
 describe("IdentityPage", () => {
   beforeEach(() => {
+    jest.clearAllMocks();
     mockUseAccount.mockReturnValue({
-      address: "0x1234567890abcdef1234567890abcdef12345678",
+      address: ADDRESS,
       isConnected: true,
     });
-    mockUseIdentity.mockReturnValue({
-      identity: {
-        did: "did:aethelred:zeroid:0x1234",
-        status: "Active",
-        createdAt: "2025-01-01",
-        credentialCount: 5,
-        verificationCount: 12,
-        registrationBlock: "4,521,089",
-      },
-      delegates: [],
-      isLoading: false,
-      createIdentity: jest.fn(),
-      revokeDelegate: jest.fn(),
-    });
+    mockUseIdentity.mockReturnValue(registeredIdentity());
   });
 
-  it("renders without crashing", () => {
-    render(<IdentityPage />);
-    expect(screen.getByTestId("app-layout")).toBeInTheDocument();
-  });
-
-  it("displays the page heading when identity exists", () => {
-    render(<IdentityPage />);
-    expect(screen.getByText("Identity")).toBeInTheDocument();
-  });
-
-  it("shows connect wallet message when not connected", () => {
+  it("asks for a controller wallet before loading identity data", () => {
     mockUseAccount.mockReturnValue({ address: undefined, isConnected: false });
     render(<IdentityPage />);
+
     expect(screen.getByText("Connect Your Wallet")).toBeInTheDocument();
+    expect(screen.queryByText("Identity record")).not.toBeInTheDocument();
   });
 
-  it("shows create identity prompt when no identity exists", () => {
+  it("does not show onboarding while evidence is still loading", () => {
     mockUseIdentity.mockReturnValue({
       identity: null,
-      delegates: [],
-      isLoading: false,
-      createIdentity: jest.fn(),
-      revokeDelegate: jest.fn(),
+      isLoading: true,
+      error: null,
     });
     render(<IdentityPage />);
+
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Loading identity evidence",
+    );
+    expect(screen.queryByText("Create Your Identity")).not.toBeInTheDocument();
+  });
+
+  it("fails closed when identity evidence cannot be loaded", () => {
+    mockUseIdentity.mockReturnValue({
+      identity: null,
+      isLoading: false,
+      error: new Error("Registry RPC unavailable"),
+    });
+    render(<IdentityPage />);
+
+    expect(
+      screen.getByText("Identity Evidence Unavailable"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Registry RPC unavailable")).toBeInTheDocument();
+    expect(screen.queryByText("Create Your Identity")).not.toBeInTheDocument();
+  });
+
+  it("offers registration only after both profile and registry evidence are absent", () => {
+    mockUseIdentity.mockReturnValue({
+      identity: {
+        did: undefined,
+        didHash: `0x${"0".repeat(64)}`,
+        hasIdentity: false,
+        isRegistered: false,
+        profile: null,
+      },
+      isLoading: false,
+      error: null,
+    });
+    render(<IdentityPage />);
+
     expect(screen.getByText("Create Your Identity")).toBeInTheDocument();
-  });
-
-  it("renders identity card and tabs when identity exists", () => {
-    render(<IdentityPage />);
-    expect(screen.getByTestId("identity-card")).toBeInTheDocument();
-    expect(screen.getByText("Overview")).toBeInTheDocument();
-    expect(screen.getByText("Delegates")).toBeInTheDocument();
-    expect(screen.getByText("Recovery")).toBeInTheDocument();
-  });
-
-  it("switches to delegates tab", () => {
-    render(<IdentityPage />);
-    fireEvent.click(screen.getByText("Delegates"));
-    expect(screen.getByText("No delegates configured")).toBeInTheDocument();
-  });
-
-  it("copies DID to clipboard when copy button is clicked", () => {
-    const writeTextMock = jest.fn().mockResolvedValue(undefined);
-    Object.assign(navigator, { clipboard: { writeText: writeTextMock } });
-    const { toast } = require("sonner");
-    render(<IdentityPage />);
-    // Find the copy button near the DID display
-    const copyButtons = screen.getAllByRole("button");
-    // The copy button is inside the DID section - find button that triggers copyDID
-    const didSection = screen.getByText("did:aethelred:zeroid:0x1234");
-    const copyBtn = didSection.parentElement?.querySelector("button");
-    fireEvent.click(copyBtn!);
-    expect(writeTextMock).toHaveBeenCalledWith("did:aethelred:zeroid:0x1234");
-    expect(toast.success).toHaveBeenCalledWith("DID copied to clipboard");
-  });
-
-  it("shows identity creation component when Create ZeroID is clicked", () => {
-    mockUseIdentity.mockReturnValue({
-      identity: null,
-      delegates: [],
-      isLoading: false,
-      createIdentity: jest.fn(),
-      revokeDelegate: jest.fn(),
-    });
-    render(<IdentityPage />);
-    const createBtn = screen.getByText("Create ZeroID");
-    fireEvent.click(createBtn);
+    fireEvent.click(screen.getByRole("button", { name: "Create ZeroID" }));
     expect(screen.getByTestId("identity-creation")).toBeInTheDocument();
   });
 
-  it("switches to recovery tab and shows guardians", () => {
+  it("renders only returned identity record values", () => {
     render(<IdentityPage />);
-    fireEvent.click(screen.getByText("Recovery"));
-    expect(screen.getByText("Social Recovery Configured")).toBeInTheDocument();
-    expect(screen.getByText("Recovery Guardians")).toBeInTheDocument();
-    expect(screen.getByText("Guardian 1")).toBeInTheDocument();
-    expect(screen.getByText("Guardian 5")).toBeInTheDocument();
+
+    expect(screen.getByTestId("identity-card")).toBeInTheDocument();
+    expect(screen.getByText(DID)).toBeInTheDocument();
+    expect(screen.getByText("Active")).toBeInTheDocument();
+    expect(screen.getByText("5")).toBeInTheDocument();
+    expect(screen.getByText("12")).toBeInTheDocument();
     expect(
-      screen.getByText("Update Recovery Configuration"),
+      screen.getByText("On-chain registration confirmed"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Current evidence returned")).toBeInTheDocument();
+    expect(screen.getByText("No current evidence")).toBeInTheDocument();
+  });
+
+  it("does not expose the former no-op or fabricated controls", () => {
+    render(<IdentityPage />);
+
+    expect(screen.queryByText("Identity Settings")).not.toBeInTheDocument();
+    expect(screen.queryByText("Add Delegate")).not.toBeInTheDocument();
+    expect(screen.queryByText("Recovery Guardians")).not.toBeInTheDocument();
+    expect(screen.queryByText("Guardian 1")).not.toBeInTheDocument();
+    expect(screen.queryByText("3 of 5 guardians")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("Update Recovery Configuration"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("does not invent counts, dates, statuses, or an on-chain anchor", () => {
+    mockUseIdentity.mockReturnValue(
+      registeredIdentity({
+        didHash: undefined,
+        hasIdentity: false,
+        credentialCount: undefined,
+        verificationCount: undefined,
+        createdAt: "not-a-date",
+        profile: { did: DID },
+      }),
+    );
+    render(<IdentityPage />);
+
+    expect(screen.getAllByText("Unavailable").length).toBeGreaterThanOrEqual(4);
+    expect(
+      screen.getByText("On-chain registration not confirmed"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("0")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("link", {
+        name: "Open controller in Aethelred Explorer",
+      }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps a durable API profile visible when the registry read has no anchor", () => {
+    mockUseIdentity.mockReturnValue(
+      registeredIdentity({
+        didHash: undefined,
+        hasIdentity: false,
+      }),
+    );
+    render(<IdentityPage />);
+
+    expect(screen.getByText("Identity record")).toBeInTheDocument();
+    expect(screen.queryByText("Create Your Identity")).not.toBeInTheDocument();
+    expect(
+      screen.getByText("On-chain registration not confirmed"),
     ).toBeInTheDocument();
   });
 
-  it("shows delegates list when delegates exist", () => {
-    const mockRevokeDelegate = jest.fn();
-    mockUseIdentity.mockReturnValue({
-      identity: {
-        did: "did:aethelred:zeroid:0x1234",
-        status: "Active",
-        createdAt: "2025-01-01",
-        credentialCount: 5,
-        verificationCount: 12,
-        registrationBlock: "4,521,089",
-      },
-      delegates: [
-        {
-          address: "0xabcdef1234567890abcdef1234567890abcdef12",
-          permissions: ["issue", "verify"],
-        },
-      ],
-      isLoading: false,
-      createIdentity: jest.fn(),
-      revokeDelegate: mockRevokeDelegate,
-    });
+  it("copies the returned DID and links only confirmed anchors to the active explorer", async () => {
+    const writeText = jest.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
     render(<IdentityPage />);
-    fireEvent.click(screen.getByText("Delegates"));
-    expect(screen.getByText("0xabcd...ef12")).toBeInTheDocument();
-    expect(screen.getByText("issue, verify")).toBeInTheDocument();
-    // Click revoke
-    fireEvent.click(screen.getByText("Revoke"));
-    expect(mockRevokeDelegate).toHaveBeenCalledWith(
-      "0xabcdef1234567890abcdef1234567890abcdef12",
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy DID" }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(DID));
+    expect(toast.success).toHaveBeenCalledWith("DID copied to clipboard");
+    expect(
+      screen.getByRole("link", {
+        name: "Open controller in Aethelred Explorer",
+      }),
+    ).toHaveAttribute(
+      "href",
+      `https://explorer-testnet.aethelred.network/address/${ADDRESS}`,
     );
   });
 
-  it("displays identity overview details", () => {
+  it("reports clipboard failure without claiming the DID was copied", async () => {
+    const writeText = jest.fn().mockRejectedValue(new Error("blocked"));
+    Object.assign(navigator, { clipboard: { writeText } });
     render(<IdentityPage />);
-    expect(screen.getByText("Decentralized Identifier")).toBeInTheDocument();
-    expect(screen.getByText("did:aethelred:zeroid:0x1234")).toBeInTheDocument();
-    expect(screen.getByText("On-chain Anchored")).toBeInTheDocument();
-    // The overview shows only real identity fields — no sample attestation rows.
-    expect(screen.queryByText("TEE Attestation")).not.toBeInTheDocument();
-    expect(screen.queryByText("Intel SGX")).not.toBeInTheDocument();
-    expect(screen.queryByText("Just now")).not.toBeInTheDocument();
-  });
 
-  it("shows fallback values when identity fields are missing", () => {
-    mockUseIdentity.mockReturnValue({
-      identity: {
-        did: null,
-        // no status, createdAt, credentialCount, verificationCount, registrationBlock
-      },
-      delegates: null,
-      isLoading: false,
-      createIdentity: jest.fn(),
-      revokeDelegate: jest.fn(),
-    });
-    render(<IdentityPage />);
-    // DID fallback is an honest em dash, not a sample DID
-    expect(screen.getByText("—")).toBeInTheDocument();
-    // createdAt fallback
-    expect(screen.getByText("N/A")).toBeInTheDocument();
-    // credentialCount and verificationCount fallbacks (0)
-    const zeros = screen.getAllByText("0");
-    expect(zeros.length).toBeGreaterThanOrEqual(2);
-    // no invented registration block number
-    expect(screen.queryByText(/4,521,089/)).not.toBeInTheDocument();
-    expect(
-      screen.getByText("Identity registered on the Aethelred L1"),
-    ).toBeInTheDocument();
-  });
-
-  it("does not copy DID when identity.did is falsy", () => {
-    const writeTextMock = jest.fn().mockResolvedValue(undefined);
-    Object.assign(navigator, { clipboard: { writeText: writeTextMock } });
-    mockUseIdentity.mockReturnValue({
-      identity: { did: null },
-      delegates: [],
-      isLoading: false,
-      createIdentity: jest.fn(),
-      revokeDelegate: jest.fn(),
-    });
-    render(<IdentityPage />);
-    const didSection = screen.getByText("—");
-    const copyBtn = didSection.parentElement?.querySelector("button");
-    fireEvent.click(copyBtn!);
-    expect(writeTextMock).not.toHaveBeenCalled();
-  });
-
-  it("shows empty delegates state when delegates is null", () => {
-    mockUseIdentity.mockReturnValue({
-      identity: {
-        did: "did:aethelred:zeroid:0x1234",
-        status: "Active",
-        createdAt: "2025-01-01",
-      },
-      delegates: null,
-      isLoading: false,
-      createIdentity: jest.fn(),
-      revokeDelegate: jest.fn(),
-    });
-    render(<IdentityPage />);
-    fireEvent.click(screen.getByText("Delegates"));
-    expect(screen.getByText("No delegates configured")).toBeInTheDocument();
-  });
-
-  it("renders overview detail items showing badge vs text correctly", () => {
-    // Status renders a badge only for a genuinely verified identity; other
-    // states render as plain text.
-    mockUseIdentity.mockReturnValue({
-      identity: {
-        did: "did:aethelred:zeroid:0x1234",
-        verificationStatus: "verified",
-        createdAt: "2025-01-01",
-        credentialCount: 5,
-        verificationCount: 12,
-      },
-      delegates: [],
-      isLoading: false,
-      createIdentity: jest.fn(),
-      revokeDelegate: jest.fn(),
-    });
-    render(<IdentityPage />);
-    const badges = screen.getAllByTestId("status-badge");
-    expect(badges.length).toBeGreaterThanOrEqual(1);
-
-    // An unverified identity shows its real status as text, not a badge.
-    mockUseIdentity.mockReturnValue({
-      identity: {
-        did: "did:aethelred:zeroid:0x1234",
-        verificationStatus: "unverified",
-        createdAt: "2025-01-01",
-        credentialCount: 0,
-        verificationCount: 0,
-      },
-      delegates: [],
-      isLoading: false,
-      createIdentity: jest.fn(),
-      revokeDelegate: jest.fn(),
-    });
-    const { getByText } = render(<IdentityPage />);
-    expect(getByText("unverified")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Copy DID" }));
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith("DID could not be copied"),
+    );
+    expect(toast.success).not.toHaveBeenCalled();
   });
 });

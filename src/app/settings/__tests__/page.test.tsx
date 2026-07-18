@@ -22,12 +22,11 @@ const registeredIdentityState = {
     verificationCount: 5,
     createdAt: "2026-07-01T00:00:00.000Z",
   },
-  delegates: [{ address: "0x1234" }],
   isLoading: false,
   error: null,
 };
 
-const mockUseIdentity = jest.fn(() => registeredIdentityState);
+const mockUseIdentity = jest.fn();
 jest.mock("@/hooks/useIdentity", () => ({
   useIdentity: () => mockUseIdentity(),
 }));
@@ -101,7 +100,6 @@ describe("SettingsPage", () => {
         did: "",
         isRegistered: false,
       },
-      delegates: [],
     });
 
     render(<SettingsPage />);
@@ -111,5 +109,22 @@ describe("SettingsPage", () => {
     expect(
       screen.getByRole("link", { name: "Open identity setup" }),
     ).toHaveAttribute("href", "/identity");
+  });
+
+  it("does not invent missing identity counts or verification status", () => {
+    mockUseIdentity.mockReturnValue({
+      ...registeredIdentityState,
+      identity: {
+        ...registeredIdentityState.identity,
+        verificationStatus: undefined,
+        credentialCount: undefined,
+        verificationCount: undefined,
+      },
+    });
+
+    render(<SettingsPage />);
+    expect(screen.getAllByText("Not reported")).toHaveLength(3);
+    expect(screen.queryByText("Active delegates")).not.toBeInTheDocument();
+    expect(screen.queryByText("0")).not.toBeInTheDocument();
   });
 });

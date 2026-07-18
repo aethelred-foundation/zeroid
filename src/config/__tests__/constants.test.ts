@@ -50,6 +50,30 @@ describe("constants - ABIs", () => {
     expect(IDENTITY_REGISTRY_ABI.length).toBeGreaterThan(0);
   });
 
+  it("matches the deployed DID-bound delegate function signatures", () => {
+    expect(
+      IDENTITY_REGISTRY_ABI.find((item: any) => item.name === "addDelegate"),
+    ).toEqual(
+      expect.objectContaining({
+        inputs: [
+          { name: "didHash", type: "bytes32" },
+          { name: "delegate", type: "address" },
+          { name: "duration", type: "uint64" },
+        ],
+      }),
+    );
+    expect(
+      IDENTITY_REGISTRY_ABI.find((item: any) => item.name === "revokeDelegate"),
+    ).toEqual(
+      expect.objectContaining({
+        inputs: [
+          { name: "didHash", type: "bytes32" },
+          { name: "delegate", type: "address" },
+        ],
+      }),
+    );
+  });
+
   it("exports CREDENTIAL_REGISTRY_ABI with getCredential function", () => {
     const fn = CREDENTIAL_REGISTRY_ABI.find(
       (item: any) => item.name === "getCredential",

@@ -1,85 +1,157 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { useState } from "react";
+import { motion } from "framer-motion";
 import {
-  Shield,
-  ShieldCheck,
-  Key,
-  Fingerprint,
-  Copy,
-  ExternalLink,
-  RefreshCw,
-  UserPlus,
-  Users,
   AlertTriangle,
-  Check,
-  Clock,
+  BadgeCheck,
+  Copy,
+  Database,
+  ExternalLink,
+  FileCheck2,
   Hash,
+  Key,
   Link2,
-  Settings,
-  ChevronRight,
+  Shield,
+  UserPlus,
 } from "lucide-react";
 import { useAccount } from "wagmi";
+import { toast } from "sonner";
 import AppLayout from "@/components/layout/AppLayout";
 import IdentityCard from "@/components/identity/IdentityCard";
 import IdentityCreation from "@/components/identity/IdentityCreation";
-import { StatusBadge } from "@/components/ui/StatusBadge";
+import { activeChain } from "@/config/chains";
 import { useIdentity } from "@/hooks/useIdentity";
-import { toast } from "sonner";
-import { aethelredMainnet } from "@/config/chains";
 
-const AETHELRED_EXPLORER_URL =
-  aethelredMainnet.blockExplorers.default.url.replace(/\/$/, "");
+type UnknownRecord = Record<string, unknown>;
 
-function getDidUri(did: unknown): string | null {
-  if (typeof did === "string") return did;
-  if (did && typeof did === "object" && "uri" in did) {
-    const uri = (did as { uri?: unknown }).uri;
-    return typeof uri === "string" ? uri : null;
-  }
-  return null;
+function asRecord(value: unknown): UnknownRecord | null {
+  return value !== null && typeof value === "object"
+    ? (value as UnknownRecord)
+    : null;
 }
 
-function buildIdentityExplorerUrl(identity: unknown, fallbackAddress?: string) {
-  const record = identity as
-    | { did?: unknown; controller?: unknown; owner?: unknown }
-    | null
-    | undefined;
-  const controller =
-    typeof record?.controller === "string"
-      ? record.controller
-      : typeof record?.owner === "string"
-        ? record.owner
-        : fallbackAddress;
+function getDidUri(value: unknown): string | null {
+  if (typeof value === "string" && value.trim().length > 0) return value;
+  const record = asRecord(value);
+  return typeof record?.uri === "string" && record.uri.trim().length > 0
+    ? record.uri
+    : null;
+}
 
-  if (controller) {
-    return `${AETHELRED_EXPLORER_URL}/address/${controller}`;
+function isNonZeroHash(value: unknown): boolean {
+  return (
+    typeof value === "string" &&
+    /^0x[0-9a-fA-F]{64}$/.test(value) &&
+    !/^0x0{64}$/i.test(value)
+  );
+}
+
+function displayCount(value: unknown): string {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+    ? value.toLocaleString()
+    : "Unavailable";
+}
+
+function displayDate(value: unknown): string {
+  if (
+    typeof value !== "string" &&
+    typeof value !== "number" &&
+    !(value instanceof Date)
+  ) {
+    return "Unavailable";
   }
 
-  const didUri = getDidUri(record?.did);
-  return didUri
-    ? `${AETHELRED_EXPLORER_URL}/search?q=${encodeURIComponent(didUri)}`
-    : AETHELRED_EXPLORER_URL;
+  const raw =
+    typeof value === "number" && value > 0 && value < 10_000_000_000
+      ? value * 1_000
+      : value;
+  const date = new Date(raw);
+  return Number.isNaN(date.getTime())
+    ? "Unavailable"
+    : date.toLocaleDateString(undefined, {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+      });
+}
+
+function displayRegistryStatus(value: unknown): string {
+  if (typeof value === "number") {
+    return (
+      ["Inactive", "Active", "Suspended", "Revoked"][value] ?? "Unavailable"
+    );
+  }
+  if (typeof value !== "string" || value.trim().length === 0) {
+    return "Unavailable";
+  }
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
+function currentEvidenceLabel(value: unknown): string {
+  if (value === true) return "Current evidence returned";
+  if (value === false) return "No current evidence";
+  return "Evidence unavailable";
+}
+
+function getExplorerUrl(address: string | undefined): string | null {
+  const explorer = (
+    activeChain as {
+      blockExplorers?: { default?: { url?: string } };
+    }
+  ).blockExplorers?.default?.url;
+  if (!explorer || !address) return null;
+  return `${explorer.replace(/\/$/, "")}/address/${address}`;
+}
+
+function EvidenceRow({
+  label,
+  value,
+  confirmed = false,
+}: {
+  label: string;
+  value: string;
+  confirmed?: boolean;
+}) {
+  return (
+    <div className="flex items-start justify-between gap-4 py-3 border-b border-[var(--border-primary)] last:border-0">
+      <span className="text-sm text-[var(--text-secondary)]">{label}</span>
+      <span
+        className={`text-sm font-medium text-right ${
+          confirmed ? "text-status-verified" : "text-[var(--text-primary)]"
+        }`}
+      >
+        {value}
+      </span>
+    </div>
+  );
 }
 
 export default function IdentityPage() {
   const { address, isConnected } = useAccount();
-  const { identity, delegates, isLoading, createIdentity, revokeDelegate } =
-    useIdentity();
+  const { identity, isLoading, error } = useIdentity();
   const [showCreation, setShowCreation] = useState(false);
-  const [activeTab, setActiveTab] = useState<
-    "overview" | "delegates" | "recovery"
-  >("overview");
-  const identityExplorerUrl = useMemo(
-    () => buildIdentityExplorerUrl(identity, address),
-    [identity, address],
-  );
 
-  const copyDID = () => {
-    if (identity?.did) {
-      navigator.clipboard.writeText(identity.did);
+  const identityRecord = asRecord(identity);
+  const profile = asRecord(identityRecord?.profile);
+  const did = getDidUri(identityRecord?.did) ?? getDidUri(profile?.did) ?? null;
+  const hasOnChainIdentity =
+    identityRecord?.hasIdentity === true &&
+    isNonZeroHash(identityRecord.didHash);
+  const explorerUrl = hasOnChainIdentity ? getExplorerUrl(address) : null;
+  const notRegistered = !profile && !hasOnChainIdentity;
+
+  const copyDID = async () => {
+    if (!did) return;
+    try {
+      await navigator.clipboard.writeText(did);
       toast.success("DID copied to clipboard");
+    } catch {
+      toast.error("DID could not be copied");
     }
   };
 
@@ -87,11 +159,11 @@ export default function IdentityPage() {
     return (
       <AppLayout>
         <div className="flex items-center justify-center min-h-[60vh]">
-          <div className="text-center">
+          <div className="text-center max-w-md">
             <Shield className="w-16 h-16 mx-auto mb-4 text-[var(--text-tertiary)]" />
             <h2 className="text-xl font-semibold mb-2">Connect Your Wallet</h2>
             <p className="text-[var(--text-secondary)]">
-              Connect your wallet to manage your decentralized identity
+              Connect the controller wallet to load its ZeroID registry record.
             </p>
           </div>
         </div>
@@ -99,14 +171,42 @@ export default function IdentityPage() {
     );
   }
 
-  // useIdentity always returns a truthy identity object; a wallet is
-  // unregistered when it has neither a backend profile nor an on-chain DID.
-  // (Checking `!identity` alone never fires and used to strand new users on
-  // the registered view, where the Create ZeroID card links back here.)
-  const notRegistered =
-    !identity ||
-    ((identity as { isRegistered?: boolean }).isRegistered === false &&
-      !(identity as { profile?: unknown }).profile);
+  if (isLoading) {
+    return (
+      <AppLayout>
+        <div
+          className="flex items-center justify-center min-h-[60vh]"
+          role="status"
+        >
+          <div className="text-center">
+            <div className="w-10 h-10 mx-auto mb-4 rounded-full border-2 border-brand-500/20 border-t-brand-500 animate-spin" />
+            <p className="text-sm text-[var(--text-secondary)]">
+              Loading identity evidence…
+            </p>
+          </div>
+        </div>
+      </AppLayout>
+    );
+  }
+
+  if (error) {
+    return (
+      <AppLayout>
+        <div className="flex items-center justify-center min-h-[60vh]">
+          <div className="card max-w-lg p-6 text-center">
+            <AlertTriangle className="w-10 h-10 mx-auto mb-4 text-status-revoked" />
+            <h2 className="text-xl font-semibold mb-2">
+              Identity Evidence Unavailable
+            </h2>
+            <p className="text-sm text-[var(--text-secondary)]">
+              {error.message ||
+                "ZeroID could not load the registry and profile evidence."}
+            </p>
+          </div>
+        </div>
+      </AppLayout>
+    );
+  }
 
   if (notRegistered && !showCreation) {
     return (
@@ -122,9 +222,8 @@ export default function IdentityPage() {
             </div>
             <h2 className="text-2xl font-bold mb-3">Create Your Identity</h2>
             <p className="text-[var(--text-secondary)] mb-6">
-              Create a self-sovereign decentralized identity. You sign in with
-              your wallet and your DID is anchored on-chain — you retain full
-              control.
+              Register an address-bound DID with a wallet signature and a
+              confirmed identity-registry transaction.
             </p>
             <button
               onClick={() => setShowCreation(true)}
@@ -133,9 +232,6 @@ export default function IdentityPage() {
               <Key className="w-5 h-5" />
               Create ZeroID
             </button>
-            <p className="text-xs text-[var(--text-tertiary)] mt-4">
-              You retain full control. No central authority.
-            </p>
           </motion.div>
         </div>
       </AppLayout>
@@ -150,329 +246,149 @@ export default function IdentityPage() {
     );
   }
 
+  const credentialCount =
+    identityRecord?.credentialCount ?? profile?.credentialCount;
+  const verificationCount =
+    identityRecord?.verificationCount ?? profile?.verificationCount;
+  const createdAt = identityRecord?.createdAt ?? profile?.createdAt;
+
   return (
     <AppLayout>
       <div className="space-y-8">
-        {/* Header */}
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold">Identity</h1>
-            <p className="text-[var(--text-secondary)] mt-1">
-              Manage your decentralized identity and delegates
-            </p>
-          </div>
-          <button className="btn-secondary">
-            <Settings className="w-4 h-4" />
-            Identity Settings
-          </button>
+        <div>
+          <h1 className="text-2xl font-bold">Identity</h1>
+          <p className="text-[var(--text-secondary)] mt-1">
+            Registry state and verification evidence returned for the connected
+            controller wallet.
+          </p>
         </div>
 
-        {/* Identity Card + Details */}
         <div className="grid grid-cols-12 gap-6">
           <div className="col-span-12 lg:col-span-5">
             <IdentityCard />
           </div>
 
-          <div className="col-span-12 lg:col-span-7">
-            <div className="card">
-              {/* Tabs */}
-              <div className="border-b border-[var(--border-primary)]">
-                <div className="flex gap-0">
-                  {[
-                    {
-                      id: "overview" as const,
-                      label: "Overview",
-                      icon: Shield,
-                    },
-                    {
-                      id: "delegates" as const,
-                      label: "Delegates",
-                      icon: Users,
-                    },
-                    { id: "recovery" as const, label: "Recovery", icon: Key },
-                  ].map((tab) => (
-                    <button
-                      key={tab.id}
-                      onClick={() => setActiveTab(tab.id)}
-                      className={`flex items-center gap-2 px-5 py-4 text-sm font-medium border-b-2 transition-colors ${
-                        activeTab === tab.id
-                          ? "border-brand-500 text-brand-500"
-                          : "border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
-                      }`}
-                    >
-                      <tab.icon className="w-4 h-4" />
-                      {tab.label}
-                    </button>
-                  ))}
+          <div className="col-span-12 lg:col-span-7 space-y-6">
+            <section className="card p-6" aria-labelledby="identity-record">
+              <div className="flex items-center gap-3 mb-6">
+                <div className="icon-chip icon-chip-sm">
+                  <Database className="w-4 h-4" />
+                </div>
+                <div>
+                  <h2 id="identity-record" className="font-semibold">
+                    Identity record
+                  </h2>
+                  <p className="text-xs text-[var(--text-tertiary)] mt-0.5">
+                    Values below are returned by the ZeroID API or registry
+                    read.
+                  </p>
                 </div>
               </div>
 
-              <div className="p-6">
-                <AnimatePresence mode="wait">
-                  {activeTab === "overview" && (
-                    <motion.div
-                      key="overview"
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      exit={{ opacity: 0 }}
-                      className="space-y-5"
+              <div className="mb-5">
+                <label className="text-xs font-medium text-[var(--text-tertiary)] uppercase tracking-wider">
+                  Decentralized Identifier
+                </label>
+                <div className="mt-1.5 flex items-center gap-2 p-3 bg-[var(--surface-secondary)] rounded-xl">
+                  <Hash className="w-4 h-4 text-brand-500 shrink-0" />
+                  <code className="text-sm font-mono truncate flex-1">
+                    {did ?? "Unavailable"}
+                  </code>
+                  <button
+                    type="button"
+                    onClick={copyDID}
+                    disabled={!did}
+                    aria-label="Copy DID"
+                    className="p-1.5 rounded-lg hover:bg-[var(--surface-tertiary)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    <Copy className="w-4 h-4 text-[var(--text-tertiary)]" />
+                  </button>
+                  {explorerUrl ? (
+                    <a
+                      href={explorerUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      aria-label="Open controller in Aethelred Explorer"
+                      className="p-1.5 rounded-lg hover:bg-[var(--surface-tertiary)] transition-colors"
                     >
-                      {/* DID */}
-                      <div>
-                        <label className="text-xs font-medium text-[var(--text-tertiary)] uppercase tracking-wider">
-                          Decentralized Identifier
-                        </label>
-                        <div className="mt-1.5 flex items-center gap-2 p-3 bg-[var(--surface-secondary)] rounded-xl">
-                          <Hash className="w-4 h-4 text-brand-500 shrink-0" />
-                          <code className="text-sm font-mono truncate flex-1">
-                            {identity?.did ?? "—"}
-                          </code>
-                          <button
-                            onClick={copyDID}
-                            className="p-1.5 rounded-lg hover:bg-[var(--surface-tertiary)] transition-colors"
-                          >
-                            <Copy className="w-4 h-4 text-[var(--text-tertiary)]" />
-                          </button>
-                          <a
-                            href={identityExplorerUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            aria-label="Open identity in Aethelred Explorer"
-                            className="p-1.5 rounded-lg hover:bg-[var(--surface-tertiary)] transition-colors"
-                          >
-                            <ExternalLink className="w-4 h-4 text-[var(--text-tertiary)]" />
-                          </a>
-                        </div>
-                      </div>
-
-                      {/* Identity Details Grid */}
-                      <div className="grid grid-cols-2 gap-4">
-                        {/* Values are the identity's real state — no sample
-                            attestation/status rows. */}
-                        {[
-                          {
-                            label: "Status",
-                            value:
-                              (identity as any)?.verificationStatus ??
-                              "unverified",
-                            badge:
-                              (identity as any)?.verificationStatus ===
-                              "verified",
-                          },
-                          {
-                            label: "Created",
-                            value: (identity as any)?.createdAt
-                              ? new Date(
-                                  (identity as any).createdAt,
-                                ).toLocaleDateString()
-                              : "N/A",
-                          },
-                          {
-                            label: "Credentials",
-                            value: (
-                              (identity as any)?.credentialCount ?? 0
-                            ).toString(),
-                          },
-                          {
-                            label: "Verifications",
-                            value: (
-                              (identity as any)?.verificationCount ?? 0
-                            ).toString(),
-                          },
-                        ].map((item) => (
-                          <div key={item.label} className="space-y-1">
-                            <div className="text-xs font-medium text-[var(--text-tertiary)] uppercase tracking-wider">
-                              {item.label}
-                            </div>
-                            {item.badge ? (
-                              <StatusBadge status="verified" />
-                            ) : (
-                              <div className="text-sm font-medium">
-                                {item.value}
-                              </div>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-
-                      {/* On-chain Registration */}
-                      <div className="p-4 bg-brand-600/5 border border-brand-500/20 rounded-xl">
-                        <div className="flex items-center gap-3">
-                          <Link2 className="w-5 h-5 text-brand-500" />
-                          <div>
-                            <div className="text-sm font-medium">
-                              On-chain Anchored
-                            </div>
-                            <div className="text-xs text-[var(--text-tertiary)]">
-                              {(identity as any)?.registrationBlock
-                                ? `Identity registered on Aethelred L1 at block #${(identity as any).registrationBlock}`
-                                : "Identity registered on the Aethelred L1"}
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    </motion.div>
-                  )}
-
-                  {activeTab === "delegates" && (
-                    <motion.div
-                      key="delegates"
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      exit={{ opacity: 0 }}
-                      className="space-y-4"
-                    >
-                      <div className="flex items-center justify-between mb-2">
-                        <p className="text-sm text-[var(--text-secondary)]">
-                          Delegates can act on your behalf for specific
-                          credential operations.
-                        </p>
-                        <button className="btn-primary btn-sm">
-                          <UserPlus className="w-4 h-4" />
-                          Add Delegate
-                        </button>
-                      </div>
-
-                      {(delegates ?? []).length === 0 ? (
-                        <div className="text-center py-12">
-                          <Users className="w-12 h-12 mx-auto mb-3 text-[var(--text-tertiary)]" />
-                          <p className="text-[var(--text-secondary)]">
-                            No delegates configured
-                          </p>
-                          <p className="text-xs text-[var(--text-tertiary)] mt-1">
-                            Add trusted addresses that can manage credentials on
-                            your behalf
-                          </p>
-                        </div>
-                      ) : (
-                        <div className="space-y-2">
-                          {delegates?.map((delegate) => (
-                            <div
-                              key={delegate.address}
-                              className="flex items-center justify-between p-3 bg-[var(--surface-secondary)] rounded-xl"
-                            >
-                              <div className="flex items-center gap-3">
-                                <div className="w-8 h-8 rounded-full bg-brand-600/20 flex items-center justify-center">
-                                  <Users className="w-4 h-4 text-brand-500" />
-                                </div>
-                                <div>
-                                  <code className="text-sm font-mono">
-                                    {delegate.address.slice(0, 6)}...
-                                    {delegate.address.slice(-4)}
-                                  </code>
-                                  <div className="text-xs text-[var(--text-tertiary)]">
-                                    {delegate.permissions.join(", ")}
-                                  </div>
-                                </div>
-                              </div>
-                              <button
-                                onClick={() => revokeDelegate(delegate.address)}
-                                className="btn-ghost btn-sm text-status-revoked"
-                              >
-                                Revoke
-                              </button>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </motion.div>
-                  )}
-
-                  {activeTab === "recovery" && (
-                    <motion.div
-                      key="recovery"
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      exit={{ opacity: 0 }}
-                      className="space-y-4"
-                    >
-                      <div className="p-4 bg-status-pending/5 border border-status-pending/20 rounded-xl">
-                        <div className="flex items-start gap-3">
-                          <AlertTriangle className="w-5 h-5 text-status-pending shrink-0 mt-0.5" />
-                          <div>
-                            <div className="text-sm font-medium">
-                              Social Recovery Configured
-                            </div>
-                            <div className="text-xs text-[var(--text-secondary)] mt-1">
-                              3 of 5 guardians required to recover your
-                              identity. Last verified 14 days ago.
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="space-y-3">
-                        <h3 className="text-sm font-semibold">
-                          Recovery Guardians
-                        </h3>
-                        {[
-                          {
-                            name: "Guardian 1",
-                            status: "active",
-                            type: "Wallet",
-                          },
-                          {
-                            name: "Guardian 2",
-                            status: "active",
-                            type: "Wallet",
-                          },
-                          {
-                            name: "Guardian 3",
-                            status: "active",
-                            type: "Hardware Key",
-                          },
-                          {
-                            name: "Guardian 4",
-                            status: "active",
-                            type: "Wallet",
-                          },
-                          {
-                            name: "Guardian 5",
-                            status: "pending",
-                            type: "Email",
-                          },
-                        ].map((guardian, i) => (
-                          <div
-                            key={i}
-                            className="flex items-center justify-between p-3 bg-[var(--surface-secondary)] rounded-xl"
-                          >
-                            <div className="flex items-center gap-3">
-                              <div
-                                className={`w-2 h-2 rounded-full ${
-                                  guardian.status === "active"
-                                    ? "bg-status-verified"
-                                    : "bg-status-pending"
-                                }`}
-                              />
-                              <div>
-                                <div className="text-sm font-medium">
-                                  {guardian.name}
-                                </div>
-                                <div className="text-xs text-[var(--text-tertiary)]">
-                                  {guardian.type}
-                                </div>
-                              </div>
-                            </div>
-                            <StatusBadge
-                              status={
-                                guardian.status === "active"
-                                  ? "verified"
-                                  : "pending"
-                              }
-                            />
-                          </div>
-                        ))}
-                      </div>
-
-                      <button className="btn-secondary w-full">
-                        <RefreshCw className="w-4 h-4" />
-                        Update Recovery Configuration
-                      </button>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
+                      <ExternalLink className="w-4 h-4 text-[var(--text-tertiary)]" />
+                    </a>
+                  ) : null}
+                </div>
               </div>
-            </div>
+
+              <EvidenceRow
+                label="Registry lifecycle status"
+                value={displayRegistryStatus(profile?.status)}
+                confirmed={
+                  profile?.status === "ACTIVE" || profile?.status === 1
+                }
+              />
+              <EvidenceRow label="Created" value={displayDate(createdAt)} />
+              <EvidenceRow
+                label="Credential records"
+                value={displayCount(credentialCount)}
+              />
+              <EvidenceRow
+                label="Verification records"
+                value={displayCount(verificationCount)}
+              />
+            </section>
+
+            <section className="card p-6" aria-labelledby="identity-evidence">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="icon-chip icon-chip-sm">
+                  <FileCheck2 className="w-4 h-4" />
+                </div>
+                <div>
+                  <h2 id="identity-evidence" className="font-semibold">
+                    Current evidence
+                  </h2>
+                  <p className="text-xs text-[var(--text-tertiary)] mt-0.5">
+                    No verification state is inferred when evidence is absent.
+                  </p>
+                </div>
+              </div>
+
+              <EvidenceRow
+                label="TEE attestation"
+                value={currentEvidenceLabel(profile?.teeAttested)}
+                confirmed={profile?.teeAttested === true}
+              />
+              <EvidenceRow
+                label="Government verification"
+                value={currentEvidenceLabel(profile?.governmentVerified)}
+                confirmed={profile?.governmentVerified === true}
+              />
+
+              <div
+                className={`mt-5 p-4 rounded-xl border ${
+                  hasOnChainIdentity
+                    ? "bg-brand-600/5 border-brand-500/20"
+                    : "bg-status-pending/5 border-status-pending/20"
+                }`}
+              >
+                <div className="flex items-start gap-3">
+                  {hasOnChainIdentity ? (
+                    <BadgeCheck className="w-5 h-5 text-brand-500 shrink-0 mt-0.5" />
+                  ) : (
+                    <Link2 className="w-5 h-5 text-status-pending shrink-0 mt-0.5" />
+                  )}
+                  <div>
+                    <div className="text-sm font-medium">
+                      {hasOnChainIdentity
+                        ? "On-chain registration confirmed"
+                        : "On-chain registration not confirmed"}
+                    </div>
+                    <div className="text-xs text-[var(--text-secondary)] mt-1">
+                      {hasOnChainIdentity
+                        ? "The configured identity registry returned a non-zero DID hash for this controller."
+                        : "ZeroID did not receive a non-zero DID hash from the configured identity registry."}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </section>
           </div>
         </div>
       </div>

@@ -81,8 +81,9 @@ export const IDENTITY_REGISTRY_ABI = [
     type: "function",
     name: "addDelegate",
     inputs: [
+      { name: "didHash", type: "bytes32" },
       { name: "delegate", type: "address" },
-      { name: "expiry", type: "uint256" },
+      { name: "duration", type: "uint64" },
     ],
     outputs: [],
     stateMutability: "nonpayable",
@@ -90,7 +91,10 @@ export const IDENTITY_REGISTRY_ABI = [
   {
     type: "function",
     name: "revokeDelegate",
-    inputs: [{ name: "delegate", type: "address" }],
+    inputs: [
+      { name: "didHash", type: "bytes32" },
+      { name: "delegate", type: "address" },
+    ],
     outputs: [],
     stateMutability: "nonpayable",
   },

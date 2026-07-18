@@ -25,7 +25,11 @@ function formatDate(value: unknown): string {
   if (typeof value !== "string" && typeof value !== "number") {
     return "Not reported";
   }
-  const date = new Date(value);
+  const normalized =
+    typeof value === "number" && value > 0 && value < 10_000_000_000
+      ? value * 1_000
+      : value;
+  const date = new Date(normalized);
   return Number.isNaN(date.getTime())
     ? "Not reported"
     : date.toLocaleDateString("en-US", {
@@ -35,9 +39,15 @@ function formatDate(value: unknown): string {
       });
 }
 
+function formatCount(value: unknown): string {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+    ? value.toLocaleString()
+    : "Not reported";
+}
+
 export default function SettingsPage() {
   const { theme, setTheme } = useTheme();
-  const { identity, delegates, isLoading, error } = useIdentity();
+  const { identity, isLoading, error } = useIdentity();
 
   return (
     <AppLayout>
@@ -105,7 +115,7 @@ export default function SettingsPage() {
             <div className="p-6 text-sm text-red-400" role="alert">
               Identity context is unavailable: {error.message}
             </div>
-          ) : !identity.isRegistered ? (
+          ) : !identity.isRegistered && !identity.profile ? (
             <div className="p-6">
               <p className="text-sm text-[var(--text-secondary)]">
                 The connected wallet has no registered ZeroID identity.
@@ -118,10 +128,15 @@ export default function SettingsPage() {
             <dl className="grid gap-px bg-[var(--border-secondary)] sm:grid-cols-2 lg:grid-cols-3">
               {[
                 ["DID", identity.did || "Not reported"],
-                ["Verification status", identity.verificationStatus],
-                ["Credentials", identity.credentialCount.toLocaleString()],
-                ["Verifications", identity.verificationCount.toLocaleString()],
-                ["Active delegates", delegates.length.toLocaleString()],
+                [
+                  "Verification status",
+                  identity.verificationStatus || "Not reported",
+                ],
+                ["Credential records", formatCount(identity.credentialCount)],
+                [
+                  "Verification records",
+                  formatCount(identity.verificationCount),
+                ],
                 ["Registered", formatDate(identity.createdAt)],
               ].map(([label, value]) => (
                 <div
@@ -146,9 +161,9 @@ export default function SettingsPage() {
             className="card p-5 transition-colors hover:border-brand-500/40"
           >
             <Fingerprint className="h-5 w-5 text-brand-500" />
-            <h2 className="mt-3 text-sm font-semibold">Identity controls</h2>
+            <h2 className="mt-3 text-sm font-semibold">Identity record</h2>
             <p className="mt-1 text-xs leading-5 text-[var(--text-secondary)]">
-              Manage the registered identity and on-chain delegates.
+              Review current registry and API-backed identity evidence.
             </p>
           </Link>
           <Link
