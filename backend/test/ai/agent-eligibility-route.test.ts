@@ -1,7 +1,7 @@
 import express from 'express';
 import request from 'supertest';
 
-jest.mock('../../src/index', () => ({
+jest.mock('../../src/runtime', () => ({
   prisma: {},
   logger: { error: jest.fn(), info: jest.fn(), warn: jest.fn() },
 }));

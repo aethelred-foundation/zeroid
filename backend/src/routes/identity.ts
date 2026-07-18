@@ -16,7 +16,7 @@ import {
   recoveryHashSchema,
 } from "../middleware/validation";
 import { apiRateLimiter, authRateLimiter } from "../middleware/rateLimit";
-import { logger, prisma, redis } from "../index";
+import { logger, prisma, redis } from "../runtime";
 import { asRouteError, sendRouteError } from "../utils/route-error";
 import { z } from "zod";
 

@@ -8,7 +8,7 @@ const mockRedisLtrim = jest.fn();
 const mockRedisExpire = jest.fn();
 const mockRedisSet = jest.fn();
 
-jest.mock('../src/index', () => ({
+jest.mock('../src/runtime', () => ({
   prisma: {
     auditLog: {
       create: mockAuditLogCreate,

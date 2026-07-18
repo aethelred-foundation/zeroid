@@ -137,7 +137,7 @@ jest.mock('../src/services/enterprise/policy-exception-service', () => ({
   },
 }));
 
-jest.mock('../src/index', () => ({
+jest.mock('../src/runtime', () => ({
   prisma: {},
 }));
 

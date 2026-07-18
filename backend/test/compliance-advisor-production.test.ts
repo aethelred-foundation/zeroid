@@ -4,7 +4,7 @@ const mockRedisSet = jest.fn();
 const mockRedisGet = jest.fn();
 const mockScreenEntity = jest.fn();
 
-jest.mock('../src/index', () => ({
+jest.mock('../src/runtime', () => ({
   prisma: {
     auditLog: {
       create: mockAuditLogCreate,

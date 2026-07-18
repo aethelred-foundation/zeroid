@@ -6,7 +6,7 @@ const mockIdentityFindFirst = jest.fn();
 const mockGetVerificationStatus = jest.fn();
 const mockIsAttestationValid = jest.fn();
 
-jest.mock('../src/index', () => ({
+jest.mock('../src/runtime', () => ({
   logger: {
     info: jest.fn(),
     warn: jest.fn(),

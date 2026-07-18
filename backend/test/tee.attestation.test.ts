@@ -20,7 +20,7 @@
  */
 import * as crypto from 'crypto';
 import { TEEAttestationService, AttestationError, TCBStatus } from '../src/services/tee';
-import { prisma, redis } from '../src/index';
+import { prisma, redis } from '../src/runtime';
 import {
   buildQuote,
   buildCollateral,
@@ -50,7 +50,7 @@ jest.mock('prom-client', () => {
 // ---------------------------------------------------------------------------
 // Suppress logger and stub redis/prisma
 // ---------------------------------------------------------------------------
-jest.mock('../src/index', () => {
+jest.mock('../src/runtime', () => {
   const { Registry } = require('prom-client');
   return {
     logger: {

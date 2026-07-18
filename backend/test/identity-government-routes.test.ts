@@ -39,7 +39,7 @@ const mockGovernmentAPIService = {
   })),
 };
 
-jest.mock("../src/index", () => ({
+jest.mock("../src/runtime", () => ({
   prisma: {
     identity: {
       findUnique: jest.fn(),

@@ -12,7 +12,7 @@ jest.mock('../src/middleware/rateLimit', () => ({
   governanceLimiter: (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
 
-jest.mock('../src/index', () => ({
+jest.mock('../src/runtime', () => ({
   logger: {
     info: jest.fn(),
     warn: jest.fn(),

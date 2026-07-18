@@ -60,7 +60,7 @@ const mockRedisEval = jest.fn(
   },
 );
 
-jest.mock('../src/index', () => ({
+jest.mock('../src/runtime', () => ({
   prisma: {
     aPIKey: {
       create: mockApiKeyCreate,

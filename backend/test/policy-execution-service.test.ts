@@ -1,6 +1,6 @@
 const mockPolicyDefinitionFindFirst = jest.fn();
 
-jest.mock('../src/index', () => ({
+jest.mock('../src/runtime', () => ({
   prisma: {
     policyDefinition: {
       findFirst: mockPolicyDefinitionFindFirst,

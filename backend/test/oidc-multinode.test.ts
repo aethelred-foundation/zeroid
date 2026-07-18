@@ -139,7 +139,7 @@ const redisMock = {
   }),
 };
 
-jest.mock('../src/index', () => {
+jest.mock('../src/runtime', () => {
   return {
     logger: {
       info: jest.fn(),

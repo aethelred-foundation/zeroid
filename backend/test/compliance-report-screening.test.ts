@@ -3,7 +3,7 @@ const mockRedisGet = jest.fn();
 const mockRedisSet = jest.fn();
 const mockAuditLogCreate = jest.fn();
 
-jest.mock('../src/index', () => ({
+jest.mock('../src/runtime', () => ({
   prisma: {
     identity: {
       findUnique: mockIdentityFindUnique,

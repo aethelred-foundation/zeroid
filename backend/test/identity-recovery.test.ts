@@ -13,7 +13,7 @@ const mockRevokePlatformSession = jest.fn();
 const mockRevokeSubjectSessions = jest.fn();
 const mockPrismaTransaction = jest.fn();
 
-jest.mock('../src/index', () => ({
+jest.mock('../src/runtime', () => ({
   logger: {
     info: jest.fn(),
     warn: jest.fn(),

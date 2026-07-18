@@ -76,7 +76,7 @@ afterAll(async () => {
 // ---------------------------------------------------------------------------
 // Wire the REAL Redis into the mock so OIDCBridge uses it
 // ---------------------------------------------------------------------------
-jest.mock('../src/index', () => {
+jest.mock('../src/runtime', () => {
   // We need to defer Redis access because realRedis is set in beforeAll
   const handler: ProxyHandler<Record<string, unknown>> = {
     get(_target, prop: string) {

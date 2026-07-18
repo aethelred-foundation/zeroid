@@ -10,7 +10,7 @@ const mockExportCredentialEvidence = jest.fn();
 
 const redisStore: Record<string, string> = {};
 
-jest.mock('../src/index', () => ({
+jest.mock('../src/runtime', () => ({
   prisma: {
     policyDecisionLedger: {
       create: mockPolicyDecisionLedgerCreate,

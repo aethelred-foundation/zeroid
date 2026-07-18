@@ -6,7 +6,7 @@ const mockPolicyDefinitionUpdate = jest.fn();
 const mockAuditLogCreate = jest.fn();
 const mockGetApprovalAuthority = jest.fn();
 
-jest.mock('../src/index', () => ({
+jest.mock('../src/runtime', () => ({
   prisma: {
     policyDefinition: {
       findUnique: mockPolicyDefinitionFindUnique,

@@ -44,7 +44,7 @@ jest.mock('../src/services/ai/agent-identity', () => ({
   },
 }));
 
-jest.mock('../src/index', () => ({
+jest.mock('../src/runtime', () => ({
   logger: {
     info: jest.fn(),
     warn: jest.fn(),

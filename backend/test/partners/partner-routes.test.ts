@@ -2,7 +2,7 @@ import express from 'express';
 import request from 'supertest';
 
 const mockIdem = { findUnique: jest.fn(), upsert: jest.fn() };
-jest.mock('../../src/index', () => ({
+jest.mock('../../src/runtime', () => ({
   prisma: {
     idempotencyRecord: {
       findUnique: (...a: unknown[]) => mockIdem.findUnique(...a),

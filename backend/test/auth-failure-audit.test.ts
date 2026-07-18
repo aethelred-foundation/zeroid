@@ -45,7 +45,7 @@ describe('auth failure audit logging', () => {
 
   it('durably audits missing bearer tokens with safe request context', async () => {
     const auditCreate = jest.fn(async ({ data }) => data);
-    jest.doMock('../src/index', () => ({
+    jest.doMock('../src/runtime', () => ({
       prisma: {
         auditLog: { create: auditCreate },
         session: { create: jest.fn(), findUnique: jest.fn() },
@@ -93,7 +93,7 @@ describe('auth failure audit logging', () => {
   it('audits malformed bearer tokens without storing token material', async () => {
     const auditCreate = jest.fn(async ({ data }) => data);
     const sessionFindUnique = jest.fn();
-    jest.doMock('../src/index', () => ({
+    jest.doMock('../src/runtime', () => ({
       prisma: {
         auditLog: { create: auditCreate },
         session: { create: jest.fn(), findUnique: sessionFindUnique },
@@ -149,7 +149,7 @@ describe('auth failure audit logging', () => {
       .setJti('session-1')
       .sign(secret);
 
-    jest.doMock('../src/index', () => ({
+    jest.doMock('../src/runtime', () => ({
       prisma: {
         auditLog: { create: auditCreate },
         session: { create: jest.fn(), findUnique: jest.fn() },

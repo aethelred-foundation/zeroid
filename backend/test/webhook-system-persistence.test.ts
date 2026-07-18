@@ -62,7 +62,7 @@ const mockRedisEval = jest.fn(
   },
 );
 
-jest.mock('../src/index', () => ({
+jest.mock('../src/runtime', () => ({
   prisma: {
     webhook: {
       create: mockWebhookCreate,

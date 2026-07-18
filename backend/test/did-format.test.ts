@@ -1,4 +1,4 @@
-jest.mock('../src/index', () => ({
+jest.mock('../src/runtime', () => ({
   logger: {
     warn: jest.fn(),
   },

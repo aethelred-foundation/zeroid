@@ -15,7 +15,7 @@ const mockVerify = jest.fn();
 jest.mock("../../src/services/oid4vp/verifier", () => ({
   verifyPresentation: (...a: unknown[]) => mockVerify(...a),
 }));
-jest.mock("../../src/index", () => ({
+jest.mock("../../src/runtime", () => ({
   prisma: {},
   logger: { error: jest.fn(), warn: jest.fn(), info: jest.fn() },
 }));

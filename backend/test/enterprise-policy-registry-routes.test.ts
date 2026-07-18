@@ -127,7 +127,7 @@ jest.mock('../src/services/enterprise/policy-registry-service', () => ({
   },
 }));
 
-jest.mock('../src/index', () => ({
+jest.mock('../src/runtime', () => ({
   prisma: {},
 }));
 

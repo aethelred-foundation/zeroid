@@ -31,7 +31,7 @@ const mockPrisma = {
   },
 };
 
-jest.mock('../src/index', () => ({
+jest.mock('../src/runtime', () => ({
   prisma: mockPrisma,
   redis: mockRedis,
   logger: mockLogger,

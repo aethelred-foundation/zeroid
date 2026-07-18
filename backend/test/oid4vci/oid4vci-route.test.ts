@@ -13,7 +13,7 @@ jest.mock("../../src/services/oid4vci/issuance", () => {
     issueCredential: (...a: unknown[]) => mockIssue(...a),
   };
 });
-jest.mock("../../src/index", () => ({
+jest.mock("../../src/runtime", () => ({
   prisma: {},
   logger: { error: jest.fn(), warn: jest.fn(), info: jest.fn() },
 }));

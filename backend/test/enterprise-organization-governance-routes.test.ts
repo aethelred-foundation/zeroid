@@ -228,7 +228,7 @@ jest.mock('../src/services/enterprise/policy-governance-service', () => ({
   },
 }));
 
-jest.mock('../src/index', () => ({
+jest.mock('../src/runtime', () => ({
   prisma: {},
 }));
 
