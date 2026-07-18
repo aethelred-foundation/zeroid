@@ -19,6 +19,14 @@ describe("feature readiness registry", () => {
     expect(getFeatureReadiness("/ai-compliance").status).toBe("Preview");
   });
 
+  it("registers the dashboard without demo telemetry evidence", () => {
+    const readiness = getFeatureReadiness("/");
+
+    expect(readiness.status).toBe("Configured");
+    expect(readiness.evidence).toContain("bounded credential and verification");
+    expect(readiness.evidence).not.toContain("demo telemetry");
+  });
+
   it("has explicit evidence for every registered surface", () => {
     for (const readiness of Object.values(FEATURE_READINESS)) {
       expect(readiness.evidence.length).toBeGreaterThan(24);

@@ -4,29 +4,41 @@ import Image from "next/image";
 import Link from "next/link";
 import { motion } from "framer-motion";
 import {
-  Shield,
-  ShieldCheck,
-  Key,
-  Fingerprint,
-  EyeOff,
+  AlertTriangle,
   ArrowRight,
   ArrowUpRight,
-  FileCheck,
   CheckCircle2,
   ClipboardCheck,
+  Database,
+  FileCheck,
+  Fingerprint,
+  History,
+  Key,
+  Loader2,
   Lock,
+  Shield,
+  ShieldCheck,
+  UserRoundCheck,
   Zap,
-  BarChart3,
-  Bot,
 } from "lucide-react";
 import { useAccount } from "wagmi";
 import AppLayout from "@/components/layout/AppLayout";
 import { MetricCard } from "@/components/ui/MetricCard";
-import { StatusBadge } from "@/components/ui/StatusBadge";
-import IdentityCard from "@/components/identity/IdentityCard";
-import { useIdentity } from "@/hooks/useIdentity";
 import { useCredentials } from "@/hooks/useCredentials";
-import { useVerification } from "@/hooks/useVerification";
+import { useIdentity } from "@/hooks/useIdentity";
+import { useVerificationHistory } from "@/hooks/useVerification";
+import { getFeatureReadiness } from "@/lib/product/readiness";
+
+type UnknownRecord = Record<string, unknown>;
+
+type ActivityItem = {
+  id: string;
+  title: string;
+  description: string;
+  timestamp: Date | null;
+  status?: string;
+  icon: typeof ShieldCheck;
+};
 
 const stagger = {
   hidden: { opacity: 0 },
@@ -45,472 +57,594 @@ const fadeUp = {
   },
 };
 
+function asRecord(value: unknown): UnknownRecord {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as UnknownRecord)
+    : {};
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function didValue(value: unknown): string | undefined {
+  if (typeof value === "string" && value.trim()) return value;
+  return stringValue(asRecord(value).uri);
+}
+
+function toDate(value: unknown): Date | null {
+  let date: Date;
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    date = new Date(value > 10_000_000_000 ? value : value * 1000);
+  } else if (typeof value === "string" && value.trim()) {
+    date = new Date(value);
+  } else if (value instanceof Date) {
+    date = value;
+  } else {
+    return null;
+  }
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function firstValidDate(...values: unknown[]): Date | null {
+  for (const value of values) {
+    const date = toDate(value);
+    if (date) return date;
+  }
+  return null;
+}
+
+function formatTimestamp(date: Date | null): string {
+  if (!date) return "Timestamp unavailable";
+  return date.toLocaleString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function humanizeCode(value: string): string {
+  return value
+    .split(/[_-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(" ");
+}
+
+function evidenceLabel(value: unknown): string {
+  if (value === true) return "Verified evidence returned";
+  if (value === false) return "No verified evidence returned";
+  return "Evidence unavailable";
+}
+
 export default function DashboardPage() {
-  const { isConnected } = useAccount();
-  const { identity } = useIdentity();
+  const { isConnected, status: walletStatus, isReconnecting } = useAccount();
+  const identityQuery = useIdentity();
   const credentialsQuery = useCredentials();
+  const verificationQuery = useVerificationHistory(undefined, 1, 100);
+  const readiness = getFeatureReadiness("/");
+
   const credentials = credentialsQuery.data?.credentials ?? [];
-  const { verificationHistory } = useVerification();
+  const verificationRecords = verificationQuery.data?.items ?? [];
+  const accessState = credentialsQuery.accessState;
+  const protectedSourcesReady =
+    accessState === "ready" &&
+    credentialsQuery.isSuccess &&
+    verificationQuery.isSuccess;
+  const protectedSourcesLoading =
+    accessState === "ready" &&
+    (credentialsQuery.isLoading || verificationQuery.isLoading);
+  const protectedSourceErrors = [
+    credentialsQuery.error instanceof Error
+      ? `Credential records: ${credentialsQuery.error.message}`
+      : null,
+    verificationQuery.error instanceof Error
+      ? `Verification records: ${verificationQuery.error.message}`
+      : null,
+  ].filter((message): message is string => Boolean(message));
 
-  const stats = {
-    totalCredentials: credentials.length,
-    activeCredentials: credentials.filter(
-      (credential) => credential.status === "active",
-    ).length,
-    verificationsToday:
-      verificationHistory?.filter(
-        (v: any) =>
-          new Date(v.timestamp).toDateString() === new Date().toDateString(),
-      ).length ?? 0,
-    totalVerifications: verificationHistory?.length ?? 0,
-  };
+  const activeCredentialCount = credentials.filter(
+    (credential) => credential.status === "active",
+  ).length;
+  const datedVerificationCount = verificationRecords.filter((record) => {
+    const raw = asRecord(record);
+    return Boolean(firstValidDate(raw.requestedAt, raw.completedAt));
+  }).length;
 
-  // Activity is derived from the user's real credentials and verification
-  // history — the dashboard shows nothing it cannot back with data. A fresh
-  // account renders the empty state instead of sample records.
-  const recentActivity: Array<{
-    id: string;
-    title: string;
-    description: string;
-    timestamp: Date | null;
-    status: "verified" | "pending" | "revoked" | "expired" | "active";
-    icon: typeof ShieldCheck;
-  }> = [
-    ...credentials.map((credential, i: number) => ({
-      id: `cred-${credential.id ?? i}`,
-      title: credential.typeLabel,
-      description: `Issuer record: ${credential.issuerId}`,
-      timestamp: toDate(credential.issuedAt),
-      status: normalizeActivityStatus(credential.status),
-      icon: ShieldCheck,
-    })),
-    ...(verificationHistory ?? []).map((v: any, i: number) => ({
-      id: `verif-${v.id ?? i}`,
-      title: v.proofType ? `${v.proofType} verification` : "Verification",
-      description: v.verifier
-        ? `Verifier: ${v.verifier}`
-        : "Proof verification",
-      timestamp: toDate(v.timestamp),
-      status: normalizeActivityStatus(v.status),
-      icon: Fingerprint,
-    })),
-  ]
-    .sort(
-      (a, b) => (b.timestamp?.getTime() ?? 0) - (a.timestamp?.getTime() ?? 0),
-    )
-    .slice(0, 6);
+  const recentActivity: ActivityItem[] = protectedSourcesReady
+    ? [
+        ...credentials.map((credential) => ({
+          id: `credential-${credential.id}`,
+          title: credential.typeLabel,
+          description: `Issuer record: ${credential.issuerId}`,
+          timestamp: toDate(credential.issuedAt),
+          status: credential.status,
+          icon: ShieldCheck,
+        })),
+        ...verificationRecords.map((verification, index) => {
+          const record = asRecord(verification);
+          const id = stringValue(record.id);
+          const verificationType = stringValue(record.verificationType);
+          const verifierId = stringValue(record.verifierId);
+          const credentialId = stringValue(record.credentialId);
+          return {
+            id: `verification-${id ?? index}`,
+            title: verificationType
+              ? `${humanizeCode(verificationType)} record`
+              : "Verification record",
+            description: verifierId
+              ? `Verifier record: ${verifierId}`
+              : credentialId
+                ? `Credential record: ${credentialId}`
+                : id
+                  ? `Verification record: ${id}`
+                  : "Record identifiers unavailable",
+            timestamp: firstValidDate(record.requestedAt, record.completedAt),
+            status: stringValue(record.result),
+            icon: Fingerprint,
+          };
+        }),
+      ]
+        .sort(
+          (left, right) =>
+            (right.timestamp?.getTime() ?? Number.NEGATIVE_INFINITY) -
+            (left.timestamp?.getTime() ?? Number.NEGATIVE_INFINITY),
+        )
+        .slice(0, 8)
+    : [];
 
-  // ================================================================
-  // WELCOME STATE — Not Connected
-  // ================================================================
+  if (
+    walletStatus === "connecting" ||
+    walletStatus === "reconnecting" ||
+    isReconnecting
+  ) {
+    return (
+      <AppLayout>
+        <div className="flex min-h-[70vh] items-center justify-center">
+          <div className="card flex items-center gap-3 p-6 text-sm text-zero-300">
+            <Loader2 className="h-5 w-5 animate-spin" />
+            Checking wallet connection...
+          </div>
+        </div>
+      </AppLayout>
+    );
+  }
+
   if (!isConnected) {
     return (
       <AppLayout>
-        <div className="relative flex items-center justify-center min-h-[85vh]">
-          {/* Ambient chrome glow */}
+        <div className="relative flex min-h-[85vh] items-center justify-center">
           <div
-            className="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[600px] pointer-events-none"
+            className="pointer-events-none absolute left-1/2 top-1/4 h-[600px] w-[800px] -translate-x-1/2 -translate-y-1/2"
             style={{
               background:
                 "radial-gradient(ellipse, rgba(192, 196, 204, 0.04) 0%, transparent 60%)",
               filter: "blur(80px)",
             }}
           />
-
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
-            className="relative text-center max-w-2xl z-10"
+            className="relative z-10 max-w-2xl text-center"
           >
-            {/* Logo with breathing glow */}
-            <motion.div
-              className="relative mx-auto w-56 h-56 mb-6"
-              animate={{
-                filter: [
-                  "drop-shadow(0 0 24px rgba(192,196,204,0.06))",
-                  "drop-shadow(0 0 50px rgba(192,196,204,0.18))",
-                  "drop-shadow(0 0 24px rgba(192,196,204,0.06))",
-                ],
-              }}
-              transition={{ duration: 4, repeat: Infinity, ease: "easeInOut" }}
-            >
+            <div className="relative mx-auto mb-6 h-56 w-56">
               <Image
                 src="/zeroid-logo.png"
                 alt="ZeroID"
                 width={224}
                 height={224}
-                className="w-full h-full object-contain rounded-[2rem]"
+                className="h-full w-full rounded-[2rem] object-contain"
                 priority
               />
-            </motion.div>
-
-            {/* Title */}
-            <h1 className="text-display-xl font-display mb-5 text-gradient-hero leading-none">
+            </div>
+            <h1 className="text-display-xl text-gradient-hero mb-5 font-display leading-none">
               Welcome to ZeroID
             </h1>
-
-            {/* Subtitle */}
-            <p className="text-zero-400 text-[17px] mb-16 max-w-lg mx-auto leading-relaxed text-balance font-body">
-              Self-sovereign identity with zero-knowledge proofs. Prove who you
-              are without revealing what you are.
+            <p className="mx-auto mb-12 max-w-lg text-[17px] leading-relaxed text-zero-400">
+              Connect a wallet to resolve its ZeroID identity state. Protected
+              credential and verification records are requested only after an
+              authenticated identity session exists.
             </p>
-
-            {/* Feature cards — bento style */}
             <motion.div
               variants={stagger}
               initial="hidden"
               animate="visible"
-              className="grid grid-cols-3 gap-4 mb-16"
+              className="mb-12 grid grid-cols-1 gap-4 md:grid-cols-3"
             >
               {[
                 {
-                  icon: EyeOff,
-                  label: "Private by Default",
-                  desc: "ZK selective disclosure protects your data",
+                  icon: Key,
+                  label: "Wallet-bound identity",
+                  description:
+                    "Backend profile and registry resolution are shown separately.",
                 },
                 {
                   icon: Lock,
-                  label: "On-Chain Anchored",
-                  desc: "Credentials anchored on the Aethelred network",
+                  label: "Protected records",
+                  description:
+                    "Unavailable sources remain unavailable instead of becoming zero.",
                 },
                 {
-                  icon: Key,
-                  label: "Self-Sovereign",
-                  desc: "You own and control your identity",
+                  icon: Database,
+                  label: "Returned evidence",
+                  description:
+                    "Counts and activity use only records returned by ZeroID APIs.",
                 },
-              ].map((f) => (
+              ].map((feature) => (
                 <motion.div
-                  key={f.label}
+                  key={feature.label}
                   variants={fadeUp}
-                  className="group bento p-6 text-left"
+                  className="bento p-6 text-left"
                 >
-                  <div
-                    className="w-10 h-10 rounded-xl flex items-center justify-center mb-4"
-                    style={{
-                      background: "rgba(192,196,204,0.06)",
-                      border: "1px solid rgba(192,196,204,0.08)",
-                    }}
-                  >
-                    <f.icon className="w-5 h-5 text-chrome-300" />
-                  </div>
-                  <div className="font-semibold text-[14px] text-white font-display mb-1">
-                    {f.label}
-                  </div>
-                  <div className="text-[12px] text-zero-500 font-body leading-relaxed">
-                    {f.desc}
-                  </div>
+                  <feature.icon className="mb-4 h-5 w-5 text-chrome-300" />
+                  <p className="text-[14px] font-semibold text-white">
+                    {feature.label}
+                  </p>
+                  <p className="mt-1 text-[12px] leading-relaxed text-zero-500">
+                    {feature.description}
+                  </p>
                 </motion.div>
               ))}
             </motion.div>
-
-            {/* CTA */}
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ delay: 0.6 }}
-              className="flex items-center justify-center gap-3 text-[12px] text-zero-500 font-body"
-            >
-              <div
-                className="w-12 h-px"
-                style={{
-                  background:
-                    "linear-gradient(90deg, transparent, rgba(255,255,255,0.06))",
-                }}
-              />
-              Connect your wallet to get started
-              <div
-                className="w-12 h-px"
-                style={{
-                  background:
-                    "linear-gradient(90deg, rgba(255,255,255,0.06), transparent)",
-                }}
-              />
-            </motion.div>
+            <p className="text-[12px] text-zero-500">
+              Use the Connect control in the header to continue.
+            </p>
           </motion.div>
         </div>
       </AppLayout>
     );
   }
 
-  // ================================================================
-  // CONNECTED DASHBOARD — Bento Grid Layout
-  // ================================================================
+  const identity = identityQuery.identity;
+  const profile = asRecord(identity.profile);
+  const profileAvailable = Boolean(identity.profile);
+  const hasRegistryIdentity = identity.hasIdentity === true;
+  const identityAvailable = profileAvailable || hasRegistryIdentity;
+  const backendDid = didValue(profile.did);
+  const registryDidHash = stringValue(identity.didHash);
+  const lifecycleStatus =
+    stringValue(profile.status) ??
+    (typeof profile.status === "number" ? String(profile.status) : undefined);
+  const createdAt = toDate(profile.createdAt);
+
   return (
     <AppLayout>
       <div className="space-y-6">
-        {/* Page Header */}
-        <div className="flex items-end justify-between pt-1">
+        <div className="flex flex-col gap-3 pt-1 md:flex-row md:items-end md:justify-between">
           <div>
             <h1 className="text-display-md font-display tracking-tight text-white">
               Dashboard
             </h1>
-            <p className="text-zero-500 mt-1.5 text-[13px] font-body">
-              Your identity at a glance
+            <p className="mt-1.5 text-[13px] text-zero-500">
+              Identity and protected records returned for this wallet session.
+            </p>
+          </div>
+          <div className="max-w-xl rounded-xl border border-chrome-300/10 bg-chrome-300/[0.03] px-4 py-3">
+            <div className="flex items-center gap-2">
+              <span className="rounded-full border border-chrome-300/15 px-2 py-0.5 text-[10px] uppercase tracking-wide text-chrome-300">
+                {readiness.status}
+              </span>
+              <span className="text-xs font-medium text-zero-300">
+                Dashboard readiness
+              </span>
+            </div>
+            <p className="mt-1 text-[11px] text-zero-500">
+              {readiness.evidence}
             </p>
           </div>
         </div>
 
-        {/* Bento Grid — Row 1: Metrics strip */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          {/* Every metric is computed from the account's real data — no sample
-              trends or invented network stats. Explicit per-card animation:
-              variant propagation through the stagger container proved
-              unreliable on the connect→dashboard mount path. */}
-          {[
-            {
-              label: "Active Credentials",
-              value: stats.activeCredentials,
-              icon: <ShieldCheck className="w-[18px] h-[18px]" />,
-            },
-            {
-              label: "Total Credentials",
-              value: stats.totalCredentials,
-              icon: <FileCheck className="w-[18px] h-[18px]" />,
-            },
-            {
-              label: "Verifications Today",
-              value: stats.verificationsToday,
-              icon: <CheckCircle2 className="w-[18px] h-[18px]" />,
-            },
-            {
-              label: "Total Verifications",
-              value: stats.totalVerifications,
-              icon: <Fingerprint className="w-[18px] h-[18px]" />,
-            },
-          ].map((m, i) => (
-            <motion.div
-              key={m.label}
-              initial={{ opacity: 0, y: 24 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{
-                duration: 0.6,
-                delay: 0.1 + i * 0.07,
-                ease: [0.16, 1, 0.3, 1],
-              }}
-            >
-              <MetricCard label={m.label} value={m.value} icon={m.icon} />
-            </motion.div>
-          ))}
-        </div>
-
-        {/* Bento Grid — Row 2: Identity + Quick Actions */}
         <div className="grid grid-cols-12 gap-4">
-          {/* Identity Card — Hero element */}
-          <motion.div
-            initial={{ opacity: 0, y: 16 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.25, duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
+          <section
             className="col-span-12 lg:col-span-7"
+            aria-label="Identity evidence"
           >
-            <IdentityCard />
-          </motion.div>
-
-          {/* Quick Actions */}
-          <motion.div
-            initial={{ opacity: 0, y: 16 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.35, duration: 0.5 }}
-            className="col-span-12 lg:col-span-5"
-          >
-            <div className="bento p-6 h-full">
-              <div className="flex items-center justify-between mb-5">
-                <p className="text-label-sm text-zero-500 uppercase font-body">
-                  Quick Actions
-                </p>
-                <Zap className="w-3.5 h-3.5 text-zero-600" />
+            <div className="bento h-full p-6">
+              <div className="mb-5 flex items-center justify-between">
+                <div>
+                  <p className="text-label-sm uppercase text-zero-500">
+                    Identity evidence
+                  </p>
+                  <p className="mt-1 text-xs text-zero-600">
+                    Backend profile and configured registry read.
+                  </p>
+                </div>
+                <Fingerprint className="h-5 w-5 text-chrome-300" />
               </div>
 
+              {identityQuery.isLoading ? (
+                <div className="flex items-center gap-2 py-10 text-sm text-zero-400">
+                  <Loader2 className="h-5 w-5 animate-spin" />
+                  Loading identity evidence...
+                </div>
+              ) : identityQuery.error ? (
+                <div className="rounded-xl border border-rose-500/20 bg-rose-500/5 p-4 text-sm text-rose-300">
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle className="mt-0.5 h-4 w-4" />
+                    <div>
+                      <p>Identity evidence unavailable</p>
+                      <p className="mt-1 text-xs text-zero-400">
+                        {identityQuery.error.message}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              ) : !identityAvailable ? (
+                <div className="py-8 text-center">
+                  <Shield className="mx-auto mb-3 h-8 w-8 text-zero-600" />
+                  <p className="text-sm text-zero-300">
+                    No backend identity profile or registry DID was returned.
+                  </p>
+                  <Link href="/identity" className="btn-primary btn-sm mt-4">
+                    Create ZeroID <ArrowRight className="h-4 w-4" />
+                  </Link>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <div className="rounded-xl bg-white/[0.025] p-4">
+                    <p className="text-[10px] uppercase tracking-wide text-zero-600">
+                      {backendDid ? "Backend DID" : "Registry DID hash"}
+                    </p>
+                    <p className="mt-1 break-all font-mono text-xs text-zero-300">
+                      {backendDid ??
+                        registryDidHash ??
+                        "Identifier unavailable"}
+                    </p>
+                  </div>
+                  <dl className="grid grid-cols-1 gap-3 text-xs md:grid-cols-2">
+                    {[
+                      [
+                        "Backend identity profile",
+                        profileAvailable ? "Returned" : "Not returned",
+                      ],
+                      [
+                        "Registry DID resolution",
+                        hasRegistryIdentity ? "Resolved" : "Not resolved",
+                      ],
+                      ["Lifecycle status", lifecycleStatus ?? "Unavailable"],
+                      ["Created", formatTimestamp(createdAt)],
+                      ["TEE evidence", evidenceLabel(profile.teeAttested)],
+                      [
+                        "Government evidence",
+                        evidenceLabel(profile.governmentVerified),
+                      ],
+                    ].map(([label, value]) => (
+                      <div
+                        key={label}
+                        className="rounded-xl border border-white/[0.04] p-3"
+                      >
+                        <dt className="text-zero-600">{label}</dt>
+                        <dd className="mt-1 text-zero-300">{value}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                  <Link
+                    href="/identity"
+                    className="inline-flex items-center gap-1.5 text-xs text-chrome-300 hover:text-white"
+                  >
+                    Manage identity <ArrowUpRight className="h-3.5 w-3.5" />
+                  </Link>
+                </div>
+              )}
+            </div>
+          </section>
+
+          <section
+            className="col-span-12 lg:col-span-5"
+            aria-label="Quick actions"
+          >
+            <div className="bento h-full p-6">
+              <div className="mb-5 flex items-center justify-between">
+                <p className="text-label-sm uppercase text-zero-500">
+                  Working links
+                </p>
+                <Zap className="h-3.5 w-3.5 text-zero-600" />
+              </div>
               <div className="space-y-2">
                 {[
                   {
-                    icon: ShieldCheck,
-                    label: "Request Credential",
-                    desc: "Request a verifiable credential",
+                    icon: UserRoundCheck,
+                    label: "Manage Identity",
+                    description: "Review or create your ZeroID",
+                    href: "/identity",
+                  },
+                  {
+                    icon: FileCheck,
+                    label: "View Credentials",
+                    description: "Review returned credential records",
                     href: "/credentials",
-                    color: "emerald",
                   },
                   {
                     icon: ClipboardCheck,
                     label: "Run Eligibility Proof",
-                    desc: "Issue policy receipt",
+                    description: "Generate a policy-bound receipt",
                     href: "/eligibility",
-                    color: "emerald",
                   },
                   {
-                    icon: Bot,
-                    label: "Register AI Agent",
-                    desc: "Deploy autonomous identity",
-                    href: "/agent-identity",
-                    color: "chrome",
-                  },
-                  {
-                    icon: BarChart3,
-                    label: "View Analytics",
-                    desc: "Privacy insights",
-                    href: "/analytics",
-                    color: "chrome",
+                    icon: History,
+                    label: "View Audit Records",
+                    description: "Open the server-backed audit trail",
+                    href: "/audit",
                   },
                 ].map((action) => (
                   <Link
-                    key={action.label}
+                    key={action.href}
                     href={action.href}
-                    className="flex items-center gap-3.5 p-3 rounded-2xl transition-all duration-300 group hover:bg-white/[0.03]"
-                    style={{ border: "1px solid transparent" }}
+                    className="group flex items-center gap-3.5 rounded-2xl p-3 transition-colors hover:bg-white/[0.03]"
                   >
-                    <div
-                      className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 transition-all duration-300 group-hover:scale-105"
-                      style={{
-                        background:
-                          action.color === "emerald"
-                            ? "rgba(52,211,153,0.06)"
-                            : "rgba(192,196,204,0.06)",
-                        border: `1px solid ${action.color === "emerald" ? "rgba(52,211,153,0.1)" : "rgba(192,196,204,0.08)"}`,
-                      }}
-                    >
-                      <action.icon
-                        className={`w-[17px] h-[17px] ${action.color === "emerald" ? "text-emerald-400" : "text-chrome-300"}`}
-                      />
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-chrome-300/10 bg-chrome-300/[0.04]">
+                      <action.icon className="h-[17px] w-[17px] text-chrome-300" />
                     </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="font-medium text-[13px] text-zero-200 group-hover:text-white transition-colors font-body">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[13px] font-medium text-zero-200 group-hover:text-white">
                         {action.label}
-                      </div>
-                      <div className="text-[11px] text-zero-500 font-body">
-                        {action.desc}
-                      </div>
+                      </p>
+                      <p className="text-[11px] text-zero-500">
+                        {action.description}
+                      </p>
                     </div>
-                    <ArrowUpRight className="w-3.5 h-3.5 text-zero-700 group-hover:text-chrome-400 transition-all shrink-0" />
+                    <ArrowUpRight className="h-3.5 w-3.5 text-zero-700 group-hover:text-chrome-400" />
                   </Link>
                 ))}
               </div>
             </div>
-          </motion.div>
+          </section>
         </div>
 
-        {/* Bento Grid — Row 3: Activity */}
-        <div className="grid grid-cols-12 gap-4">
-          {/* Activity Feed — real credentials + verifications only */}
-          <motion.div
-            initial={{ opacity: 0, y: 16 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.4, duration: 0.5 }}
-            className="col-span-12"
-          >
-            <div className="bento">
-              <div
-                className="p-6 flex items-center justify-between"
-                style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}
-              >
-                <h2 className="text-heading-sm font-display">
-                  Recent Activity
-                </h2>
-                <Link
-                  href="/audit"
-                  className="text-[12px] text-zero-500 hover:text-chrome-300 transition-colors flex items-center gap-1.5 font-body"
-                >
-                  View All <ArrowRight className="w-3.5 h-3.5" />
-                </Link>
-              </div>
+        <section aria-label="Protected record evidence" className="space-y-4">
+          <div>
+            <h2 className="text-heading-sm font-display">
+              Protected record evidence
+            </h2>
+            <p className="mt-1 text-xs text-zero-500">
+              Each endpoint is requested with a 100-record page. Counts below
+              describe returned records, not lifetime totals.
+            </p>
+          </div>
 
-              {recentActivity.length === 0 && (
-                <div className="px-6 py-12 text-center">
-                  <Shield className="w-7 h-7 text-zero-600 mx-auto mb-3" />
-                  <p className="text-[13px] text-zero-400 font-body">
-                    No activity yet
-                  </p>
-                  <p className="text-[11px] text-zero-500 font-body mt-1">
-                    Create your identity and request a credential — your real
-                    issuance and verification events appear here.
+          {accessState !== "ready" ? (
+            <div className="card border-amber-500/20 p-6 text-sm text-amber-100">
+              <div className="flex items-start gap-3">
+                <Lock className="mt-0.5 h-5 w-5" />
+                <div>
+                  <p>Authenticated identity session required</p>
+                  <p className="mt-1 text-xs text-zero-400">
+                    Sign in from the header to load credential and
+                    verification records. No zero values are shown while these
+                    sources are unavailable.
                   </p>
                 </div>
-              )}
-
-              <div>
-                {recentActivity.map((a, i) => (
-                  <motion.div
-                    key={a.id}
-                    initial={{ opacity: 0, x: -12 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    transition={{ delay: 0.5 + i * 0.07 }}
-                    className="px-6 py-4 flex items-center gap-4 transition-colors hover:bg-white/[0.015] group"
-                    style={{
-                      borderBottom:
-                        i < recentActivity.length - 1
-                          ? "1px solid rgba(255,255,255,0.03)"
-                          : "none",
-                    }}
-                  >
-                    <div
-                      className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 transition-transform duration-300 group-hover:scale-105"
-                      style={{
-                        background:
-                          a.status === "verified"
-                            ? "rgba(52, 211, 153, 0.06)"
-                            : "rgba(251, 191, 36, 0.06)",
-                        border: `1px solid ${a.status === "verified" ? "rgba(52, 211, 153, 0.1)" : "rgba(251, 191, 36, 0.1)"}`,
-                      }}
-                    >
-                      <a.icon
-                        className={`w-[17px] h-[17px] ${a.status === "verified" ? "text-emerald-400" : "text-amber-400"}`}
-                      />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="font-medium text-[13px] text-zero-200 font-body">
-                        {a.title}
-                      </div>
-                      <div className="text-[11px] text-zero-500 truncate font-body mt-0.5">
-                        {a.description}
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-3 shrink-0">
-                      <StatusBadge status={a.status} size="sm" />
-                      <span className="text-[10px] text-zero-600 whitespace-nowrap font-mono">
-                        {a.timestamp ? formatTimeAgo(a.timestamp) : "—"}
-                      </span>
-                    </div>
-                  </motion.div>
-                ))}
               </div>
             </div>
-          </motion.div>
-        </div>
+          ) : protectedSourcesLoading ? (
+            <div className="card flex items-center gap-3 p-8 text-sm text-zero-300">
+              <Loader2 className="h-5 w-5 animate-spin" />
+              Loading protected records...
+            </div>
+          ) : protectedSourceErrors.length > 0 ? (
+            <div className="card border-rose-500/20 p-6" role="alert">
+              <div className="flex items-start gap-3 text-rose-300">
+                <AlertTriangle className="mt-0.5 h-5 w-5" />
+                <div>
+                  <p className="text-sm font-medium">
+                    Protected record evidence unavailable
+                  </p>
+                  <ul className="mt-2 space-y-1 text-xs text-zero-400">
+                    {protectedSourceErrors.map((message) => (
+                      <li key={message}>{message}</li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            </div>
+          ) : protectedSourcesReady ? (
+            <>
+              <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+                {[
+                  {
+                    label: "Credential records returned",
+                    value: credentials.length,
+                    subtitle: "Current 100-record page",
+                    icon: <FileCheck className="h-[18px] w-[18px]" />,
+                  },
+                  {
+                    label: "Active credentials returned",
+                    value: activeCredentialCount,
+                    subtitle: "Calculated from returned records",
+                    icon: <ShieldCheck className="h-[18px] w-[18px]" />,
+                  },
+                  {
+                    label: "Verification records returned",
+                    value: verificationRecords.length,
+                    subtitle: "Current 100-record page",
+                    icon: <Fingerprint className="h-[18px] w-[18px]" />,
+                  },
+                  {
+                    label: "Dated verification records",
+                    value: datedVerificationCount,
+                    subtitle: "Valid returned timestamps only",
+                    icon: <CheckCircle2 className="h-[18px] w-[18px]" />,
+                  },
+                ].map((metric) => (
+                  <MetricCard
+                    key={metric.label}
+                    label={metric.label}
+                    value={metric.value}
+                    subtitle={metric.subtitle}
+                    icon={metric.icon}
+                  />
+                ))}
+              </div>
+
+              <div className="bento">
+                <div className="flex items-center justify-between border-b border-white/[0.04] p-6">
+                  <div>
+                    <h2 className="text-heading-sm font-display">
+                      Recent returned records
+                    </h2>
+                    <p className="mt-1 text-xs text-zero-500">
+                      Credential issuance dates and verification request dates.
+                    </p>
+                  </div>
+                  <Link
+                    href="/audit"
+                    className="flex items-center gap-1.5 text-[12px] text-zero-500 hover:text-chrome-300"
+                  >
+                    Open audit trail <ArrowRight className="h-3.5 w-3.5" />
+                  </Link>
+                </div>
+
+                {recentActivity.length === 0 ? (
+                  <div className="px-6 py-12 text-center">
+                    <Database className="mx-auto mb-3 h-7 w-7 text-zero-600" />
+                    <p className="text-[13px] text-zero-400">
+                      Both protected endpoints returned empty record pages.
+                    </p>
+                  </div>
+                ) : (
+                  <div>
+                    {recentActivity.map((activity, index) => (
+                      <div
+                        key={activity.id}
+                        className="flex items-center gap-4 px-6 py-4"
+                        style={{
+                          borderBottom:
+                            index < recentActivity.length - 1
+                              ? "1px solid rgba(255,255,255,0.03)"
+                              : "none",
+                        }}
+                      >
+                        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/[0.05] bg-white/[0.025]">
+                          <activity.icon className="h-[17px] w-[17px] text-chrome-300" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-[13px] font-medium text-zero-200">
+                            {activity.title}
+                          </p>
+                          <p className="mt-0.5 truncate text-[11px] text-zero-500">
+                            {activity.description}
+                          </p>
+                        </div>
+                        <div className="shrink-0 text-right">
+                          <p className="font-mono text-[10px] text-zero-400">
+                            {activity.status ?? "Status unavailable"}
+                          </p>
+                          <p className="mt-1 text-[10px] text-zero-600">
+                            {formatTimestamp(activity.timestamp)}
+                          </p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </>
+          ) : null}
+        </section>
       </div>
     </AppLayout>
   );
-}
-
-function formatTimeAgo(date: Date): string {
-  const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
-  if (seconds < 60) return "Just now";
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  return `${days}d ago`;
-}
-
-/** Accepts Unix seconds, Unix milliseconds, or an ISO string. */
-function toDate(ts: unknown): Date | null {
-  if (typeof ts === "number" && Number.isFinite(ts) && ts > 0) {
-    return new Date(ts < 1e12 ? ts * 1000 : ts);
-  }
-  if (typeof ts === "string" && ts) {
-    const d = new Date(ts);
-    return Number.isNaN(d.getTime()) ? null : d;
-  }
-  return null;
-}
-
-/** Collapse backend/legacy status strings onto the StatusBadge vocabulary. */
-function normalizeActivityStatus(
-  status: unknown,
-): "verified" | "pending" | "revoked" | "expired" | "active" {
-  const s = typeof status === "string" ? status.toLowerCase() : "";
-  if (s === "verified" || s === "completed") return "verified";
-  if (s === "active") return "active";
-  if (s === "revoked" || s === "rejected" || s === "failed") return "revoked";
-  if (s === "expired") return "expired";
-  return "pending";
 }

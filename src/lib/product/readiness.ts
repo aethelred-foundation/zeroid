@@ -14,7 +14,8 @@ export const FEATURE_READINESS: Record<string, FeatureReadiness> = {
   "/": {
     href: "/",
     status: "Configured",
-    evidence: "Aggregates backend-backed readiness signals and demo telemetry.",
+    evidence:
+      "Shows wallet and identity evidence plus bounded credential and verification records; unavailable sources remain explicit instead of becoming synthetic or zero-valued fallbacks.",
   },
   "/identity": {
     href: "/identity",
@@ -56,7 +57,7 @@ export const FEATURE_READINESS: Record<string, FeatureReadiness> = {
     href: "/analytics",
     status: "Preview",
     evidence:
-      "Analytics panels are demo-ready; SIEM/export integration decides production status.",
+      "Analytics exposes bounded backend-derived records and labels unsupported comparisons and export evidence unavailable; production SIEM integration remains external.",
   },
   "/regulatory": {
     href: "/regulatory",

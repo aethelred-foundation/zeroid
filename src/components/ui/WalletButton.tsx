@@ -23,29 +23,38 @@ import {
 } from "@/config/wallet-picker";
 import { useIdentity } from "@/contexts/IdentityContext";
 
-type VerificationLevel = "verified" | "pending" | "unverified";
+type SessionLevel =
+  | "authenticated"
+  | "authentication-required"
+  | "wallet-only"
+  | "unsupported-network";
 
 const SUPPORTED_CHAINS = [aethelredMainnet, aethelredTestnet, aethelredDevnet];
 
-function VerificationBadge({ level }: { level: VerificationLevel }) {
+function SessionBadge({ level }: { level: SessionLevel }) {
   const config: Record<
-    VerificationLevel,
+    SessionLevel,
     { icon: React.ReactNode; className: string; label: string }
   > = {
-    verified: {
+    authenticated: {
       icon: <BadgeCheck className="w-3 h-3" />,
       className: "text-emerald-400 bg-emerald-400/8 border-emerald-400/15",
-      label: "Verified",
+      label: "Signed in to ZeroID",
     },
-    pending: {
+    "authentication-required": {
       icon: <AlertCircle className="w-3 h-3" />,
       className: "text-amber-400 bg-amber-400/8 border-amber-400/15",
-      label: "Pending",
+      label: "ZeroID sign-in required",
     },
-    unverified: {
+    "wallet-only": {
       icon: <AlertCircle className="w-3 h-3" />,
       className: "text-zero-400 bg-zero-400/8 border-zero-400/15",
-      label: "Unverified",
+      label: "Wallet connected; no registered ZeroID",
+    },
+    "unsupported-network": {
+      icon: <AlertCircle className="w-3 h-3" />,
+      className: "text-rose-400 bg-rose-400/8 border-rose-400/15",
+      label: "Unsupported network",
     },
   };
 
@@ -178,12 +187,13 @@ export function WalletButton({ className = "" }: WalletButtonProps) {
     );
   }
 
-  const verificationLevel: VerificationLevel =
-    wrongNetwork || !identity.isRegistered
-      ? "unverified"
+  const sessionLevel: SessionLevel = wrongNetwork
+    ? "unsupported-network"
+    : !identity.isRegistered
+      ? "wallet-only"
       : sessionStatus === "authenticated"
-        ? "verified"
-        : "pending";
+        ? "authenticated"
+        : "authentication-required";
   const requiresSignIn =
     identity.isRegistered &&
     (sessionStatus === "sign-in-required" || sessionStatus === "signing");
@@ -252,7 +262,7 @@ export function WalletButton({ className = "" }: WalletButtonProps) {
         <span className="text-zero-200 font-medium font-mono text-[11px]">
           {formatAddress(address)}
         </span>
-        <VerificationBadge level={verificationLevel} />
+        <SessionBadge level={sessionLevel} />
         {displayBalance && (
           <span className="hidden md:inline text-[11px] text-zero-500 font-mono">
             {displayBalance}

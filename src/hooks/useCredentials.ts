@@ -81,6 +81,11 @@ export function useCredentials(
   const backendStatus = toBackendStatus(status);
   if (backendStatus) params.set("status", backendStatus);
   params.set("role", role);
+  // This hook exposes the returned collection, not a server-side lifetime
+  // total. Request the endpoint maximum so consumers can label one bounded
+  // page accurately instead of presenting the backend default page as total.
+  params.set("page", "1");
+  params.set("limit", "100");
 
   const query = useQuery({
     queryKey: ["credentials", address, status, role],

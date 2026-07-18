@@ -146,6 +146,28 @@ describe("WalletButton", () => {
     expect(screen.getByText("0x1234...5678")).toBeInTheDocument();
     expect(screen.getByText(activeChain.name)).toBeInTheDocument();
     expect(screen.getByText("1.5 ETH")).toBeInTheDocument();
+    expect(
+      screen.getByTitle("Wallet connected; no registered ZeroID"),
+    ).toBeInTheDocument();
+  });
+
+  it("labels an authenticated identity session as signed in, not verified", () => {
+    mockAccountState = {
+      address: "0x1234567890abcdef1234567890abcdef12345678",
+      isConnected: true,
+      isConnecting: false,
+    };
+    mockIdentityState = {
+      identity: { isRegistered: true },
+      sessionStatus: "authenticated",
+      sessionError: null,
+      signIn: mockSignIn,
+    };
+
+    render(<WalletButton />);
+
+    expect(screen.getByTitle("Signed in to ZeroID")).toBeInTheDocument();
+    expect(screen.queryByTitle("Verified")).not.toBeInTheDocument();
   });
 
   it("shows an explicit sign-in action for a registered wallet without a session", () => {

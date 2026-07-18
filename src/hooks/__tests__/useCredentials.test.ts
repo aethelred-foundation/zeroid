@@ -152,6 +152,9 @@ describe("useCredentials hooks", () => {
       expect(apiClient.get).toHaveBeenCalledWith(
         expect.stringContaining("/api/v1/credentials"),
       );
+      const url = (apiClient.get as jest.Mock).mock.calls[0][0] as string;
+      expect(url).toContain("page=1");
+      expect(url).toContain("limit=100");
     });
 
     it("passes status filter to the query", async () => {
