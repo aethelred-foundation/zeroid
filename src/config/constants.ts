@@ -221,10 +221,17 @@ export const ZK_VERIFIER_ABI = [
     type: "function",
     name: "verifyProof",
     inputs: [
-      { name: "a", type: "uint256[2]" },
-      { name: "b", type: "uint256[2][2]" },
-      { name: "c", type: "uint256[2]" },
-      { name: "input", type: "uint256[]" },
+      { name: "circuitId", type: "bytes32" },
+      {
+        name: "proof",
+        type: "tuple",
+        components: [
+          { name: "a", type: "uint256[2]" },
+          { name: "b", type: "uint256[2][2]" },
+          { name: "c", type: "uint256[2]" },
+        ],
+      },
+      { name: "publicInputs", type: "uint256[]" },
     ],
     outputs: [{ name: "", type: "bool" }],
     stateMutability: "view",
@@ -234,9 +241,9 @@ export const ZK_VERIFIER_ABI = [
 export const TEE_REGISTRY_ABI = [
   {
     type: "function",
-    name: "attestationStatus",
-    inputs: [{ name: "enclaveId", type: "bytes32" }],
-    outputs: [{ name: "", type: "string" }],
+    name: "isAttestationValid",
+    inputs: [{ name: "enclaveHash", type: "bytes32" }],
+    outputs: [{ name: "", type: "bool" }],
     stateMutability: "view",
   },
 ] as const;

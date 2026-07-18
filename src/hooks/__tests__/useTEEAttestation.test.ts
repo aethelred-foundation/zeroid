@@ -108,6 +108,10 @@ beforeEach(() => {
     data: undefined,
     isLoading: false,
   });
+  mockApiClient.getAttestation.mockResolvedValue({
+    isValid: false,
+    expiresAt: Math.floor(Date.now() / 1000) + 3_600,
+  });
 });
 
 // ===========================================================================
@@ -126,34 +130,42 @@ describe("useAttestationStatus", () => {
     });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(useReadContract).toHaveBeenCalledWith(
+      expect.objectContaining({
+        functionName: "isAttestationValid",
+        args: [enclaveHash],
+      }),
+    );
     expect(mockApiClient.getAttestation).toHaveBeenCalledWith(enclaveHash);
     expect(result.current.isAttested).toBe(true);
   });
 
-  it("returns isAttested=true when on-chain status is verified", () => {
+  it("returns isAttested=true when the on-chain validity check returns true", () => {
     (useReadContract as jest.Mock).mockReturnValue({
-      data: "verified",
+      data: true,
       isLoading: false,
     });
-    const { result } = renderHook(() => useAttestationStatus("enc-1"), {
+    const { result } = renderHook(() => useAttestationStatus(enclaveHash), {
       wrapper: createWrapper(),
     });
 
     expect(result.current.isAttested).toBe(true);
     expect(result.current.isExpired).toBe(false);
+    expect(result.current.onChainStatus).toBe(true);
   });
 
-  it("returns isExpired=true when on-chain status is expired", () => {
+  it("returns isAttested=false when the on-chain validity check returns false", () => {
     (useReadContract as jest.Mock).mockReturnValue({
-      data: "expired",
+      data: false,
       isLoading: false,
     });
-    const { result } = renderHook(() => useAttestationStatus("enc-1"), {
+    const { result } = renderHook(() => useAttestationStatus(enclaveHash), {
       wrapper: createWrapper(),
     });
 
     expect(result.current.isAttested).toBe(false);
-    expect(result.current.isExpired).toBe(true);
+    expect(result.current.isExpired).toBe(false);
+    expect(result.current.onChainStatus).toBe(false);
   });
 
   it("returns isAttested=false when no on-chain data", () => {
@@ -161,7 +173,7 @@ describe("useAttestationStatus", () => {
       data: undefined,
       isLoading: false,
     });
-    const { result } = renderHook(() => useAttestationStatus("enc-1"), {
+    const { result } = renderHook(() => useAttestationStatus(enclaveHash), {
       wrapper: createWrapper(),
     });
 

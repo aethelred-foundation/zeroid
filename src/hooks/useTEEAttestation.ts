@@ -12,7 +12,6 @@ import { toast } from "sonner";
 import { apiClient } from "@/lib/api/client";
 import { TEE_REGISTRY_ADDRESS, TEE_REGISTRY_ABI } from "@/config/constants";
 import type {
-  AttestationStatus,
   AttestationReport,
   Bytes32,
   TEENode,
@@ -143,23 +142,24 @@ function summarizeNetwork(nodes: TEENode[]): TEENetworkStatus {
 // ---------------------------------------------------------------------------
 
 export function useAttestationStatus(enclaveId: string | undefined) {
+  const hasValidEnclaveId = Boolean(enclaveId && isValidBytes32(enclaveId));
   const { data: onChainStatus, isLoading: isOnChainLoading } = useReadContract({
     address: TEE_REGISTRY_ADDRESS as Address,
     abi: TEE_REGISTRY_ABI,
-    functionName: "attestationStatus",
-    args: enclaveId ? [enclaveId as `0x${string}`] : undefined,
-    query: { enabled: !!enclaveId, refetchInterval: 60_000 },
+    functionName: "isAttestationValid",
+    args: hasValidEnclaveId ? [enclaveId as Bytes32] : undefined,
+    query: { enabled: hasValidEnclaveId, refetchInterval: 60_000 },
   });
 
   const apiQuery = useQuery({
     queryKey: ["attestation", enclaveId],
     queryFn: async () =>
       apiClient.getAttestation(enclaveId as Bytes32) as Promise<AttestationReport>,
-    enabled: !!enclaveId && isValidBytes32(enclaveId),
+    enabled: hasValidEnclaveId,
     staleTime: 30_000,
   });
 
-  const status = onChainStatus as AttestationStatus | undefined;
+  const isValidOnChain = onChainStatus as boolean | undefined;
   const apiAttestation = apiQuery.data;
   const apiExpired = apiAttestation
     ? isExpired(apiAttestation.expiresAt)
@@ -167,10 +167,10 @@ export function useAttestationStatus(enclaveId: string | undefined) {
 
   return {
     ...apiQuery,
-    onChainStatus: status,
+    onChainStatus: isValidOnChain,
     isOnChainLoading,
-    isAttested: status === "verified" || Boolean(apiAttestation?.isValid),
-    isExpired: status === "expired" || apiExpired,
+    isAttested: isValidOnChain === true || Boolean(apiAttestation?.isValid),
+    isExpired: apiExpired,
   };
 }
 
