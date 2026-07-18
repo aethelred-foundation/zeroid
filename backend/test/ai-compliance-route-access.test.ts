@@ -202,32 +202,32 @@ describe('AI compliance route enterprise access control', () => {
     expect(mockScreenIdentity).not.toHaveBeenCalled();
   });
 
-  it('allows screening for a resolved enterprise compliance role', async () => {
-    mockScreenIdentity.mockResolvedValue({
-      screeningId: 'screening-1',
-      identityId: screenBody.identityId,
-      result: 'clear',
-      matchScore: 0,
-      matchedLists: [],
-      pepMatches: [],
-      adverseMedia: [],
-      riskIndicators: [],
-      screenedAt: new Date('2026-05-03T00:00:00.000Z'),
-      expiresAt: new Date('2026-05-04T00:00:00.000Z'),
-      listsChecked: ['ofac_sdn'],
-    });
-
-    await request(createApp())
+  it('fails closed after verifying the enterprise role and target tenancy', async () => {
+    const response = await request(createApp())
       .post('/ai/compliance/screen')
       .send(screenBody)
-      .expect(200);
+      .expect(503);
 
     expect(mockResolveContext).toHaveBeenCalledWith(
       '550e8400-e29b-41d4-a716-446655440001',
       undefined,
       ['operator', 'admin', 'compliance_officer'],
     );
-    expect(mockScreenIdentity).toHaveBeenCalledWith(screenBody);
+    expect(mockOrganizationMemberFindUnique).toHaveBeenCalledWith({
+      where: {
+        organizationId_identityId: {
+          organizationId: 'org-1',
+          identityId: screenBody.identityId,
+        },
+      },
+      select: { identityId: true },
+    });
+    expect(response.body).toEqual({
+      error: 'AUTHORITATIVE_SANCTIONS_SCREENING_UNAVAILABLE',
+      message:
+        'Sanctions screening is unavailable until identity attributes come from authoritative provenance-bound evidence and results use an immutable tenant-scoped database.',
+    });
+    expect(mockScreenIdentity).not.toHaveBeenCalled();
   });
 
   it('hides screening targets outside the resolved organization', async () => {

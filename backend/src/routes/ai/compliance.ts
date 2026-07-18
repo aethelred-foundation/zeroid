@@ -192,6 +192,14 @@ function sendComplianceAlertsUnavailable(res: Response): void {
   });
 }
 
+function sendSanctionsScreeningUnavailable(res: Response): void {
+  res.status(503).json({
+    error: 'AUTHORITATIVE_SANCTIONS_SCREENING_UNAVAILABLE',
+    message:
+      'Sanctions screening is unavailable until identity attributes come from authoritative provenance-bound evidence and results use an immutable tenant-scoped database.',
+  });
+}
+
 // ---------------------------------------------------------------------------
 // POST /ai/compliance/screen
 // Screen an identity against sanctions/PEP lists
@@ -203,19 +211,7 @@ router.post(
   async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
       if (!(await requireIdentityTarget(req, res, req.body.identityId))) return;
-      const result = await complianceAdvisorService.screenIdentity(req.body);
-
-      const statusCode = result.result === 'confirmed_match' ? 200
-        : result.result === 'potential_match' ? 200
-        : 200;
-
-      res.status(statusCode).json({
-        success: true,
-        data: result,
-        ...(result.result !== 'clear' && {
-          warning: `Screening result: ${result.result} — manual review may be required`,
-        }),
-      });
+      sendSanctionsScreeningUnavailable(res);
     } catch (error) {
       handleError(error, res);
     }
