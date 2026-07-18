@@ -100,7 +100,7 @@ export default function IdentityCreation() {
   const [registered, setRegistered] = useState(false);
 
   const { address, isConnected } = useAccount();
-  const { connectors, connect } = useConnect();
+  const { connectors, connectAsync } = useConnect();
   const { createIdentity } = useIdentity();
   const {
     initiateVerification: initiateUAEPass,
@@ -121,11 +121,12 @@ export default function IdentityCreation() {
   );
 
   const handleNext = useCallback(() => {
+    if (step?.id === "connect-wallet" && (!isConnected || !address)) return;
     if (currentStep < STEPS.length - 1) {
       setCompletedSteps((prev) => new Set([...prev, currentStep]));
       goToStep(currentStep + 1);
     }
-  }, [currentStep, goToStep, STEPS.length]);
+  }, [address, currentStep, goToStep, isConnected, step?.id, STEPS.length]);
 
   const handleBack = useCallback(() => {
     if (currentStep > 0) goToStep(currentStep - 1);
@@ -164,9 +165,9 @@ export default function IdentityCreation() {
   const handleConnectWallet = useCallback(
     (connector: (typeof connectors)[number]) =>
       runStep(async () => {
-        connect({ connector });
+        await connectAsync({ connector });
       }, "Failed to connect wallet"),
-    [connect, runStep],
+    [connectAsync, runStep],
   );
 
   const handleUAEPass = useCallback(
@@ -544,7 +545,11 @@ export default function IdentityCreation() {
         </div>
         <button
           onClick={handleNext}
-          disabled={isLastStep}
+          disabled={
+            isLastStep ||
+            isProcessing ||
+            (step?.id === "connect-wallet" && (!isConnected || !address))
+          }
           className="btn-primary btn-sm"
         >
           {step?.optional ? "Skip" : "Next"}

@@ -22,7 +22,9 @@ export function AppProviders({ children }: { children: React.ReactNode }) {
             refetchOnWindowFocus: false,
           },
           mutations: {
-            retry: 1,
+            // Wallet and API mutations are not inherently idempotent. Retrying
+            // them globally can duplicate a transaction after a lost response.
+            retry: 0,
           },
         },
       }),

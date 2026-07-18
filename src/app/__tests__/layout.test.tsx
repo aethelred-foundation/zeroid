@@ -60,8 +60,11 @@ import RootLayout from "../layout";
 
 describe("RootLayout", () => {
   let consoleErrorSpy: jest.SpyInstance;
+  const QueryClientMock = jest.requireMock("@tanstack/react-query")
+    .QueryClient as jest.Mock;
 
   beforeEach(() => {
+    QueryClientMock.mockClear();
     const originalConsoleError = console.error;
     consoleErrorSpy = jest
       .spyOn(console, "error")
@@ -117,5 +120,21 @@ describe("RootLayout", () => {
       </RootLayout>,
     );
     expect(screen.getByTestId("toaster")).toBeInTheDocument();
+  });
+
+  it("disables automatic retries for non-idempotent mutations", () => {
+    render(
+      <RootLayout>
+        <div>Content</div>
+      </RootLayout>,
+    );
+
+    expect(QueryClientMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        defaultOptions: expect.objectContaining({
+          mutations: { retry: 0 },
+        }),
+      }),
+    );
   });
 });

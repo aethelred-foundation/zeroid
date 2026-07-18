@@ -42,16 +42,19 @@ jest.mock("lucide-react", () => {
   };
 });
 
-const mockConnect = jest.fn();
+const mockConnectAsync = jest.fn().mockResolvedValue(undefined);
 const mockConnectors = [
-  { id: "metamask", name: "MetaMask" },
-  { id: "walletconnect", name: "WalletConnect" },
+  { id: "metamask", uid: "metamask-1", name: "MetaMask" },
+  { id: "walletconnect", uid: "walletconnect-1", name: "WalletConnect" },
 ];
 
 const mockUseAccount = jest.fn(() => ({ address: undefined, isConnected: false }));
 jest.mock("wagmi", () => ({
   useAccount: () => mockUseAccount(),
-  useConnect: () => ({ connectors: mockConnectors, connect: mockConnect }),
+  useConnect: () => ({
+    connectors: mockConnectors,
+    connectAsync: mockConnectAsync,
+  }),
 }));
 
 const mockCreateIdentity = jest.fn().mockResolvedValue(undefined);
@@ -96,6 +99,7 @@ beforeEach(() => {
     scanStatus: "idle",
     error: null,
   });
+  mockConnectAsync.mockResolvedValue(undefined);
   mockCreateIdentity.mockResolvedValue(undefined);
   mockInitiateVerification.mockResolvedValue(undefined);
   mockStartScan.mockResolvedValue(undefined);
@@ -116,11 +120,13 @@ describe("IdentityCreation — default testnet flow", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("renders wallet connectors and connects on click", () => {
+  it("renders wallet connectors and awaits the async connector on click", async () => {
     render(<IdentityCreation />);
     expect(screen.getByText("MetaMask")).toBeInTheDocument();
-    fireEvent.click(screen.getByText("MetaMask"));
-    expect(mockConnect).toHaveBeenCalledWith({ connector: mockConnectors[0] });
+    await act(async () => fireEvent.click(screen.getByText("MetaMask")));
+    expect(mockConnectAsync).toHaveBeenCalledWith({
+      connector: mockConnectors[0],
+    });
   });
 
   it("shows the connected wallet address", () => {
@@ -132,24 +138,21 @@ describe("IdentityCreation — default testnet flow", () => {
   });
 
   it("surfaces a wallet connect error", async () => {
-    mockConnect.mockImplementation(() => {
-      throw new Error("User rejected");
-    });
+    mockConnectAsync.mockRejectedValueOnce(new Error("User rejected"));
     render(<IdentityCreation />);
     await act(async () => fireEvent.click(screen.getByText("MetaMask")));
     expect(screen.getByText("User rejected")).toBeInTheDocument();
   });
 
   it("falls back to a generic message on a non-Error connect failure", async () => {
-    mockConnect.mockImplementation(() => {
-      throw "boom";
-    });
+    mockConnectAsync.mockRejectedValueOnce("boom");
     render(<IdentityCreation />);
     await act(async () => fireEvent.click(screen.getByText("MetaMask")));
     expect(screen.getByText("Failed to connect wallet")).toBeInTheDocument();
   });
 
   it("Next advances to the Register step; Back returns", () => {
+    connected();
     render(<IdentityCreation />);
     fireEvent.click(screen.getByText("Next"));
     expect(screen.getByText("Register Your Identity")).toBeInTheDocument();
@@ -158,19 +161,26 @@ describe("IdentityCreation — default testnet flow", () => {
   });
 
   it("Back is disabled on the first step, Next disabled on the last", () => {
+    connected();
     render(<IdentityCreation />);
     expect(screen.getByText("Back").closest("button")).toBeDisabled();
     fireEvent.click(screen.getByText("Next")); // → register (last)
     expect(screen.getByText("Next").closest("button")).toBeDisabled();
   });
 
-  it("register button is disabled until a wallet is connected", () => {
-    render(<IdentityCreation />);
+  it("prevents advancing until the wallet reports a successful connection", () => {
+    const { rerender } = render(<IdentityCreation />);
+    expect(screen.getByText("Next").closest("button")).toBeDisabled();
     fireEvent.click(screen.getByText("Next"));
-    expect(screen.getByRole("button", { name: /register identity/i }).closest("button")).toBeDisabled();
     expect(
-      screen.getByText("Connect your wallet first (step 1)."),
-    ).toBeInTheDocument();
+      screen.queryByText("Register Your Identity"),
+    ).not.toBeInTheDocument();
+
+    connected();
+    rerender(<IdentityCreation />);
+    expect(screen.getByText("Next").closest("button")).not.toBeDisabled();
+    fireEvent.click(screen.getByText("Next"));
+    expect(screen.getByText("Register Your Identity")).toBeInTheDocument();
   });
 
   it("registers the identity and shows the success state", async () => {
@@ -257,6 +267,7 @@ describe("IdentityCreation — enterprise flow (flags on)", () => {
   });
 
   it("marks optional steps as skippable (Skip button + Optional label)", () => {
+    connected();
     render(<IdentityCreation />);
     fireEvent.click(screen.getByText("Next")); // → UAE Pass (optional)
     expect(screen.getByText("UAE Pass Identity Verification")).toBeInTheDocument();
@@ -265,6 +276,7 @@ describe("IdentityCreation — enterprise flow (flags on)", () => {
   });
 
   it("runs the UAE Pass verification action", async () => {
+    connected();
     render(<IdentityCreation />);
     fireEvent.click(screen.getByText("Next"));
     await act(async () =>
@@ -274,6 +286,7 @@ describe("IdentityCreation — enterprise flow (flags on)", () => {
   });
 
   it("runs the TEE biometric action", async () => {
+    connected();
     render(<IdentityCreation />);
     fireEvent.click(screen.getByText("Next")); // UAE Pass
     fireEvent.click(screen.getByText("Skip")); // → biometric
