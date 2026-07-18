@@ -15,12 +15,9 @@ import {
 } from '../../services/ai/compliance-advisor';
 import {
   riskScoringService,
+  riskAssessmentUnavailableError,
   RiskScoringError,
 } from '../../services/ai/risk-scoring';
-import {
-  fraudDetectionService,
-  FraudDetectionError,
-} from '../../services/ai/fraud-detection';
 
 // ---------------------------------------------------------------------------
 // Validation schemas
@@ -187,14 +184,12 @@ async function requireCredentialTarget(
   return { subjectId: credential.subjectId };
 }
 
-async function getOrganizationIdentityIds(
-  organizationId: string,
-): Promise<Set<string>> {
-  const memberships = await prisma.organizationMember.findMany({
-    where: { organizationId },
-    select: { identityId: true },
+function sendComplianceAlertsUnavailable(res: Response): void {
+  res.status(503).json({
+    error: 'COMPLIANCE_ALERT_TENANT_PROVENANCE_UNAVAILABLE',
+    message:
+      'Compliance alerts are unavailable until durable records include immutable organization ownership.',
   });
-  return new Set(memberships.map((membership) => membership.identityId));
 }
 
 // ---------------------------------------------------------------------------
@@ -257,7 +252,7 @@ router.post(
 
 // ---------------------------------------------------------------------------
 // GET /ai/compliance/risk/:identityId
-// Get comprehensive risk assessment for an identity
+// Reserved until authoritative, tenant-scoped risk evidence is durable
 // ---------------------------------------------------------------------------
 router.get(
   '/risk/:identityId',
@@ -269,7 +264,7 @@ router.get(
   async (req: AuthenticatedRequest, res: Response): Promise<void> => {
     try {
       const { identityId } = req.params;
-      const { jurisdiction, entityType } = req.query as {
+      const { entityType } = req.query as {
         jurisdiction?: string;
         entityType: 'identity' | 'credential' | 'transaction';
       };
@@ -291,18 +286,7 @@ router.get(
         return;
       }
 
-      const assessment = await riskScoringService.assessRisk(
-        identityId as string,
-        entityType,
-        jurisdiction,
-      );
-
-      res.json({
-        success: true,
-        data: {
-          riskAssessment: assessment,
-        },
-      });
+      throw riskAssessmentUnavailableError();
     } catch (error) {
       handleError(error, res);
     }
@@ -341,115 +325,27 @@ router.post(
 
 // ---------------------------------------------------------------------------
 // GET /ai/compliance/alerts
-// Get active compliance alerts
+// Reserved until durable alerts carry immutable organization ownership
 // ---------------------------------------------------------------------------
 router.get(
   '/alerts',
   validate({ query: AlertsQuerySchema }),
   requireEnterpriseContext(COMPLIANCE_READ_ROLES),
-  async (req: AuthenticatedRequest, res: Response): Promise<void> => {
-    try {
-      const { entityId, severity, limit } = req.query as unknown as {
-        entityId?: string;
-        severity?: 'low' | 'medium' | 'high' | 'critical';
-        limit: number;
-      };
-      const organizationId = getOrganizationId(req, res);
-      if (!organizationId) return;
-      if (entityId && !(await requireIdentityTarget(req, res, entityId))) return;
-      const organizationIdentityIds =
-        await getOrganizationIdentityIds(organizationId);
-
-      // Fetch both compliance alerts and fraud alerts
-      const [complianceAlerts, fraudAlerts] = await Promise.all([
-        complianceAdvisorService.getActiveAlerts(entityId),
-        fraudDetectionService.getActiveAlerts(
-          severity as 'low' | 'medium' | 'high' | 'critical' | undefined,
-        ),
-      ]);
-
-      // Merge and sort by creation time
-      const allAlerts = [
-        ...complianceAlerts.map((a) => ({
-          ...a,
-          source: 'compliance' as const,
-        })),
-        ...fraudAlerts.map((a) => ({
-          alertId: a.alertId,
-          entityId: a.identityId,
-          level: a.severity,
-          category: 'fraud_detection',
-          title: a.title,
-          description: a.description,
-          regulation: 'AML/CFT',
-          actionRequired: a.status === 'active' ? 'Review and resolve' : 'Under investigation',
-          createdAt: a.createdAt,
-          source: 'fraud' as const,
-        })),
-      ].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-       .filter((alert) => organizationIdentityIds.has(alert.entityId))
-       .slice(0, limit);
-      const complianceAlertCount = allAlerts.filter(
-        (alert) => alert.source === 'compliance',
-      ).length;
-      const fraudAlertCount = allAlerts.filter(
-        (alert) => alert.source === 'fraud',
-      ).length;
-
-      res.json({
-        success: true,
-        data: {
-          alerts: allAlerts,
-          total: allAlerts.length,
-          complianceAlertCount,
-          fraudAlertCount,
-        },
-      });
-    } catch (error) {
-      handleError(error, res);
-    }
+  (_req: AuthenticatedRequest, res: Response): void => {
+    sendComplianceAlertsUnavailable(res);
   },
 );
 
 // ---------------------------------------------------------------------------
 // POST /ai/compliance/alerts/:alertId/acknowledge
-// Acknowledge a compliance alert without resolving it
+// Reserved until acknowledgement can enforce immutable tenant ownership
 // ---------------------------------------------------------------------------
 router.post(
   '/alerts/:alertId/acknowledge',
   validate({ params: AlertParamsSchema }),
   requireEnterpriseContext(COMPLIANCE_WRITE_ROLES),
-  async (req: AuthenticatedRequest, res: Response): Promise<void> => {
-    try {
-      if (!req.identity?.id) {
-        res.status(401).json({
-          error: 'UNAUTHENTICATED',
-          message: 'Authentication required',
-        });
-        return;
-      }
-
-      const { alertId } = req.params as { alertId: string };
-      const targetAlert = await complianceAdvisorService.getAlert(alertId);
-      if (
-        !targetAlert ||
-        !(await requireIdentityTarget(req, res, targetAlert.entityId))
-      ) {
-        return;
-      }
-
-      const alert = await complianceAdvisorService.acknowledgeAlert(
-        alertId,
-        req.identity.id,
-      );
-
-      res.json({
-        success: true,
-        data: alert,
-      });
-    } catch (error) {
-      handleError(error, res);
-    }
+  (_req: AuthenticatedRequest, res: Response): void => {
+    sendComplianceAlertsUnavailable(res);
   },
 );
 
@@ -534,8 +430,7 @@ router.get(
 function handleError(error: unknown, res: Response): void {
   if (
     error instanceof ComplianceAdvisorError ||
-    error instanceof RiskScoringError ||
-    error instanceof FraudDetectionError
+    error instanceof RiskScoringError
   ) {
     res.status(error.statusCode).json({
       error: error.code,

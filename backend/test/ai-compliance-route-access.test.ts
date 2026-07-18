@@ -10,10 +10,8 @@ const mockGetActiveAlerts = jest.fn();
 const mockGetAlert = jest.fn();
 const mockAssessRisk = jest.fn();
 const mockAssessRegulatoryChangeImpact = jest.fn();
-const mockFraudGetActiveAlerts = jest.fn();
 const mockOrganizationMemberFindUnique = jest.fn();
 const mockOrganizationMemberFindFirst = jest.fn();
-const mockOrganizationMemberFindMany = jest.fn();
 const mockCredentialFindUnique = jest.fn();
 
 class MockEnterpriseOrganizationError extends Error {
@@ -24,6 +22,17 @@ class MockEnterpriseOrganizationError extends Error {
   ) {
     super(message);
     this.name = 'EnterpriseOrganizationError';
+  }
+}
+
+class MockRiskScoringError extends Error {
+  constructor(
+    message: string,
+    public code: string,
+    public statusCode: number,
+  ) {
+    super(message);
+    this.name = 'RiskScoringError';
   }
 }
 
@@ -38,7 +47,6 @@ jest.mock('../src/runtime', () => ({
     organizationMember: {
       findUnique: mockOrganizationMemberFindUnique,
       findFirst: mockOrganizationMemberFindFirst,
-      findMany: mockOrganizationMemberFindMany,
     },
     credential: {
       findUnique: mockCredentialFindUnique,
@@ -93,17 +101,16 @@ jest.mock('../src/services/ai/compliance-advisor', () => ({
 }));
 
 jest.mock('../src/services/ai/risk-scoring', () => ({
-  RiskScoringError: class RiskScoringError extends Error {},
+  RiskScoringError: MockRiskScoringError,
+  riskAssessmentUnavailableError: () =>
+    new MockRiskScoringError(
+      'Risk assessment is unavailable until tenant-scoped durable credential verification and audit evidence is implemented',
+      'RISK_ASSESSMENT_EVIDENCE_UNAVAILABLE',
+      503,
+    ),
   riskScoringService: {
     assessRisk: mockAssessRisk,
     getAvailableJurisdictions: jest.fn(() => []),
-  },
-}));
-
-jest.mock('../src/services/ai/fraud-detection', () => ({
-  FraudDetectionError: class FraudDetectionError extends Error {},
-  fraudDetectionService: {
-    getActiveAlerts: mockFraudGetActiveAlerts,
   },
 }));
 
@@ -138,9 +145,6 @@ describe('AI compliance route enterprise access control', () => {
     mockOrganizationMemberFindFirst.mockResolvedValue({
       identityId: screenBody.identityId,
     });
-    mockOrganizationMemberFindMany.mockResolvedValue([
-      { identityId: screenBody.identityId },
-    ]);
     mockCredentialFindUnique.mockResolvedValue({
       issuerId: '550e8400-e29b-41d4-a716-446655440010',
       subjectId: screenBody.identityId,
@@ -153,7 +157,6 @@ describe('AI compliance route enterprise access control', () => {
       status: 'compliant',
     });
     mockGetActiveAlerts.mockResolvedValue([]);
-    mockFraudGetActiveAlerts.mockResolvedValue([]);
     mockGetAlert.mockResolvedValue({
       alertId: 'alert-123',
       entityId: screenBody.identityId,
@@ -257,11 +260,11 @@ describe('AI compliance route enterprise access control', () => {
     expect(mockGenerateReport).not.toHaveBeenCalled();
   });
 
-  it('authorizes credential risk by issuer or subject organization membership', async () => {
+  it('checks credential tenancy before failing closed on unavailable evidence', async () => {
     const response = await request(createApp())
       .get(`/ai/compliance/risk/${credentialId}`)
       .query({ entityType: 'credential', jurisdiction: 'US' })
-      .expect(200);
+      .expect(503);
 
     expect(mockCredentialFindUnique).toHaveBeenCalledWith({
       where: { id: credentialId },
@@ -276,128 +279,75 @@ describe('AI compliance route enterprise access control', () => {
       },
       select: { identityId: true },
     });
-    expect(mockAssessRisk).toHaveBeenCalledWith(
-      credentialId,
-      'credential',
-      'US',
-    );
+    expect(mockAssessRisk).not.toHaveBeenCalled();
     expect(mockComputeComplianceScore).not.toHaveBeenCalled();
-    expect(response.body.data).toEqual({
-      riskAssessment: { assessmentId: 'risk-1' },
+    expect(response.body).toEqual({
+      error: 'RISK_ASSESSMENT_EVIDENCE_UNAVAILABLE',
+      message:
+        'Risk assessment is unavailable until tenant-scoped durable credential verification and audit evidence is implemented',
     });
   });
 
-  it('filters global alert stores down to organization members', async () => {
-    mockGetActiveAlerts.mockResolvedValue([
-      {
-        alertId: 'alert-owned',
-        entityId: screenBody.identityId,
-        level: 'warning',
-        category: 'sanctions',
-        title: 'Owned alert',
-        description: 'Review',
-        regulation: 'FATF',
-        actionRequired: 'Review',
-        createdAt: new Date('2026-05-03T00:00:00.000Z'),
-      },
-      {
-        alertId: 'alert-foreign',
-        entityId: outsideIdentityId,
-        level: 'critical',
-        category: 'sanctions',
-        title: 'Foreign alert',
-        description: 'Review',
-        regulation: 'FATF',
-        actionRequired: 'Review',
-        createdAt: new Date('2026-05-04T00:00:00.000Z'),
-      },
-    ]);
-    mockFraudGetActiveAlerts.mockResolvedValue([
-      {
-        alertId: 'fraud-owned',
-        identityId: screenBody.identityId,
-        severity: 'high',
-        status: 'active',
-        title: 'Owned fraud alert',
-        description: 'Review',
-        createdAt: new Date('2026-05-05T00:00:00.000Z'),
-      },
-      {
-        alertId: 'fraud-foreign',
-        identityId: outsideIdentityId,
-        severity: 'high',
-        status: 'active',
-        title: 'Foreign fraud alert',
-        description: 'Review',
-        createdAt: new Date('2026-05-06T00:00:00.000Z'),
-      },
-    ]);
+  it('does not reveal the disabled risk service for a foreign credential', async () => {
+    mockOrganizationMemberFindFirst.mockResolvedValueOnce(null);
 
     const response = await request(createApp())
-      .get('/ai/compliance/alerts')
-      .expect(200);
+      .get(`/ai/compliance/risk/${credentialId}`)
+      .query({ entityType: 'credential', jurisdiction: 'US' })
+      .expect(404);
 
-    expect(response.body.data.alerts.map((alert: any) => alert.alertId)).toEqual([
-      'fraud-owned',
-      'alert-owned',
-    ]);
-    expect(response.body.data).toMatchObject({
-      total: 2,
-      complianceAlertCount: 1,
-      fraudAlertCount: 1,
+    expect(response.body).toEqual({
+      error: 'COMPLIANCE_TARGET_NOT_FOUND',
+      message: 'Compliance target not found',
     });
+    expect(mockAssessRisk).not.toHaveBeenCalled();
   });
 
-  it('acknowledges an alert for a resolved write role', async () => {
-    mockAcknowledgeAlert.mockResolvedValue({
-      alertId: 'alert-123',
-      entityId: '550e8400-e29b-41d4-a716-446655440000',
-      level: 'warning',
-      category: 'sanctions',
-      title: 'Review required',
-      description: 'Potential match',
-      regulation: 'FATF',
-      actionRequired: 'Review',
-      createdAt: new Date('2026-05-03T00:00:00.000Z'),
-      acknowledgedAt: new Date('2026-05-03T00:05:00.000Z'),
-    });
+  it('fails closed before reading alerts without tenant provenance', async () => {
+    const response = await request(createApp())
+      .get('/ai/compliance/alerts')
+      .query({ severity: 'high' })
+      .expect(503);
 
+    expect(response.body).toEqual({
+      error: 'COMPLIANCE_ALERT_TENANT_PROVENANCE_UNAVAILABLE',
+      message:
+        'Compliance alerts are unavailable until durable records include immutable organization ownership.',
+    });
+    expect(mockGetActiveAlerts).not.toHaveBeenCalled();
+    expect(mockGetAlert).not.toHaveBeenCalled();
+  });
+
+  it('fails closed before acknowledging alerts without tenant provenance', async () => {
     const response = await request(createApp())
       .post('/ai/compliance/alerts/alert-123/acknowledge')
       .send({})
-      .expect(200);
+      .expect(503);
 
-    expect(response.body.success).toBe(true);
-    expect(mockResolveContext).toHaveBeenCalledWith(
-      '550e8400-e29b-41d4-a716-446655440001',
-      undefined,
-      ['operator', 'admin', 'compliance_officer'],
-    );
-    expect(mockAcknowledgeAlert).toHaveBeenCalledWith(
-      'alert-123',
-      '550e8400-e29b-41d4-a716-446655440001',
-    );
+    expect(response.body).toEqual({
+      error: 'COMPLIANCE_ALERT_TENANT_PROVENANCE_UNAVAILABLE',
+      message:
+        'Compliance alerts are unavailable until durable records include immutable organization ownership.',
+    });
+    expect(mockGetAlert).not.toHaveBeenCalled();
+    expect(mockAcknowledgeAlert).not.toHaveBeenCalled();
   });
 
-  it('does not acknowledge alerts for another organization', async () => {
-    mockGetAlert.mockResolvedValueOnce({
-      alertId: 'alert-foreign',
-      entityId: outsideIdentityId,
-      level: 'critical',
-      category: 'sanctions',
-      title: 'Foreign alert',
-      description: 'Review',
-      regulation: 'FATF',
-      actionRequired: 'Review',
-      createdAt: new Date('2026-05-03T00:00:00.000Z'),
-    });
-    mockOrganizationMemberFindUnique.mockResolvedValueOnce(null);
+  it('still enforces alert write roles before reporting feature availability', async () => {
+    mockResolveContext.mockRejectedValueOnce(
+      new MockEnterpriseOrganizationError(
+        'Insufficient enterprise role',
+        'ENTERPRISE_ROLE_FORBIDDEN',
+        403,
+      ),
+    );
 
     await request(createApp())
-      .post('/ai/compliance/alerts/alert-foreign/acknowledge')
+      .post('/ai/compliance/alerts/alert-123/acknowledge')
       .send({})
-      .expect(404);
+      .expect(403);
 
+    expect(mockGetAlert).not.toHaveBeenCalled();
     expect(mockAcknowledgeAlert).not.toHaveBeenCalled();
   });
 
