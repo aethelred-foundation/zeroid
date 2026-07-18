@@ -54,8 +54,9 @@ export default function DashboardPage() {
 
   const stats = {
     totalCredentials: credentials.length,
-    activeCredentials: credentials.filter((c: any) => c.status === "active")
-      .length,
+    activeCredentials: credentials.filter(
+      (credential) => credential.status === "active",
+    ).length,
     verificationsToday:
       verificationHistory?.filter(
         (v: any) =>
@@ -75,26 +76,28 @@ export default function DashboardPage() {
     status: "verified" | "pending" | "revoked" | "expired" | "active";
     icon: typeof ShieldCheck;
   }> = [
-    ...credentials.map((c: any, i: number) => ({
-      id: `cred-${c.id ?? c.hash ?? i}`,
-      title: c.name ?? c.schemaName ?? "Credential",
-      description: c.issuer
-        ? `Issued by ${c.issuer}`
-        : "Verifiable credential",
-      timestamp: toDate(c.issuedAt),
-      status: normalizeActivityStatus(c.status),
+    ...credentials.map((credential, i: number) => ({
+      id: `cred-${credential.id ?? i}`,
+      title: credential.typeLabel,
+      description: `Issuer record: ${credential.issuerId}`,
+      timestamp: toDate(credential.issuedAt),
+      status: normalizeActivityStatus(credential.status),
       icon: ShieldCheck,
     })),
     ...(verificationHistory ?? []).map((v: any, i: number) => ({
       id: `verif-${v.id ?? i}`,
       title: v.proofType ? `${v.proofType} verification` : "Verification",
-      description: v.verifier ? `Verifier: ${v.verifier}` : "Proof verification",
+      description: v.verifier
+        ? `Verifier: ${v.verifier}`
+        : "Proof verification",
       timestamp: toDate(v.timestamp),
       status: normalizeActivityStatus(v.status),
       icon: Fingerprint,
     })),
   ]
-    .sort((a, b) => (b.timestamp?.getTime() ?? 0) - (a.timestamp?.getTime() ?? 0))
+    .sort(
+      (a, b) => (b.timestamp?.getTime() ?? 0) - (a.timestamp?.getTime() ?? 0),
+    )
     .slice(0, 6);
 
   // ================================================================
@@ -471,7 +474,6 @@ export default function DashboardPage() {
               </div>
             </div>
           </motion.div>
-
         </div>
       </div>
     </AppLayout>

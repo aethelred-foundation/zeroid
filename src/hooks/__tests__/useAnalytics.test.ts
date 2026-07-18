@@ -10,6 +10,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import React from "react";
 
 const mockAddress = "0x1234567890abcdef1234567890abcdef12345678";
+const credentialId = "d74ed26c-47ac-4b62-94a8-38704c53b876";
 
 jest.mock("wagmi", () => ({
   useAccount: jest.fn(() => ({ address: mockAddress, isConnected: true })),
@@ -55,17 +56,16 @@ function createWrapper() {
 
 const credentials = [
   {
-    id: "cred-1",
-    hash: "cred-1",
-    schemaHash: "schema-1",
-    schemaName: "KYC Credential",
-    schemaType: "kyc",
-    issuerDid: { uri: "did:aethelred:issuer:cbuae" },
-    subjectDid: { uri: "did:aethelred:subject:1" },
-    issuedAt: 1_780_000_000,
-    expiresAt: 1_820_000_000,
-    status: "verified",
-    merkleRoot: "0xabc",
+    id: credentialId,
+    credentialType: "KYC_LEVEL_2",
+    issuerId: "issuer-record-17",
+    subjectId: "subject-record-8",
+    claimsHash:
+      "3f3bd8d3d60d1412f98f8f366f0bbbea21c10ac40db80a9e28fa8911223e7f4b",
+    proof: { type: "DataIntegrityProof" },
+    issuedAt: "2026-06-01T00:00:00.000Z",
+    expiresAt: "2027-06-01T00:00:00.000Z",
+    status: "ACTIVE",
   },
 ];
 
@@ -75,7 +75,7 @@ const history = [
     verificationType: "ZK_PROOF",
     result: "VERIFIED",
     requestedAt: "2026-06-20T10:00:00.000Z",
-    credentialId: "cred-1",
+    credentialId,
     verifierId: "did:aethelred:verifier:edge",
   },
   {
@@ -83,7 +83,7 @@ const history = [
     verificationType: "CREDENTIAL_CHECK",
     result: "VERIFIED",
     requestedAt: "2026-06-21T10:00:00.000Z",
-    credentialId: "cred-1",
+    credentialId,
     verifierId: "did:aethelred:verifier:presight",
   },
 ];
@@ -94,7 +94,7 @@ const requestGroups = {
       id: "req-1",
       verifierDid: "did:aethelred:verifier:edge",
       verifierName: "EDGE",
-      credentialHash: "cred-1",
+      credentialId,
       requestedAttributes: ["ageOver18", "nationality"],
       circuitId: "age-proof",
       purpose: "facility_access",
@@ -107,8 +107,13 @@ const requestGroups = {
       id: "req-2",
       verifierDid: "did:aethelred:verifier:presight",
       verifierName: "Presight",
-      credentialHash: "cred-1",
-      requestedAttributes: ["fullName", "dateOfBirth", "passport", "nationality"],
+      credentialId,
+      requestedAttributes: [
+        "fullName",
+        "dateOfBirth",
+        "passport",
+        "nationality",
+      ],
       purpose: "model_governance",
       userConsent: false,
       createdAt: 1_782_086_400,
@@ -190,8 +195,37 @@ describe("useCredentialUsageAnalytics", () => {
       zkProofPresentations: 1,
     });
     expect(result.current.data?.byCredentialType[0]).toMatchObject({
-      schemaName: "KYC Credential",
+      credentialTypeLabel: "KYC Level 2",
+      credentialId,
       presentationCount: 2,
+    });
+  });
+
+  it("fails closed when the credential API returns the legacy UI shape", async () => {
+    mockApiClient.get.mockImplementation((path: string) => {
+      if (path === "/api/v1/credentials?role=subject") {
+        return Promise.resolve([
+          {
+            id: credentialId,
+            hash: "0xlegacy",
+            schemaName: "Legacy credential",
+            status: "verified",
+          },
+        ]);
+      }
+      if (path === "/api/v1/verification/history?limit=100") {
+        return Promise.resolve(history);
+      }
+      return Promise.resolve([]);
+    });
+
+    const { result } = renderHook(() => useCredentialUsageAnalytics("30d"), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(result.current.error).toMatchObject({
+      name: "CredentialResponseContractError",
     });
   });
 
@@ -241,9 +275,13 @@ describe("useNetworkBenchmarks", () => {
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(result.current.data?.sampleSize).toBeGreaterThan(0);
-    expect(result.current.data?.benchmarks.map((metric) => metric.metric)).toEqual(
-      ["privacyPreservingRatio", "verifierDiversity", "attributeExposure"],
-    );
+    expect(
+      result.current.data?.benchmarks.map((metric) => metric.metric),
+    ).toEqual([
+      "privacyPreservingRatio",
+      "verifierDiversity",
+      "attributeExposure",
+    ]);
   });
 });
 
@@ -255,7 +293,9 @@ describe("usePrivacyRecommendations", () => {
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(result.current.data?.length).toBeGreaterThan(0);
-    expect(result.current.data?.[0].implementationSteps.length).toBeGreaterThan(0);
+    expect(result.current.data?.[0].implementationSteps.length).toBeGreaterThan(
+      0,
+    );
   });
 });
 

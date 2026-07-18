@@ -280,7 +280,9 @@ function periodDays(period: AnalyticsPeriod) {
   return 30;
 }
 
-function healthStatus(score: number): "excellent" | "good" | "moderate" | "poor" {
+function healthStatus(
+  score: number,
+): "excellent" | "good" | "moderate" | "poor" {
   if (score >= 90) return "excellent";
   if (score >= 80) return "good";
   if (score >= 65) return "moderate";
@@ -335,7 +337,7 @@ export default function AnalyticsPage() {
   const liveVerificationsByType =
     usage?.byCredentialType && usage.byCredentialType.length > 0
       ? usage.byCredentialType.slice(0, 6).map((credential) => ({
-          type: credential.schemaName,
+          type: credential.credentialTypeLabel,
           count: credential.presentationCount,
           percentage: Math.round(
             (credential.presentationCount / usageTotal) * 100,
@@ -352,9 +354,7 @@ export default function AnalyticsPage() {
             1,
             Math.round(verifier.requestCount / periodDays(timeRange)),
           )}/day`,
-          topCredential:
-            verifier.attributesRequested[0] ??
-            "ZK proof",
+          topCredential: verifier.attributesRequested[0] ?? "ZK proof",
         }))
       : verifierAnalytics;
   const livePrivacyBreakdown = {
@@ -366,8 +366,7 @@ export default function AnalyticsPage() {
       privacyBreakdown.selectiveDisclosure,
     fullDisclosure:
       usage?.fullDisclosurePresentations ?? privacyBreakdown.fullDisclosure,
-    privacyScore:
-      privacyScore?.overallScore ?? privacyBreakdown.privacyScore,
+    privacyScore: privacyScore?.overallScore ?? privacyBreakdown.privacyScore,
     dataPointsProtected:
       usage?.topAttributes.reduce(
         (total, attribute) => total + attribute.proofOnlyCount,
@@ -405,12 +404,19 @@ export default function AnalyticsPage() {
             metric: "Credential Freshness",
             score: Math.max(
               0,
-              100 - usage.byCredentialType.filter((c) => c.presentationCount === 0).length * 8,
+              100 -
+                usage.byCredentialType.filter((c) => c.presentationCount === 0)
+                  .length *
+                  8,
             ),
             status: healthStatus(
               Math.max(
                 0,
-                100 - usage.byCredentialType.filter((c) => c.presentationCount === 0).length * 8,
+                100 -
+                  usage.byCredentialType.filter(
+                    (c) => c.presentationCount === 0,
+                  ).length *
+                    8,
               ),
             ),
             detail: `${usage.byCredentialType.length} credential type(s) represented in recent activity`,
@@ -442,13 +448,14 @@ export default function AnalyticsPage() {
         ]
       : identityHealthMetrics;
   const liveNetworkStats = {
-    totalCredentials: usage?.byCredentialType.length ?? networkStats.totalCredentials,
+    totalCredentials:
+      usage?.byCredentialType.length ?? networkStats.totalCredentials,
     totalVerifications:
-      benchmarks?.sampleSize ?? usage?.totalPresentations ?? networkStats.totalVerifications,
-    uniqueUsers:
-      verifierData?.totalVerifiers ?? networkStats.uniqueUsers,
-    avgPrivacyScore:
-      privacyScore?.overallScore ?? networkStats.avgPrivacyScore,
+      benchmarks?.sampleSize ??
+      usage?.totalPresentations ??
+      networkStats.totalVerifications,
+    uniqueUsers: verifierData?.totalVerifiers ?? networkStats.uniqueUsers,
+    avgPrivacyScore: privacyScore?.overallScore ?? networkStats.avgPrivacyScore,
     zkProofPercentage:
       usage?.privacyPreservingRatio ?? networkStats.zkProofPercentage,
   };
@@ -863,7 +870,10 @@ export default function AnalyticsPage() {
                         <div className="text-2xl font-bold text-emerald-400">
                           {(
                             (livePrivacyBreakdown.zkProved /
-                              Math.max(1, livePrivacyBreakdown.totalVerifications)) *
+                              Math.max(
+                                1,
+                                livePrivacyBreakdown.totalVerifications,
+                              )) *
                             100
                           ).toFixed(1)}
                           %
@@ -877,7 +887,10 @@ export default function AnalyticsPage() {
                         <div className="text-2xl font-bold text-amber-400">
                           {(
                             (livePrivacyBreakdown.selectiveDisclosure /
-                              Math.max(1, livePrivacyBreakdown.totalVerifications)) *
+                              Math.max(
+                                1,
+                                livePrivacyBreakdown.totalVerifications,
+                              )) *
                             100
                           ).toFixed(1)}
                           %
@@ -891,7 +904,10 @@ export default function AnalyticsPage() {
                         <div className="text-2xl font-bold text-red-400">
                           {(
                             (livePrivacyBreakdown.fullDisclosure /
-                              Math.max(1, livePrivacyBreakdown.totalVerifications)) *
+                              Math.max(
+                                1,
+                                livePrivacyBreakdown.totalVerifications,
+                              )) *
                             100
                           ).toFixed(1)}
                           %
@@ -967,7 +983,7 @@ export default function AnalyticsPage() {
                   Privacy Recommendations
                 </h3>
                 <div className="space-y-2">
-                      {liveRecommendationsForUi.map((rec) => (
+                  {liveRecommendationsForUi.map((rec) => (
                     <div
                       key={rec.id}
                       className="flex items-start gap-3 p-3 rounded-xl hover:bg-zero-800/30 transition-colors"
@@ -1098,14 +1114,12 @@ export default function AnalyticsPage() {
                 {[
                   {
                     label: "Total Credentials",
-                    value:
-                      liveNetworkStats.totalCredentials.toLocaleString(),
+                    value: liveNetworkStats.totalCredentials.toLocaleString(),
                     icon: Fingerprint,
                   },
                   {
                     label: "Total Verifications",
-                    value:
-                      liveNetworkStats.totalVerifications.toLocaleString(),
+                    value: liveNetworkStats.totalVerifications.toLocaleString(),
                     icon: CheckCircle2,
                   },
                   {

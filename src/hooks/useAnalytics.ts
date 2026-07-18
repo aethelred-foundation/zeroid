@@ -10,7 +10,11 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { useAccount } from "wagmi";
 import { toast } from "sonner";
 import { apiClient } from "@/lib/api/client";
-import type { Credential, ISODateString, VerificationRequest } from "@/types";
+import {
+  normalizeCredentialSummaries,
+  type CredentialSummary,
+} from "@/lib/credentials/summary";
+import type { ISODateString, VerificationRequest } from "@/types";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -57,8 +61,8 @@ export interface CredentialUsageAnalytics {
 }
 
 export interface CredentialTypeUsage {
-  schemaName: string;
-  schemaId: string;
+  credentialTypeLabel: string;
+  credentialId: string;
   presentationCount: number;
   zkProofCount: number;
   selectiveDisclosureCount: number;
@@ -123,7 +127,7 @@ export interface ExposureEvent {
   timestamp: ISODateString;
   verifierDid: string;
   verifierName: string;
-  credentialSchemaName: string;
+  credentialTypeLabel: string;
   attributesDisclosed: string[];
   disclosureMethod: "full" | "selective" | "zk_proof";
   purpose: string;
@@ -214,7 +218,7 @@ type AnalyticsVerificationRequest = Partial<VerificationRequest> & {
 };
 
 type AnalyticsSnapshot = {
-  credentials: Credential[];
+  credentials: CredentialSummary[];
   history: BackendVerificationHistoryEntry[];
   requests: AnalyticsVerificationRequest[];
   period: AnalyticsPeriod;
@@ -266,21 +270,20 @@ function verifierDid(value: AnalyticsVerificationRequest): string {
   return "unknown-verifier";
 }
 
-function credentialLabel(credential?: Credential, fallback = "credential"): string {
-  return (
-    credential?.schemaName ??
-    credential?.schemaType ??
-    credential?.name ??
-    fallback
-  );
+function credentialLabel(
+  credential?: CredentialSummary,
+  fallback = "credential",
+): string {
+  return credential?.typeLabel ?? fallback;
 }
 
-function credentialKey(credential?: Credential): string {
-  return credential?.hash ?? credential?.id ?? credential?.schemaHash ?? "unknown";
+function credentialKey(credential?: CredentialSummary): string {
+  return credential?.id ?? "unknown";
 }
 
 function requestAttributes(request: AnalyticsVerificationRequest): string[] {
-  const values = request.requestedAttributes ?? request.requiredAttributes ?? [];
+  const values =
+    request.requestedAttributes ?? request.requiredAttributes ?? [];
   return values
     .map((attribute) =>
       typeof attribute === "string" ? attribute : attribute.key,
@@ -295,13 +298,12 @@ function requestTimestamp(request: AnalyticsVerificationRequest): unknown {
 function isZkRequest(
   item: AnalyticsVerificationRequest | BackendVerificationHistoryEntry,
 ): boolean {
-  const type =
-    "verificationType" in item ? item.verificationType : undefined;
+  const type = "verificationType" in item ? item.verificationType : undefined;
   const circuitId = "circuitId" in item ? item.circuitId : undefined;
   return Boolean(
     type?.toUpperCase().includes("ZK") ||
-      type?.toUpperCase().includes("ELIGIBILITY") ||
-      circuitId,
+    type?.toUpperCase().includes("ELIGIBILITY") ||
+    circuitId,
   );
 }
 
@@ -346,8 +348,8 @@ async function fetchVerificationRequests(): Promise<
 async function fetchAnalyticsSnapshot(
   period: AnalyticsPeriod = "30d",
 ): Promise<AnalyticsSnapshot> {
-  const [credentials, history, requests] = await Promise.all([
-    apiClient.get<Credential[]>("/api/v1/credentials?role=subject"),
+  const [credentialResponse, history, requests] = await Promise.all([
+    apiClient.get<unknown>("/api/v1/credentials?role=subject"),
     apiClient.get<BackendVerificationHistoryEntry[]>(
       "/api/v1/verification/history?limit=100",
     ),
@@ -355,21 +357,23 @@ async function fetchAnalyticsSnapshot(
   ]);
 
   return {
-    credentials,
+    credentials: normalizeCredentialSummaries(credentialResponse),
     history: history.filter((entry) =>
       inPeriod(entry.requestedAt ?? entry.completedAt, period),
     ),
-    requests: requests.filter((request) => inPeriod(requestTimestamp(request), period)),
+    requests: requests.filter((request) =>
+      inPeriod(requestTimestamp(request), period),
+    ),
     period,
   };
 }
 
-function credentialMap(snapshot: AnalyticsSnapshot): Map<string, Credential> {
-  const map = new Map<string, Credential>();
+function credentialMap(
+  snapshot: AnalyticsSnapshot,
+): Map<string, CredentialSummary> {
+  const map = new Map<string, CredentialSummary>();
   for (const credential of snapshot.credentials) {
-    map.set(credentialKey(credential), credential);
-    if (credential.id) map.set(credential.id, credential);
-    if (credential.hash) map.set(credential.hash, credential);
+    map.set(credential.id, credential);
   }
   return map;
 }
@@ -393,8 +397,11 @@ function buildUsage(snapshot: AnalyticsSnapshot): CredentialUsageAnalytics {
     const current =
       byCredential.get(key) ??
       ({
-        schemaName: credentialLabel(credential, entry.credentialId ?? "credential"),
-        schemaId: key,
+        credentialTypeLabel: credentialLabel(
+          credential,
+          entry.credentialId ?? "credential",
+        ),
+        credentialId: key,
         presentationCount: 0,
         zkProofCount: 0,
         selectiveDisclosureCount: 0,
@@ -407,13 +414,15 @@ function buildUsage(snapshot: AnalyticsSnapshot): CredentialUsageAnalytics {
   }
 
   for (const request of snapshot.requests) {
-    const key = request.credentialHash ?? request.credentialId ?? "unknown";
-    const credential = credentials.get(key);
+    const referencedId =
+      request.credentialId ?? request.credentialHash ?? "unknown";
+    const credential = credentials.get(referencedId);
+    const key = credential?.id ?? referencedId;
     const current =
       byCredential.get(key) ??
       ({
-        schemaName: credentialLabel(credential, key),
-        schemaId: key,
+        credentialTypeLabel: credentialLabel(credential, key),
+        credentialId: key,
         presentationCount: 0,
         zkProofCount: 0,
         selectiveDisclosureCount: 0,
@@ -493,9 +502,7 @@ function buildUsage(snapshot: AnalyticsSnapshot): CredentialUsageAnalytics {
     byCredentialType: [...byCredential.values()].sort(
       (a, b) => b.presentationCount - a.presentationCount,
     ),
-    byDay: [...byDay.values()].sort((a, b) =>
-      a.date.localeCompare(b.date),
-    ),
+    byDay: [...byDay.values()].sort((a, b) => a.date.localeCompare(b.date)),
     topAttributes: [...attributeMap.values()].sort(
       (a, b) => b.totalRequests - a.totalRequests,
     ),
@@ -513,7 +520,10 @@ function buildPrivacyScore(snapshot: AnalyticsSnapshot): PrivacyScore {
   ).length;
   const breakdown: PrivacyBreakdown = {
     selectiveDisclosureUsage: usage.privacyPreservingRatio,
-    zkProofAdoption: percentage(usage.zkProofPresentations, Math.max(1, requests)),
+    zkProofAdoption: percentage(
+      usage.zkProofPresentations,
+      Math.max(1, requests),
+    ),
     credentialMinimisation: Math.max(
       0,
       100 - Math.round(Math.max(0, average(attributeCounts) - 2) * 18),
@@ -540,7 +550,9 @@ function buildPrivacyScore(snapshot: AnalyticsSnapshot): PrivacyScore {
   }));
   const firstScore = history[0]?.score ?? overallScore;
   const changePercent =
-    firstScore > 0 ? Math.round(((overallScore - firstScore) / firstScore) * 100) : 0;
+    firstScore > 0
+      ? Math.round(((overallScore - firstScore) / firstScore) * 100)
+      : 0;
 
   return {
     overallScore,
@@ -565,7 +577,9 @@ function buildPrivacyScore(snapshot: AnalyticsSnapshot): PrivacyScore {
   };
 }
 
-function buildVerifierAnalytics(snapshot: AnalyticsSnapshot): VerifierAnalytics {
+function buildVerifierAnalytics(
+  snapshot: AnalyticsSnapshot,
+): VerifierAnalytics {
   const profiles = new Map<string, VerifierProfile>();
   const purposeCounts = new Map<string, number>();
 
@@ -589,7 +603,8 @@ function buildVerifierAnalytics(snapshot: AnalyticsSnapshot): VerifierAnalytics 
     current.attributesRequested = [
       ...new Set([...current.attributesRequested, ...attributes]),
     ];
-    current.zkProofAcceptance = current.zkProofAcceptance || isZkRequest(request);
+    current.zkProofAcceptance =
+      current.zkProofAcceptance || isZkRequest(request);
     current.trustScore = Math.min(
       100,
       55 +
@@ -631,7 +646,10 @@ function buildVerifierAnalytics(snapshot: AnalyticsSnapshot): VerifierAnalytics 
   };
 }
 
-function buildExposureTimeline(snapshot: AnalyticsSnapshot): DataExposureTimeline {
+function buildExposureTimeline(
+  snapshot: AnalyticsSnapshot,
+): DataExposureTimeline {
+  const credentials = credentialMap(snapshot);
   const entries = snapshot.requests.map<ExposureEvent>((request) => {
     const attributes = requestAttributes(request);
     const method = disclosureMethod(request);
@@ -639,18 +657,27 @@ function buildExposureTimeline(snapshot: AnalyticsSnapshot): DataExposureTimelin
       0,
       Math.min(
         100,
-        attributes.length * 12 + (method === "full" ? 35 : 0) - (method === "zk_proof" ? 25 : 0),
+        attributes.length * 12 +
+          (method === "full" ? 35 : 0) -
+          (method === "zk_proof" ? 25 : 0),
       ),
     );
+    const referencedCredentialId =
+      request.credentialId ?? request.credentialHash;
+    const credential = referencedCredentialId
+      ? credentials.get(referencedCredentialId)
+      : undefined;
     return {
-      id: request.id ?? `${verifierDid(request)}-${isoDate(requestTimestamp(request))}`,
+      id:
+        request.id ??
+        `${verifierDid(request)}-${isoDate(requestTimestamp(request))}`,
       timestamp: isoDate(requestTimestamp(request)),
       verifierDid: verifierDid(request),
       verifierName: request.verifierName ?? verifierDid(request),
-      credentialSchemaName:
+      credentialTypeLabel:
+        credential?.typeLabel ??
         request.requiredCredentials?.[0] ??
-        request.credentialHash ??
-        request.credentialId ??
+        referencedCredentialId ??
         "credential",
       attributesDisclosed: method === "zk_proof" ? [] : attributes,
       disclosureMethod: method,
@@ -666,7 +693,9 @@ function buildExposureTimeline(snapshot: AnalyticsSnapshot): DataExposureTimelin
     entries.flatMap((entry) => entry.attributesDisclosed),
   );
   const uniqueVerifiers = new Set(entries.map((entry) => entry.verifierDid));
-  const highRiskExposures = entries.filter((entry) => entry.riskScore >= 70).length;
+  const highRiskExposures = entries.filter(
+    (entry) => entry.riskScore >= 70,
+  ).length;
 
   return {
     entries: entries.sort((a, b) => b.timestamp.localeCompare(a.timestamp)),
@@ -677,11 +706,7 @@ function buildExposureTimeline(snapshot: AnalyticsSnapshot): DataExposureTimelin
     uniqueAttributesExposed: uniqueAttributes.size,
     uniqueVerifiers: uniqueVerifiers.size,
     riskLevel:
-      highRiskExposures > 2
-        ? "high"
-        : highRiskExposures > 0
-          ? "medium"
-          : "low",
+      highRiskExposures > 2 ? "high" : highRiskExposures > 0 ? "medium" : "low",
     highRiskExposures,
   };
 }
@@ -824,13 +849,14 @@ function buildRecommendations(
   return recommendations.sort(
     (a, b) =>
       ({ critical: 0, high: 1, medium: 2, low: 3 })[a.priority] -
-      ({ critical: 0, high: 1, medium: 2, low: 3 })[b.priority],
+      { critical: 0, high: 1, medium: 2, low: 3 }[b.priority],
   );
 }
 
 function csvCell(value: unknown): string {
   if (value === undefined || value === null) return "";
-  const text = typeof value === "object" ? JSON.stringify(value) : String(value);
+  const text =
+    typeof value === "object" ? JSON.stringify(value) : String(value);
   return `"${text.replace(/"/g, '""')}"`;
 }
 
@@ -847,7 +873,10 @@ function analyticsReportCsv(report: Record<string, unknown>): string {
 }
 
 function escapePdfText(value: string): string {
-  return value.replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
+  return value
+    .replace(/\\/g, "\\\\")
+    .replace(/\(/g, "\\(")
+    .replace(/\)/g, "\\)");
 }
 
 function analyticsReportPdf(report: Record<string, unknown>): string {
@@ -861,7 +890,10 @@ function analyticsReportPdf(report: Record<string, unknown>): string {
     `Privacy preserving ratio: ${usage.privacyPreservingRatio}%`,
   ];
   const text = lines
-    .map((line, index) => `BT /F1 12 Tf 72 ${740 - index * 22} Td (${escapePdfText(line)}) Tj ET`)
+    .map(
+      (line, index) =>
+        `BT /F1 12 Tf 72 ${740 - index * 22} Td (${escapePdfText(line)}) Tj ET`,
+    )
     .join("\n");
   const stream = `${text}\n`;
   return `%PDF-1.4
@@ -938,10 +970,9 @@ function downloadReport(
   format: AnalyticsExport["format"],
   encrypted: boolean,
 ): { url: string; sizeBytes: number; checksum: string } {
-  const mimeType =
-    encrypted
-      ? "application/octet-stream"
-      : format === "json"
+  const mimeType = encrypted
+    ? "application/octet-stream"
+    : format === "json"
       ? "application/json"
       : format === "csv"
         ? "text/csv"

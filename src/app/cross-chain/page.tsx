@@ -18,50 +18,27 @@ import {
   useSupportedChains,
 } from "@/hooks/useCrossChain";
 import { useCredentials } from "@/hooks/useCredentials";
-import type { Credential } from "@/types";
+import type { CredentialSummary } from "@/lib/credentials/summary";
 
-function credentialId(credential: Credential): string {
-  const id =
-    credential.id ||
-    credential.hash ||
-    credential.contentHash ||
-    credential.schemaHash;
-  return typeof id === "string" && id.length > 0 ? id : "Unavailable";
+function credentialId(credential: CredentialSummary): string {
+  return credential.id;
 }
 
-function credentialLabel(credential: Credential): string {
-  return (
-    credential.schemaName ||
-    credential.name ||
-    credential.schemaType ||
-    "Unnamed credential"
-  );
+function credentialLabel(credential: CredentialSummary): string {
+  return credential.typeLabel;
 }
 
-function credentialIssuer(credential: Credential): string {
-  if (credential.issuer) return credential.issuer;
-  if (typeof credential.issuerDid === "string") return credential.issuerDid;
-  if (
-    credential.issuerDid &&
-    typeof credential.issuerDid === "object" &&
-    "uri" in credential.issuerDid &&
-    typeof credential.issuerDid.uri === "string"
-  ) {
-    return credential.issuerDid.uri;
-  }
-  return "Issuer unavailable";
+function credentialIssuer(credential: CredentialSummary): string {
+  return `Issuer record ${credential.issuerId}`;
 }
 
-function credentialStatus(credential: Credential): string {
-  const status = String(credential.status ?? "unknown").toLowerCase();
-  return status === "1" ? "active" : status;
+function credentialStatus(credential: CredentialSummary): string {
+  return credential.status;
 }
 
-function credentialExpiry(credential: Credential): string {
+function credentialExpiry(credential: CredentialSummary): string {
   if (!credential.expiresAt) return "No expiry supplied";
-  const raw = Number(credential.expiresAt);
-  const timestamp = raw < 10_000_000_000 ? raw * 1000 : raw;
-  const date = new Date(timestamp);
+  const date = new Date(credential.expiresAt);
   return Number.isFinite(date.getTime())
     ? `Expires ${date.toLocaleDateString()}`
     : "Expiry unavailable";

@@ -24,13 +24,15 @@ import { useAccount, useSignMessage } from "wagmi";
 import type {
   IdentityState,
   IdentityProfile,
-  Credential,
-  CredentialStatus,
   DID,
   Bytes32,
   Address,
 } from "@/types";
 import { apiClient } from "@/lib/api/client";
+import type {
+  CredentialSummary,
+  CredentialSummaryStatus,
+} from "@/lib/credentials/summary";
 import {
   friendlyRegistrationError,
   friendlyWalletError,
@@ -61,9 +63,14 @@ export type IdentitySessionStatus =
   | "signing"
   | "authenticated";
 
+export type IdentityContextState = Omit<IdentityState, "credentials"> & {
+  /** Authenticated credential inventory returned by the backend. */
+  credentials: CredentialSummary[];
+};
+
 export interface IdentityContextValue {
   /** Current identity state */
-  identity: IdentityState;
+  identity: IdentityContextState;
 
   /** Register a new identity on-chain */
   registerIdentity: (recoveryHash: Bytes32) => Promise<void>;
@@ -83,11 +90,13 @@ export interface IdentityContextValue {
   /** Refresh the credential list from the backend */
   refreshCredentials: () => Promise<void>;
 
-  /** Get a specific credential by hash */
-  getCredential: (credentialHash: Bytes32) => Credential | undefined;
+  /** Get a specific credential by its backend UUID. */
+  getCredential: (credentialId: string) => CredentialSummary | undefined;
 
   /** Filter credentials by status */
-  getCredentialsByStatus: (status: CredentialStatus) => Credential[];
+  getCredentialsByStatus: (
+    status: CredentialSummaryStatus,
+  ) => CredentialSummary[];
 
   /** Clear identity state (e.g. on wallet disconnect) */
   clearIdentity: () => void;
@@ -100,7 +109,7 @@ export interface IdentityContextValue {
 // Defaults
 // ============================================================================
 
-const DEFAULT_IDENTITY_STATE: IdentityState = {
+const DEFAULT_IDENTITY_STATE: IdentityContextState = {
   profile: null,
   credentials: [],
   isLoading: false,
@@ -128,7 +137,9 @@ export function IdentityProvider({ children }: { children: React.ReactNode }) {
   const { address, isConnected } = useAccount();
   const { signMessageAsync } = useSignMessage();
 
-  const [state, setState] = useState<IdentityState>(DEFAULT_IDENTITY_STATE);
+  const [state, setState] = useState<IdentityContextState>(
+    DEFAULT_IDENTITY_STATE,
+  );
   const [sessionStatus, setSessionStatus] =
     useState<IdentitySessionStatus>("anonymous");
   const [sessionError, setSessionError] = useState<string | null>(null);
@@ -178,13 +189,8 @@ export function IdentityProvider({ children }: { children: React.ReactNode }) {
   // -------------------------------------------------------------------------
 
   const fetchCredentials = useCallback(
-    async (authToken: string): Promise<Credential[]> => {
-      const result = await apiClient.listCredentials(
-        undefined,
-        1,
-        100,
-        authToken,
-      );
+    async (authToken: string): Promise<CredentialSummary[]> => {
+      const result = await apiClient.listCredentials(1, 100, authToken);
       return result.items;
     },
     [],
@@ -257,7 +263,7 @@ export function IdentityProvider({ children }: { children: React.ReactNode }) {
 
         if (profile) {
           const authToken = getIdentityAuthToken();
-          let credentials: Credential[] = [];
+          let credentials: CredentialSummary[] = [];
 
           if (authToken) {
             try {
@@ -607,15 +613,19 @@ export function IdentityProvider({ children }: { children: React.ReactNode }) {
   }, [state.profile, fetchCredentials]);
 
   const getCredential = useCallback(
-    (credentialHash: Bytes32) => {
-      return state.credentials.find((c) => c.hash === credentialHash);
+    (credentialId: string) => {
+      return state.credentials.find(
+        (credential) => credential.id === credentialId,
+      );
     },
     [state.credentials],
   );
 
   const getCredentialsByStatus = useCallback(
-    (status: CredentialStatus) => {
-      return state.credentials.filter((c) => c.status === status);
+    (status: CredentialSummaryStatus) => {
+      return state.credentials.filter(
+        (credential) => credential.status === status,
+      );
     },
     [state.credentials],
   );

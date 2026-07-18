@@ -18,13 +18,11 @@ import {
 } from "@/lib/identity/registration";
 import { expireIdentitySession } from "@/lib/identity/session";
 import { createDID } from "@/lib/utils";
+import type { IdentityProfile, DID, Bytes32 } from "@/types";
 import type {
-  IdentityProfile,
-  Credential,
-  CredentialStatus,
-  DID,
-  Bytes32,
-} from "@/types";
+  CredentialSummary,
+  CredentialSummaryStatus,
+} from "@/lib/credentials/summary";
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -97,19 +95,20 @@ const makeProfile = (addr: string): IdentityProfile => ({
 });
 
 const makeCredential = (
-  hash: string,
-  status: CredentialStatus = 1,
-): Credential => ({
-  hash: hash as Bytes32,
-  schemaHash:
-    "0xschema0000000000000000000000000000000000000000000000000000000001" as Bytes32,
-  issuerDid: makeDID("0xissuer"),
-  subjectDid: makeDID(mockAddress),
-  issuedAt: 1700000000,
-  expiresAt: 1800000000,
+  index: number,
+  status: CredentialSummaryStatus = "active",
+): CredentialSummary => ({
+  id: `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
+  credentialType: "KYC_LEVEL_2",
+  typeLabel: "KYC Level 2",
+  category: "kyc",
+  issuerId: "issuer-identity-id",
+  subjectId: "subject-identity-id",
+  claimsHash: "a".repeat(64),
+  proofAvailable: true,
   status,
-  merkleRoot:
-    "0xmerkle0000000000000000000000000000000000000000000000000000000001" as Bytes32,
+  issuedAt: "2023-11-14T22:13:20.000Z",
+  expiresAt: "2027-01-15T08:00:00.000Z",
 });
 
 // ---------------------------------------------------------------------------
@@ -238,7 +237,7 @@ describe("IdentityContext", () => {
   describe("loading identity on connect", () => {
     it("fetches profile and protected credentials for a validated session", async () => {
       const profile = makeProfile(mockAddress);
-      const creds = [makeCredential("0xcred01"), makeCredential("0xcred02")];
+      const creds = [makeCredential(1), makeCredential(2)];
       establishIdentitySession(profile);
 
       (apiClient.getIdentityByAddress as jest.Mock).mockResolvedValue(profile);
@@ -377,7 +376,7 @@ describe("IdentityContext", () => {
   describe("wallet-backed session", () => {
     it("signs the server challenge, stores the returned token in memory, and refreshes credentials", async () => {
       const profile = makeProfile(mockAddress);
-      const credentials = [makeCredential("0xcredential")];
+      const credentials = [makeCredential(1)];
       const challengeMessage = "server-issued sign-in message";
 
       (apiClient.getIdentityByAddress as jest.Mock).mockResolvedValue(profile);
@@ -425,7 +424,6 @@ describe("IdentityContext", () => {
         signature: "0xsignature",
       });
       expect(apiClient.listCredentials).toHaveBeenCalledWith(
-        undefined,
         1,
         100,
         "wallet-session-token",
@@ -480,7 +478,7 @@ describe("IdentityContext", () => {
       establishIdentitySession(profile);
       (apiClient.getIdentityByAddress as jest.Mock).mockResolvedValue(profile);
       (apiClient.listCredentials as jest.Mock).mockResolvedValue({
-        items: [makeCredential("0xcredential")],
+        items: [makeCredential(1)],
         total: 1,
         page: 1,
         pageSize: 100,
@@ -583,7 +581,7 @@ describe("IdentityContext", () => {
         (walletAddress: string) => Promise.resolve(makeProfile(walletAddress)),
       );
       (apiClient.listCredentials as jest.Mock).mockResolvedValue({
-        items: [makeCredential("0xold-wallet-credential")],
+        items: [makeCredential(1)],
         total: 1,
         page: 1,
         pageSize: 100,
@@ -624,11 +622,8 @@ describe("IdentityContext", () => {
     it("polls credentials every CREDENTIAL_POLL_INTERVAL_MS when registered", async () => {
       const profile = makeProfile(mockAddress);
       establishIdentitySession(profile);
-      const credsFirst = [makeCredential("0xcred01")];
-      const credsSecond = [
-        makeCredential("0xcred01"),
-        makeCredential("0xcred02"),
-      ];
+      const credsFirst = [makeCredential(1)];
+      const credsSecond = [makeCredential(1), makeCredential(2)];
 
       (apiClient.getIdentityByAddress as jest.Mock).mockResolvedValue(profile);
       (apiClient.listCredentials as jest.Mock)
@@ -1020,9 +1015,9 @@ describe("IdentityContext", () => {
       const profile = makeProfile(mockAddress);
       establishIdentitySession(profile);
       const credsNew = [
-        makeCredential("0xcred01"),
-        makeCredential("0xcred02"),
-        makeCredential("0xcred03"),
+        makeCredential(1),
+        makeCredential(2),
+        makeCredential(3),
       ];
 
       (apiClient.getIdentityByAddress as jest.Mock).mockResolvedValue(profile);
@@ -1124,8 +1119,8 @@ describe("IdentityContext", () => {
   // =========================================================================
 
   describe("getCredential", () => {
-    it("returns the credential matching the hash", async () => {
-      const cred = makeCredential("0xcred01");
+    it("returns the credential matching the backend UUID", async () => {
+      const cred = makeCredential(1);
       establishIdentitySession();
 
       (apiClient.getIdentityByAddress as jest.Mock).mockResolvedValue(
@@ -1150,7 +1145,7 @@ describe("IdentityContext", () => {
         expect(result.current.identity.credentials.length).toBe(1);
       });
 
-      expect(result.current.getCredential("0xcred01" as Bytes32)).toEqual(cred);
+      expect(result.current.getCredential(cred.id)).toEqual(cred);
     });
 
     it("returns undefined for non-existent credential", async () => {
@@ -1177,7 +1172,7 @@ describe("IdentityContext", () => {
       });
 
       expect(
-        result.current.getCredential("0xnonexistent" as Bytes32),
+        result.current.getCredential("ffffffff-ffff-4fff-8fff-ffffffffffff"),
       ).toBeUndefined();
     });
   });
@@ -1188,9 +1183,9 @@ describe("IdentityContext", () => {
 
   describe("getCredentialsByStatus", () => {
     it("filters credentials by status", async () => {
-      const activeCred = makeCredential("0xcred01", 1);
-      const revokedCred = makeCredential("0xcred02", 3);
-      const expiredCred = makeCredential("0xcred03", 4);
+      const activeCred = makeCredential(1, "active");
+      const revokedCred = makeCredential(2, "revoked");
+      const expiredCred = makeCredential(3, "expired");
       establishIdentitySession();
 
       (apiClient.getIdentityByAddress as jest.Mock).mockResolvedValue(
@@ -1215,15 +1210,13 @@ describe("IdentityContext", () => {
         expect(result.current.identity.credentials.length).toBe(3);
       });
 
-      expect(
-        result.current.getCredentialsByStatus(1 as CredentialStatus),
-      ).toEqual([activeCred]);
-      expect(
-        result.current.getCredentialsByStatus(3 as CredentialStatus),
-      ).toEqual([revokedCred]);
-      expect(
-        result.current.getCredentialsByStatus(2 as CredentialStatus),
-      ).toEqual([]);
+      expect(result.current.getCredentialsByStatus("active")).toEqual([
+        activeCred,
+      ]);
+      expect(result.current.getCredentialsByStatus("revoked")).toEqual([
+        revokedCred,
+      ]);
+      expect(result.current.getCredentialsByStatus("suspended")).toEqual([]);
     });
   });
 
@@ -1237,7 +1230,7 @@ describe("IdentityContext", () => {
         makeProfile(mockAddress),
       );
       (apiClient.listCredentials as jest.Mock).mockResolvedValue({
-        items: [makeCredential("0xcred01")],
+        items: [makeCredential(1)],
         total: 1,
         page: 1,
         pageSize: 100,

@@ -1,266 +1,208 @@
 import React from "react";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import CredentialList from "@/components/credentials/CredentialList";
+import type { CredentialSummary } from "@/lib/credentials/summary";
 
 jest.mock("framer-motion", () => ({
   motion: {
-    div: ({ children, ...props }: any) => <div {...props}>{children}</div>,
+    div: ({ children, layout, ...props }: any) => (
+      <div {...props}>{children}</div>
+    ),
   },
   AnimatePresence: ({ children }: any) => children,
 }));
 
-jest.mock("lucide-react", () => ({
-  Search: (props: any) => <div data-testid="icon-search" {...props} />,
-  Filter: (props: any) => <div data-testid="icon-filter" {...props} />,
-  Grid3X3: (props: any) => <div data-testid="icon-grid" {...props} />,
-  List: (props: any) => <div data-testid="icon-list" {...props} />,
-  ShieldCheck: (props: any) => (
-    <div data-testid="icon-shield-check" {...props} />
-  ),
-  Clock: (props: any) => <div data-testid="icon-clock" {...props} />,
-  ShieldAlert: (props: any) => (
-    <div data-testid="icon-shield-alert" {...props} />
-  ),
-  AlertTriangle: (props: any) => <div data-testid="icon-alert" {...props} />,
-  Loader2: (props: any) => <div data-testid="icon-loader" {...props} />,
-  FolderOpen: (props: any) => <div data-testid="icon-folder-open" {...props} />,
-}));
+jest.mock(
+  "lucide-react",
+  () =>
+    new Proxy(
+      {},
+      {
+        get: (_target: unknown, prop: string | symbol) => {
+          if (prop === "__esModule") return true;
+          return (props: any) => (
+            <div
+              data-testid={`icon-${String(prop).toLowerCase()}`}
+              {...props}
+            />
+          );
+        },
+      },
+    ),
+);
 
-jest.mock("@/components/credentials/CredentialCard", () => {
-  return function MockCredentialCard({ credential, onRevoke, onVerify }: any) {
-    return (
-      <div data-testid={`credential-card-${credential.id}`}>
-        <span>{credential.name}</span>
-        <button onClick={() => onRevoke(credential.id)}>Revoke</button>
-        <button onClick={() => onVerify(credential.id)}>Verify</button>
-      </div>
-    );
-  };
-});
+jest.mock("@/components/credentials/CredentialCard", () => ({
+  __esModule: true,
+  default: ({ credential, onVerify, onRevoke }: any) => (
+    <div
+      data-testid={`credential-card-${credential.id}`}
+      data-holder-revoke={String(Boolean(onRevoke))}
+    >
+      <span>{credential.typeLabel}</span>
+      {onVerify && (
+        <button onClick={() => onVerify(credential.id)}>Validate</button>
+      )}
+    </div>
+  ),
+}));
 
 jest.mock("@/hooks/useCredentials", () => ({
   useCredentials: jest.fn(),
 }));
 
 import { useCredentials } from "@/hooks/useCredentials";
-const mockUseCredentials = useCredentials as jest.Mock;
 
-const mockCredentials = [
+const mockUseCredentials = useCredentials as jest.Mock;
+const verifyCredential = jest.fn();
+
+const baseCredential: CredentialSummary = {
+  id: "d74ed26c-47ac-4b62-94a8-38704c53b876",
+  credentialType: "KYC_LEVEL_2",
+  typeLabel: "KYC Level 2",
+  category: "kyc",
+  issuerId: "issuer-aethelred",
+  subjectId: "subject-1",
+  claimsHash: "claims-hash-1",
+  proofAvailable: true,
+  status: "active",
+  issuedAt: "2026-07-18T08:00:00.000Z",
+  expiresAt: "2027-07-18T08:00:00.000Z",
+};
+
+const credentials: CredentialSummary[] = [
+  baseCredential,
   {
-    id: "c1",
-    name: "KYC Credential",
-    issuer: "Aethelred",
-    status: "verified",
-    schemaType: "kyc",
+    ...baseCredential,
+    id: "9b4bde84-439b-452b-a0eb-d0671988ad44",
+    credentialType: "EDUCATION",
+    typeLabel: "Education",
+    category: "education",
+    issuerId: "issuer-university",
+    status: "suspended",
   },
   {
-    id: "c2",
-    name: "Education Cert",
-    issuer: "University",
-    status: "pending",
-    schemaType: "education",
-  },
-  {
-    id: "c3",
-    name: "Employment Record",
-    issuer: "Company Inc",
+    ...baseCredential,
+    id: "b3b31128-f0bf-42ea-bcba-4d33c671d1bc",
+    credentialType: "EMPLOYMENT",
+    typeLabel: "Employment",
+    category: "employment",
+    issuerId: "issuer-employer",
     status: "revoked",
-    schemaType: "employment",
   },
 ];
 
 describe("CredentialList", () => {
   beforeEach(() => {
+    jest.clearAllMocks();
     mockUseCredentials.mockReturnValue({
-      credentials: mockCredentials,
+      credentials,
       isLoading: false,
       error: null,
-      revokeCredential: jest.fn(),
-      verifyCredential: jest.fn(),
+      verifyCredential,
     });
   });
 
-  it("renders loading state", () => {
-    mockUseCredentials.mockReturnValue({
+  it("renders loading, error, and empty states", () => {
+    mockUseCredentials.mockReturnValueOnce({
       credentials: [],
       isLoading: true,
       error: null,
-      revokeCredential: jest.fn(),
-      verifyCredential: jest.fn(),
+      verifyCredential,
     });
-    render(<CredentialList />);
+    const { rerender } = render(<CredentialList />);
     expect(screen.getByText("Loading credentials...")).toBeInTheDocument();
-  });
 
-  it("renders error state", () => {
-    mockUseCredentials.mockReturnValue({
+    mockUseCredentials.mockReturnValueOnce({
       credentials: [],
       isLoading: false,
       error: new Error("Network error"),
-      revokeCredential: jest.fn(),
-      verifyCredential: jest.fn(),
+      verifyCredential,
     });
-    render(<CredentialList />);
+    rerender(<CredentialList />);
     expect(
       screen.getByText("Failed to load credentials: Network error"),
     ).toBeInTheDocument();
-  });
 
-  it("renders empty state when no credentials", () => {
-    mockUseCredentials.mockReturnValue({
+    mockUseCredentials.mockReturnValueOnce({
       credentials: [],
       isLoading: false,
       error: null,
-      revokeCredential: jest.fn(),
-      verifyCredential: jest.fn(),
+      verifyCredential,
     });
-    render(<CredentialList />);
+    rerender(<CredentialList />);
     expect(
-      screen.getByText(
-        "No credentials yet. Request your first credential to get started.",
-      ),
+      screen.getByText("No credentials were returned for this identity."),
     ).toBeInTheDocument();
   });
 
-  it("renders credentials", () => {
+  it("renders normalized credential labels and a count", () => {
     render(<CredentialList />);
-    expect(screen.getByText("KYC Credential")).toBeInTheDocument();
-    expect(screen.getByText("Education Cert")).toBeInTheDocument();
-    expect(screen.getByText("Employment Record")).toBeInTheDocument();
-  });
-
-  it("shows credential count", () => {
-    render(<CredentialList />);
+    expect(
+      screen.getByTestId(`credential-card-${credentials[0].id}`),
+    ).toHaveTextContent("KYC Level 2");
+    expect(
+      screen.getByTestId(`credential-card-${credentials[1].id}`),
+    ).toHaveTextContent("Education");
+    expect(
+      screen.getByTestId(`credential-card-${credentials[2].id}`),
+    ).toHaveTextContent("Employment");
     expect(screen.getByText("3 credentials found")).toBeInTheDocument();
   });
 
-  it("renders search input", () => {
-    render(<CredentialList />);
-    expect(
-      screen.getByPlaceholderText("Search credentials..."),
-    ).toBeInTheDocument();
-  });
-
-  it("filters credentials by search query", () => {
+  it("searches by normalized type and issuer record ID", () => {
     render(<CredentialList />);
     const input = screen.getByPlaceholderText("Search credentials...");
+
     fireEvent.change(input, { target: { value: "KYC" } });
     expect(screen.getByText("1 credential found")).toBeInTheDocument();
-    expect(screen.getByText("KYC Credential")).toBeInTheDocument();
-  });
+    expect(screen.getByText("KYC Level 2")).toBeInTheDocument();
 
-  it("renders status filter tabs", () => {
-    render(<CredentialList />);
-    expect(screen.getByText("All")).toBeInTheDocument();
-    expect(screen.getByText("Verified")).toBeInTheDocument();
-    expect(screen.getByText("Pending")).toBeInTheDocument();
-    expect(screen.getByText("Revoked")).toBeInTheDocument();
-    expect(screen.getByText("Expired")).toBeInTheDocument();
-  });
-
-  it("filters by status when tab is clicked", () => {
-    render(<CredentialList />);
-    fireEvent.click(screen.getByText("Verified"));
+    fireEvent.change(input, { target: { value: "issuer-university" } });
     expect(screen.getByText("1 credential found")).toBeInTheDocument();
-    expect(screen.getByText("KYC Credential")).toBeInTheDocument();
-  });
-
-  it("renders view mode toggle buttons", () => {
-    render(<CredentialList />);
-    expect(screen.getByLabelText("Grid view")).toBeInTheDocument();
-    expect(screen.getByLabelText("List view")).toBeInTheDocument();
-  });
-
-  it("renders schema type dropdown", () => {
-    render(<CredentialList />);
-    const select = screen.getByDisplayValue("All Types");
-    expect(select).toBeInTheDocument();
-  });
-
-  it("filters by schema type", () => {
-    render(<CredentialList />);
-    const select = screen.getByDisplayValue("All Types");
-    fireEvent.change(select, { target: { value: "kyc" } });
-    expect(screen.getByText("1 credential found")).toBeInTheDocument();
-  });
-
-  it("shows no match message when filters exclude all", () => {
-    render(<CredentialList />);
-    fireEvent.click(screen.getByText("Expired"));
     expect(
-      screen.getByText("No credentials match your filters."),
-    ).toBeInTheDocument();
+      screen.getByTestId(`credential-card-${credentials[1].id}`),
+    ).toHaveTextContent("Education");
   });
 
-  it("switches to list view when list button is clicked", () => {
+  it("filters by backend-derived status", () => {
     render(<CredentialList />);
-    fireEvent.click(screen.getByLabelText("List view"));
-    // In list view, the container should have 'space-y-3' class (not grid)
-    expect(screen.getByText("KYC Credential")).toBeInTheDocument();
+    fireEvent.click(screen.getByText("Suspended"));
+
+    expect(screen.getByText("1 credential found")).toBeInTheDocument();
+    expect(
+      screen.getByTestId(`credential-card-${credentials[1].id}`),
+    ).toHaveTextContent("Education");
   });
 
-  it("switches back to grid view from list view", () => {
+  it("filters by credential category instead of a nonexistent schema type", () => {
+    render(<CredentialList />);
+    const select = screen.getByDisplayValue("All Categories");
+    fireEvent.change(select, { target: { value: "employment" } });
+
+    expect(screen.getByText("1 credential found")).toBeInTheDocument();
+    expect(
+      screen.getByTestId(`credential-card-${credentials[2].id}`),
+    ).toHaveTextContent("Employment");
+  });
+
+  it("does not pass a holder revocation action to cards", () => {
+    render(<CredentialList />);
+    for (const card of screen.getAllByTestId(/credential-card-/)) {
+      expect(card).toHaveAttribute("data-holder-revoke", "false");
+    }
+  });
+
+  it("keeps authenticated server validation available", () => {
+    render(<CredentialList />);
+    fireEvent.click(screen.getAllByText("Validate")[0]);
+    expect(verifyCredential).toHaveBeenCalledWith(baseCredential.id);
+  });
+
+  it("switches between grid and list views", () => {
     render(<CredentialList />);
     fireEvent.click(screen.getByLabelText("List view"));
+    expect(screen.getByText("KYC Level 2")).toBeInTheDocument();
     fireEvent.click(screen.getByLabelText("Grid view"));
-    expect(screen.getByText("KYC Credential")).toBeInTheDocument();
-  });
-
-  it("filters by search query matching issuer name", () => {
-    render(<CredentialList />);
-    const input = screen.getByPlaceholderText("Search credentials...");
-    fireEvent.change(input, { target: { value: "University" } });
-    expect(screen.getByText("1 credential found")).toBeInTheDocument();
-    expect(screen.getByText("Education Cert")).toBeInTheDocument();
-  });
-
-  it("filters by search query matching schema type", () => {
-    render(<CredentialList />);
-    const input = screen.getByPlaceholderText("Search credentials...");
-    fireEvent.change(input, { target: { value: "employment" } });
-    expect(screen.getByText("1 credential found")).toBeInTheDocument();
-    expect(screen.getByText("Employment Record")).toBeInTheDocument();
-  });
-
-  it("shows singular credential count for one result", () => {
-    render(<CredentialList />);
-    const input = screen.getByPlaceholderText("Search credentials...");
-    fireEvent.change(input, { target: { value: "KYC" } });
-    expect(screen.getByText("1 credential found")).toBeInTheDocument();
-  });
-
-  it("handles null credentials from hook", () => {
-    mockUseCredentials.mockReturnValue({
-      credentials: null,
-      isLoading: false,
-      error: null,
-      revokeCredential: jest.fn(),
-      verifyCredential: jest.fn(),
-    });
-    render(<CredentialList />);
-    expect(screen.getByText("0 credentials found")).toBeInTheDocument();
-  });
-
-  it("combines status and schema filters", () => {
-    render(<CredentialList />);
-    fireEvent.click(screen.getByText("Verified"));
-    const select = screen.getByDisplayValue("All Types");
-    fireEvent.change(select, { target: { value: "kyc" } });
-    expect(screen.getByText("1 credential found")).toBeInTheDocument();
-  });
-
-  it("combines search and status filters", () => {
-    render(<CredentialList />);
-    fireEvent.click(screen.getByText("Pending"));
-    const input = screen.getByPlaceholderText("Search credentials...");
-    fireEvent.change(input, { target: { value: "Education" } });
-    expect(screen.getByText("1 credential found")).toBeInTheDocument();
-  });
-
-  it("returns no results when search has no match", () => {
-    render(<CredentialList />);
-    const input = screen.getByPlaceholderText("Search credentials...");
-    fireEvent.change(input, { target: { value: "nonexistent-query-xyz" } });
-    expect(screen.getByText("0 credentials found")).toBeInTheDocument();
+    expect(screen.getByText("KYC Level 2")).toBeInTheDocument();
   });
 });

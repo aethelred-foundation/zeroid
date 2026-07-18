@@ -165,8 +165,12 @@ describe("DashboardPage", () => {
       isConnected: true,
     });
     render(<DashboardPage />);
-    expect(screen.queryByRole("button", { name: "24h" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "30d" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "24h" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "30d" }),
+    ).not.toBeInTheDocument();
   });
 
   it("does not render fabricated network or score panels", () => {
@@ -253,9 +257,9 @@ describe("DashboardPage", () => {
           {
             id: "c1",
             status: "active",
-            name: "KYC Credential",
-            issuer: "Aethelred Registry",
-            issuedAt: Math.floor(Date.now() / 1000) - 3600,
+            typeLabel: "KYC Credential",
+            issuerId: "aethelred-registry-record",
+            issuedAt: new Date(Date.now() - 3600000).toISOString(),
           },
         ],
       },
@@ -276,7 +280,9 @@ describe("DashboardPage", () => {
     });
     render(<DashboardPage />);
     expect(screen.getByText("KYC Credential")).toBeInTheDocument();
-    expect(screen.getByText("Issued by Aethelred Registry")).toBeInTheDocument();
+    expect(
+      screen.getByText("Issuer record: aethelred-registry-record"),
+    ).toBeInTheDocument();
     expect(screen.getByText("age verification")).toBeInTheDocument();
     expect(screen.getByText("1h ago")).toBeInTheDocument();
     expect(screen.getByText("2h ago")).toBeInTheDocument();

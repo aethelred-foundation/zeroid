@@ -53,29 +53,30 @@ const mockUseCredentials = useCredentials as jest.Mock;
 
 const realCredentials = [
   {
-    id: "cred-live-kyc",
-    hash: "0xabc",
-    schemaHash: "0xschema",
-    schemaName: "Live KYC Credential",
-    issuerDid: { uri: "did:aethelred:testnet:issuer" },
-    subjectDid: { uri: "did:aethelred:testnet:holder" },
-    issuedAt: 1_700_000_000,
-    expiresAt: 2_000_000_000,
-    status: "verified",
-    merkleRoot: "0xroot",
+    id: "d74ed26c-47ac-4b62-94a8-38704c53b876",
+    credentialType: "KYC_LEVEL_2",
+    typeLabel: "Live KYC Credential",
+    category: "kyc",
+    issuerId: "issuer-record-17",
+    subjectId: "subject-record-8",
+    claimsHash: "claims-hash-1",
+    proofAvailable: true,
+    issuedAt: "2026-07-18T08:00:00.000Z",
+    expiresAt: "2027-07-18T08:00:00.000Z",
+    status: "active",
   },
   {
-    id: "cred-live-residency",
-    hash: "0xdef",
-    schemaHash: "0xschema2",
-    schemaName: "Live Residency Credential",
-    issuer: "Verified UAE Issuer",
-    issuerDid: { uri: "did:aethelred:testnet:uae-issuer" },
-    subjectDid: { uri: "did:aethelred:testnet:holder" },
-    issuedAt: 1_700_000_000,
-    expiresAt: 2_000_000_000,
+    id: "9b4bde84-439b-452b-a0eb-d0671988ad44",
+    credentialType: "PROOF_OF_ADDRESS",
+    typeLabel: "Live Residency Credential",
+    category: "identity",
+    issuerId: "verified-uae-issuer-record",
+    subjectId: "subject-record-8",
+    claimsHash: "claims-hash-2",
+    proofAvailable: true,
+    issuedAt: "2026-07-18T08:00:00.000Z",
+    expiresAt: "2027-07-18T08:00:00.000Z",
     status: "active",
-    merkleRoot: "0xroot2",
   },
 ];
 
@@ -140,7 +141,7 @@ describe("CrossChainPage truth-in-product gating", () => {
 
     expect(screen.getByText("Live KYC Credential")).toBeInTheDocument();
     expect(screen.getByText("Live Residency Credential")).toBeInTheDocument();
-    expect(screen.getByText(/Verified UAE Issuer/)).toBeInTheDocument();
+    expect(screen.getByText(/verified-uae-issuer-record/)).toBeInTheDocument();
     expect(
       screen.queryByText("Age Verification (18+)"),
     ).not.toBeInTheDocument();
