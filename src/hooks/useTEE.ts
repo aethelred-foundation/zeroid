@@ -5,8 +5,8 @@
 import { useState, useCallback, useEffect } from "react";
 import { apiClient } from "@/lib/api/client";
 import { getPlatformLabel, selectBestNode } from "@/lib/tee/attestation";
-import { isExpired, stringToBytes32 } from "@/lib/utils";
-import type { AttestationInfo, Bytes32, TEENode, TEENodeStatus } from "@/types";
+import { isExpired } from "@/lib/utils";
+import type { AttestationInfo, TEENode, TEENodeStatus } from "@/types";
 
 interface TEEState {
   nodes: TEENodeStatus[];
@@ -61,14 +61,6 @@ function nodeToAttestationInfo(node: TEENode): AttestationInfo {
   };
 }
 
-function safeHashPayload(data: unknown): Bytes32 {
-  try {
-    return stringToBytes32(JSON.stringify(data));
-  } catch {
-    return stringToBytes32(String(data));
-  }
-}
-
 export function useTEE() {
   const [state, setState] = useState<TEEState>({
     nodes: [],
@@ -101,32 +93,6 @@ export function useTEE() {
     }
   }, []);
 
-  const verifyInEnclave = useCallback(
-    async (
-      data: unknown,
-    ): Promise<{ verified: boolean; attestation: string; payloadHash: Bytes32 }> => {
-      const nodes = await apiClient.listTEENodes();
-      const bestNode = selectBestNode(nodes);
-      if (!bestNode) {
-        throw new Error("No online attested TEE node is available.");
-      }
-
-      const attestation = await apiClient.getAttestation(
-        bestNode.attestation.enclaveHash,
-      );
-      if (!attestation.isValid || isExpired(attestation.expiresAt)) {
-        throw new Error("Selected TEE node does not have a fresh attestation.");
-      }
-
-      return {
-        verified: true,
-        attestation: attestation.enclaveHash,
-        payloadHash: safeHashPayload(data),
-      };
-    },
-    [],
-  );
-
   useEffect(() => {
     refreshStatus().catch(() => undefined);
   }, [refreshStatus]);
@@ -146,7 +112,6 @@ export function useTEE() {
     isLoading: state.isLoading,
     error: state.error,
     refreshStatus,
-    verifyInEnclave,
     enclaveStatus,
   };
 }

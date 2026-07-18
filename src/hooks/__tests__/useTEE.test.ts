@@ -9,7 +9,6 @@ import { useTEE } from "@/hooks/useTEE";
 
 jest.mock("@/lib/api/client", () => ({
   apiClient: {
-    getAttestation: jest.fn(),
     listTEENodes: jest.fn(),
   },
 }));
@@ -19,8 +18,9 @@ jest.mock("@/lib/tee/attestation", () => ({
   getPlatformLabel: jest.fn((platform: number) =>
     platform === 1 ? "Intel SGX" : "Unknown",
   ),
-  selectBestNode: jest.fn((nodes: any[]) =>
-    nodes.find((node) => node.isOnline && node.attestation.isValid) ?? null,
+  selectBestNode: jest.fn(
+    (nodes: any[]) =>
+      nodes.find((node) => node.isOnline && node.attestation.isValid) ?? null,
   ),
 }));
 
@@ -56,7 +56,6 @@ beforeEach(() => {
   jest.clearAllMocks();
   const node = makeNode();
   mockApiClient.listTEENodes.mockResolvedValue([node]);
-  mockApiClient.getAttestation.mockResolvedValue(node.attestation);
 });
 
 describe("useTEE", () => {
@@ -109,24 +108,10 @@ describe("useTEE", () => {
     expect(result.current.nodes[0].id).toBe("sgx-2");
   });
 
-  it("verifyInEnclave checks the selected node attestation", async () => {
+  it("does not represent node discovery as payload verification", async () => {
     const { result } = renderHook(() => useTEE());
     await waitFor(() => expect(result.current.nodes).toHaveLength(1));
-
-    let verifyResult:
-      | { verified: boolean; attestation: string; payloadHash: string }
-      | undefined;
-
-    await act(async () => {
-      verifyResult = await result.current.verifyInEnclave({ data: "test" });
-    });
-
-    expect(mockApiClient.getAttestation).toHaveBeenCalledWith(enclaveHash);
-    expect(verifyResult).toMatchObject({
-      verified: true,
-      attestation: enclaveHash,
-    });
-    expect(verifyResult?.payloadHash).toMatch(/^0x[0-9a-f]{64}$/);
+    expect(result.current).not.toHaveProperty("verifyInEnclave");
   });
 
   it("surfaces API errors instead of using seeded fallback nodes", async () => {
