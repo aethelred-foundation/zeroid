@@ -127,6 +127,30 @@ beforeEach(() => {
 });
 
 describe("identity government verification routes", () => {
+  it.each([
+    "verified_oidc_claims",
+    "verifiedOIDCClaims",
+    "verifiedClaims",
+    "verified_claims",
+    "governmentVerification",
+    "kyc_level",
+    "tee_attestation_id",
+    "controller",
+    "futureAuthoritativeNamespace",
+  ])("rejects non-client-writable profile metadata key %s", async (reservedKey) => {
+    const res = await request(buildApp())
+      .patch("/api/v1/identity/me")
+      .send({
+        metadata: {
+          [reservedKey]: { name: "attacker-controlled" },
+        },
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("VALIDATION_ERROR");
+    expect(mockIdentityService.updateIdentity).not.toHaveBeenCalled();
+  });
+
   it("starts UAE Pass OAuth with a state bound to the authenticated identity", async () => {
     const res = await request(buildApp())
       .post("/api/v1/identity/government/uae-pass/start")

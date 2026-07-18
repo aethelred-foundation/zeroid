@@ -11,6 +11,7 @@ import {
 import {
   validate,
   registerIdentitySchema,
+  clientIdentityMetadataSchema,
 } from "../middleware/validation";
 import { apiRateLimiter, authRateLimiter } from "../middleware/rateLimit";
 import { logger, prisma, redis } from "../runtime";
@@ -513,8 +514,9 @@ router.post(
 const updateSchema = z
   .object({
     displayName: z.string().min(1).max(100).optional(),
-    metadata: z.record(z.unknown()).optional(),
+    metadata: clientIdentityMetadataSchema.optional(),
   })
+  .strict()
   .refine(
     (data) => data.displayName !== undefined || data.metadata !== undefined,
     {

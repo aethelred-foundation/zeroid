@@ -7,6 +7,10 @@ import {
   normalizeWalletRegistrationDid,
   verifyWalletRegistrationProof,
 } from './identity-registration-proof';
+import {
+  buildClientIdentityMetadata,
+  findNonClientWritableIdentityMetadataKey,
+} from '../utils/identity-metadata';
 // tee import removed — not used in this module
 import { IdentityStatus } from '@prisma/client';
 import nodeCrypto from 'crypto';
@@ -71,6 +75,8 @@ export class IdentityService {
     token: string;
     sessionId: string;
   }> {
+    this.assertClientIdentityMetadata(request.metadata);
+
     // Normalize the public identifier before lookup so case variants cannot
     // bypass the idempotent conflict response or create an alias.
     const did = normalizeWalletRegistrationDid(request.did);
@@ -115,10 +121,10 @@ export class IdentityService {
             publicKey: verifiedProof.publicKey,
             recoveryHash: this.protectRecoveryHash(verifiedProof.recoveryHash),
             displayName: request.displayName,
-            metadata: {
-              ...(request.metadata ?? {}),
-              controller: verifiedProof.controller,
-            } as any,
+            metadata: buildClientIdentityMetadata(
+              request.metadata,
+              verifiedProof.controller,
+            ) as any,
             status: 'ACTIVE',
             delegatedTo: [],
           },
@@ -210,6 +216,8 @@ export class IdentityService {
     identityId: string,
     updates: { displayName?: string; metadata?: Record<string, unknown> },
   ): Promise<IdentityResponse> {
+    this.assertClientIdentityMetadata(updates.metadata);
+
     const identity = await prisma.identity.findUnique({ where: { id: identityId } });
     if (!identity) {
       throw new IdentityError('Identity not found', 'IDENTITY_NOT_FOUND', 404);
@@ -224,12 +232,16 @@ export class IdentityService {
       metadata: identity.metadata,
     };
 
+    const controller = this.getControllerFromWalletDid(identity.did);
     const updated = await this.runIdentityAuditTransaction(async (tx) => {
       const nextIdentity = await tx.identity.update({
         where: { id: identityId },
         data: {
           displayName: updates.displayName ?? identity.displayName,
-          metadata: (updates.metadata ?? identity.metadata ?? undefined) as any,
+          metadata: buildClientIdentityMetadata(
+            updates.metadata ?? identity.metadata,
+            controller,
+          ) as any,
         },
       });
 
@@ -295,6 +307,34 @@ export class IdentityService {
 
   private isValidRecoveryHash(value: string): boolean {
     return /^[0-9a-f]{64}$/i.test(value);
+  }
+
+  private assertClientIdentityMetadata(
+    metadata: Record<string, unknown> | undefined,
+  ): void {
+    if (!metadata) return;
+
+    const unsupportedKey = findNonClientWritableIdentityMetadataKey(metadata);
+    if (unsupportedKey) {
+      throw new IdentityError(
+        `Identity metadata key "${unsupportedKey}" is not client-writable`,
+        'IDENTITY_METADATA_RESERVED',
+        400,
+      );
+    }
+  }
+
+  private getControllerFromWalletDid(did: string): string {
+    const controller = did.split(':').at(-1)?.toLowerCase();
+    if (!controller || !/^0x[a-f0-9]{40}$/.test(controller)) {
+      throw new IdentityError(
+        'Stored identity is not bound to a canonical wallet controller',
+        'IDENTITY_CONTROLLER_INVALID',
+        500,
+      );
+    }
+
+    return controller;
   }
 
   private protectRecoveryHash(recoveryHash: string): string {

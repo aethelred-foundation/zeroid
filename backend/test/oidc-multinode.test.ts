@@ -54,6 +54,18 @@ jest.mock('https', () => ({
   request: jest.fn(),
 }));
 
+jest.mock('../src/services/government-api', () => ({
+  governmentAPIService: {
+    getVerificationStatus: jest.fn(async () => null),
+  },
+}));
+
+jest.mock('../src/services/tee', () => ({
+  teeService: {
+    isAttestationValid: jest.fn(async () => false),
+  },
+}));
+
 // ---------------------------------------------------------------------------
 // Functional Redis mock — backed by a shared Map so both OIDCBridge instances
 // see the same data, exactly as they would against a real Redis cluster.
@@ -296,6 +308,8 @@ describe('OIDC multi-node correctness', () => {
     mockIdentityFindUnique.mockImplementation(async ({ where }) => ({
       id: where.id,
       status: 'ACTIVE',
+      teeAttestationId: null,
+      updatedAt: new Date('2026-04-28T00:00:00.000Z'),
     }));
     mockOrganizationMemberFindFirst.mockResolvedValue({ id: 'membership-1' });
     fetchMock.mockResolvedValue({ ok: true, status: 200 });
@@ -869,7 +883,7 @@ describe('OIDC multi-node correctness', () => {
     expect(refreshed.refresh_token).not.toBe(tokens.refresh_token);
   });
 
-  test('refresh token rotation preserves authorized userinfo claims', async () => {
+  test('refresh token rotation rebuilds claims instead of replaying its original snapshot', async () => {
     const client = await registerTestClient(bridgeA);
     const { code } = await authorizeCode(
       bridgeA,
@@ -885,6 +899,18 @@ describe('OIDC multi-node correctness', () => {
       clientSecret: client.clientSecret,
     });
 
+    const refreshKey = [...store.keys()].find((key) =>
+      key.startsWith('oidc:refresh:'),
+    );
+    const legacyRefreshRecord = JSON.parse(store.get(refreshKey!)!);
+    legacyRefreshRecord.claims = {
+      name: 'Forged Legacy Name',
+      email: 'forged@example.test',
+      email_verified: true,
+      verified_claims: { claims: { name: 'Forged Legacy Name' } },
+    };
+    store.set(refreshKey!, JSON.stringify(legacyRefreshRecord));
+
     const refreshed = await bridgeB.exchangeToken({
       grantType: 'refresh_token',
       refreshToken: tokens.refresh_token,
@@ -895,10 +921,10 @@ describe('OIDC multi-node correctness', () => {
     const userInfo = await bridgeA.getUserInfo(refreshed.access_token);
     expect(userInfo).toMatchObject({
       sub: 'user-refresh-claims',
-      name: 'Alice',
-      email: 'alice@example.com',
-      email_verified: true,
     });
+    expect(userInfo.name).toBeUndefined();
+    expect(userInfo.email).toBeUndefined();
+    expect(userInfo.email_verified).toBeUndefined();
   });
 
   test('refresh token downscoping cannot be expanded again', async () => {
@@ -1288,6 +1314,32 @@ describe('OIDC multi-node correctness', () => {
     expect(tokens.access_token).toBeDefined();
   });
 
+  test('authorization codes from a retired claims trust policy are invalidated', async () => {
+    const client = await registerTestClient(bridgeA);
+    const { code } = await authorizeCode(
+      bridgeA,
+      client.clientId,
+      'user-retired-claims-code',
+    );
+    const codeKey = `oidc:authcodes:${code}`;
+    const storedCode = JSON.parse(store.get(codeKey)!);
+    delete storedCode.claimsTrustVersion;
+    store.set(codeKey, JSON.stringify(storedCode));
+
+    await expect(
+      bridgeB.exchangeToken({
+        grantType: 'authorization_code',
+        code: code!,
+        redirectUri: REDIRECT_URI,
+        clientId: client.clientId,
+        clientSecret: client.clientSecret,
+      }),
+    ).rejects.toMatchObject({
+      errorCode: 'invalid_grant',
+    });
+    expect(store.has(codeKey)).toBe(false);
+  });
+
   test('authorization code claims require the registered client and redirect binding', async () => {
     const clientA = await registerTestClient(bridgeA);
     const clientB = await registerTestClient(bridgeA);
@@ -1379,6 +1431,8 @@ describe('OIDC multi-node correctness', () => {
     );
     expect(refreshKeys).toHaveLength(1);
     expect(refreshKeys[0]).toMatch(/^oidc:refresh:sha256:/);
+    const storedRefresh = JSON.parse(store.get(refreshKeys[0])!);
+    expect(storedRefresh).not.toHaveProperty('claims');
     for (const members of setStore.values()) {
       expect([...members]).not.toContain(tokens.refresh_token);
     }
@@ -1391,6 +1445,34 @@ describe('OIDC multi-node correctness', () => {
     });
     expect(refreshed.access_token).toBeDefined();
     expect(refreshed.refresh_token).not.toBe(tokens.refresh_token);
+  });
+
+  test('userinfo rejects access tokens from a retired claims trust policy', async () => {
+    const client = await registerTestClient(bridgeA);
+    const { code } = await authorizeCode(
+      bridgeA,
+      client.clientId,
+      'user-retired-claims-token',
+    );
+    const tokens = await bridgeA.exchangeToken({
+      grantType: 'authorization_code',
+      code: code!,
+      redirectUri: REDIRECT_URI,
+      clientId: client.clientId,
+      clientSecret: client.clientSecret,
+    });
+    const payload = decodeJwtPayload(tokens.access_token);
+    const tokenKey = `oidc:tokens:${String(payload.jti)}`;
+    const storedToken = JSON.parse(store.get(tokenKey)!);
+    delete storedToken.claimsTrustVersion;
+    store.set(tokenKey, JSON.stringify(storedToken));
+
+    await expect(
+      bridgeB.getUserInfo(tokens.access_token),
+    ).rejects.toMatchObject({
+      errorCode: 'invalid_token',
+      statusCode: 401,
+    });
   });
 
   test('stored refresh token digests are not accepted as bearer tokens', async () => {

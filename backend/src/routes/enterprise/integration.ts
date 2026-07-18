@@ -2711,8 +2711,6 @@ router.post(
       const subject = await prisma.identity.findUnique({
         where: { id: subjectId },
         select: {
-          displayName: true,
-          metadata: true,
           status: true,
           teeAttestationId: true,
           updatedAt: true,

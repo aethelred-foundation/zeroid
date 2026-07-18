@@ -234,4 +234,75 @@ describe('IdentityService registration hardening', () => {
     expect(mockGenerateToken).not.toHaveBeenCalled();
   });
 
+  it('rejects authoritative metadata namespaces before registration persistence', async () => {
+    process.env.ZEROID_AUTH_ORIGIN = 'https://zeroid.test';
+    process.env.AETHELRED_CHAIN_ID = '7332';
+    const registration = await signedRegistration(
+      Wallet.createRandom(),
+      sha256Hex('reserved metadata registration proof'),
+    );
+    const service = new IdentityService();
+
+    await expect(service.register({
+      ...registration,
+      metadata: {
+        verified_oidc_claims: { name: 'Attacker Controlled' },
+      },
+    })).rejects.toMatchObject({
+      code: 'IDENTITY_METADATA_RESERVED',
+      statusCode: 400,
+    });
+
+    expect(mockIdentityFindUnique).not.toHaveBeenCalled();
+    expect(mockIdentityCreate).not.toHaveBeenCalled();
+  });
+
+  it('rejects authoritative namespaces on service-level profile updates', async () => {
+    const service = new IdentityService();
+
+    await expect(service.updateIdentity('identity-1', {
+      metadata: {
+        verifiedClaims: { email: 'attacker@example.test' },
+      },
+    })).rejects.toMatchObject({
+      code: 'IDENTITY_METADATA_RESERVED',
+      statusCode: 400,
+    });
+
+    expect(mockIdentityFindUnique).not.toHaveBeenCalled();
+    expect(mockIdentityUpdate).not.toHaveBeenCalled();
+  });
+
+  it('removes legacy authoritative metadata and restores the DID controller', async () => {
+    const controller = '0x1234567890123456789012345678901234567890';
+    const identity = baseIdentity({
+      did: `did:aethelred:testnet:${controller}`,
+      metadata: {
+        avatarUri: 'https://example.test/avatar.png',
+        controller: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+        verified_claims: {
+          claims: { name: 'Legacy Attacker Value' },
+        },
+      },
+    });
+    mockIdentityFindUnique.mockResolvedValue(identity);
+    mockIdentityUpdate.mockImplementation(async ({ data }) => ({
+      ...identity,
+      ...data,
+      updatedAt: new Date('2026-04-28T00:01:00.000Z'),
+    }));
+    const service = new IdentityService();
+
+    await service.updateIdentity('identity-1', { displayName: 'Alice' });
+
+    expect(mockIdentityUpdate).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        metadata: {
+          avatarUri: 'https://example.test/avatar.png',
+          controller,
+        },
+      }),
+    }));
+  });
+
 });

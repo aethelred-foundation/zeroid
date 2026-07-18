@@ -432,7 +432,6 @@ export function IdentityProvider({ children }: { children: React.ReactNode }) {
             publicKey,
             recoveryHash: normalizedRecoveryHash,
             signature,
-            metadata: { controller: address.toLowerCase() },
           });
         } catch (registerError) {
           throw friendlyRegistrationError(registerError);

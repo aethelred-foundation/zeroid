@@ -193,6 +193,30 @@ export function parseOrThrow<T>(
 // ---------------------------------------------------------------------------
 // Schema for common request patterns
 // ---------------------------------------------------------------------------
+export const clientIdentityMetadataSchema = z
+  .object({
+    avatarUri: z
+      .string()
+      .url()
+      .max(2048)
+      .refine(
+        (value) => {
+          try {
+            const url = new URL(value);
+            return url.protocol === 'https:' && !url.username && !url.password;
+          } catch {
+            return false;
+          }
+        },
+        { message: 'Avatar URI must be credential-free HTTPS' },
+      )
+      .optional(),
+    didDocument: z.record(z.unknown()).optional(),
+    didHash: z.string().regex(/^0x[a-fA-F0-9]{64}$/).optional(),
+    txHash: z.string().regex(/^0x[a-fA-F0-9]{64}$/).optional(),
+  })
+  .strict();
+
 export const registerIdentitySchema = z
   .object({
     did: walletDidSchema,
@@ -201,7 +225,7 @@ export const registerIdentitySchema = z
     recoveryHash: recoveryHashSchema.transform((value) => value.toLowerCase()),
     signature: walletRegistrationSignatureSchema,
     displayName: z.string().min(1).max(100).optional(),
-    metadata: z.record(z.unknown()).optional(),
+    metadata: clientIdentityMetadataSchema.optional(),
   })
   .strict();
 

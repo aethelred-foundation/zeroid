@@ -219,7 +219,6 @@ export function useCreateIdentity() {
           recoveryHash,
           signature,
           metadata: {
-            controller: address.toLowerCase(),
             txHash: hash,
             didHash,
             didDocument: { ...params.didDocument, id: did },

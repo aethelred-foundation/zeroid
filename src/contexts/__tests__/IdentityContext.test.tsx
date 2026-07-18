@@ -764,7 +764,6 @@ describe("IdentityContext", () => {
         publicKey: validPublicKey,
         recoveryHash: recoveryHash.slice(2),
         signature: "0xsignature",
-        metadata: { controller: mockAddress.toLowerCase() },
       });
       expect(mockSignMessageAsync).toHaveBeenCalledWith({
         message: expect.stringContaining("Chain ID: 7332"),

@@ -64,4 +64,54 @@ describe('walletDidSchema', () => {
       }),
     ).toThrow();
   });
+
+  it.each([
+    'verified_oidc_claims',
+    'verifiedOIDCClaims',
+    'verifiedClaims',
+    'verified_claims',
+    'verified-claims',
+    'governmentVerification',
+    'kyc_level',
+    'tee_attestation_id',
+    'controller',
+    'futureAuthoritativeNamespace',
+  ])('rejects the non-client-writable metadata key %s', (reservedKey) => {
+    const payload = {
+      did: `did:aethelred:testnet:${address}`,
+      controller: address,
+      publicKey: Buffer.from('a-valid-public-key-that-is-long-enough').toString('base64'),
+      recoveryHash: 'a'.repeat(64),
+      signature: `0x${'0'.repeat(128)}1b`,
+      metadata: {
+        [reservedKey]: { name: 'attacker-controlled' },
+      },
+    };
+
+    expect(() => registerIdentitySchema.parse(payload)).toThrow();
+  });
+
+  it('accepts the explicit client metadata allowlist', () => {
+    const hash = `0x${'a'.repeat(64)}`;
+    const parsed = registerIdentitySchema.parse({
+      did: `did:aethelred:testnet:${address}`,
+      controller: address,
+      publicKey: Buffer.from('a-valid-public-key-that-is-long-enough').toString('base64'),
+      recoveryHash: 'a'.repeat(64),
+      signature: `0x${'0'.repeat(128)}1b`,
+      metadata: {
+        avatarUri: 'https://example.test/avatar.png',
+        didDocument: { id: `did:aethelred:testnet:${address.toLowerCase()}` },
+        didHash: hash,
+        txHash: hash,
+      },
+    });
+
+    expect(parsed.metadata).toEqual({
+      avatarUri: 'https://example.test/avatar.png',
+      didDocument: { id: `did:aethelred:testnet:${address.toLowerCase()}` },
+      didHash: hash,
+      txHash: hash,
+    });
+  });
 });

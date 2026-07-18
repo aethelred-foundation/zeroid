@@ -15,6 +15,19 @@ jest.mock('../src/services/tee', () => ({
 
 import { buildTrustedOIDCClaims } from '../src/services/enterprise/oidc-claims';
 
+function legacySubject(
+  metadata: Record<string, unknown>,
+  teeAttestationId: string | null,
+  displayName: string | null = null,
+) {
+  return {
+    displayName,
+    metadata,
+    teeAttestationId,
+    updatedAt: new Date('2026-04-28T00:00:00.000Z'),
+  };
+}
+
 describe('buildTrustedOIDCClaims', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -23,16 +36,18 @@ describe('buildTrustedOIDCClaims', () => {
   });
 
   it('does not issue profile or contact claims from self-asserted subject metadata', async () => {
-    const claims = await buildTrustedOIDCClaims('identity-1', {
-      displayName: 'Alice Sovereign',
-      metadata: {
-        name: 'Alice Metadata',
-        email: 'alice@example.test',
-        email_verified: true,
-      },
-      teeAttestationId: 'attestation-stale',
-      updatedAt: new Date('2026-04-28T00:00:00.000Z'),
-    });
+    const claims = await buildTrustedOIDCClaims(
+      'identity-1',
+      legacySubject(
+        {
+          name: 'Alice Metadata',
+          email: 'alice@example.test',
+          email_verified: true,
+        },
+        'attestation-stale',
+        'Alice Sovereign',
+      ),
+    );
 
     expect(mockGetVerificationStatus).toHaveBeenCalledWith('identity-1');
     expect(mockIsAttestationValid).toHaveBeenCalledWith('attestation-stale');
@@ -46,7 +61,7 @@ describe('buildTrustedOIDCClaims', () => {
     expect(claims).not.toHaveProperty('tee_attestation_id');
   });
 
-  it('issues government and TEE claims only from current evidence', async () => {
+  it('never promotes user metadata to verified claims even when current government evidence exists', async () => {
     mockGetVerificationStatus.mockResolvedValueOnce({
       verified: true,
       provider: 'EMIRATES_ID',
@@ -57,59 +72,43 @@ describe('buildTrustedOIDCClaims', () => {
     });
     mockIsAttestationValid.mockResolvedValueOnce(true);
 
-    const claims = await buildTrustedOIDCClaims('identity-1', {
-      displayName: null,
-      metadata: {
-        verified_oidc_claims: {
-          name: 'Alice Sovereign',
-          email: 'alice@example.test',
-          phone_number: '+971501234567',
-          address: {
-            formatted: 'Dubai, AE',
-            country: 'AE',
-            internal_note: 'do-not-emit',
+    const claims = await buildTrustedOIDCClaims(
+      'identity-1',
+      legacySubject(
+        {
+          verified_oidc_claims: {
+            name: 'Alice Sovereign',
+            email: 'alice@example.test',
+            phone_number: '+971501234567',
+            address: {
+              formatted: 'Dubai, AE',
+              country: 'AE',
+              internal_note: 'do-not-emit',
+            },
+            nationality: 'ARE',
           },
-          nationality: 'ARE',
+          given_name: 'Unverified',
+          age_over_21: true,
         },
-        given_name: 'Unverified',
-        age_over_21: true,
-      },
-      teeAttestationId: 'attestation-current',
-      updatedAt: new Date('2026-04-28T00:00:00.000Z'),
-    });
+        'attestation-current',
+      ),
+    );
 
     expect(claims).toMatchObject({
-      name: 'Alice Sovereign',
-      email: 'alice@example.test',
-      email_verified: true,
-      phone_number: '+971501234567',
-      phone_number_verified: true,
-      address: {
-        formatted: 'Dubai, AE',
-        country: 'AE',
-      },
-      nationality: 'ARE',
       kyc_level: 'government_verified',
       kyc_provider: 'emirates_id',
       kyc_verified_at: 1777334400,
       verification_level: 'government_and_tee',
       tee_attestation_id: 'attestation-current',
-      verified_claims: {
-        verification: expect.objectContaining({
-          trust_framework: 'zeroid_government',
-          assurance_level: 'government_verified',
-          provider: 'emirates_id',
-          reference_id: 'eid-current',
-        }),
-        claims: expect.objectContaining({
-          name: 'Alice Sovereign',
-          email: 'alice@example.test',
-          phone_number: '+971501234567',
-          nationality: 'ARE',
-        }),
-      },
     });
-    expect(claims.address).not.toHaveProperty('internal_note');
+    expect(claims).not.toHaveProperty('name');
+    expect(claims).not.toHaveProperty('email');
+    expect(claims).not.toHaveProperty('email_verified');
+    expect(claims).not.toHaveProperty('phone_number');
+    expect(claims).not.toHaveProperty('phone_number_verified');
+    expect(claims).not.toHaveProperty('address');
+    expect(claims).not.toHaveProperty('nationality');
+    expect(claims).not.toHaveProperty('verified_claims');
     expect(claims).not.toHaveProperty('given_name');
     expect(claims).not.toHaveProperty('age_over_21');
   });
@@ -125,8 +124,6 @@ describe('buildTrustedOIDCClaims', () => {
     });
 
     const claims = await buildTrustedOIDCClaims('identity-2', {
-      displayName: null,
-      metadata: {},
       teeAttestationId: null,
       updatedAt: new Date('2026-04-28T00:00:00.000Z'),
     });
@@ -149,17 +146,18 @@ describe('buildTrustedOIDCClaims', () => {
       expiresAt: new Date('2025-04-28T00:00:00.000Z'),
     });
 
-    const claims = await buildTrustedOIDCClaims('identity-3', {
-      displayName: null,
-      metadata: {
-        verified_oidc_claims: {
-          name: 'Expired Alice',
-          email: 'expired@example.test',
+    const claims = await buildTrustedOIDCClaims(
+      'identity-3',
+      legacySubject(
+        {
+          verified_oidc_claims: {
+            name: 'Expired Alice',
+            email: 'expired@example.test',
+          },
         },
-      },
-      teeAttestationId: null,
-      updatedAt: new Date('2026-04-28T00:00:00.000Z'),
-    });
+        null,
+      ),
+    );
 
     expect(claims).toEqual({ updated_at: 1777334400 });
   });
@@ -173,17 +171,18 @@ describe('buildTrustedOIDCClaims', () => {
       expiresAt: new Date('2027-04-28T00:00:00.000Z'),
     });
 
-    const claims = await buildTrustedOIDCClaims('identity-4', {
-      displayName: null,
-      metadata: {
-        verified_oidc_claims: {
-          name: 'Undated Alice',
-          email: 'undated@example.test',
+    const claims = await buildTrustedOIDCClaims(
+      'identity-4',
+      legacySubject(
+        {
+          verified_oidc_claims: {
+            name: 'Undated Alice',
+            email: 'undated@example.test',
+          },
         },
-      },
-      teeAttestationId: null,
-      updatedAt: new Date('2026-04-28T00:00:00.000Z'),
-    });
+        null,
+      ),
+    );
 
     expect(claims).toEqual({ updated_at: 1777334400 });
   });
@@ -198,14 +197,49 @@ describe('buildTrustedOIDCClaims', () => {
       expiresAt: new Date('2027-04-28T00:00:00.000Z'),
     });
 
-    const claims = await buildTrustedOIDCClaims('identity-5', {
-      displayName: null,
-      metadata: {
-        verified_oidc_claims: {
-          name: 'Stale Alice',
-          email: 'stale@example.test',
+    const claims = await buildTrustedOIDCClaims(
+      'identity-5',
+      legacySubject(
+        {
+          verified_oidc_claims: {
+            name: 'Stale Alice',
+            email: 'stale@example.test',
+          },
         },
-      },
+        null,
+      ),
+    );
+
+    expect(claims).toEqual({ updated_at: 1777334400 });
+  });
+
+  it('requires an explicit verified=true status before issuing assurance claims', async () => {
+    mockGetVerificationStatus.mockResolvedValueOnce({
+      provider: 'EMIRATES_ID',
+      referenceId: 'eid-implicit',
+      verifiedFields: ['fullName'],
+      verifiedAt: new Date('2026-04-28T00:00:00.000Z'),
+      expiresAt: new Date('2027-04-28T00:00:00.000Z'),
+    });
+
+    const claims = await buildTrustedOIDCClaims('identity-6', {
+      teeAttestationId: null,
+      updatedAt: new Date('2026-04-28T00:00:00.000Z'),
+    });
+
+    expect(claims).toEqual({ updated_at: 1777334400 });
+  });
+
+  it('requires an explicit evidence expiry before issuing assurance claims', async () => {
+    mockGetVerificationStatus.mockResolvedValueOnce({
+      verified: true,
+      provider: 'EMIRATES_ID',
+      referenceId: 'eid-no-expiry',
+      verifiedFields: ['fullName'],
+      verifiedAt: new Date('2026-04-28T00:00:00.000Z'),
+    });
+
+    const claims = await buildTrustedOIDCClaims('identity-7', {
       teeAttestationId: null,
       updatedAt: new Date('2026-04-28T00:00:00.000Z'),
     });
