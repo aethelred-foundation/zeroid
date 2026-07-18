@@ -258,7 +258,7 @@ describe('AI compliance route enterprise access control', () => {
   });
 
   it('authorizes credential risk by issuer or subject organization membership', async () => {
-    await request(createApp())
+    const response = await request(createApp())
       .get(`/ai/compliance/risk/${credentialId}`)
       .query({ entityType: 'credential', jurisdiction: 'US' })
       .expect(200);
@@ -281,10 +281,10 @@ describe('AI compliance route enterprise access control', () => {
       'credential',
       'US',
     );
-    expect(mockComputeComplianceScore).toHaveBeenCalledWith(
-      screenBody.identityId,
-      'US',
-    );
+    expect(mockComputeComplianceScore).not.toHaveBeenCalled();
+    expect(response.body.data).toEqual({
+      riskAssessment: { assessmentId: 'risk-1' },
+    });
   });
 
   it('filters global alert stores down to organization members', async () => {

@@ -113,6 +113,7 @@ describe('ComplianceAdvisorService production screening guardrails', () => {
       result: 'potential_match',
       matchScore: 91,
       listsChecked: ['ofac_sdn', 'eu_consolidated', 'un_sanctions', 'uae_local', 'pep_database'],
+      unavailableChecks: ['adverse_media'],
     });
     expect(result.matchedLists).toEqual([
       expect.objectContaining({
@@ -134,5 +135,36 @@ describe('ComplianceAdvisorService production screening guardrails', () => {
         code: 'PRODUCTION_SCREENING_UNAVAILABLE',
         statusCode: 503,
       });
+  });
+
+  it.each([
+    {
+      operation: () => new ComplianceAdvisorService().generateReport(
+        request.identityId,
+        'comprehensive',
+        'AE',
+      ),
+      code: 'COMPLIANCE_REPORT_POLICY_UNCONFIGURED',
+    },
+    {
+      operation: () => new ComplianceAdvisorService().queryComplianceAdvisor({
+        question: 'What controls apply to this organization?',
+        context: { jurisdiction: 'AE' },
+      }),
+      code: 'COMPLIANCE_ADVISOR_KB_UNCONFIGURED',
+    },
+    {
+      operation: () => new ComplianceAdvisorService().assessRegulatoryChangeImpact(
+        'Authority notice',
+        'A material policy change requiring an approved scope mapping.',
+        'AE',
+      ),
+      code: 'REGULATORY_IMPACT_POLICY_UNCONFIGURED',
+    },
+  ])('fails closed for ungoverned production compliance content: $code', async ({ operation, code }) => {
+    await expect(operation()).rejects.toMatchObject<Partial<ComplianceAdvisorError>>({
+      code,
+      statusCode: 503,
+    });
   });
 });

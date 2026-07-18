@@ -39,6 +39,8 @@ export interface SanctionsScreeningResult {
   screenedAt: Date;
   expiresAt: Date;
   listsChecked: string[];
+  /** Screening categories for which no provider ran. */
+  unavailableChecks: string[];
 }
 
 interface SanctionsListMatch {
@@ -307,7 +309,7 @@ export class ComplianceAdvisorService {
     const listsChecked = [
       'OFAC SDN', 'OFAC Consolidated', 'EU Consolidated Sanctions',
       'UN Security Council', 'UK HM Treasury', 'FATF High-Risk Jurisdictions',
-      'PEP Global Database', 'Adverse Media Screening',
+      'PEP Global Database',
     ];
 
     const screeningResult: SanctionsScreeningResult = {
@@ -322,6 +324,7 @@ export class ComplianceAdvisorService {
       screenedAt: new Date(),
       expiresAt: new Date(Date.now() + 24 * 3600_000),
       listsChecked,
+      unavailableChecks: ['adverse_media'],
     };
 
     // Persist screening result
@@ -429,6 +432,7 @@ export class ComplianceAdvisorService {
       screenedAt: new Date(result.timestamp),
       expiresAt: new Date(result.nextScreeningDate),
       listsChecked: result.listsScreened,
+      unavailableChecks: ['adverse_media'],
     };
   }
 
@@ -440,6 +444,14 @@ export class ComplianceAdvisorService {
     reportType: ComplianceReportType,
     jurisdiction: string,
   ): Promise<ComplianceReport> {
+    if (isProductionRuntime()) {
+      throw new ComplianceAdvisorError(
+        'Production compliance reports require an approved, versioned compliance policy and authority-reviewed report templates.',
+        'COMPLIANCE_REPORT_POLICY_UNCONFIGURED',
+        503,
+      );
+    }
+
     const reportId = `rpt-${crypto.randomUUID()}`;
     const framework = this.getFrameworkForJurisdiction(jurisdiction);
 
@@ -686,6 +698,14 @@ export class ComplianceAdvisorService {
   // Natural language compliance advisor
   // -------------------------------------------------------------------------
   async queryComplianceAdvisor(query: AdvisorQuery): Promise<AdvisorResponse> {
+    if (isProductionRuntime()) {
+      throw new ComplianceAdvisorError(
+        'The compliance advisor is unavailable until an authority-reviewed, versioned regulatory knowledge source is configured.',
+        'COMPLIANCE_ADVISOR_KB_UNCONFIGURED',
+        503,
+      );
+    }
+
     const queryId = `cq-${crypto.randomUUID()}`;
 
     logger.info('compliance_advisor_query', {
@@ -781,7 +801,7 @@ export class ComplianceAdvisorService {
     await prisma.auditLog.create({
       data: {
         identityId: query.context?.identityId ?? 'system',
-        action: 'COMPLIANCE_ADVISOR_QUERY' as any,
+        action: 'COMPLIANCE_ADVISOR_QUERY',
         resourceType: 'compliance_advisor_query',
         resourceId: queryId,
         details: {
@@ -804,6 +824,14 @@ export class ComplianceAdvisorService {
     changes: string,
     jurisdiction: string,
   ): Promise<RegulatoryChangeImpact> {
+    if (isProductionRuntime()) {
+      throw new ComplianceAdvisorError(
+        'Regulatory impact assessment is unavailable until an approved policy mapping defines scope, effective dates, and affected records.',
+        'REGULATORY_IMPACT_POLICY_UNCONFIGURED',
+        503,
+      );
+    }
+
     const changeId = `rci-${crypto.randomUUID()}`;
 
     logger.info('regulatory_change_impact_assessment', {
@@ -1239,7 +1267,7 @@ export class ComplianceAdvisorService {
       await prisma.auditLog.create({
         data: {
           identityId: result.identityId,
-          action: 'SANCTIONS_SCREENING' as any,
+          action: 'SANCTIONS_SCREENING',
           resourceType: 'screening',
           resourceId: result.screeningId,
           details: {

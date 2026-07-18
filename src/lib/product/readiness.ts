@@ -44,7 +44,7 @@ export const FEATURE_READINESS: Record<string, FeatureReadiness> = {
     href: "/ai-compliance",
     status: "Preview",
     evidence:
-      "AI compliance workflows are useful for pilots but require model governance and audit sign-off.",
+      "Signed-list screening, organization alerts, and record-based risk evidence are implemented; legal advice, reports, and impact models stay unavailable in production pending approved sources and policy mappings.",
   },
   "/agent-identity": {
     href: "/agent-identity",

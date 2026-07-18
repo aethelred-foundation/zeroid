@@ -273,8 +273,6 @@ router.get(
         jurisdiction?: string;
         entityType: 'identity' | 'credential' | 'transaction';
       };
-      let complianceScoreEntityId = identityId as string;
-
       if (entityType === 'identity') {
         if (!(await requireIdentityTarget(req, res, identityId as string))) return;
       } else if (entityType === 'credential') {
@@ -284,7 +282,6 @@ router.get(
           identityId as string,
         );
         if (!credentialTarget) return;
-        complianceScoreEntityId = credentialTarget.subjectId;
       } else {
         res.status(403).json({
           error: 'COMPLIANCE_TARGET_SCOPE_UNSUPPORTED',
@@ -300,17 +297,10 @@ router.get(
         jurisdiction,
       );
 
-      // Also fetch compliance score
-      const complianceScore = await complianceAdvisorService.computeComplianceScore(
-        complianceScoreEntityId,
-        jurisdiction ?? 'US',
-      );
-
       res.json({
         success: true,
         data: {
           riskAssessment: assessment,
-          complianceScore,
         },
       });
     } catch (error) {

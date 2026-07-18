@@ -78,7 +78,7 @@ beforeEach(() => {
 describe("useScreenIdentity", () => {
   const cleanResult = {
     screeningId: "scr-1",
-    identityId: "id-1",
+    identityId: "550e8400-e29b-41d4-a716-446655440000",
     result: "clear",
     matchScore: 0,
     matchedLists: [],
@@ -88,6 +88,7 @@ describe("useScreenIdentity", () => {
     screenedAt: "2026-01-01T00:00:00Z",
     expiresAt: "2026-02-01T00:00:00Z",
     listsChecked: ["ofac_sdn"],
+    unavailableChecks: ["adverse_media"],
   };
 
   const flaggedResult = {
@@ -248,14 +249,6 @@ describe("useRiskAssessment", () => {
       confidence: 0.9,
       timestamp: "2026-01-01T00:00:00Z",
     },
-    complianceScore: {
-      entityId: "id-1",
-      jurisdiction: "US",
-      overallScore: 92,
-      rating: "excellent",
-      components: {},
-      computedAt: "2026-01-01T00:00:00Z",
-    },
   };
 
   it("fetches risk assessment for given identityId", async () => {
@@ -267,6 +260,7 @@ describe("useRiskAssessment", () => {
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(mockApiClient.get).toHaveBeenCalledWith(
       "/api/v1/ai/compliance/risk/id-1",
+      { entityType: "identity" },
     );
     expect(result.current.data).toEqual(mockRiskResponse);
   });
@@ -296,14 +290,6 @@ describe("useRefreshRiskAssessment", () => {
       confidence: 0.88,
       timestamp: "2026-01-01T00:00:00Z",
     },
-    complianceScore: {
-      entityId: "id-1",
-      jurisdiction: "US",
-      overallScore: 80,
-      rating: "good",
-      components: {},
-      computedAt: "2026-01-01T00:00:00Z",
-    },
   };
 
   it("fetches latest risk and shows success toast with score", async () => {
@@ -318,6 +304,7 @@ describe("useRefreshRiskAssessment", () => {
 
     expect(mockApiClient.get).toHaveBeenCalledWith(
       "/api/v1/ai/compliance/risk/id-1",
+      { entityType: "identity" },
     );
     expect(mockToast.success).toHaveBeenCalledWith("Risk assessment updated", {
       description: "Score: 42 (review)",
@@ -414,7 +401,7 @@ describe("useComplianceAlerts", () => {
     alerts: [
       {
         alertId: "a-1",
-        entityId: "id-1",
+        entityId: "550e8400-e29b-41d4-a716-446655440000",
         level: "warning",
         category: "sanctions",
         title: "Alert 1",
@@ -461,7 +448,19 @@ describe("useComplianceAlerts", () => {
 
 describe("useAcknowledgeAlert", () => {
   it("posts acknowledge and shows success toast", async () => {
-    mockApiClient.post.mockResolvedValue(undefined);
+    mockApiClient.post.mockResolvedValue({
+      alertId: "alert-123",
+      entityId: "550e8400-e29b-41d4-a716-446655440000",
+      level: "warning",
+      category: "sanctions",
+      title: "Review required",
+      description: "Potential match",
+      regulation: "FATF",
+      actionRequired: "Review",
+      createdAt: "2026-01-01T00:00:00Z",
+      acknowledgedAt: "2026-01-01T00:05:00Z",
+      source: "compliance",
+    });
     const { result } = renderHook(() => useAcknowledgeAlert(), {
       wrapper: createWrapper(),
     });
