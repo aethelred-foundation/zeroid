@@ -155,7 +155,9 @@ describe("IdentityCreation — default testnet flow", () => {
     connected();
     render(<IdentityCreation />);
     fireEvent.click(screen.getByText("Next"));
-    expect(screen.getByText("Register Your Identity")).toBeInTheDocument();
+    expect(
+      screen.getByText("Registration Temporarily Unavailable"),
+    ).toBeInTheDocument();
     fireEvent.click(screen.getByText("Back"));
     expect(screen.getByText("Connect Wallet")).toBeInTheDocument();
   });
@@ -180,56 +182,24 @@ describe("IdentityCreation — default testnet flow", () => {
     rerender(<IdentityCreation />);
     expect(screen.getByText("Next").closest("button")).not.toBeDisabled();
     fireEvent.click(screen.getByText("Next"));
-    expect(screen.getByText("Register Your Identity")).toBeInTheDocument();
+    expect(
+      screen.getByText("Registration Temporarily Unavailable"),
+    ).toBeInTheDocument();
   });
 
-  it("registers the identity and shows the success state", async () => {
+  it("truthfully disables registration without invoking the wallet flow", () => {
     connected();
     render(<IdentityCreation />);
     fireEvent.click(screen.getByText("Next"));
-    await act(async () =>
-      fireEvent.click(screen.getByRole("button", { name: /register identity/i })),
-    );
-    expect(mockCreateIdentity).toHaveBeenCalled();
-    expect(screen.getByText("Identity Registered")).toBeInTheDocument();
-    const cta = screen.getByRole("link", { name: /go to dashboard/i });
-    expect(cta).toHaveAttribute("href", "/");
-  });
-
-  it("shows Registering... while the transaction is in flight", async () => {
-    connected();
-    let resolve: () => void;
-    mockCreateIdentity.mockImplementation(
-      () => new Promise<void>((r) => (resolve = r)),
-    );
-    render(<IdentityCreation />);
-    fireEvent.click(screen.getByText("Next"));
-    act(() => fireEvent.click(screen.getByRole("button", { name: /register identity/i })));
-    expect(screen.getByText("Registering...")).toBeInTheDocument();
-    await act(async () => resolve!());
-  });
-
-  it("surfaces a registration error and stays on the register step", async () => {
-    connected();
-    mockCreateIdentity.mockRejectedValueOnce(new Error("Transaction reverted"));
-    render(<IdentityCreation />);
-    fireEvent.click(screen.getByText("Next"));
-    await act(async () =>
-      fireEvent.click(screen.getByRole("button", { name: /register identity/i })),
-    );
-    expect(screen.getByText("Transaction reverted")).toBeInTheDocument();
+    const registrationButton = screen.getByRole("button", {
+      name: /registration unavailable/i,
+    });
+    expect(registrationButton).toBeDisabled();
+    expect(
+      screen.getByText(/wallet will not be asked to sign or submit a transaction/i),
+    ).toBeInTheDocument();
+    expect(mockCreateIdentity).not.toHaveBeenCalled();
     expect(screen.queryByText("Identity Registered")).not.toBeInTheDocument();
-  });
-
-  it("falls back to a generic message on a non-Error registration failure", async () => {
-    connected();
-    mockCreateIdentity.mockRejectedValueOnce(null);
-    render(<IdentityCreation />);
-    fireEvent.click(screen.getByText("Next"));
-    await act(async () =>
-      fireEvent.click(screen.getByRole("button", { name: /register identity/i })),
-    );
-    expect(screen.getByText("Identity registration failed")).toBeInTheDocument();
   });
 
   it("clicking a completed step indicator navigates back", () => {

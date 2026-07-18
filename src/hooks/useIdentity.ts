@@ -6,29 +6,16 @@
  */
 
 import { useCallback } from "react";
-import {
-  useAccount,
-  usePublicClient,
-  useReadContract,
-  useSignMessage,
-} from "wagmi";
+import { useAccount, useReadContract } from "wagmi";
 import { useSafeWriteContract } from "./useSafeWriteContract";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { type Address, type Hash, keccak256, toBytes } from "viem";
+import { type Address, type Hash } from "viem";
 import { toast } from "sonner";
 import { apiClient } from "@/lib/api/client";
 import {
-  buildRegistrationMessage,
+  createIdentityRegistrationUnavailableError,
   getIdentityAuthToken,
-  getRegistrationAuthContext,
-  getRegistrationDid,
-  recoverRegistrationPublicKey,
-  storeIdentityAuthToken,
 } from "@/lib/identity/registration";
-import {
-  friendlyRegistrationError,
-  friendlyWalletError,
-} from "@/lib/wallet-errors";
 import {
   IDENTITY_REGISTRY_ADDRESS,
   IDENTITY_REGISTRY_ABI,
@@ -121,122 +108,17 @@ export function useIdentityProfile() {
 // ---------------------------------------------------------------------------
 
 export function useCreateIdentity() {
-  const queryClient = useQueryClient();
-  const { writeContractAsync } = useSafeWriteContract();
-  const { signMessageAsync } = useSignMessage();
-  const { address } = useAccount();
-  const publicClient = usePublicClient();
-
   return useMutation({
-    mutationFn: async (params: CreateIdentityParams): Promise<Hash> => {
-      const did = getRegistrationDid(params.didDocument, address);
-      if (!address) {
-        throw new Error("Wallet must be connected to register an identity.");
-      }
-
-      // Derive the on-chain arguments from the DID itself. The contract's
-      // registerIdentity(bytes32 didHash, bytes32 recoveryHash) reverts on a
-      // zero didHash, so the didHash MUST be the real keccak of the DID — not
-      // the placeholder EMPTY_BYTES32 the wizard passes — and the second arg
-      // MUST be a bytes32 recovery hash, not the recovery ADDRESS.
-      const didHash = keccak256(toBytes(did));
-      const recoveryController =
-        params.recoveryAddress && params.recoveryAddress !== ZERO_ADDRESS
-          ? params.recoveryAddress
-          : (address ?? ZERO_ADDRESS);
-      const recoveryHashHex = keccak256(
-        toBytes(`${did}#recovery:${recoveryController.toLowerCase()}`),
-      );
-      // Backend recovery hash is the same digest without the 0x prefix
-      // (its schema is a bare 64-char hex SHA-256-shaped string).
-      const recoveryHash = recoveryHashHex.slice(2);
-
-      // A DID document key supplied by the wizard cannot prove control of the
-      // connected EVM account. Always request a wallet signature and derive
-      // the registration key from that exact proof.
-      const message = buildRegistrationMessage({
-        did,
-        controller: address,
-        recoveryHash,
-        ...getRegistrationAuthContext(),
-      });
-      let signature: `0x${string}`;
-      try {
-        signature = await signMessageAsync({ message });
-      } catch (error) {
-        // Surface signing failures as guidance (e.g. personal_sign reaching
-        // the node because a non-signing provider owns window.ethereum).
-        throw friendlyWalletError(error);
-      }
-      const publicKey = await recoverRegistrationPublicKey(message, signature);
-
-      // Anchor the DID on-chain: registerIdentity(didHash, recoveryHash).
-      const hash = await writeContractAsync({
-        address: IDENTITY_REGISTRY_ADDRESS as Address,
-        abi: IDENTITY_REGISTRY_ABI,
-        functionName: "registerIdentity",
-        args: [didHash, recoveryHashHex],
-      });
-
-      // A wallet returning a hash only means it ACCEPTED the request — it says
-      // nothing about where (or whether) the transaction landed. Require the
-      // receipt on THIS app's configured RPC, with success status, before the
-      // backend learns about the identity or the user is told it is anchored.
-      // This closes two real failure modes: a reverted transaction, and a
-      // wallet whose RPC for chain 7332 points at a different node than ours
-      // (the hash then never appears here and we must not claim success).
-      if (!publicClient) {
-        throw new Error(
-          "No RPC client for the active network — cannot confirm the registration transaction.",
-        );
-      }
-      let receipt;
-      try {
-        receipt = await publicClient.waitForTransactionReceipt({
-          hash,
-          timeout: 90_000,
-        });
-      } catch {
-        throw new Error(
-          `The registration transaction (${hash}) was not confirmed on this network's RPC. ` +
-            "If your wallet talks to a different node for this chain, point it at the same RPC as this app and retry.",
-        );
-      }
-      if (receipt.status !== "success") {
-        throw new Error(
-          "The registration transaction was rejected on-chain. No identity was created.",
-        );
-      }
-
-      // Persist full DID document via API. The stored document carries the
-      // DERIVED did — never a caller-supplied placeholder id.
-      let registration: Awaited<ReturnType<typeof apiClient.registerIdentity>>;
-      try {
-        registration = await apiClient.registerIdentity({
-          did,
-          controller: address,
-          publicKey,
-          recoveryHash,
-          signature,
-          metadata: {
-            txHash: hash,
-            didHash,
-            didDocument: { ...params.didDocument, id: did },
-          },
-        });
-      } catch (error) {
-        throw friendlyRegistrationError(error);
-      }
-      storeIdentityAuthToken(registration.token);
-
-      return hash;
-    },
-    onSuccess: () => {
-      toast.success("Identity created successfully");
-      queryClient.invalidateQueries({ queryKey: ["identity"] });
+    mutationFn: async (_params: CreateIdentityParams): Promise<Hash> => {
+      // Do not ask for a signature or submit an irreversible wallet
+      // transaction while the API cannot independently bind the confirmed
+      // registry event to the identity being persisted.
+      throw createIdentityRegistrationUnavailableError();
     },
     onError: (err: Error) => {
-      toast.error("Failed to create identity", { description: err.message });
+      toast.error("Identity registration unavailable", {
+        description: err.message,
+      });
     },
   });
 }

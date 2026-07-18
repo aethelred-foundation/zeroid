@@ -2,7 +2,6 @@
 
 import { useState, useCallback, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import Link from "next/link";
 import {
   Wallet,
   ShieldCheck,
@@ -20,9 +19,9 @@ import {
   isAethelredWallet,
   orderWalletConnectors,
 } from "@/config/wallet-picker";
-import { useIdentity } from "@/hooks/useIdentity";
 import { useUAEPass } from "@/hooks/useUAEPass";
 import { useBiometric } from "@/hooks/useBiometric";
+import { IDENTITY_REGISTRY_VERIFICATION_UNAVAILABLE_MESSAGE } from "@/lib/identity/registration";
 import type { IdentityCreationStep } from "@/types";
 
 interface StepConfig {
@@ -60,8 +59,8 @@ const ALL_STEPS: StepConfig[] = [
   },
   {
     id: "register",
-    title: "Register Identity",
-    subtitle: "Sign in with your wallet and anchor your DID on-chain",
+    title: "Identity Registration",
+    subtitle: "Registration is paused until server-side chain verification is ready",
     icon: Globe,
   },
 ];
@@ -97,11 +96,9 @@ export default function IdentityCreation() {
   const [stepErrors, setStepErrors] = useState<Record<number, string>>({});
   const [completedSteps, setCompletedSteps] = useState<Set<number>>(new Set());
   const [isProcessing, setIsProcessing] = useState(false);
-  const [registered, setRegistered] = useState(false);
 
   const { address, isConnected } = useAccount();
   const { connectors, connectAsync } = useConnect();
-  const { createIdentity } = useIdentity();
   const {
     initiateVerification: initiateUAEPass,
     verificationStatus: uaePassStatus,
@@ -178,16 +175,6 @@ export default function IdentityCreation() {
   const handleBiometricScan = useCallback(
     () => runStep(startScan, "Biometric scan failed"),
     [startScan, runStep],
-  );
-
-  const handleRegister = useCallback(
-    async () => {
-      const ok = await runStep(async () => {
-        await createIdentity();
-      }, "Identity registration failed");
-      if (ok) setRegistered(true);
-    },
-    [createIdentity, runStep],
   );
 
   const currentError = stepErrors[currentStep];
@@ -365,66 +352,19 @@ export default function IdentityCreation() {
                 animate={{ scale: 1 }}
                 transition={{ type: "spring", stiffness: 200 }}
               >
-                {registered ? (
-                  <CheckCircle2 className="w-8 h-8 text-status-verified" />
-                ) : (
-                  <Globe className="w-8 h-8 text-brand-500" />
-                )}
+                <AlertCircle className="w-8 h-8 text-status-pending" />
               </motion.div>
 
-              {registered ? (
-                <>
-                  <h4 className="font-semibold text-[var(--text-primary)] mb-2">
-                    Identity Registered
-                  </h4>
-                  <p className="text-sm text-[var(--text-secondary)] mb-6">
-                    Your DID is anchored on the Aethelred network and your session
-                    is active. You can now request credentials and run proofs.
-                  </p>
-                  <Link href="/" className="btn-primary">
-                    Go to Dashboard
-                    <ArrowRight className="w-4 h-4" />
-                  </Link>
-                </>
-              ) : (
-                <>
-                  <h4 className="font-semibold text-[var(--text-primary)] mb-2">
-                    Register Your Identity
-                  </h4>
-                  <p className="text-sm text-[var(--text-secondary)] mb-6">
-                    This anchors your decentralized identifier on-chain and starts
-                    your session. Your wallet will prompt you twice — first to{" "}
-                    <span className="text-[var(--text-primary)]">sign a message</span>{" "}
-                    (free), then to confirm one{" "}
-                    <span className="text-[var(--text-primary)]">
-                      on-chain transaction
-                    </span>{" "}
-                    (a little AETHEL for gas).
-                  </p>
-                  {!isConnected && (
-                    <p className="text-sm text-status-pending mb-4">
-                      Connect your wallet first (step 1).
-                    </p>
-                  )}
-                  <button
-                    onClick={handleRegister}
-                    disabled={isProcessing || !isConnected}
-                    className="btn-primary"
-                  >
-                    {isProcessing ? (
-                      <>
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                        Registering...
-                      </>
-                    ) : (
-                      <>
-                        <Globe className="w-4 h-4" />
-                        Register Identity
-                      </>
-                    )}
-                  </button>
-                </>
-              )}
+              <h4 className="font-semibold text-[var(--text-primary)] mb-2">
+                Registration Temporarily Unavailable
+              </h4>
+              <p className="text-sm text-[var(--text-secondary)] mb-6">
+                {IDENTITY_REGISTRY_VERIFICATION_UNAVAILABLE_MESSAGE}
+              </p>
+              <button disabled className="btn-primary" aria-disabled="true">
+                <Globe className="w-4 h-4" />
+                Registration Unavailable
+              </button>
             </div>
           </div>
         );

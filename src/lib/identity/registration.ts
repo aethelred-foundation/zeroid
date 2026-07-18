@@ -16,6 +16,11 @@ const IDENTITY_AUTH_TOKEN_STORAGE_KEY = "zeroid.identity.authToken";
 const ALLOW_BROWSER_TOKEN_STORAGE_FLAG =
   "NEXT_PUBLIC_ZEROID_ALLOW_BROWSER_TOKEN_STORAGE";
 
+export const IDENTITY_REGISTRY_VERIFICATION_UNAVAILABLE_CODE =
+  "IDENTITY_REGISTRY_VERIFICATION_UNAVAILABLE" as const;
+export const IDENTITY_REGISTRY_VERIFICATION_UNAVAILABLE_MESSAGE =
+  "Identity registration is temporarily unavailable while ZeroID adds server-side verification of the on-chain registry transaction. Your wallet will not be asked to sign or submit a transaction, and no identity or session will be created.";
+
 let inMemoryIdentityAuthToken: string | undefined;
 
 type RegistrationPublicKeyRecord = Record<string, unknown>;
@@ -39,6 +44,19 @@ export interface BackendIdentityRegistrationResult {
   identity: unknown;
   token: string;
   sessionId: string;
+}
+
+export function createIdentityRegistrationUnavailableError(): Error & {
+  code: typeof IDENTITY_REGISTRY_VERIFICATION_UNAVAILABLE_CODE;
+  statusCode: 503;
+} {
+  return Object.assign(
+    new Error(IDENTITY_REGISTRY_VERIFICATION_UNAVAILABLE_MESSAGE),
+    {
+      code: IDENTITY_REGISTRY_VERIFICATION_UNAVAILABLE_CODE,
+      statusCode: 503 as const,
+    },
+  );
 }
 
 export function getIdentityAuthToken(): string | undefined {

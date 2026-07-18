@@ -342,150 +342,7 @@ describe("useIdentity hooks", () => {
   // =========================================================================
 
   describe("useCreateIdentity", () => {
-    it("registers identity on-chain and via API, then shows toast", async () => {
-      (apiClient.registerIdentity as jest.Mock).mockResolvedValue({
-        token: "identity-token",
-        sessionId: "session-1",
-        identity: {},
-      });
-
-      const { useCreateIdentity } = await import("@/hooks/useIdentity");
-      const { result } = renderHook(() => useCreateIdentity(), {
-        wrapper: createQueryWrapper(),
-      });
-
-      await act(async () => {
-        await result.current.mutateAsync({
-          didDocumentHash: validRecoveryHash,
-          recoveryAddress: "0xrecovery",
-          // Canonical address-bound DID, mixed-case address on purpose.
-          didDocument: {
-            id: "did:aethelred:testnet:0x1234567890ABCDEF1234567890abcdef12345678",
-          },
-          publicKeys: [validPublicKey],
-        } as any);
-      });
-
-      // On-chain args are DERIVED bytes32 hashes, not the placeholder/address:
-      // registerIdentity(keccak256(did), keccak256(did#recovery:controller)).
-      const { keccak256, toBytes } = require("viem");
-      const expectedDid = `did:aethelred:testnet:${mockAddress}`;
-      const expectedDidHash = keccak256(toBytes(expectedDid));
-      // recoveryAddress "0xrecovery" was supplied, so it is the recovery
-      // controller (lowercased) — not the wallet address.
-      const expectedRecoveryHex = keccak256(
-        toBytes(`${expectedDid}#recovery:0xrecovery`),
-      );
-      expect(mockWriteContractAsync).toHaveBeenCalledWith(
-        expect.objectContaining({
-          functionName: "registerIdentity",
-          args: [expectedDidHash, expectedRecoveryHex],
-        }),
-      );
-
-      // The DID passes through normalized, and the backend gets the same
-      // recovery digest without the 0x prefix.
-      expect(apiClient.registerIdentity).toHaveBeenCalledWith(
-        expect.objectContaining({
-          did: expectedDid,
-          controller: mockAddress,
-          publicKey: validPublicKey,
-          recoveryHash: expectedRecoveryHex.slice(2),
-          signature: "0xsignature",
-        }),
-      );
-      expect(mockSignMessageAsync).toHaveBeenCalledTimes(1);
-      expect(mockSignMessageAsync).toHaveBeenCalledWith({
-        message: expect.stringContaining(`DID: ${expectedDid}`),
-      });
-      expect(getIdentityAuthToken()).toBe("identity-token");
-      expect(
-        window.sessionStorage.getItem("zeroid.identity.authToken"),
-      ).toBeNull();
-
-      expect(toast.success).toHaveBeenCalledWith(
-        "Identity created successfully",
-      );
-    });
-
-    it("never registers a placeholder DID — derives the wallet DID instead", async () => {
-      // The wizard once passed { id: "did:aethelred:pending" }, which a loose
-      // pattern accepted verbatim: the backend stored a literal "pending"
-      // identity that squatted the DID for every wallet (409 on retry) while
-      // the address lookup 404'd. Placeholders must fall through to address
-      // derivation, and the stored didDocument must carry the derived id.
-      (apiClient.registerIdentity as jest.Mock).mockResolvedValue({
-        token: "identity-token",
-        sessionId: "session-1",
-        identity: {},
-      });
-
-      const { useCreateIdentity } = await import("@/hooks/useIdentity");
-      const { result } = renderHook(() => useCreateIdentity(), {
-        wrapper: createQueryWrapper(),
-      });
-
-      await act(async () => {
-        await result.current.mutateAsync({
-          didDocumentHash: validRecoveryHash,
-          recoveryAddress: "0xrecovery",
-          didDocument: { id: "did:aethelred:pending" },
-          publicKeys: [validPublicKey],
-        } as any);
-      });
-
-      const expectedDid = `did:aethelred:testnet:${mockAddress}`;
-      expect(apiClient.registerIdentity).toHaveBeenCalledWith(
-        expect.objectContaining({
-          did: expectedDid,
-          metadata: expect.objectContaining({
-            didDocument: expect.objectContaining({ id: expectedDid }),
-          }),
-        }),
-      );
-    });
-
-    it("waits for the tx receipt before telling the backend", async () => {
-      // The wallet handing back a hash is NOT proof the transaction landed on
-      // this app's chain — a wallet pointed at a different RPC for the same
-      // chain id broadcasts elsewhere and the hash never appears here. The
-      // backend must not learn about an identity until the receipt confirms.
-      (apiClient.registerIdentity as jest.Mock).mockResolvedValue({
-        token: "identity-token",
-        sessionId: "session-1",
-        identity: {},
-      });
-
-      const { useCreateIdentity } = await import("@/hooks/useIdentity");
-      const { result } = renderHook(() => useCreateIdentity(), {
-        wrapper: createQueryWrapper(),
-      });
-
-      await act(async () => {
-        await result.current.mutateAsync({
-          didDocumentHash: validRecoveryHash,
-          recoveryAddress: "0xrecovery",
-          didDocument: { id: "did:aethelred:pending" },
-          publicKeys: [validPublicKey],
-        } as any);
-      });
-
-      expect(mockWaitForTransactionReceipt).toHaveBeenCalledWith(
-        expect.objectContaining({ hash: mockTxHash }),
-      );
-      // Ordering: the receipt resolved before the API persisted the DID.
-      const receiptOrder =
-        mockWaitForTransactionReceipt.mock.invocationCallOrder[0];
-      const apiOrder = (apiClient.registerIdentity as jest.Mock).mock
-        .invocationCallOrder[0];
-      expect(receiptOrder).toBeLessThan(apiOrder);
-    });
-
-    it("does not register with the backend when the receipt never arrives", async () => {
-      mockWaitForTransactionReceipt.mockRejectedValue(
-        new Error("Timed out while waiting for transaction"),
-      );
-
+    it("fails before any wallet signature, transaction, API call, or token write", async () => {
       const { useCreateIdentity } = await import("@/hooks/useIdentity");
       const { result } = renderHook(() => useCreateIdentity(), {
         wrapper: createQueryWrapper(),
@@ -496,64 +353,49 @@ describe("useIdentity hooks", () => {
           result.current.mutateAsync({
             didDocumentHash: validRecoveryHash,
             recoveryAddress: "0xrecovery",
-            didDocument: { id: "did:aethelred:pending" },
+            didDocument: { id: `did:aethelred:testnet:${mockAddress}` },
             publicKeys: [validPublicKey],
           } as any),
-        ).rejects.toThrow(/not confirmed on this network's RPC/);
+        ).rejects.toMatchObject({
+          code: "IDENTITY_REGISTRY_VERIFICATION_UNAVAILABLE",
+          statusCode: 503,
+        });
       });
 
+      expect(mockSignMessageAsync).not.toHaveBeenCalled();
+      expect(mockWriteContractAsync).not.toHaveBeenCalled();
+      expect(mockWaitForTransactionReceipt).not.toHaveBeenCalled();
       expect(apiClient.registerIdentity).not.toHaveBeenCalled();
-      expect(toast.error).toHaveBeenCalled();
-    });
-
-    it("does not register with the backend when the tx reverted", async () => {
-      mockWaitForTransactionReceipt.mockResolvedValue({ status: "reverted" });
-
-      const { useCreateIdentity } = await import("@/hooks/useIdentity");
-      const { result } = renderHook(() => useCreateIdentity(), {
-        wrapper: createQueryWrapper(),
-      });
-
-      await act(async () => {
-        await expect(
-          result.current.mutateAsync({
-            didDocumentHash: validRecoveryHash,
-            recoveryAddress: "0xrecovery",
-            didDocument: { id: "did:aethelred:pending" },
-            publicKeys: [validPublicKey],
-          } as any),
-        ).rejects.toThrow(/rejected on-chain/);
-      });
-
-      expect(apiClient.registerIdentity).not.toHaveBeenCalled();
-    });
-
-    it("shows error toast on failure", async () => {
-      mockWriteContractAsync.mockRejectedValue(
-        new Error("User rejected transaction"),
+      expect(getIdentityAuthToken()).toBeUndefined();
+      expect(toast.success).not.toHaveBeenCalled();
+      expect(toast.error).toHaveBeenCalledWith(
+        "Identity registration unavailable",
+        {
+          description: expect.stringContaining(
+            "server-side verification of the on-chain registry transaction",
+          ),
+        },
       );
+    });
+  });
 
-      const { useCreateIdentity } = await import("@/hooks/useIdentity");
-      const { result } = renderHook(() => useCreateIdentity(), {
+  describe("useIdentity registration wrapper", () => {
+    it("preserves the fail-closed registration gate", async () => {
+      const { useIdentity } = await import("@/hooks/useIdentity");
+      const { result } = renderHook(() => useIdentity(), {
         wrapper: createQueryWrapper(),
       });
 
       await act(async () => {
-        try {
-          await result.current.mutateAsync({
-            didDocumentHash: validRecoveryHash,
-            recoveryAddress: "0xrecovery",
-            didDocument: {},
-            publicKeys: [validPublicKey],
-          } as any);
-        } catch {
-          // Expected
-        }
+        await expect(result.current.createIdentity()).rejects.toMatchObject({
+          code: "IDENTITY_REGISTRY_VERIFICATION_UNAVAILABLE",
+          statusCode: 503,
+        });
       });
 
-      expect(toast.error).toHaveBeenCalledWith("Failed to create identity", {
-        description: "User rejected transaction",
-      });
+      expect(mockSignMessageAsync).not.toHaveBeenCalled();
+      expect(mockWriteContractAsync).not.toHaveBeenCalled();
+      expect(apiClient.registerIdentity).not.toHaveBeenCalled();
     });
   });
 

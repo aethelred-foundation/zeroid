@@ -37,7 +37,6 @@ const mockUseAccount = jest.fn<
 const mockSignMessageAsync = jest.fn();
 const validRecoveryHash =
   "0x1111111111111111111111111111111111111111111111111111111111111111" as Bytes32;
-const validPublicKey = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
 
 jest.mock("wagmi", () => ({
   useAccount: () => mockUseAccount(),
@@ -732,19 +731,8 @@ describe("IdentityContext", () => {
   // =========================================================================
 
   describe("registerIdentity", () => {
-    it("registers identity and re-fetches profile on success", async () => {
-      const profile = makeProfile(mockAddress);
-      const recoveryHash = validRecoveryHash;
-
-      (apiClient.getIdentityByAddress as jest.Mock)
-        .mockResolvedValueOnce(null) // initial fetch
-        .mockResolvedValueOnce(profile); // post-registration fetch
-      (apiClient.registerIdentity as jest.Mock).mockResolvedValue({
-        identity: profile,
-        token: "identity-token",
-        sessionId: "session-1",
-      });
-
+    it("fails closed without asking for a signature or calling the API", async () => {
+      (apiClient.getIdentityByAddress as jest.Mock).mockResolvedValue(null);
       mockUseAccount.mockReturnValue({
         address: mockAddress,
         isConnected: true,
@@ -756,26 +744,27 @@ describe("IdentityContext", () => {
         expect(result.current.identity.isLoading).toBe(false);
       });
 
-      await act(() => result.current.registerIdentity(recoveryHash));
+      let caught: unknown;
+      await act(async () => {
+        try {
+          await result.current.registerIdentity(validRecoveryHash);
+        } catch (error) {
+          caught = error;
+        }
+      });
 
-      expect(apiClient.registerIdentity).toHaveBeenCalledWith({
-        did: expect.any(String),
-        controller: mockAddress,
-        publicKey: validPublicKey,
-        recoveryHash: recoveryHash.slice(2),
-        signature: "0xsignature",
+      expect(caught).toMatchObject({
+        code: "IDENTITY_REGISTRY_VERIFICATION_UNAVAILABLE",
+        statusCode: 503,
       });
-      expect(mockSignMessageAsync).toHaveBeenCalledWith({
-        message: expect.stringContaining("Chain ID: 7332"),
-      });
-      expect(getIdentityAuthToken()).toBe("identity-token");
-      expect(
-        window.sessionStorage.getItem("zeroid.identity.authToken"),
-      ).toBeNull();
-      expect(result.current.identity.isRegistered).toBe(true);
-      expect(result.current.identity.profile).toEqual(profile);
-      expect(result.current.identity.credentials).toEqual([]);
+      expect(mockSignMessageAsync).not.toHaveBeenCalled();
+      expect(apiClient.registerIdentity).not.toHaveBeenCalled();
+      expect(getIdentityAuthToken()).toBeUndefined();
+      expect(result.current.identity.isRegistered).toBe(false);
       expect(result.current.identity.isLoading).toBe(false);
+      expect(result.current.identity.error).toContain(
+        "server-side verification of the on-chain registry transaction",
+      );
     });
 
     it("throws when wallet is not connected (no DID)", async () => {
@@ -791,111 +780,8 @@ describe("IdentityContext", () => {
       await expect(
         act(() => result.current.registerIdentity(recoveryHash)),
       ).rejects.toThrow("Wallet must be connected to register");
-    });
-
-    it("clears the new session when the registered profile cannot be validated", async () => {
-      (apiClient.getIdentityByAddress as jest.Mock).mockResolvedValue(null);
-      (apiClient.registerIdentity as jest.Mock).mockResolvedValue({
-        identity: makeProfile(mockAddress),
-        token: "unvalidated-token",
-        sessionId: "session-unvalidated",
-      });
-      mockUseAccount.mockReturnValue({
-        address: mockAddress,
-        isConnected: true,
-      });
-
-      const { result } = renderHook(() => useIdentity(), { wrapper });
-      await waitFor(() => {
-        expect(result.current.identity.isLoading).toBe(false);
-      });
-
-      let caught: unknown;
-      await act(async () => {
-        try {
-          await result.current.registerIdentity(validRecoveryHash);
-        } catch (error) {
-          caught = error;
-        }
-      });
-
-      expect(caught).toEqual(
-        new Error(
-          "Registration completed, but the new identity profile could not be validated. Reconnect the wallet and sign in again.",
-        ),
-      );
-      expect(getIdentityAuthToken()).toBeUndefined();
-      expect(result.current.sessionStatus).toBe("anonymous");
-      expect(result.current.identity.isRegistered).toBe(false);
-    });
-
-    it("sets error state and re-throws when registration API fails", async () => {
-      (apiClient.getIdentityByAddress as jest.Mock).mockResolvedValue(null);
-      (apiClient.registerIdentity as jest.Mock).mockRejectedValue(
-        new Error("Registration server error"),
-      );
-
-      mockUseAccount.mockReturnValue({
-        address: mockAddress,
-        isConnected: true,
-      });
-
-      const { result } = renderHook(() => useIdentity(), { wrapper });
-
-      await waitFor(() => {
-        expect(result.current.identity.isLoading).toBe(false);
-      });
-
-      const recoveryHash = validRecoveryHash;
-
-      let caught: Error | undefined;
-      await act(async () => {
-        try {
-          await result.current.registerIdentity(recoveryHash);
-        } catch (e) {
-          caught = e as Error;
-        }
-      });
-
-      expect(caught).toBeDefined();
-      expect(caught!.message).toBe("Registration server error");
-      expect(result.current.identity.error).toBe("Registration server error");
-      expect(result.current.identity.isLoading).toBe(false);
-    });
-
-    it("handles non-Error thrown in registration catch", async () => {
-      (apiClient.getIdentityByAddress as jest.Mock).mockResolvedValue(null);
-      (apiClient.registerIdentity as jest.Mock).mockRejectedValue(
-        "string registration error",
-      );
-
-      mockUseAccount.mockReturnValue({
-        address: mockAddress,
-        isConnected: true,
-      });
-
-      const { result } = renderHook(() => useIdentity(), { wrapper });
-
-      await waitFor(() => {
-        expect(result.current.identity.isLoading).toBe(false);
-      });
-
-      const recoveryHash = validRecoveryHash;
-
-      let caught: unknown;
-      await act(async () => {
-        try {
-          await result.current.registerIdentity(recoveryHash);
-        } catch (e) {
-          caught = e;
-        }
-      });
-
-      // Non-Error throwables are wrapped into a real Error by the
-      // registration error mapper so the UI always has a message to show.
-      expect(caught).toBeInstanceOf(Error);
-      expect((caught as Error).message).toBe("string registration error");
-      expect(result.current.identity.error).toBe("string registration error");
+      expect(mockSignMessageAsync).not.toHaveBeenCalled();
+      expect(apiClient.registerIdentity).not.toHaveBeenCalled();
     });
   });
 

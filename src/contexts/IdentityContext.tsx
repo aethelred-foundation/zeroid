@@ -33,17 +33,11 @@ import type {
   CredentialSummary,
   CredentialSummaryStatus,
 } from "@/lib/credentials/summary";
+import { friendlyWalletError } from "@/lib/wallet-errors";
 import {
-  friendlyRegistrationError,
-  friendlyWalletError,
-} from "@/lib/wallet-errors";
-import {
-  buildRegistrationMessage,
   clearIdentityAuthToken,
+  createIdentityRegistrationUnavailableError,
   getIdentityAuthToken,
-  getRegistrationAuthContext,
-  normalizeRecoveryHash,
-  recoverRegistrationPublicKey,
   storeIdentityAuthToken,
 } from "@/lib/identity/registration";
 import {
@@ -394,94 +388,20 @@ export function IdentityProvider({ children }: { children: React.ReactNode }) {
   // -------------------------------------------------------------------------
 
   const registerIdentity = useCallback(
-    async (recoveryHash: Bytes32) => {
+    async (_recoveryHash: Bytes32) => {
       if (!did || !address) {
         throw new Error("Wallet must be connected to register");
       }
 
-      setState((prev) => ({ ...prev, isLoading: true, error: null }));
-
-      try {
-        const registeringAddress = address.toLowerCase();
-        const normalizedRecoveryHash = normalizeRecoveryHash(recoveryHash);
-        const message = buildRegistrationMessage({
-          did: did.uri,
-          controller: address as Address,
-          recoveryHash: normalizedRecoveryHash,
-          ...getRegistrationAuthContext(),
-        });
-        let signature: `0x${string}`;
-        try {
-          signature = await signMessageAsync({ message });
-        } catch (signError) {
-          // Surface signing failures as guidance (e.g. personal_sign reaching
-          // the node because a non-signing provider owns window.ethereum).
-          throw friendlyWalletError(signError);
-        }
-        const publicKey = await recoverRegistrationPublicKey(
-          message,
-          signature,
-        );
-        let registration: Awaited<
-          ReturnType<typeof apiClient.registerIdentity>
-        >;
-        try {
-          registration = await apiClient.registerIdentity({
-            did: did.uri,
-            controller: address as Address,
-            publicKey,
-            recoveryHash: normalizedRecoveryHash,
-            signature,
-          });
-        } catch (registerError) {
-          throw friendlyRegistrationError(registerError);
-        }
-        if (activeAddressRef.current !== registeringAddress) {
-          throw new Error(
-            "Wallet account changed during registration. Please try again.",
-          );
-        }
-        storeIdentityAuthToken(registration.token);
-        setSessionStatus("authenticated");
-        setSessionError(null);
-
-        // Re-fetch the profile after registration
-        const profile = await fetchProfile(address as Address);
-        if (activeAddressRef.current !== registeringAddress) {
-          clearIdentityAuthToken();
-          throw new Error(
-            "Wallet account changed during registration. Please try again.",
-          );
-        }
-        if (
-          !profile ||
-          getProfileDidUri(profile).toLowerCase() !== did.uri.toLowerCase()
-        ) {
-          clearIdentityAuthToken();
-          setSessionStatus("anonymous");
-          setSessionError(null);
-          throw new Error(
-            "Registration completed, but the new identity profile could not be validated. Reconnect the wallet and sign in again.",
-          );
-        }
-
-        setState({
-          profile,
-          credentials: [],
-          isLoading: false,
-          isRegistered: true,
-          error: null,
-        });
-      } catch (error) {
-        setState((prev) => ({
-          ...prev,
-          isLoading: false,
-          error: error instanceof Error ? error.message : "Registration failed",
-        }));
-        throw error;
-      }
+      const error = createIdentityRegistrationUnavailableError();
+      setState((prev) => ({
+        ...prev,
+        isLoading: false,
+        error: error.message,
+      }));
+      throw error;
     },
-    [did, address, fetchProfile, signMessageAsync],
+    [did, address],
   );
 
   const signIn = useCallback(async () => {

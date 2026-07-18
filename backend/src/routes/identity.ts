@@ -99,41 +99,17 @@ router.post(
   "/register",
   authRateLimiter,
   validate({ body: registerIdentitySchema }),
-  async (req: Request, res: Response): Promise<void> => {
-    try {
-      const {
-        did,
-        controller,
-        publicKey,
-        recoveryHash,
-        signature,
-        displayName,
-        metadata,
-      } = req.body;
-
-      const result = await identityService.register({
-        did,
-        controller,
-        publicKey,
-        recoveryHash,
-        signature,
-        displayName,
-        metadata,
-      });
-
-      res.status(201).json({
-        data: {
-          identity: result.identity,
-          token: result.token,
-          sessionId: result.sessionId,
-        },
-        message: "Identity registered successfully",
-      });
-    } catch (err) {
-      const error = asRouteError(err);
-      logger.error("identity_register_error", { error: error.message });
-      sendRouteError(res, error, "IDENTITY_REGISTER_FAILED");
-    }
+  (_req: Request, res: Response): void => {
+    // A wallet signature proves control of the controller, but client-supplied
+    // txHash/didHash metadata does not prove that the expected registry call
+    // succeeded on this deployment's chain. Until the backend owns an RPC
+    // verifier that binds a confirmed receipt + registry event to this exact
+    // request, fail closed before identity/session/audit persistence.
+    res.status(503).json({
+      error:
+        "Identity registration is unavailable until the registry transaction can be verified server-side. No identity or session was created.",
+      code: "IDENTITY_REGISTRY_VERIFICATION_UNAVAILABLE",
+    });
   },
 );
 
