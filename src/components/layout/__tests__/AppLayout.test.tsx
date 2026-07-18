@@ -149,14 +149,14 @@ describe("AppLayout", () => {
     expect(screen.getByText("Aethelred Network")).toBeInTheDocument();
   });
 
-  it("renders ZeroID branding in footer", () => {
+  it("does not claim network health without a live health check", () => {
     render(
       <AppLayout>
         <div>Content</div>
       </AppLayout>,
     );
     expect(screen.getByText("ZeroID")).toBeInTheDocument();
-    expect(screen.getByText("Online")).toBeInTheDocument();
+    expect(screen.queryByText("Online")).not.toBeInTheDocument();
   });
 
   it("handles desktop sidebar toggle callback (no-op)", () => {

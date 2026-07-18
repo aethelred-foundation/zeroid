@@ -578,14 +578,6 @@ export function AppLayout({ children }: AppLayoutProps) {
               <span>Aethelred Network</span>
             </div>
             <div className="flex items-center gap-4">
-              <span className="flex items-center gap-1.5">
-                <span className="relative flex h-[5px] w-[5px]">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-60" />
-                  <span className="relative inline-flex rounded-full h-[5px] w-[5px] bg-emerald-500" />
-                </span>
-                <span className="text-emerald-500">Online</span>
-              </span>
-              <span className="w-px h-3 bg-zero-800" />
               <span className="font-mono text-zero-700">v1.0.0</span>
             </div>
           </div>
