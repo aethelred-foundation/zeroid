@@ -11,9 +11,6 @@ import {
 import {
   validate,
   registerIdentitySchema,
-  didSchema,
-  publicKeySchema,
-  recoveryHashSchema,
 } from "../middleware/validation";
 import { apiRateLimiter, authRateLimiter } from "../middleware/rateLimit";
 import { logger, prisma, redis } from "../runtime";
@@ -491,100 +488,6 @@ async function getCurrentTeeAttestationStatus(
     ? teeService.isAttestationValid(identity.teeAttestationId)
     : false;
 }
-
-// ---------------------------------------------------------------------------
-// POST /api/v1/identity/recover — Recover identity with recovery proof
-// ---------------------------------------------------------------------------
-const recoverSchema = z.object({
-  did: didSchema,
-  recoveryProof: z.string().min(32).max(1024),
-  newPublicKey: publicKeySchema,
-  newRecoveryHash: recoveryHashSchema,
-});
-
-router.post(
-  "/recover",
-  authRateLimiter,
-  validate({ body: recoverSchema }),
-  async (req: Request, res: Response): Promise<void> => {
-    try {
-      const result = await identityService.recoverIdentity({
-        did: req.body.did,
-        recoveryProof: req.body.recoveryProof,
-        newPublicKey: req.body.newPublicKey,
-        newRecoveryHash: req.body.newRecoveryHash,
-      });
-
-      res.json({
-        data: {
-          identity: result.identity,
-          token: result.token,
-          sessionId: result.sessionId,
-        },
-        message: "Identity recovered successfully",
-      });
-    } catch (err) {
-      const error = asRouteError(err);
-      logger.error("identity_recover_error", { error: error.message });
-      sendRouteError(res, error, "IDENTITY_RECOVER_FAILED");
-    }
-  },
-);
-
-// ---------------------------------------------------------------------------
-// POST /api/v1/identity/delegate — Add a delegation
-// ---------------------------------------------------------------------------
-const delegateSchema = z.object({
-  delegateDid: didSchema,
-});
-
-router.post(
-  "/delegate",
-  authMiddleware,
-  validate({ body: delegateSchema }),
-  async (req: AuthenticatedRequest, res: Response): Promise<void> => {
-    try {
-      const identity = await identityService.addDelegation({
-        delegatorId: req.identity!.id,
-        delegateDid: req.body.delegateDid,
-      });
-
-      res.json({
-        data: identity,
-        message: "Delegation granted successfully",
-      });
-    } catch (err) {
-      const error = asRouteError(err);
-      logger.error("delegation_error", { error: error.message });
-      sendRouteError(res, error, "DELEGATION_FAILED");
-    }
-  },
-);
-
-// ---------------------------------------------------------------------------
-// DELETE /api/v1/identity/delegate/:did — Revoke a delegation
-// ---------------------------------------------------------------------------
-router.delete(
-  "/delegate/:did",
-  authMiddleware,
-  validate({ params: z.object({ did: z.string().min(1) }) }),
-  async (req: AuthenticatedRequest, res: Response): Promise<void> => {
-    try {
-      const delegateDid = decodeURIComponent(req.params.did as string);
-      const identity = await identityService.revokeDelegation(
-        req.identity!.id,
-        delegateDid,
-      );
-
-      res.json({
-        data: identity,
-        message: "Delegation revoked successfully",
-      });
-    } catch (err) {
-      sendRouteError(res, asRouteError(err), "DELEGATION_REVOKE_FAILED");
-    }
-  },
-);
 
 // ---------------------------------------------------------------------------
 // POST /api/v1/identity/logout — Revoke current session

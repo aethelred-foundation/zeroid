@@ -39,6 +39,20 @@ const mockGovernmentAPIService = {
   })),
 };
 
+const mockIdentityService = {
+  register: jest.fn(),
+  getIdentity: jest.fn(),
+  recoverIdentity: jest.fn(async () => ({
+    identity: IDENTITY,
+    token: "unexpected-recovery-token",
+    sessionId: "unexpected-recovery-session",
+  })),
+  addDelegation: jest.fn(),
+  revokeDelegation: jest.fn(),
+  logout: jest.fn(),
+  updateIdentity: jest.fn(),
+};
+
 jest.mock("../src/runtime", () => ({
   prisma: {
     identity: {
@@ -55,15 +69,7 @@ jest.mock("../src/services/government-api", () => ({
 }));
 
 jest.mock("../src/services/identity", () => ({
-  identityService: {
-    register: jest.fn(),
-    getIdentity: jest.fn(),
-    recoverIdentity: jest.fn(),
-    addDelegation: jest.fn(),
-    revokeDelegation: jest.fn(),
-    logout: jest.fn(),
-    updateIdentity: jest.fn(),
-  },
+  identityService: mockIdentityService,
 }));
 
 jest.mock("../src/services/tee", () => ({
@@ -109,6 +115,9 @@ function buildApp(): Express {
   const app = express();
   app.use(express.json());
   app.use("/api/v1/identity", identityRoutes);
+  app.use((_req, res) => {
+    res.status(404).json({ error: "Not found", code: "ROUTE_NOT_FOUND" });
+  });
   return app;
 }
 
@@ -278,5 +287,55 @@ describe("identity government verification routes", () => {
     expect(mockGovernmentAPIService.getVerificationStatus).toHaveBeenCalledWith(
       IDENTITY.id,
     );
+  });
+});
+
+describe("retired legacy identity lifecycle routes", () => {
+  it.each([
+    {
+      method: "post" as const,
+      path: "/api/v1/identity/recover",
+      body: {
+        did: IDENTITY.did,
+        recoveryProof: "r".repeat(64),
+        newPublicKey: "A".repeat(44),
+        newRecoveryHash: "a".repeat(64),
+      },
+    },
+    {
+      method: "post" as const,
+      path: "/api/v1/identity/delegate",
+      body: {
+        delegateDid:
+          "did:aethelred:testnet:0xabcdefabcdefabcdefabcdefabcdefabcdefabcd",
+      },
+    },
+    {
+      method: "delete" as const,
+      path:
+        "/api/v1/identity/delegate/did%3Aaethelred%3Atestnet%3A0xabcdefabcdefabcdefabcdefabcdefabcdefabcd",
+      body: undefined,
+    },
+  ])("does not expose $method $path", async ({ method, path, body }) => {
+    let pendingRequest = request(buildApp())[method](path);
+    if (body !== undefined) {
+      pendingRequest = pendingRequest.send(body);
+    }
+
+    const res = await pendingRequest;
+
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({
+      error: "Not found",
+      code: "ROUTE_NOT_FOUND",
+    });
+    expect(res.text).not.toContain("unexpected-recovery-token");
+    expect(res.text).not.toContain("unexpected-recovery-session");
+    expect(mockIdentityService.recoverIdentity).not.toHaveBeenCalled();
+    expect(mockIdentityService.addDelegation).not.toHaveBeenCalled();
+    expect(mockIdentityService.revokeDelegation).not.toHaveBeenCalled();
+    expect(mockIdentityService.register).not.toHaveBeenCalled();
+    expect(mockIdentityService.updateIdentity).not.toHaveBeenCalled();
+    expect(mockIdentityService.logout).not.toHaveBeenCalled();
   });
 });

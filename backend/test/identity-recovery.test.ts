@@ -116,7 +116,7 @@ function baseIdentity(overrides: Record<string, unknown> = {}) {
   };
 }
 
-describe('IdentityService recovery hardening', () => {
+describe('IdentityService registration hardening', () => {
   beforeEach(() => {
     process.env = { ...ORIGINAL_ENV };
     jest.clearAllMocks();
@@ -142,57 +142,6 @@ describe('IdentityService recovery hardening', () => {
         },
       }),
     );
-  });
-
-  it('does not self-reactivate suspended identities during recovery', async () => {
-    mockIdentityFindUnique.mockResolvedValue(
-      baseIdentity({ status: 'SUSPENDED' }),
-    );
-    const service = new IdentityService();
-
-    await expect(
-      service.recoverIdentity({
-        did: 'did:aethelred:alice',
-        recoveryProof: 'valid recovery proof with enough entropy',
-        newPublicKey: publicKey(),
-        newRecoveryHash: sha256Hex('new recovery proof with enough entropy'),
-      }),
-    ).rejects.toMatchObject({
-      code: 'IDENTITY_RECOVERY_BLOCKED',
-      statusCode: 403,
-    });
-
-    expect(mockIdentityUpdate).not.toHaveBeenCalled();
-    expect(mockGenerateToken).not.toHaveBeenCalled();
-    expect(mockAuditLogCreate).toHaveBeenCalledWith(expect.objectContaining({
-      data: expect.objectContaining({
-        identityId: 'identity-1',
-        details: expect.objectContaining({
-          success: false,
-          reason: 'identity_status_not_recoverable',
-          status: 'SUSPENDED',
-        }),
-      }),
-    }));
-  });
-
-  it('rejects invalid replacement recovery hashes before rotating keys', async () => {
-    mockIdentityFindUnique.mockResolvedValue(baseIdentity());
-    const service = new IdentityService();
-
-    await expect(
-      service.recoverIdentity({
-        did: 'did:aethelred:alice',
-        recoveryProof: 'valid recovery proof with enough entropy',
-        newPublicKey: publicKey(),
-        newRecoveryHash: 'not-a-sha256-digest',
-      }),
-    ).rejects.toMatchObject({
-      code: 'IDENTITY_INVALID_RECOVERY_HASH',
-    });
-
-    expect(mockIdentityUpdate).not.toHaveBeenCalled();
-    expect(mockGenerateToken).not.toHaveBeenCalled();
   });
 
   it('stores peppered recovery hashes for production registrations', async () => {
@@ -285,73 +234,4 @@ describe('IdentityService recovery hardening', () => {
     expect(mockGenerateToken).not.toHaveBeenCalled();
   });
 
-  it('requires a recovery hash pepper before production recovery verification', async () => {
-    process.env.NODE_ENV = 'production';
-    delete process.env.IDENTITY_RECOVERY_HASH_PEPPER;
-    mockIdentityFindUnique.mockResolvedValue(baseIdentity());
-    const service = new IdentityService();
-
-    await expect(
-      service.recoverIdentity({
-        did: 'did:aethelred:alice',
-        recoveryProof: 'valid recovery proof with enough entropy',
-        newPublicKey: publicKey(),
-        newRecoveryHash: sha256Hex('new recovery proof with enough entropy'),
-      }),
-    ).rejects.toMatchObject({
-      code: 'IDENTITY_RECOVERY_HASH_PEPPER_MISSING',
-      statusCode: 500,
-    });
-
-    expect(mockIdentityUpdate).not.toHaveBeenCalled();
-    expect(mockGenerateToken).not.toHaveBeenCalled();
-  });
-
-  it('verifies and rotates peppered production recovery hashes', async () => {
-    process.env.NODE_ENV = 'production';
-    process.env.IDENTITY_RECOVERY_HASH_PEPPER = 'r'.repeat(64);
-    const recoveryProof = 'valid recovery proof with enough entropy';
-    const nextRecoveryHash = sha256Hex('new recovery proof with enough entropy');
-    const nextPublicKey = publicKey();
-    const currentIdentity = baseIdentity({
-      recoveryHash: protectedRecoveryHash(sha256Hex(recoveryProof)),
-    });
-    mockIdentityFindUnique.mockResolvedValue(currentIdentity);
-    mockIdentityUpdate.mockResolvedValueOnce(
-      baseIdentity({
-        publicKey: nextPublicKey,
-        recoveryHash: protectedRecoveryHash(nextRecoveryHash),
-        status: 'ACTIVE',
-      }),
-    );
-    const service = new IdentityService();
-
-    await expect(
-      service.recoverIdentity({
-        did: 'did:aethelred:alice',
-        recoveryProof,
-        newPublicKey: nextPublicKey,
-        newRecoveryHash: nextRecoveryHash,
-      }),
-    ).resolves.toMatchObject({
-      sessionId: 'session-1',
-    });
-
-    expect(mockPrismaTransaction).toHaveBeenCalledTimes(1);
-    expect(mockIdentityUpdate).toHaveBeenNthCalledWith(1, {
-      where: { id: 'identity-1' },
-      data: expect.objectContaining({
-        publicKey: nextPublicKey,
-        recoveryHash: protectedRecoveryHash(nextRecoveryHash),
-        status: 'ACTIVE',
-      }),
-    });
-    expect(mockAuditLogCreate).toHaveBeenCalledWith(expect.objectContaining({
-      data: expect.objectContaining({
-        action: 'IDENTITY_RECOVERED',
-        resourceId: 'identity-1',
-        details: { success: true },
-      }),
-    }));
-  });
 });

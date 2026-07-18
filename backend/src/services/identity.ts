@@ -40,18 +40,6 @@ export interface IdentityResponse {
   updatedAt: Date;
 }
 
-export interface RecoverIdentityRequest {
-  did: string;
-  recoveryProof: string;
-  newPublicKey: string;
-  newRecoveryHash: string;
-}
-
-export interface DelegationRequest {
-  delegatorId: string;
-  delegateDid: string;
-}
-
 // ---------------------------------------------------------------------------
 // Identity Service
 // ---------------------------------------------------------------------------
@@ -271,224 +259,6 @@ export class IdentityService {
   }
 
   // -------------------------------------------------------------------------
-  // Recover identity (social recovery / recovery hash)
-  // -------------------------------------------------------------------------
-  async recoverIdentity(request: RecoverIdentityRequest): Promise<{
-    identity: IdentityResponse;
-    token: string;
-    sessionId: string;
-  }> {
-    logger.info('identity_recovery_start', { did: request.did });
-
-    const identity = await prisma.identity.findUnique({ where: { did: request.did } });
-    if (!identity) {
-      throw new IdentityError('Identity not found', 'IDENTITY_NOT_FOUND', 404);
-    }
-    if (!this.isRecoverableStatus(identity.status)) {
-      logger.warn('identity_recovery_blocked', {
-        did: request.did,
-        status: identity.status,
-      });
-      await prisma.auditLog.create({
-        data: {
-          identityId: identity.id,
-          action: 'IDENTITY_RECOVERED',
-          resourceType: 'identity',
-          resourceId: identity.id,
-          details: {
-            success: false,
-            reason: 'identity_status_not_recoverable',
-            status: identity.status,
-          },
-        },
-      });
-      throw new IdentityError(
-        'Identity status does not allow self-service recovery',
-        'IDENTITY_RECOVERY_BLOCKED',
-        403,
-      );
-    }
-    if (!this.isValidPublicKey(request.newPublicKey)) {
-      throw new IdentityError('Invalid public key format', 'IDENTITY_INVALID_KEY');
-    }
-    if (!this.isValidRecoveryHash(request.newRecoveryHash)) {
-      throw new IdentityError('Invalid recovery hash format', 'IDENTITY_INVALID_RECOVERY_HASH');
-    }
-
-    // Verify recovery proof against stored hash
-    const proofHash = await this.hashRecoveryProof(request.recoveryProof);
-    if (!this.recoveryHashMatches(proofHash, identity.recoveryHash)) {
-      logger.warn('identity_recovery_failed', { did: request.did, reason: 'invalid_proof' });
-
-      await prisma.auditLog.create({
-        data: {
-          identityId: identity.id,
-          action: 'IDENTITY_RECOVERED',
-          resourceType: 'identity',
-          resourceId: identity.id,
-          details: { success: false, reason: 'invalid_recovery_proof' },
-        },
-      });
-
-      throw new IdentityError('Invalid recovery proof', 'IDENTITY_RECOVERY_INVALID', 403);
-    }
-
-    // Revoke all existing platform and enterprise federation sessions
-    await oidcBridge.revokeSubjectSessions(identity.id);
-    const sessions = await prisma.session.findMany({ where: { identityId: identity.id } });
-    for (const session of sessions) {
-      await revokeToken(session.id);
-    }
-
-    const protectedNewRecoveryHash = this.protectRecoveryHash(
-      request.newRecoveryHash,
-    );
-    const activated = await this.runIdentityAuditTransaction(async (tx) => {
-      const updated = await tx.identity.update({
-        where: { id: identity.id },
-        data: {
-          publicKey: request.newPublicKey,
-          recoveryHash: protectedNewRecoveryHash,
-          status: 'ACTIVE',
-          teeAttested: false,
-          teeAttestationId: null,
-        },
-      });
-
-      await tx.auditLog.create({
-        data: {
-          identityId: identity.id,
-          action: 'IDENTITY_RECOVERED',
-          resourceType: 'identity',
-          resourceId: identity.id,
-          details: { success: true },
-          previousState: { publicKey: identity.publicKey },
-          newState: { publicKey: request.newPublicKey },
-        },
-      });
-
-      return updated;
-    });
-
-    // Generate new token
-    const { token, sessionId } = await generateToken(identity.id, identity.did);
-
-    // Invalidate caches
-    await redis.del(`identity:id:${identity.id}`);
-    await redis.del(`identity:did:${identity.did}`);
-
-    logger.info('identity_recovered', { identityId: identity.id, did: request.did });
-
-    return {
-      identity: this.formatIdentity(activated),
-      token,
-      sessionId,
-    };
-  }
-
-  // -------------------------------------------------------------------------
-  // Delegate identity access
-  // -------------------------------------------------------------------------
-  async addDelegation(request: DelegationRequest): Promise<IdentityResponse> {
-    const identity = await prisma.identity.findUnique({ where: { id: request.delegatorId } });
-    if (!identity) {
-      throw new IdentityError('Delegator identity not found', 'IDENTITY_NOT_FOUND', 404);
-    }
-
-    if (identity.status !== 'ACTIVE') {
-      throw new IdentityError('Cannot delegate from inactive identity', 'IDENTITY_NOT_ACTIVE');
-    }
-
-    // Verify delegate DID exists
-    const delegate = await prisma.identity.findUnique({ where: { did: request.delegateDid } });
-    if (!delegate) {
-      throw new IdentityError('Delegate DID not found', 'IDENTITY_DELEGATE_NOT_FOUND', 404);
-    }
-
-    if (identity.delegatedTo.includes(request.delegateDid)) {
-      throw new IdentityError('Delegation already exists', 'IDENTITY_DELEGATION_EXISTS');
-    }
-
-    // Max 5 delegations
-    if (identity.delegatedTo.length >= 5) {
-      throw new IdentityError('Maximum delegations reached (5)', 'IDENTITY_MAX_DELEGATIONS');
-    }
-
-    const updated = await this.runIdentityAuditTransaction(async (tx) => {
-      const nextIdentity = await tx.identity.update({
-        where: { id: request.delegatorId },
-        data: {
-          delegatedTo: [...identity.delegatedTo, request.delegateDid],
-        },
-      });
-
-      await tx.auditLog.create({
-        data: {
-          identityId: request.delegatorId,
-          action: 'DELEGATION_GRANTED',
-          resourceType: 'identity',
-          resourceId: request.delegatorId,
-          details: { delegateDid: request.delegateDid },
-        },
-      });
-
-      return nextIdentity;
-    });
-
-    await redis.del(`identity:id:${request.delegatorId}`);
-    await redis.del(`identity:did:${identity.did}`);
-
-    logger.info('delegation_granted', {
-      delegatorId: request.delegatorId,
-      delegateDid: request.delegateDid,
-    });
-
-    return this.formatIdentity(updated);
-  }
-
-  // -------------------------------------------------------------------------
-  // Revoke delegation
-  // -------------------------------------------------------------------------
-  async revokeDelegation(delegatorId: string, delegateDid: string): Promise<IdentityResponse> {
-    const identity = await prisma.identity.findUnique({ where: { id: delegatorId } });
-    if (!identity) {
-      throw new IdentityError('Identity not found', 'IDENTITY_NOT_FOUND', 404);
-    }
-
-    if (!identity.delegatedTo.includes(delegateDid)) {
-      throw new IdentityError('Delegation not found', 'IDENTITY_DELEGATION_NOT_FOUND', 404);
-    }
-
-    const updated = await this.runIdentityAuditTransaction(async (tx) => {
-      const nextIdentity = await tx.identity.update({
-        where: { id: delegatorId },
-        data: {
-          delegatedTo: identity.delegatedTo.filter((d) => d !== delegateDid),
-        },
-      });
-
-      await tx.auditLog.create({
-        data: {
-          identityId: delegatorId,
-          action: 'DELEGATION_REVOKED',
-          resourceType: 'identity',
-          resourceId: delegatorId,
-          details: { delegateDid },
-        },
-      });
-
-      return nextIdentity;
-    });
-
-    await redis.del(`identity:id:${delegatorId}`);
-    await redis.del(`identity:did:${identity.did}`);
-
-    logger.info('delegation_revoked', { delegatorId, delegateDid });
-
-    return this.formatIdentity(updated);
-  }
-
-  // -------------------------------------------------------------------------
   // Logout (revoke session)
   // -------------------------------------------------------------------------
   async logout(identityId: string, sessionId: string): Promise<void> {
@@ -527,18 +297,6 @@ export class IdentityService {
     return /^[0-9a-f]{64}$/i.test(value);
   }
 
-  private isRecoverableStatus(status: IdentityStatus): boolean {
-    return status === 'ACTIVE' || status === 'PENDING' || status === 'RECOVERED';
-  }
-
-  private async hashRecoveryProof(proof: string): Promise<string> {
-    const encoder = new TextEncoder();
-    const hashBuffer = await globalThis.crypto.subtle.digest('SHA-256', encoder.encode(proof));
-    return Array.from(new Uint8Array(hashBuffer))
-      .map((b) => b.toString(16).padStart(2, '0'))
-      .join('');
-  }
-
   private protectRecoveryHash(recoveryHash: string): string {
     const pepper = this.getRecoveryHashPepper();
     if (!pepper) return recoveryHash;
@@ -548,23 +306,6 @@ export class IdentityService {
       .update('zeroid:identity-recovery:v2:')
       .update(recoveryHash)
       .digest('hex');
-  }
-
-  private recoveryHashMatches(
-    presentedRecoveryHash: string,
-    storedRecoveryHash: string,
-  ): boolean {
-    const protectedPresentedHash = this.protectRecoveryHash(
-      presentedRecoveryHash,
-    );
-    if (this.timingSafeHexEqual(protectedPresentedHash, storedRecoveryHash)) {
-      return true;
-    }
-
-    return (
-      this.allowLegacyRecoveryHashFallback() &&
-      this.timingSafeHexEqual(presentedRecoveryHash, storedRecoveryHash)
-    );
   }
 
   private getRecoveryHashPepper(): string | null {
@@ -582,22 +323,6 @@ export class IdentityService {
     }
 
     return null;
-  }
-
-  private allowLegacyRecoveryHashFallback(): boolean {
-    return !isProductionRuntime();
-  }
-
-  private timingSafeHexEqual(left: string, right: string): boolean {
-    if (!/^[0-9a-f]{64}$/i.test(left) || !/^[0-9a-f]{64}$/i.test(right)) {
-      return false;
-    }
-    const leftBuffer = Buffer.from(left, 'hex');
-    const rightBuffer = Buffer.from(right, 'hex');
-    return (
-      leftBuffer.length === rightBuffer.length &&
-      nodeCrypto.timingSafeEqual(leftBuffer, rightBuffer)
-    );
   }
 
   private formatIdentity(identity: {
