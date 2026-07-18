@@ -208,7 +208,7 @@ describe("EnterprisePage", () => {
     expect(screen.getByTestId("app-layout")).toBeInTheDocument();
     expect(screen.getByText("Enterprise Console")).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "API Keys" }),
+      screen.getByRole("button", { name: "API Access" }),
     ).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "Webhooks" }),
@@ -234,81 +234,18 @@ describe("EnterprisePage", () => {
     expect(screen.getByText("SLA met")).toBeInTheDocument();
   });
 
-  it("filters API keys by the selected environment", () => {
+  it("keeps API credentials visibly unavailable without live controls", () => {
     render(<EnterprisePage />);
-    expect(screen.getByText("Production - Main")).toBeInTheDocument();
-    expect(screen.queryByText("Sandbox - Testing")).not.toBeInTheDocument();
 
-    fireEvent.click(
-      screen.getByRole("button", { name: "Switch API key environment" }),
-    );
-    expect(screen.getByText("Sandbox - Testing")).toBeInTheDocument();
+    expect(screen.getByText("Configuration required")).toBeInTheDocument();
+    expect(screen.getByText("Runtime credential auth")).toBeInTheDocument();
+    expect(screen.getByText("Durable request metering")).toBeInTheDocument();
+    expect(screen.getByText("Production SDK contract")).toBeInTheDocument();
     expect(screen.queryByText("Production - Main")).not.toBeInTheDocument();
-  });
-
-  it("never exposes secrets returned by the API key inventory", () => {
-    render(<EnterprisePage />);
-    expect(screen.getByText(/zid_live_\*{12}/)).toBeInTheDocument();
     expect(
-      screen.queryByRole("button", { name: /copy secret/i }),
+      screen.queryByRole("button", { name: "Create Key" }),
     ).not.toBeInTheDocument();
-  });
-
-  it("refreshes and revokes keys through enterprise hooks", () => {
-    render(<EnterprisePage />);
-    fireEvent.click(screen.getByRole("button", { name: /refresh/i }));
-    fireEvent.click(screen.getByTitle("Revoke API key"));
-
-    expect(mockApiKeysRefetch).toHaveBeenCalledTimes(1);
-    expect(mockRevokeAPIKeyMutate).toHaveBeenCalledWith("k1");
-  });
-
-  it("creates a key and keeps its one-time secret in an explicit confirmation", async () => {
-    render(<EnterprisePage />);
-    fireEvent.click(screen.getByRole("button", { name: "Create Key" }));
-    fireEvent.change(
-      screen.getByPlaceholderText("production identity verification"),
-      { target: { value: "EDGE production verifier" } },
-    );
-    fireEvent.click(
-      screen.getAllByRole("button", { name: "Create Key" }).at(-1)!,
-    );
-
-    await waitFor(() =>
-      expect(mockCreateAPIKeyMutateAsync).toHaveBeenCalledWith(
-        expect.objectContaining({
-          name: "EDGE production verifier",
-          environment: "production",
-          scopes: ["credentials:read", "verification:write", "identity:read"],
-        }),
-      ),
-    );
-    expect(
-      await screen.findByRole("dialog", { name: "API key created" }),
-    ).toBeInTheDocument();
-    expect(screen.getByText("zid_live_secret_created")).toBeInTheDocument();
-  });
-
-  it("copies only the newly created one-time secret", async () => {
-    const writeText = jest.fn().mockResolvedValue(undefined);
-    Object.defineProperty(navigator, "clipboard", {
-      configurable: true,
-      value: { writeText },
-    });
-    render(<EnterprisePage />);
-    fireEvent.click(screen.getByRole("button", { name: "Create Key" }));
-    fireEvent.change(
-      screen.getByPlaceholderText("production identity verification"),
-      { target: { value: "EDGE production verifier" } },
-    );
-    fireEvent.click(
-      screen.getAllByRole("button", { name: "Create Key" }).at(-1)!,
-    );
-
-    fireEvent.click(await screen.findByRole("button", { name: "Copy secret" }));
-    await waitFor(() =>
-      expect(writeText).toHaveBeenCalledWith("zid_live_secret_created"),
-    );
+    expect(screen.queryByTitle("Revoke API key")).not.toBeInTheDocument();
   });
 
   it("shows unreported webhook health honestly", () => {
@@ -348,15 +285,19 @@ describe("EnterprisePage", () => {
     expect(mockTestWebhookMutate).toHaveBeenCalledWith("w1");
   });
 
-  it("renders usage reported by the enterprise endpoint", () => {
+  it("shows usage as unavailable without durable runtime metering", () => {
     render(<EnterprisePage />);
     selectTab("Usage");
 
-    expect(screen.getByText("93,500 requests reported")).toBeInTheDocument();
+    expect(screen.getByText("Usage reporting unavailable")).toBeInTheDocument();
     expect(
-      screen.getByText("POST /api/v1/credentials/{id}/verify"),
+      screen.getByText("Awaiting telemetry integration"),
     ).toBeInTheDocument();
-    expect(screen.getByText("48,293")).toBeInTheDocument();
-    expect(screen.getByText("38ms")).toBeInTheDocument();
+    expect(
+      screen.queryByText("93,500 requests reported"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("POST /api/v1/credentials/{id}/verify"),
+    ).not.toBeInTheDocument();
   });
 });

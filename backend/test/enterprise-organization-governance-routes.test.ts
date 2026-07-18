@@ -7,6 +7,10 @@ const mockGetGovernanceSettings = jest.fn();
 const mockUpdateGovernanceSettings = jest.fn();
 const mockListGovernancePacks = jest.fn();
 const mockGetAnalytics = jest.fn();
+const mockCreateAPIKey = jest.fn();
+const mockListAPIKeys = jest.fn();
+const mockIssueOAuth2Token = jest.fn();
+const mockGetSDKMetadata = jest.fn();
 const mockGetViolations = jest.fn();
 const mockGetAlerts = jest.fn();
 const mockGenerateReport = jest.fn();
@@ -130,7 +134,11 @@ jest.mock('../src/services/enterprise/webhook-system', () => ({
 
 jest.mock('../src/services/enterprise/api-gateway', () => ({
   apiGateway: {
+    createAPIKey: mockCreateAPIKey,
+    listAPIKeys: mockListAPIKeys,
+    issueOAuth2Token: mockIssueOAuth2Token,
     getAnalytics: mockGetAnalytics,
+    getSDKMetadata: mockGetSDKMetadata,
   },
   CreateAPIKeySchema: {
     safeParse: (value: unknown) => ({ success: true, data: value }),
@@ -447,13 +455,71 @@ describe('enterprise organization governance routes', () => {
     expect(mockListGovernancePacks).toHaveBeenCalled();
   });
 
-  it('scopes usage analytics to the enterprise context organization', async () => {
+  it('keeps usage analytics unavailable until durable runtime metering is integrated', async () => {
     const response = await invokeRoute('GET', '/usage', {
       query: { period: '7' },
     });
 
-    expect(response.statusCode).toBe(200);
-    expect(mockGetAnalytics).toHaveBeenCalledWith('org-1', 7);
+    expect(response.statusCode).toBe(503);
+    expect(response.body).toMatchObject({
+      code: 'ENTERPRISE_API_CONTROL_PLANE_UNAVAILABLE',
+      capability: 'usage_analytics',
+      status: 'configuration_required',
+    });
+    expect(mockGetAnalytics).not.toHaveBeenCalled();
+  });
+
+  it('does not mint or inventory API keys before runtime authentication is wired', async () => {
+    const createResponse = await invokeRoute('POST', '/api-keys', {
+      body: {
+        name: 'production verifier',
+        environment: 'production',
+        scopes: ['verification:write'],
+      },
+    });
+    const listResponse = await invokeRoute('GET', '/api-keys');
+
+    for (const response of [createResponse, listResponse]) {
+      expect(response.statusCode).toBe(503);
+      expect(response.body).toMatchObject({
+        code: 'ENTERPRISE_API_CONTROL_PLANE_UNAVAILABLE',
+        capability: 'api_keys',
+        status: 'configuration_required',
+      });
+    }
+    expect(mockCreateAPIKey).not.toHaveBeenCalled();
+    expect(mockListAPIKeys).not.toHaveBeenCalled();
+  });
+
+  it('does not issue OAuth client-credentials tokens before route authentication is wired', async () => {
+    const response = await invokeRoute('POST', '/oauth2/token', {
+      body: {
+        grant_type: 'client_credentials',
+        client_id: 'enterprise-client',
+        client_secret: 'not-a-real-secret',
+      },
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.body).toEqual({
+      error: 'temporarily_unavailable',
+      error_description:
+        'Enterprise OAuth client credentials are unavailable until runtime token authentication and durable request metering are integrated',
+    });
+    expect(mockIssueOAuth2Token).not.toHaveBeenCalled();
+  });
+
+  it('does not advertise an SDK contract that is not published', async () => {
+    const response = await invokeRoute('GET', '/sdk/metadata');
+
+    expect(response.statusCode).toBe(501);
+    expect(response.body).toEqual({
+      error:
+        'Enterprise SDK metadata is unavailable because no production API contract is published',
+      code: 'ENTERPRISE_SDK_METADATA_NOT_IMPLEMENTED',
+      status: 'not_implemented',
+    });
+    expect(mockGetSDKMetadata).not.toHaveBeenCalled();
   });
 
   it('keeps every SLA evidence endpoint unavailable without a telemetry adapter', async () => {
