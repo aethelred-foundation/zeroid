@@ -5,12 +5,13 @@ The target hero workflow is DID holder -> provider-backed KYC credential -> elig
 ## Release modes
 
 - `npm run readiness:check` validates repository controls, source manifests, required documents, and configured CI gates. Passing it does not activate eligibility issuance or establish production readiness.
-- `npm run readiness:production` additionally requires pinned circuit artifacts and checks that the explicit signed-witness prover block has been removed. Passing it is necessary, but the workflow acceptance criteria below must also be evidenced in the target environment.
+- `npm run readiness:production` additionally requires a Playwright configuration scoped to a dedicated `e2e/` or `tests/e2e/` suite, at least one E2E specification, pinned circuit artifacts, and removal of the explicit signed-witness prover block. Passing it is necessary, but the workflow acceptance criteria below must also be evidenced in the target environment.
 
 ## Mandatory technical gates
 
 - Frontend: `npm run type-check`, `npm run test:ci`, `npm run build`.
 - Backend: `npm --prefix backend run type-check`, `npm --prefix backend test`, `npm --prefix backend run build`.
+- E2E: `npm run test:e2e` against an explicitly scoped Playwright suite; a package script by itself is not test evidence.
 - Circuits: `npm run circuits:validate`; production also requires an audited ceremony, `npm run circuits:eligibility:build`, and `npm run circuits:validate:artifacts`.
 - Contracts: `forge test`.
 - Security: `npm run security:audit:all`, Rust `cargo audit`, Go `govulncheck`.

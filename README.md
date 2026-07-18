@@ -351,7 +351,7 @@ cd sdk/go && go test ./... && cd ../..
 # SDK — Python
 cd sdk/python && pytest && cd ../..
 
-# E2E tests (Playwright)
+# E2E tests (requires a committed, explicitly scoped Playwright config and suite)
 npx playwright install
 npm run test:e2e
 ```

@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync } from 'fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'fs';
 import path from 'path';
 import { spawnSync } from 'child_process';
 import { fileURLToPath } from 'url';
@@ -36,6 +36,16 @@ const requiredPackageScripts = [
   'readiness:check',
   'readiness:production',
 ];
+
+const playwrightConfigCandidates = [
+  'playwright.config.ts',
+  'playwright.config.mts',
+  'playwright.config.js',
+  'playwright.config.mjs',
+  'playwright.config.cjs',
+];
+const playwrightSpecRoots = ['e2e', 'tests/e2e'];
+const playwrightSpecPattern = /\.(?:e2e|spec|test)\.[cm]?[jt]sx?$/;
 
 function readJson(relativePath) {
   return JSON.parse(readFileSync(path.join(repoRoot, relativePath), 'utf8'));
@@ -149,6 +159,71 @@ function checkFrontendArchitecture() {
   ];
 }
 
+function directoryContainsPlaywrightSpec(relativeDirectory) {
+  const absoluteDirectory = path.join(repoRoot, relativeDirectory);
+  if (
+    !existsSync(absoluteDirectory) ||
+    !statSync(absoluteDirectory).isDirectory()
+  ) {
+    return false;
+  }
+
+  return readdirSync(absoluteDirectory, { withFileTypes: true }).some(
+    (entry) => {
+      const relativeEntry = path.join(relativeDirectory, entry.name);
+      if (entry.isDirectory()) {
+        return directoryContainsPlaywrightSpec(relativeEntry);
+      }
+      return (
+        entry.isFile() &&
+        playwrightSpecPattern.test(entry.name) &&
+        statSync(path.join(repoRoot, relativeEntry)).size > 0
+      );
+    },
+  );
+}
+
+function checkPlaywrightE2E() {
+  const configPath = playwrightConfigCandidates.find((candidate) =>
+    existsSync(path.join(repoRoot, candidate)),
+  );
+  const config = configPath ? readText(configPath) : '';
+  const explicitlyScopedConfig =
+    /testDir\s*:\s*['"`](?:\.\/)?(?:tests\/)?e2e\/?['"`]/.test(config);
+  const specRoot = playwrightSpecRoots.find(directoryContainsPlaywrightSpec);
+  const playwrightCli = path.join(
+    repoRoot,
+    'node_modules/@playwright/test/cli.js',
+  );
+
+  if (
+    !configPath ||
+    !explicitlyScopedConfig ||
+    !specRoot ||
+    !existsSync(playwrightCli)
+  ) {
+    return {
+      control: 'e2e:playwright-suite-discoverable',
+      ok: false,
+    };
+  }
+
+  const discovery = run('node', [
+    playwrightCli,
+    'test',
+    '--list',
+    `--config=${configPath}`,
+    specRoot,
+  ]);
+
+  return {
+    control: 'e2e:playwright-suite-discoverable',
+    ok:
+      discovery.ok &&
+      /Total:\s*[1-9]\d*\s+tests?(?:\s|$)/m.test(discovery.stdout),
+  };
+}
+
 const checks = [
   ...requiredFiles.map(checkFile),
   ...checkPackageScripts(),
@@ -166,6 +241,8 @@ checks.push({
 });
 
 if (requireLive) {
+  checks.push(checkPlaywrightE2E());
+
   const artifactValidation = run('node', [
     'scripts/validate-circuit-artifacts.mjs',
     '--require-artifacts',
