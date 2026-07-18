@@ -339,31 +339,32 @@ describe("ProofContext", () => {
 
       const { result } = renderHook(() => useProofs(), { wrapper });
 
-      // Start first generation (don't await)
-      const firstGeneration = act(() =>
+      // Start the first generation while keeping its proof promise pending.
+      // Use a synchronous act scope for the immediate state update so act
+      // scopes do not overlap while the pending operation is exercised.
+      let firstGeneration!: Promise<ZKProof>;
+      act(() => {
+        firstGeneration = result.current.generateZKProof(
+          mockCircuitId,
+          { dateOfBirth: "946684800" },
+          { ageThresholdYears: "18" },
+        );
+      });
+
+      // Attempt second generation while first is in-flight
+      await expect(
         result.current.generateZKProof(
           mockCircuitId,
           { dateOfBirth: "946684800" },
           { ageThresholdYears: "18" },
-        ),
-      );
-
-      // Attempt second generation while first is in-flight
-      await expect(
-        act(() =>
-          result.current.generateZKProof(
-            mockCircuitId,
-            { dateOfBirth: "946684800" },
-            { ageThresholdYears: "18" },
-          ),
         ),
       ).rejects.toThrow("A proof is already being generated");
 
       // Clean up
       await act(async () => {
         resolveProof!(makeZKProof());
+        await firstGeneration;
       });
-      await firstGeneration;
     });
 
     it("reports progress via onProgress callback in generateProof", async () => {

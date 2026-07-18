@@ -198,8 +198,11 @@ describe("APIKeyManager", () => {
     });
     // Submit - the Create Key button inside modal (second one)
     const createButtons = screen.getAllByText("Create Key");
-    fireEvent.click(createButtons[createButtons.length - 1]);
+    await act(async () => {
+      fireEvent.click(createButtons[createButtons.length - 1]);
+    });
     expect(onCreateKey).toHaveBeenCalledWith("Test Key", ["read"]);
+    expect(screen.queryByText("Create API Key")).not.toBeInTheDocument();
   });
 
   it("calls onRotateKey when confirming rotation", async () => {
@@ -207,8 +210,11 @@ describe("APIKeyManager", () => {
     render(<APIKeyManager keys={mockKeys} onRotateKey={onRotateKey} />);
     fireEvent.click(screen.getAllByLabelText("Rotate key")[0]);
     expect(screen.getByText("Rotate API Key")).toBeInTheDocument();
-    fireEvent.click(screen.getByText("Rotate Key"));
+    await act(async () => {
+      fireEvent.click(screen.getByText("Rotate Key"));
+    });
     expect(onRotateKey).toHaveBeenCalledWith("k1");
+    expect(screen.queryByText("Rotate API Key")).not.toBeInTheDocument();
   });
 
   it("calls onDeleteKey when confirming deletion", async () => {
@@ -216,8 +222,11 @@ describe("APIKeyManager", () => {
     render(<APIKeyManager keys={mockKeys} onDeleteKey={onDeleteKey} />);
     fireEvent.click(screen.getAllByLabelText("Delete key")[0]);
     expect(screen.getByText("Delete API Key")).toBeInTheDocument();
-    fireEvent.click(screen.getByText("Delete Key"));
+    await act(async () => {
+      fireEvent.click(screen.getByText("Delete Key"));
+    });
     expect(onDeleteKey).toHaveBeenCalledWith("k1");
+    expect(screen.queryByText("Delete API Key")).not.toBeInTheDocument();
   });
 
   it("toggles scope selection in create modal", () => {
@@ -352,7 +361,7 @@ describe("APIKeyManager", () => {
     expect(container.firstChild).toHaveClass("err-class");
   });
 
-  it("prevents deselecting last scope in create modal", () => {
+  it("prevents deselecting last scope in create modal", async () => {
     const onCreateKey = jest.fn().mockResolvedValue("key");
     render(<APIKeyManager keys={mockKeys} onCreateKey={onCreateKey} />);
     fireEvent.click(screen.getByText("Create Key"));
@@ -363,8 +372,11 @@ describe("APIKeyManager", () => {
       target: { value: "Test" },
     });
     const createButtons = screen.getAllByText("Create Key");
-    fireEvent.click(createButtons[createButtons.length - 1]);
+    await act(async () => {
+      fireEvent.click(createButtons[createButtons.length - 1]);
+    });
     expect(onCreateKey).toHaveBeenCalledWith("Test", ["read"]);
+    expect(screen.queryByText("Create API Key")).not.toBeInTheDocument();
   });
 
   it("handleConfirmAction returns early when confirmAction is null", async () => {
@@ -419,12 +431,20 @@ describe("APIKeyManager", () => {
   });
 
   it("copies keyPrefix when fullKey is not available", async () => {
+    jest.useFakeTimers();
     const writeText = jest.fn().mockResolvedValue(undefined);
     Object.assign(navigator, { clipboard: { writeText } });
     render(<APIKeyManager keys={mockKeys} />);
     // k2 (Legacy Key) has no fullKey
-    fireEvent.click(screen.getAllByLabelText("Copy key")[1]);
+    await act(async () => {
+      fireEvent.click(screen.getAllByLabelText("Copy key")[1]);
+    });
     expect(writeText).toHaveBeenCalledWith("zid_live_old...");
+    expect(screen.getByTestId("icon-check")).toBeInTheDocument();
+    await act(async () => {
+      jest.advanceTimersByTime(2100);
+    });
+    jest.useRealTimers();
   });
 
   it("shows request count for keys", () => {
