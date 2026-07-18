@@ -85,6 +85,7 @@ const PROD_BASE_ENV: NodeJS.ProcessEnv = {
   ZK_CONTEXT_BOUND_CIRCUITS_READY: 'true',
   ZK_CIRCUIT_ARTIFACT_DIGESTS_JSON: JSON.stringify(circuitDigestManifest),
   OID4VCI_ISSUER_JWK: JSON.stringify(oid4vciIssuerJwk),
+  OID4VCI_STORAGE_HASH_PEPPER: 'o'.repeat(64),
 };
 
 describe('production safety controls', () => {
@@ -913,6 +914,21 @@ describe('OpenID4VCI / OpenID4VP production controls', () => {
 
   it('accepts a valid private OID4VCI_ISSUER_JWK (no violations)', () => {
     expect(collectProductionSafetyViolations(cleanProdEnv)).toEqual([]);
+  });
+
+  it('requires a strong OpenID4VCI storage pepper', () => {
+    expect(
+      collectProductionSafetyViolations({
+        ...cleanProdEnv,
+        OID4VCI_STORAGE_HASH_PEPPER: '',
+      }),
+    ).toEqual([expect.objectContaining({ control: 'OID4VCI_STORAGE_HASH_PEPPER' })]);
+    expect(
+      collectProductionSafetyViolations({
+        ...cleanProdEnv,
+        OID4VCI_STORAGE_HASH_PEPPER: 'short',
+      }),
+    ).toEqual([expect.objectContaining({ control: 'OID4VCI_STORAGE_HASH_PEPPER' })]);
   });
 
   it('flags OID4VP_ISSUER_JWKS only when set but malformed (absence is fail-closed by design)', () => {

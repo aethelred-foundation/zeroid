@@ -6,12 +6,9 @@
  *   POST /api/v1/oid4vci/token                     -> pre-auth code -> access_token + c_nonce
  *   POST /api/v1/oid4vci/credential   (Bearer)     -> key proof -> SD-JWT VC
  *
- * NOTE: not yet mounted in src/index.ts (unmerged WIP). Mount with:
- *   app.use('/api/v1/oid4vci', oid4vciRouter)
- * Integration points (documented): claim sourcing -> identity/credential
- * services; issuer signing key -> OID4VCI_ISSUER_JWK / enterprise-key-signer;
- * stores -> Prisma/Redis for multi-instance (the in-memory store is single-
- * instance/dev only).
+ * Mounted by src/index.ts at /api/v1/oid4vci. Claim sourcing remains
+ * intentionally fail-closed until authoritative per-configuration sources are
+ * wired; signing uses OID4VCI_ISSUER_JWK and stores use Prisma.
  */
 import { Router, Response } from 'express';
 import { z } from 'zod';
@@ -35,7 +32,12 @@ import { createIssuerSignDepsFromEnv } from '../../services/oid4vci/issuer-key';
 import type { SdJwtIssueDeps } from '../../services/oid4vci/sd-jwt-issuer';
 
 const ISSUER = process.env.OID4VCI_ISSUER ?? 'https://issuer.zeroid';
-const stores = createPrismaIssuanceStores(prisma);
+
+let stores: IssuanceDeps['stores'] | null = null;
+function getStores(): IssuanceDeps['stores'] {
+  if (!stores) stores = createPrismaIssuanceStores(prisma, process.env);
+  return stores;
+}
 
 // Fail-closed issuer key (audit F1): in production a missing/unusable
 // OID4VCI_ISSUER_JWK throws 503 — never an ephemeral key. Dev keeps the
@@ -54,10 +56,13 @@ function getSignDeps(): Promise<SdJwtIssueDeps> {
 async function buildDeps(): Promise<IssuanceDeps> {
   return {
     issuer: ISSUER,
-    stores,
+    stores: getStores(),
     sourceClaims: async () => {
-      // Integration point: resolve the subject's attributes from the identity /
-      // credential / risk services. Until wired, issuance is explicitly disabled.
+      // Do not synthesize eligibility from arbitrary Credential.claims. The
+      // configuration contract does not yet identify trusted source credential
+      // types, freshness limits, or claim transformations, and Identity has no
+      // authoritative residence attribute. Until that contract exists,
+      // issuance remains explicitly disabled.
       throw new ServiceError(
         'claim sourcing not configured (wire to identity/credential services)',
         'unsupported_credential_type',
@@ -102,7 +107,23 @@ router.post(
   validate({ body: OfferSchema }),
   async (req: AuthenticatedRequest, res: Response) => {
     try {
-      const { offer, preAuthorizedCode } = await createCredentialOffer(await buildDeps(), req.body);
+      const identity = req.identity;
+      if (!identity) {
+        throw new ServiceError('Authentication required', 'AUTH_REQUIRED', 401);
+      }
+      const body = req.body as z.infer<typeof OfferSchema>;
+      if (body.subjectDid !== identity.did) {
+        throw new ServiceError(
+          'Credential offer subject must match the authenticated identity',
+          'OID4VCI_SUBJECT_MISMATCH',
+          403,
+        );
+      }
+
+      const { offer, preAuthorizedCode } = await createCredentialOffer(
+        await buildDeps(),
+        { ...body, subjectDid: identity.did },
+      );
       res.status(201).json({ credential_offer: offer, pre_authorized_code: preAuthorizedCode });
     } catch (error) {
       sendServiceError(res, error, logger);

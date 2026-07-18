@@ -84,6 +84,27 @@ describe("redeemPreAuthorizedCode", () => {
     await expect(
       redeemPreAuthorizedCode(deps, { grantType: PRE_AUTH_GRANT_TYPE, preAuthorizedCode, txCode: "9999" }),
     ).rejects.toMatchObject({ code: "invalid_grant" });
+
+    // A typo must not burn the offer. The correct holder can still redeem it.
+    await expect(
+      redeemPreAuthorizedCode(deps, { grantType: PRE_AUTH_GRANT_TYPE, preAuthorizedCode, txCode: "1234" }),
+    ).resolves.toMatchObject({ token_type: "bearer" });
+  });
+
+  it("allows only one concurrent exchange of the same pre-authorized code", async () => {
+    const deps = unitDeps();
+    const { preAuthorizedCode } = await createCredentialOffer(deps, {
+      configId: "regulated-eligibility-v1", subjectDid: "did:z:alice",
+    });
+
+    const attempts = await Promise.allSettled([
+      redeemPreAuthorizedCode(deps, { grantType: PRE_AUTH_GRANT_TYPE, preAuthorizedCode }),
+      redeemPreAuthorizedCode(deps, { grantType: PRE_AUTH_GRANT_TYPE, preAuthorizedCode }),
+    ]);
+
+    expect(attempts.filter((attempt) => attempt.status === "fulfilled")).toHaveLength(1);
+    const rejected = attempts.find((attempt) => attempt.status === "rejected");
+    expect(rejected).toMatchObject({ reason: expect.objectContaining({ code: "invalid_grant" }) });
   });
 });
 
@@ -136,6 +157,62 @@ describe("issueCredential", () => {
     // token not consumed -> a retry (no audit hook) still issues
     const retry = await issueCredential(unitDeps({ stores }), { accessToken: tok.access_token, proofJwt: "proof" });
     expect(retry.format).toBe("dc+sd-jwt");
+  });
+
+  it("allows only one live issuer to use an access token", async () => {
+    let enterSourceClaims!: () => void;
+    let releaseSourceClaims!: () => void;
+    const sourceClaimsEntered = new Promise<void>((resolve) => { enterSourceClaims = resolve; });
+    const sourceClaimsBlocked = new Promise<void>((resolve) => { releaseSourceClaims = resolve; });
+    const deps = unitDeps({
+      sourceClaims: jest.fn(async () => {
+        enterSourceClaims();
+        await sourceClaimsBlocked;
+        return { ...ATTRS };
+      }),
+    });
+    const { preAuthorizedCode } = await createCredentialOffer(deps, {
+      configId: "regulated-eligibility-v1", subjectDid: "did:z:alice",
+    });
+    const tok = await redeemPreAuthorizedCode(deps, {
+      grantType: PRE_AUTH_GRANT_TYPE,
+      preAuthorizedCode,
+    });
+
+    const first = issueCredential(deps, { accessToken: tok.access_token, proofJwt: "proof-1" });
+    await sourceClaimsEntered;
+    await expect(
+      issueCredential(deps, { accessToken: tok.access_token, proofJwt: "proof-2" }),
+    ).rejects.toMatchObject({ code: "invalid_token", statusCode: 401 });
+    releaseSourceClaims();
+    await expect(first).resolves.toMatchObject({ format: "dc+sd-jwt" });
+  });
+
+  it("lets a new worker take over an expired lease without stale-owner completion", async () => {
+    const stores = createInMemoryIssuanceStores();
+    const deps = unitDeps({ stores });
+    const { preAuthorizedCode } = await createCredentialOffer(deps, {
+      configId: "regulated-eligibility-v1", subjectDid: "did:z:alice",
+    });
+    const tok = await redeemPreAuthorizedCode(deps, {
+      grantType: PRE_AUTH_GRANT_TYPE,
+      preAuthorizedCode,
+    });
+
+    await expect(stores.claimToken(tok.access_token, {
+      claimId: "old-owner",
+      now: NOW,
+      claimExpiresAt: NOW + 5,
+    })).resolves.toMatchObject({ claimId: "old-owner" });
+    await expect(stores.claimToken(tok.access_token, {
+      claimId: "new-owner",
+      now: NOW + 5,
+      claimExpiresAt: NOW + 10,
+    })).resolves.toMatchObject({ claimId: "new-owner" });
+
+    await expect(stores.completeToken(tok.access_token, "old-owner", NOW + 5)).resolves.toBe(false);
+    await expect(stores.releaseToken(tok.access_token, "old-owner")).resolves.toBe(false);
+    await expect(stores.completeToken(tok.access_token, "new-owner", NOW + 5)).resolves.toBe(true);
   });
 });
 

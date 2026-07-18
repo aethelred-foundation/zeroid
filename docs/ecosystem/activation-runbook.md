@@ -49,6 +49,9 @@ NEXT_PUBLIC_FEE_ROUTER_ADDRESS="0x..."             # from step 1
 OID4VCI_ISSUER_JWK='{"kty":"EC","crv":"P-256",...,"d":"...","kid":"issuer-key-1"}'
                                   # REQUIRED in production (private JWK; boot +
                                   # issuance fail closed without it — audit F1)
+OID4VCI_STORAGE_HASH_PEPPER="$(openssl rand -hex 32)"
+                                  # REQUIRED in production; keep independent
+                                  # from JWT/signing keys and preserve across restarts
 OID4VP_ISSUER_JWKS='{"issuer-key-1":{...public jwk...}}' # verifier trust store
 ```
 
@@ -81,6 +84,14 @@ npx prisma migrate resolve --applied 20260718000000_zeroid_baseline
 ```
 
 Do not run `db push --accept-data-loss` in testnet or production.
+
+The `20260718010000_oid4vci_atomic_issuance` migration adds nullable token
+lease columns. Deploying the corresponding application changes stored offer
+codes/access tokens to HMAC digests and encrypts c_nonce values. Existing
+short-lived OID4VCI offers and token sessions cannot be migrated without their
+plaintext client values, so drain their 10-minute TTL (or explicitly purge
+those two ephemeral tables during a maintenance window) before enabling the
+new application build.
 
 ## 3. Activation gates (flip only after end-to-end verification)
 

@@ -986,10 +986,10 @@ model Oid4vpPresentationRequest {
 }
 
 model Oid4vciOffer {
-  preAuthCode String   @id
+  preAuthCode String   @id // HMAC digest; the bearer code is never persisted
   configId    String
   subjectDid  String
-  txCode      String?
+  txCode      String?  // HMAC digest; protects low-entropy PINs after DB disclosure
   createdAt   DateTime @default(now())
   expiresAt   DateTime
 
@@ -997,12 +997,15 @@ model Oid4vciOffer {
 }
 
 model Oid4vciTokenSession {
-  accessToken String   @id
-  configId    String
-  subjectDid  String
-  cNonce      String
-  createdAt   DateTime @default(now())
-  expiresAt   DateTime
+  accessToken   String    @id // HMAC digest; the bearer token is never persisted
+  configId      String
+  subjectDid    String
+  cNonce        String    // AES-256-GCM envelope bound to accessToken
+  claimId       String?
+  claimExpiresAt DateTime?
+  createdAt     DateTime  @default(now())
+  expiresAt     DateTime
 
+  @@index([claimExpiresAt])
   @@map("oid4vci_token_sessions")
 }

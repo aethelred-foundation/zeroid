@@ -12,6 +12,7 @@ const MIN_POLICY_RECEIPT_SECRET_LENGTH = 48;
 const MIN_ENTERPRISE_SECRET_HASH_PEPPER_LENGTH = 48;
 const MIN_IDENTITY_RECOVERY_HASH_PEPPER_LENGTH = 48;
 const MIN_GOVERNMENT_CACHE_HASH_PEPPER_LENGTH = 48;
+const MIN_OID4VCI_STORAGE_HASH_PEPPER_LENGTH = 48;
 const DEFAULT_DEVELOPMENT_CORS_ORIGINS = ['http://localhost:3000'];
 const REQUIRED_SECRET_KEY_BYTES = 32;
 const MAX_PRODUCTION_SANCTIONS_LIST_AGE_HOURS = 24;
@@ -168,6 +169,7 @@ export function checkedProductionSafetyControls(): string[] {
     'SANCTIONS_SCREENING_STORE_FILE',
     'WEBHOOK_SECRET_ENCRYPTION_KEY',
     'OID4VCI_ISSUER_JWK',
+    'OID4VCI_STORAGE_HASH_PEPPER',
     'OID4VP_ISSUER_JWKS',
     'POLICY_RECEIPT_SIGNING_SECRET',
     'REGULATORY_REPORT_STORE_DIR',
@@ -422,6 +424,24 @@ export function collectProductionSafetyViolations(
     violations.push({
       control: 'OID4VCI_ISSUER_JWK',
       risk: 'OID4VCI_ISSUER_JWK must be a JSON private JWK (kty plus a private component)',
+    });
+  }
+
+  const oid4vciStorageHashPepper = env.OID4VCI_STORAGE_HASH_PEPPER?.trim();
+  if (!oid4vciStorageHashPepper) {
+    violations.push({
+      control: 'OID4VCI_STORAGE_HASH_PEPPER',
+      risk: 'OpenID4VCI bearer codes, access tokens, tx_codes, and nonce envelopes require a deployment-specific storage pepper',
+    });
+  } else if (oid4vciStorageHashPepper.length < MIN_OID4VCI_STORAGE_HASH_PEPPER_LENGTH) {
+    violations.push({
+      control: 'OID4VCI_STORAGE_HASH_PEPPER',
+      risk: `OpenID4VCI storage hash pepper must be at least ${MIN_OID4VCI_STORAGE_HASH_PEPPER_LENGTH} characters`,
+    });
+  } else if (isKnownUnsafeSharedSecret(oid4vciStorageHashPepper)) {
+    violations.push({
+      control: 'OID4VCI_STORAGE_HASH_PEPPER',
+      risk: 'OpenID4VCI storage hash pepper must not use a known development or test placeholder',
     });
   }
 

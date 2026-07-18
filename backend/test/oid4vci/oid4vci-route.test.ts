@@ -4,6 +4,7 @@ import request from "supertest";
 const mockOffer = jest.fn();
 const mockToken = jest.fn();
 const mockIssue = jest.fn();
+let mockAuthenticated = true;
 jest.mock("../../src/services/oid4vci/issuance", () => {
   const actual = jest.requireActual("../../src/services/oid4vci/issuance");
   return {
@@ -19,7 +20,9 @@ jest.mock("../../src/runtime", () => ({
 }));
 jest.mock("../../src/middleware/auth", () => ({
   authMiddleware: (req: any, _res: unknown, next: () => void) => {
-    req.identity = { id: "op", did: "did:op", status: "ACTIVE" };
+    if (mockAuthenticated) {
+      req.identity = { id: "op", did: "did:aethelred:alice", status: "ACTIVE" };
+    }
     next();
   },
 }));
@@ -42,6 +45,7 @@ beforeEach(() => {
   mockOffer.mockReset();
   mockToken.mockReset();
   mockIssue.mockReset();
+  mockAuthenticated = true;
 });
 
 describe("OpenID4VCI routes", () => {
@@ -59,10 +63,35 @@ describe("OpenID4VCI routes", () => {
     });
     const r = await request(makeApp())
       .post("/api/v1/oid4vci/credential-offer")
-      .send({ configId: "regulated-eligibility-v1", subjectDid: "did:z:alice" });
+      .send({ configId: "regulated-eligibility-v1", subjectDid: "did:aethelred:alice" });
     expect(r.status).toBe(201);
     expect(r.body.pre_authorized_code).toBe("pac-1");
     expect(r.body.credential_offer.credential_configuration_ids).toEqual(["regulated-eligibility-v1"]);
+    expect(mockOffer).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ subjectDid: "did:aethelred:alice" }),
+    );
+  });
+
+  it("POST /credential-offer rejects a subject other than the authenticated DID", async () => {
+    const r = await request(makeApp())
+      .post("/api/v1/oid4vci/credential-offer")
+      .send({ configId: "regulated-eligibility-v1", subjectDid: "did:aethelred:bob" });
+
+    expect(r.status).toBe(403);
+    expect(r.body.error).toBe("OID4VCI_SUBJECT_MISMATCH");
+    expect(mockOffer).not.toHaveBeenCalled();
+  });
+
+  it("POST /credential-offer fails closed if auth middleware yields no identity", async () => {
+    mockAuthenticated = false;
+    const r = await request(makeApp())
+      .post("/api/v1/oid4vci/credential-offer")
+      .send({ configId: "regulated-eligibility-v1", subjectDid: "did:aethelred:alice" });
+
+    expect(r.status).toBe(401);
+    expect(r.body.error).toBe("AUTH_REQUIRED");
+    expect(mockOffer).not.toHaveBeenCalled();
   });
 
   it("POST /token exchanges a pre-authorized code (200)", async () => {
