@@ -2894,6 +2894,14 @@ router.post('/oidc/saml', (_req: Request, res: Response): void => {
 // SLA ROUTES
 // ==========================================================================
 
+const sendSLATelemetryUnavailable = (res: Response): void => {
+  res.status(503).json({
+    error:
+      'SLA evidence is unavailable until an instrumented durable telemetry adapter is deployed',
+    code: 'SLA_AUTHORITATIVE_TELEMETRY_UNAVAILABLE',
+  });
+};
+
 // ---------------------------------------------------------------------------
 // POST /enterprise/sla/register — Register SLA definition
 // ---------------------------------------------------------------------------
@@ -2908,7 +2916,15 @@ router.post(
         ...req.body,
         clientId,
       });
-      res.status(201).json({ message: 'SLA definition registered' });
+      res.status(201).json({
+        message: 'SLA configuration registered',
+        data: {
+          clientId,
+          configurationStatus: 'configured',
+          reportingStatus:
+            'unavailable_until_instrumented_durable_telemetry_adapter_is_deployed',
+        },
+      });
     } catch (err) {
       const error = err as Error & { statusCode?: number; code?: string };
       logger.error('sla_register_error', { error: error.message });
@@ -2927,21 +2943,8 @@ router.get(
   '/sla/report',
   requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES),
   validate({ query: PeriodQuerySchema }),
-  async (req: Request, res: Response): Promise<void> => {
-    try {
-      const clientId = getClientId(req);
-      const { period: periodDays } = req.query as unknown as z.infer<
-        typeof PeriodQuerySchema
-      >;
-      const report = slaMonitor.generateReport(clientId, periodDays);
-      res.status(200).json({ data: report });
-    } catch (err) {
-      const error = err as Error & { statusCode?: number; code?: string };
-      logger.error('sla_report_error', { error: error.message });
-      res
-        .status(error.statusCode ?? 500)
-        .json({ error: error.message, code: error.code ?? 'SLA_REPORT_ERROR' });
-    }
+  (_req: Request, res: Response): void => {
+    sendSLATelemetryUnavailable(res);
   },
 );
 
@@ -2952,22 +2955,8 @@ router.get(
   '/sla/violations',
   requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES),
   validate({ query: SinceQuerySchema }),
-  async (req: Request, res: Response): Promise<void> => {
-    try {
-      const clientId = getClientId(req);
-      const { since } = req.query as unknown as z.infer<
-        typeof SinceQuerySchema
-      >;
-      const violations = slaMonitor.getViolations(clientId, since);
-      res.status(200).json({ data: violations });
-    } catch (err) {
-      const error = err as Error & { statusCode?: number; code?: string };
-      logger.error('sla_violations_error', { error: error.message });
-      res.status(error.statusCode ?? 500).json({
-        error: error.message,
-        code: error.code ?? 'SLA_VIOLATIONS_ERROR',
-      });
-    }
+  (_req: Request, res: Response): void => {
+    sendSLATelemetryUnavailable(res);
   },
 );
 
@@ -2978,22 +2967,8 @@ router.get(
   '/sla/alerts',
   requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES),
   validate({ query: LimitedListQuerySchema }),
-  async (req: Request, res: Response): Promise<void> => {
-    try {
-      const clientId = getClientId(req);
-      const { limit } = req.query as unknown as z.infer<
-        typeof LimitedListQuerySchema
-      >;
-      const alerts = slaMonitor.getAlerts(clientId, limit);
-      res.status(200).json({ data: alerts });
-    } catch (err) {
-      const error = err as Error & { statusCode?: number; code?: string };
-      logger.error('sla_alerts_error', { error: error.message });
-      res.status(error.statusCode ?? 500).json({
-        error: error.message,
-        code: error.code ?? 'SLA_ALERTS_ERROR',
-      });
-    }
+  (_req: Request, res: Response): void => {
+    sendSLATelemetryUnavailable(res);
   },
 );
 
