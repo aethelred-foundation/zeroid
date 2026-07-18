@@ -379,11 +379,14 @@ function WebhookCard({
       initial={{ opacity: 0, y: 5 }}
       animate={{ opacity: 1, y: 0 }}
     >
-      <button
-        className="w-full text-left px-5 py-4 hover:bg-[var(--surface-secondary)] transition-colors focus:outline-none"
-        onClick={() => setExpanded(!expanded)}
-      >
-        <div className="flex items-start gap-3">
+      <div className="flex items-start gap-3 px-5 py-4 transition-colors hover:bg-[var(--surface-secondary)]">
+        <button
+          type="button"
+          aria-expanded={expanded}
+          aria-label={`${expanded ? "Collapse" : "Expand"} webhook ${webhook.url}`}
+          className="flex min-w-0 flex-1 items-start gap-3 text-left focus:outline-none"
+          onClick={() => setExpanded(!expanded)}
+        >
           <div
             className={`w-9 h-9 rounded-lg ${webhook.active ? "bg-brand-500/10" : "bg-[var(--surface-tertiary)]"} flex items-center justify-center flex-shrink-0`}
           >
@@ -424,35 +427,31 @@ function WebhookCard({
               ))}
             </div>
           </div>
-          <div className="flex items-center gap-1 flex-shrink-0">
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onTest?.(webhook.id);
-              }}
-              className="p-1.5 rounded-lg hover:bg-[var(--surface-tertiary)] transition-colors"
-              title="Send test event"
-            >
-              <Play className="w-3.5 h-3.5 text-[var(--text-tertiary)]" />
-            </button>
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onDelete?.(webhook.id);
-              }}
-              className="p-1.5 rounded-lg hover:bg-red-500/10 transition-colors"
-              title="Delete webhook"
-            >
-              <Trash2 className="w-3.5 h-3.5 text-red-400" />
-            </button>
-            {expanded ? (
-              <ChevronUp className="w-4 h-4 text-[var(--text-tertiary)]" />
-            ) : (
-              <ChevronDown className="w-4 h-4 text-[var(--text-tertiary)]" />
-            )}
-          </div>
+          {expanded ? (
+            <ChevronUp className="mt-2.5 h-4 w-4 flex-shrink-0 text-[var(--text-tertiary)]" />
+          ) : (
+            <ChevronDown className="mt-2.5 h-4 w-4 flex-shrink-0 text-[var(--text-tertiary)]" />
+          )}
+        </button>
+        <div className="flex flex-shrink-0 items-center gap-1">
+          <button
+            type="button"
+            onClick={() => onTest?.(webhook.id)}
+            className="rounded-lg p-1.5 transition-colors hover:bg-[var(--surface-tertiary)]"
+            title="Send test event"
+          >
+            <Play className="h-3.5 w-3.5 text-[var(--text-tertiary)]" />
+          </button>
+          <button
+            type="button"
+            onClick={() => onDelete?.(webhook.id)}
+            className="rounded-lg p-1.5 transition-colors hover:bg-red-500/10"
+            title="Delete webhook"
+          >
+            <Trash2 className="h-3.5 w-3.5 text-red-400" />
+          </button>
         </div>
-      </button>
+      </div>
 
       <AnimatePresence>
         {expanded && (

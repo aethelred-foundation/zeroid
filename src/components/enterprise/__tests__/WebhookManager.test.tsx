@@ -4,7 +4,14 @@ import WebhookManager from "@/components/enterprise/WebhookManager";
 
 jest.mock("framer-motion", () => ({
   motion: {
-    div: ({ children, ...props }: any) => <div {...props}>{children}</div>,
+    div: ({
+      children,
+      layout: _layout,
+      initial: _initial,
+      animate: _animate,
+      exit: _exit,
+      ...props
+    }: any) => <div {...props}>{children}</div>,
   },
   AnimatePresence: ({ children }: any) => children,
 }));
@@ -170,7 +177,7 @@ describe("WebhookManager", () => {
     expect(formAddButton).toBeDisabled();
   });
 
-  it("selects events and enters valid URL to enable form submission", () => {
+  it("selects events and enters valid URL to enable form submission", async () => {
     const onAdd = jest.fn().mockResolvedValue(undefined);
     render(<WebhookManager webhooks={mockWebhooks} onAdd={onAdd} />);
     fireEvent.click(screen.getByText("Add Webhook"));
@@ -192,7 +199,9 @@ describe("WebhookManager", () => {
     expect(formAddButton).not.toBeDisabled();
 
     // Submit the form
-    fireEvent.click(formAddButton);
+    await act(async () => {
+      fireEvent.click(formAddButton);
+    });
     expect(onAdd).toHaveBeenCalledWith(
       "https://my-server.com/hook",
       ["credential.issued"],
