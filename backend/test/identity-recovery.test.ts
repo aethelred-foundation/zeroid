@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { Wallet } from 'ethers';
 
 const mockIdentityFindUnique = jest.fn();
 const mockIdentityCreate = jest.fn();
@@ -52,6 +53,7 @@ jest.mock('../src/services/enterprise/oidc-bridge', () => ({
 }));
 
 import { IdentityService } from '../src/services/identity';
+import { buildWalletRegistrationMessage } from '../src/services/identity-registration-proof';
 
 const ORIGINAL_ENV = { ...process.env };
 
@@ -72,6 +74,28 @@ function protectedRecoveryHash(recoveryHash: string): string {
 
 function publicKey(): string {
   return Buffer.from(crypto.randomBytes(32)).toString('base64');
+}
+
+async function signedRegistration(wallet: Wallet, recoveryHash: string) {
+  const controller = wallet.address.toLowerCase();
+  const did = `did:aethelred:testnet:${controller}`;
+  const message = buildWalletRegistrationMessage({
+    origin: new URL(process.env.ZEROID_AUTH_ORIGIN as string),
+    chainId: Number(process.env.AETHELRED_CHAIN_ID),
+    did,
+    controller,
+    recoveryHash,
+  });
+
+  return {
+    did,
+    controller,
+    publicKey: Buffer.from(wallet.signingKey.publicKey.slice(2), 'hex').toString(
+      'base64',
+    ),
+    recoveryHash,
+    signature: await wallet.signMessage(message),
+  };
 }
 
 function baseIdentity(overrides: Record<string, unknown> = {}) {
@@ -174,7 +198,13 @@ describe('IdentityService recovery hardening', () => {
   it('stores peppered recovery hashes for production registrations', async () => {
     process.env.NODE_ENV = 'production';
     process.env.IDENTITY_RECOVERY_HASH_PEPPER = 'r'.repeat(64);
+    process.env.ZEROID_AUTH_ORIGIN = 'https://zeroid.test';
+    process.env.AETHELRED_CHAIN_ID = '7332';
     const recoveryHash = sha256Hex('new identity recovery proof');
+    const registration = await signedRegistration(
+      Wallet.createRandom(),
+      recoveryHash,
+    );
     const createdAt = new Date('2026-04-28T00:00:00.000Z');
     mockIdentityFindUnique.mockResolvedValue(null);
     mockIdentityCreate.mockImplementation(async ({ data }) => ({
@@ -192,11 +222,7 @@ describe('IdentityService recovery hardening', () => {
     }));
     const service = new IdentityService();
 
-    await service.register({
-      did: 'did:aethelred:new-user',
-      publicKey: publicKey(),
-      recoveryHash,
-    });
+    await service.register(registration);
 
     expect(mockPrismaTransaction).toHaveBeenCalledTimes(1);
     expect(mockIdentityCreate).toHaveBeenCalledWith(expect.objectContaining({
@@ -204,6 +230,59 @@ describe('IdentityService recovery hardening', () => {
         recoveryHash: protectedRecoveryHash(recoveryHash),
       }),
     }));
+  });
+
+  it('returns an idempotent 409 when a signed registration is replayed', async () => {
+    process.env.ZEROID_AUTH_ORIGIN = 'https://zeroid.test';
+    process.env.AETHELRED_CHAIN_ID = '7332';
+    const registration = await signedRegistration(
+      Wallet.createRandom(),
+      sha256Hex('replay-safe recovery proof'),
+    );
+    const createdAt = new Date('2026-04-28T00:00:00.000Z');
+    const created = baseIdentity({
+      did: registration.did,
+      publicKey: registration.publicKey,
+      recoveryHash: registration.recoveryHash,
+      createdAt,
+      updatedAt: createdAt,
+    });
+    mockIdentityFindUnique
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(created);
+    mockIdentityCreate.mockResolvedValue(created);
+    const service = new IdentityService();
+
+    await expect(service.register(registration)).resolves.toMatchObject({
+      sessionId: 'session-1',
+    });
+    await expect(service.register(registration)).rejects.toMatchObject({
+      code: 'IDENTITY_DID_EXISTS',
+      statusCode: 409,
+    });
+
+    expect(mockIdentityCreate).toHaveBeenCalledTimes(1);
+    expect(mockGenerateToken).toHaveBeenCalledTimes(1);
+  });
+
+  it('maps a concurrent duplicate registration race to the same 409', async () => {
+    process.env.ZEROID_AUTH_ORIGIN = 'https://zeroid.test';
+    process.env.AETHELRED_CHAIN_ID = '7332';
+    const registration = await signedRegistration(
+      Wallet.createRandom(),
+      sha256Hex('concurrent replay recovery proof'),
+    );
+    mockIdentityFindUnique.mockResolvedValue(null);
+    mockPrismaTransaction.mockRejectedValueOnce(
+      Object.assign(new Error('Unique constraint failed'), { code: 'P2002' }),
+    );
+    const service = new IdentityService();
+
+    await expect(service.register(registration)).rejects.toMatchObject({
+      code: 'IDENTITY_DID_EXISTS',
+      statusCode: 409,
+    });
+    expect(mockGenerateToken).not.toHaveBeenCalled();
   });
 
   it('requires a recovery hash pepper before production recovery verification', async () => {

@@ -19,8 +19,8 @@ import { toast } from "sonner";
 import { apiClient } from "@/lib/api/client";
 import {
   buildRegistrationMessage,
-  extractRegistrationPublicKey,
   getIdentityAuthToken,
+  getRegistrationAuthContext,
   getRegistrationDid,
   recoverRegistrationPublicKey,
   storeIdentityAuthToken,
@@ -120,6 +120,9 @@ export function useCreateIdentity() {
   return useMutation({
     mutationFn: async (params: CreateIdentityParams): Promise<Hash> => {
       const did = getRegistrationDid(params.didDocument, address);
+      if (!address) {
+        throw new Error("Wallet must be connected to register an identity.");
+      }
 
       // Derive the on-chain arguments from the DID itself. The contract's
       // registerIdentity(bytes32 didHash, bytes32 recoveryHash) reverts on a
@@ -138,27 +141,24 @@ export function useCreateIdentity() {
       // (its schema is a bare 64-char hex SHA-256-shaped string).
       const recoveryHash = recoveryHashHex.slice(2);
 
-      let publicKey = extractRegistrationPublicKey(params.publicKeys);
-
-      if (!publicKey) {
-        if (!address) {
-          throw new Error("Wallet must be connected to register an identity.");
-        }
-        const message = buildRegistrationMessage({
-          did,
-          controller: address,
-          recoveryHash,
-        });
-        let signature: `0x${string}`;
-        try {
-          signature = await signMessageAsync({ message });
-        } catch (error) {
-          // Surface signing failures as guidance (e.g. personal_sign reaching
-          // the node because a non-signing provider owns window.ethereum).
-          throw friendlyWalletError(error);
-        }
-        publicKey = await recoverRegistrationPublicKey(message, signature);
+      // A DID document key supplied by the wizard cannot prove control of the
+      // connected EVM account. Always request a wallet signature and derive
+      // the registration key from that exact proof.
+      const message = buildRegistrationMessage({
+        did,
+        controller: address,
+        recoveryHash,
+        ...getRegistrationAuthContext(),
+      });
+      let signature: `0x${string}`;
+      try {
+        signature = await signMessageAsync({ message });
+      } catch (error) {
+        // Surface signing failures as guidance (e.g. personal_sign reaching
+        // the node because a non-signing provider owns window.ethereum).
+        throw friendlyWalletError(error);
       }
+      const publicKey = await recoverRegistrationPublicKey(message, signature);
 
       // Anchor the DID on-chain: registerIdentity(didHash, recoveryHash).
       const hash = await writeContractAsync({
@@ -204,10 +204,12 @@ export function useCreateIdentity() {
       try {
         registration = await apiClient.registerIdentity({
           did,
+          controller: address,
           publicKey,
           recoveryHash,
+          signature,
           metadata: {
-            controller: address?.toLowerCase(),
+            controller: address.toLowerCase(),
             txHash: hash,
             didHash,
             didDocument: { ...params.didDocument, id: did },

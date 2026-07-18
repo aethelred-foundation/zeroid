@@ -3,6 +3,10 @@ import { generateToken, revokeToken } from '../middleware/auth';
 import { oidcBridge } from './enterprise/oidc-bridge';
 import { isAethelredDid } from '../utils/did';
 import { isProductionRuntime } from './production-safety';
+import {
+  normalizeWalletRegistrationDid,
+  verifyWalletRegistrationProof,
+} from './identity-registration-proof';
 // tee import removed — not used in this module
 import { IdentityStatus } from '@prisma/client';
 import nodeCrypto from 'crypto';
@@ -15,8 +19,10 @@ const MIN_IDENTITY_RECOVERY_HASH_PEPPER_LENGTH = 48;
 // ---------------------------------------------------------------------------
 export interface RegisterIdentityRequest {
   did: string;
+  controller: string;
   publicKey: string;
   recoveryHash: string;
+  signature: string;
   displayName?: string;
   metadata?: Record<string, unknown>;
 }
@@ -77,68 +83,98 @@ export class IdentityService {
     token: string;
     sessionId: string;
   }> {
-    logger.info('identity_registration_start', { did: request.did });
+    // Normalize the public identifier before lookup so case variants cannot
+    // bypass the idempotent conflict response or create an alias.
+    const did = normalizeWalletRegistrationDid(request.did);
+    logger.info('identity_registration_start', { did });
 
     // Check for existing DID
-    const existing = await prisma.identity.findUnique({ where: { did: request.did } });
+    const existing = await prisma.identity.findUnique({ where: { did } });
     if (existing) {
       throw new IdentityError('DID already registered', 'IDENTITY_DID_EXISTS', 409);
     }
 
+    // The server, not the browser, reconstructs the signed message from the
+    // normalized fields and configured origin/chain. The returned values are
+    // canonical and are the only values persisted below.
+    const verifiedProof = verifyWalletRegistrationProof({
+      did,
+      controller: request.controller,
+      publicKey: request.publicKey,
+      recoveryHash: request.recoveryHash,
+      signature: request.signature,
+    });
+
     // Validate DID format
-    if (!this.isValidDID(request.did)) {
+    if (!this.isValidDID(verifiedProof.did)) {
       throw new IdentityError('Invalid DID format', 'IDENTITY_INVALID_DID');
     }
 
     // Validate public key format
-    if (!this.isValidPublicKey(request.publicKey)) {
+    if (!this.isValidPublicKey(verifiedProof.publicKey)) {
       throw new IdentityError('Invalid public key format', 'IDENTITY_INVALID_KEY');
     }
-    if (!this.isValidRecoveryHash(request.recoveryHash)) {
+    if (!this.isValidRecoveryHash(verifiedProof.recoveryHash)) {
       throw new IdentityError('Invalid recovery hash format', 'IDENTITY_INVALID_RECOVERY_HASH');
     }
 
-    const identity = await this.runIdentityAuditTransaction(async (tx) => {
-      const created = await tx.identity.create({
-        data: {
-          did: request.did,
-          publicKey: request.publicKey,
-          recoveryHash: this.protectRecoveryHash(request.recoveryHash),
-          displayName: request.displayName,
-          metadata: (request.metadata ?? {}) as any,
-          status: 'ACTIVE',
-          delegatedTo: [],
-        },
-      });
-
-      await tx.auditLog.create({
-        data: {
-          identityId: created.id,
-          action: 'IDENTITY_CREATED',
-          resourceType: 'identity',
-          resourceId: created.id,
-          details: {
-            did: request.did,
+    let identity;
+    try {
+      identity = await this.runIdentityAuditTransaction(async (tx) => {
+        const created = await tx.identity.create({
+          data: {
+            did: verifiedProof.did,
+            publicKey: verifiedProof.publicKey,
+            recoveryHash: this.protectRecoveryHash(verifiedProof.recoveryHash),
             displayName: request.displayName,
+            metadata: {
+              ...(request.metadata ?? {}),
+              controller: verifiedProof.controller,
+            } as any,
+            status: 'ACTIVE',
+            delegatedTo: [],
           },
-        },
-      });
+        });
 
-      return created;
-    });
+        await tx.auditLog.create({
+          data: {
+            identityId: created.id,
+            action: 'IDENTITY_CREATED',
+            resourceType: 'identity',
+            resourceId: created.id,
+            details: {
+              did: verifiedProof.did,
+              controller: verifiedProof.controller,
+              proofVersion: 'zeroid.identity.registration.v1',
+              displayName: request.displayName,
+            },
+          },
+        });
+
+        return created;
+      });
+    } catch (error) {
+      // Two identical signed requests can pass the read check concurrently.
+      // The database unique constraint remains authoritative; translate that
+      // race into the same stable 409 as an ordinary replay.
+      if ((error as { code?: unknown })?.code === 'P2002') {
+        throw new IdentityError('DID already registered', 'IDENTITY_DID_EXISTS', 409);
+      }
+      throw error;
+    }
 
     // Generate authentication token
     const { token, sessionId } = await generateToken(identity.id, identity.did);
 
     // Cache identity lookup
     await redis.set(
-      `identity:did:${request.did}`,
+      `identity:did:${verifiedProof.did}`,
       JSON.stringify({ id: identity.id, did: identity.did, status: identity.status }),
       'EX',
       3600,
     );
 
-    logger.info('identity_registered', { identityId: identity.id, did: request.did });
+    logger.info('identity_registered', { identityId: identity.id, did: verifiedProof.did });
 
     return {
       identity: this.formatIdentity(identity),

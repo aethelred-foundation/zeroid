@@ -103,12 +103,22 @@ router.post(
   validate({ body: registerIdentitySchema }),
   async (req: Request, res: Response): Promise<void> => {
     try {
-      const { did, publicKey, recoveryHash, displayName, metadata } = req.body;
+      const {
+        did,
+        controller,
+        publicKey,
+        recoveryHash,
+        signature,
+        displayName,
+        metadata,
+      } = req.body;
 
       const result = await identityService.register({
         did,
+        controller,
         publicKey,
         recoveryHash,
+        signature,
         displayName,
         metadata,
       });

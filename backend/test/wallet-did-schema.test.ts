@@ -28,8 +28,10 @@ describe('walletDidSchema', () => {
 
   it('is enforced by registerIdentitySchema', () => {
     const base = {
+      controller: address,
       publicKey: Buffer.from('a-valid-public-key-that-is-long-enough').toString('base64'),
       recoveryHash: 'a'.repeat(64),
+      signature: `0x${'0'.repeat(128)}1b`,
     };
     expect(() =>
       registerIdentitySchema.parse({ ...base, did: 'did:aethelred:pending' }),
@@ -39,5 +41,27 @@ describe('walletDidSchema', () => {
       did: `did:aethelred:testnet:${address}`,
     });
     expect(ok.did).toBe(`did:aethelred:testnet:${address.toLowerCase()}`);
+    expect(ok.controller).toBe(address.toLowerCase());
+    expect(ok.signature).toBe(`0x${'0'.repeat(128)}1b`);
+  });
+
+  it('requires an explicit canonical wallet signature', () => {
+    const base = {
+      did: `did:aethelred:testnet:${address}`,
+      controller: address,
+      publicKey: Buffer.from('a-valid-public-key-that-is-long-enough').toString('base64'),
+      recoveryHash: 'a'.repeat(64),
+    };
+
+    expect(() => registerIdentitySchema.parse(base)).toThrow();
+    expect(() =>
+      registerIdentitySchema.parse({ ...base, signature: '0x1234' }),
+    ).toThrow();
+    expect(() =>
+      registerIdentitySchema.parse({
+        ...base,
+        signature: `0x${'0'.repeat(128)}00`,
+      }),
+    ).toThrow();
   });
 });

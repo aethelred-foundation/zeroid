@@ -119,6 +119,22 @@ export const recoveryHashSchema = z
   .string()
   .regex(/^[0-9a-f]{64}$/i, 'Recovery hash must be a SHA-256 hex digest');
 
+export const walletControllerSchema = z
+  .string()
+  .regex(/^0x[0-9a-fA-F]{40}$/, 'Controller must be an EVM wallet address')
+  .transform((value) => value.toLowerCase());
+
+// Registration deliberately accepts only the canonical 65-byte Ethereum
+// signature form with v=27/28. Compact or recovery-id-0/1 variants would give
+// the same proof multiple wire encodings and make request auditing ambiguous.
+export const walletRegistrationSignatureSchema = z
+  .string()
+  .regex(
+    /^0x[0-9a-fA-F]{128}(1b|1c)$/i,
+    'Signature must be a canonical 65-byte Ethereum wallet signature',
+  )
+  .transform((value) => value.toLowerCase());
+
 export const credentialTypeSchema = z.enum([
   'NATIONAL_ID',
   'PASSPORT',
@@ -177,13 +193,17 @@ export function parseOrThrow<T>(
 // ---------------------------------------------------------------------------
 // Schema for common request patterns
 // ---------------------------------------------------------------------------
-export const registerIdentitySchema = z.object({
-  did: walletDidSchema,
-  publicKey: publicKeySchema,
-  recoveryHash: recoveryHashSchema,
-  displayName: z.string().min(1).max(100).optional(),
-  metadata: z.record(z.unknown()).optional(),
-});
+export const registerIdentitySchema = z
+  .object({
+    did: walletDidSchema,
+    controller: walletControllerSchema,
+    publicKey: publicKeySchema,
+    recoveryHash: recoveryHashSchema.transform((value) => value.toLowerCase()),
+    signature: walletRegistrationSignatureSchema,
+    displayName: z.string().min(1).max(100).optional(),
+    metadata: z.record(z.unknown()).optional(),
+  })
+  .strict();
 
 export const issueCredentialSchema = z.object({
   credentialType: credentialTypeSchema,

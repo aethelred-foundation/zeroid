@@ -1,6 +1,8 @@
 import {
+  buildRegistrationMessage,
   clearIdentityAuthToken,
   getIdentityAuthToken,
+  normalizeRecoveryHash,
   storeIdentityAuthToken,
 } from "@/lib/identity/registration";
 
@@ -119,5 +121,57 @@ describe("getRegistrationDid", () => {
     expect(() => getRegistrationDid({ id: "did:aethelred:pending" })).toThrow(
       /wallet address is required/i,
     );
+  });
+});
+
+describe("wallet registration proof message", () => {
+  const controller =
+    "0x1234567890abcdef1234567890abcdef12345678" as `0x${string}`;
+  const did = `did:aethelred:testnet:${controller}`;
+  const recoveryHash = "a".repeat(64);
+
+  it("uses the canonical origin/chain/DID/controller/recovery representation", () => {
+    expect(
+      buildRegistrationMessage({
+        did,
+        controller,
+        recoveryHash,
+        origin: "https://zeroid.test",
+        chainId: 7332,
+      }),
+    ).toBe(
+      [
+        "zeroid.test wants you to register a ZeroID identity with your Ethereum account:",
+        controller,
+        "",
+        "Authorize creation of the wallet-bound ZeroID identity below. This request does not initiate a blockchain transaction.",
+        "",
+        "URI: https://zeroid.test",
+        "Version: 1",
+        "Chain ID: 7332",
+        `DID: ${did}`,
+        `Recovery Hash: ${recoveryHash}`,
+        "Purpose: zeroid.identity.registration",
+      ].join("\n"),
+    );
+  });
+
+  it("normalizes the recovery hash before it is signed", () => {
+    expect(normalizeRecoveryHash(`0x${"A".repeat(64)}` as `0x${string}`)).toBe(
+      "a".repeat(64),
+    );
+  });
+
+  it("refuses a controller that differs from the DID address", () => {
+    expect(() =>
+      buildRegistrationMessage({
+        did,
+        controller:
+          "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd" as `0x${string}`,
+        recoveryHash,
+        origin: "https://zeroid.test",
+        chainId: 7332,
+      }),
+    ).toThrow(/controller must match/i);
   });
 });

@@ -1,4 +1,5 @@
 import { hashMessage, recoverPublicKey, type Hex } from "viem";
+import { activeChain } from "@/config/chains";
 import type { Address, Bytes32 } from "@/types";
 
 /**
@@ -21,10 +22,17 @@ type RegistrationPublicKeyRecord = Record<string, unknown>;
 
 export interface BackendIdentityRegistrationPayload {
   did: string;
+  controller: Address;
   publicKey: string;
   recoveryHash: string;
+  signature: Hex;
   displayName?: string;
   metadata?: Record<string, unknown>;
+}
+
+export interface RegistrationAuthContext {
+  origin: string;
+  chainId: number;
 }
 
 export interface BackendIdentityRegistrationResult {
@@ -89,7 +97,26 @@ export function normalizeRecoveryHash(value: Bytes32): string {
   if (!/^[0-9a-f]{64}$/i.test(recoveryHash)) {
     throw new Error("Identity recovery hash must be a valid bytes32 value.");
   }
-  return recoveryHash;
+  return recoveryHash.toLowerCase();
+}
+
+/**
+ * Bind registration to the exact browser origin and configured Aethelred
+ * chain. The backend independently resolves the same values from
+ * ZEROID_AUTH_ORIGIN and AETHELRED_CHAIN_ID; neither value is trusted from the
+ * request payload.
+ */
+export function getRegistrationAuthContext(): RegistrationAuthContext {
+  if (typeof window === "undefined") {
+    throw new Error("Wallet registration must be started in a browser.");
+  }
+
+  const origin = normalizeRegistrationOrigin(window.location.origin);
+  if (!Number.isSafeInteger(activeChain.id) || activeChain.id <= 0) {
+    throw new Error("The active wallet chain is not valid for registration.");
+  }
+
+  return { origin: origin.origin, chainId: activeChain.id };
 }
 
 export function extractRegistrationPublicKey(
@@ -106,13 +133,39 @@ export function buildRegistrationMessage(params: {
   did: string;
   controller: Address;
   recoveryHash: string;
+  origin: string;
+  chainId: number;
 }): string {
+  const didMatch = params.did.match(WALLET_DID_PATTERN);
+  if (!didMatch) {
+    throw new Error("Identity DID must contain a canonical wallet address.");
+  }
+  const did = `did:aethelred:${didMatch[1]}:${didMatch[2].toLowerCase()}`;
+  const controller = params.controller.toLowerCase();
+  const recoveryHash = params.recoveryHash.toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(recoveryHash)) {
+    throw new Error("Identity recovery hash must be a valid bytes32 value.");
+  }
+  if (did.slice(did.lastIndexOf(":") + 1) !== controller) {
+    throw new Error("Wallet controller must match the identity DID.");
+  }
+  if (!Number.isSafeInteger(params.chainId) || params.chainId <= 0) {
+    throw new Error("The active wallet chain is not valid for registration.");
+  }
+  const origin = normalizeRegistrationOrigin(params.origin);
+
   return [
-    "ZeroID identity registration",
-    `DID: ${params.did}`,
-    `Controller: ${params.controller.toLowerCase()}`,
-    `Recovery hash: ${params.recoveryHash}`,
-    "Purpose: bind this wallet controller key to the DID.",
+    `${origin.host} wants you to register a ZeroID identity with your Ethereum account:`,
+    controller,
+    "",
+    "Authorize creation of the wallet-bound ZeroID identity below. This request does not initiate a blockchain transaction.",
+    "",
+    `URI: ${origin.origin}`,
+    "Version: 1",
+    `Chain ID: ${params.chainId}`,
+    `DID: ${did}`,
+    `Recovery Hash: ${recoveryHash}`,
+    "Purpose: zeroid.identity.registration",
   ].join("\n");
 }
 
@@ -181,4 +234,26 @@ function hexToBase64(value: string): string {
   }
 
   return btoa(String.fromCharCode(...bytes));
+}
+
+function normalizeRegistrationOrigin(value: string): URL {
+  let origin: URL;
+  try {
+    origin = new URL(value);
+  } catch {
+    throw new Error("The ZeroID registration origin is invalid.");
+  }
+
+  if (
+    !["http:", "https:"].includes(origin.protocol) ||
+    origin.username ||
+    origin.password ||
+    origin.search ||
+    origin.hash ||
+    (origin.pathname !== "/" && origin.pathname !== "")
+  ) {
+    throw new Error("The ZeroID registration origin is invalid.");
+  }
+
+  return origin;
 }

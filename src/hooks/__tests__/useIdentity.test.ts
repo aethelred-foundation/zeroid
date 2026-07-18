@@ -63,6 +63,13 @@ jest.mock("@/lib/api/client", () => ({
   },
 }));
 
+jest.mock("@/lib/identity/registration", () => ({
+  ...jest.requireActual("@/lib/identity/registration"),
+  recoverRegistrationPublicKey: jest.fn(() =>
+    Promise.resolve("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="),
+  ),
+}));
+
 jest.mock("@/config/constants", () => ({
   IDENTITY_REGISTRY_ADDRESS: "0xRegistryAddress",
   IDENTITY_REGISTRY_ABI: [{ type: "function", name: "resolveByController" }],
@@ -273,10 +280,13 @@ describe("useIdentity hooks", () => {
       // The backend answers 404 IDENTITY_ADDRESS_NOT_FOUND for a wallet with
       // no ZeroID — the normal first-run state. It must surface as a null
       // profile so the UI shows onboarding, not the error card.
-      const notFound = Object.assign(new Error("Identity not found for address"), {
-        statusCode: 404,
-        code: "IDENTITY_ADDRESS_NOT_FOUND",
-      });
+      const notFound = Object.assign(
+        new Error("Identity not found for address"),
+        {
+          statusCode: 404,
+          code: "IDENTITY_ADDRESS_NOT_FOUND",
+        },
+      );
       (apiClient.get as jest.Mock).mockRejectedValue(notFound);
 
       const { useIdentityProfile } = await import("@/hooks/useIdentity");
@@ -360,10 +370,16 @@ describe("useIdentity hooks", () => {
       expect(apiClient.registerIdentity).toHaveBeenCalledWith(
         expect.objectContaining({
           did: expectedDid,
+          controller: mockAddress,
           publicKey: validPublicKey,
           recoveryHash: expectedRecoveryHex.slice(2),
+          signature: "0xsignature",
         }),
       );
+      expect(mockSignMessageAsync).toHaveBeenCalledTimes(1);
+      expect(mockSignMessageAsync).toHaveBeenCalledWith({
+        message: expect.stringContaining(`DID: ${expectedDid}`),
+      });
       expect(getIdentityAuthToken()).toBe("identity-token");
       expect(
         window.sessionStorage.getItem("zeroid.identity.authToken"),
@@ -645,8 +661,10 @@ describe("useIdentity hooks", () => {
         displayName: "Combined",
       };
 
-      mockUseReadContract
-        .mockReturnValue({ data: didHashValue, isLoading: false }); // resolveByController
+      mockUseReadContract.mockReturnValue({
+        data: didHashValue,
+        isLoading: false,
+      }); // resolveByController
 
       (apiClient.get as jest.Mock).mockResolvedValue(profile);
 
