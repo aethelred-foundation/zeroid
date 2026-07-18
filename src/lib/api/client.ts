@@ -13,7 +13,6 @@ import type {
   PaginatedResponse,
   HealthResponse,
   IdentityProfile,
-  CredentialSchema,
   ZKProof,
   ProofVerification,
   ProofRequest,
@@ -39,6 +38,12 @@ import {
   normalizeCredentialSummary,
   type CredentialSummary,
 } from "@/lib/credentials/summary";
+import {
+  normalizeSchemaRegistryPage,
+  normalizeSchemaRegistryRecord,
+  type SchemaGovernanceStatus,
+  type SchemaRegistryRecord,
+} from "@/lib/schemas/registry";
 import type {
   EligibilityDisclosurePolicy,
   EligibilityProofRequest,
@@ -867,40 +872,49 @@ export const apiClient = {
     );
   },
 
-  /** List available credential schemas */
+  /** List credential schemas exactly as returned by schema governance. */
   async listSchemas(
     page = 1,
     pageSize = 20,
-  ): Promise<PaginatedResponse<CredentialSchema>> {
-    const result = await withRetry(
-      () =>
-        request<CredentialSchema[]>("GET", "/api/v1/governance/schemas", {
-          params: { page, limit: pageSize },
-        }),
-      DEFAULT_RETRIES,
+    filters: { status?: SchemaGovernanceStatus; name?: string } = {},
+  ): Promise<PaginatedResponse<SchemaRegistryRecord>> {
+    const params: Record<string, string | number> = {
+      page,
+      limit: pageSize,
+    };
+    if (filters.status) params.status = filters.status;
+    const nameFilter = filters.name?.trim();
+    if (nameFilter && nameFilter.length > 100) {
+      throw new ZeroIDApiError(
+        "Schema name filter cannot exceed 100 characters.",
+        "SCHEMA_NAME_FILTER_INVALID",
+        400,
+      );
+    }
+    if (nameFilter) params.name = nameFilter;
+
+    // Governance routes are authenticated. Do not retry with a bearer token:
+    // a rejected session must fail once and transition the wallet back to the
+    // explicit sign-in state.
+    const result = await request<unknown[]>(
+      "GET",
+      "/api/v1/governance/schemas",
+      { params },
     );
     const pagination = (
-      result as ApiResponse<CredentialSchema[]> & {
-        pagination?: BackendPagination;
-      }
+      result as ApiResponse<unknown[]> & { pagination?: unknown }
     ).pagination;
-    const items = result.data ?? [];
-    const resolvedPage = pagination?.page ?? page;
-    const resolvedPageSize = pagination?.limit ?? pageSize;
-    const total = pagination?.total ?? items.length;
 
-    return {
-      items,
-      total,
-      page: resolvedPage,
-      pageSize: resolvedPageSize,
-      hasMore: resolvedPage * resolvedPageSize < total,
-    };
+    return normalizeSchemaRegistryPage(result.data, pagination, filters.status);
   },
 
-  /** Get a single schema by ID */
-  async getSchema(schemaId: string): Promise<CredentialSchema> {
-    return get<CredentialSchema>(`/api/v1/governance/schemas/${schemaId}`);
+  /** Get a single schema-governance record by backend UUID. */
+  async getSchema(schemaId: string): Promise<SchemaRegistryRecord> {
+    return normalizeSchemaRegistryRecord(
+      await get<unknown>(
+        `/api/v1/governance/schemas/${encodeURIComponent(schemaId)}`,
+      ),
+    );
   },
 
   // --------------------------------------------------------------------------

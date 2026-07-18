@@ -1,706 +1,401 @@
 "use client";
 
-import { useState } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { FormEvent, useState } from "react";
+import Link from "next/link";
+import { useQuery } from "@tanstack/react-query";
+import { useAccount } from "wagmi";
 import {
-  Store,
-  Search,
-  Filter,
-  Star,
-  ShieldCheck,
-  CheckCircle2,
-  Globe,
+  ArrowLeft,
   ArrowRight,
-  ChevronDown,
-  Users,
-  Award,
-  TrendingUp,
-  Coins,
-  BookOpen,
-  Building2,
-  Fingerprint,
+  CheckCircle2,
+  FileKey2,
   FileText,
-  Heart,
-  ExternalLink,
-  BadgeCheck,
-  Clock,
-  Tag,
-  Grid3X3,
-  List,
-  SortAsc,
+  Loader2,
+  RefreshCw,
+  Search,
+  ShieldAlert,
+  Store,
+  UserRound,
 } from "lucide-react";
 import AppLayout from "@/components/layout/AppLayout";
+import { useIdentity } from "@/contexts/IdentityContext";
+import { apiClient } from "@/lib/api/client";
+import type { SchemaRegistryRecord } from "@/lib/schemas/registry";
 
-// ============================================================
-// Marketplace Data
-// ============================================================
+const PAGE_SIZE = 12;
 
-const credentialSchemas = [
-  {
-    id: "cs1",
-    name: "KYC Identity Verification",
-    category: "Identity",
-    issuer: "Aethelred Trust Services",
-    trustScore: 98,
-    verifications: 128439,
-    price: "Free",
-    staking: "100 AETH",
-    jurisdictions: ["US", "EU", "UAE", "SG"],
-    featured: true,
-    description:
-      "Full KYC verification including document check, biometric matching, and liveness detection via TEE.",
-    useCases: [
-      "DeFi onboarding",
-      "Exchange verification",
-      "Institutional access",
-    ],
-  },
-  {
-    id: "cs2",
-    name: "Accredited Investor Attestation",
-    category: "Financial",
-    issuer: "SecureVault Compliance",
-    trustScore: 96,
-    verifications: 45821,
-    price: "$25",
-    staking: "500 AETH",
-    jurisdictions: ["US", "EU", "UK"],
-    featured: true,
-    description:
-      "SEC-compliant accredited investor verification with income and net worth attestation.",
-    useCases: [
-      "Security token offerings",
-      "Private fund access",
-      "Reg D compliance",
-    ],
-  },
-  {
-    id: "cs3",
-    name: "Age Verification (18+)",
-    category: "Identity",
-    issuer: "Aethelred Trust Services",
-    trustScore: 98,
-    verifications: 892341,
-    price: "Free",
-    staking: "50 AETH",
-    jurisdictions: ["Global"],
-    featured: false,
-    description:
-      "Zero-knowledge proof of age without revealing date of birth. Accepted globally.",
-    useCases: ["Gaming platforms", "Content access", "E-commerce age gates"],
-  },
-  {
-    id: "cs4",
-    name: "Business Entity Verification",
-    category: "Corporate",
-    issuer: "Dubai Chamber Digital",
-    trustScore: 94,
-    verifications: 12847,
-    price: "$50",
-    staking: "1000 AETH",
-    jurisdictions: ["UAE", "SG", "HK"],
-    featured: true,
-    description:
-      "Company registration and beneficial ownership verification for institutional entities.",
-    useCases: ["B2B transactions", "Supply chain", "Institutional DeFi"],
-  },
-  {
-    id: "cs5",
-    name: "Anti-Money Laundering Certificate",
-    category: "Compliance",
-    issuer: "ComplianceFirst AG",
-    trustScore: 92,
-    verifications: 34521,
-    price: "$15",
-    staking: "250 AETH",
-    jurisdictions: ["US", "EU", "UK", "CH"],
-    featured: false,
-    description:
-      "AML compliance attestation including source of funds and transaction monitoring clearance.",
-    useCases: [
-      "Cross-border payments",
-      "High-value transfers",
-      "Institutional trading",
-    ],
-  },
-  {
-    id: "cs6",
-    name: "Professional License Credential",
-    category: "Professional",
-    issuer: "Credential Alliance",
-    trustScore: 89,
-    verifications: 8932,
-    price: "$10",
-    staking: "150 AETH",
-    jurisdictions: ["US", "EU", "UK", "AU"],
-    featured: false,
-    description:
-      "Verification of professional licenses (medical, legal, financial advisory) from issuing authorities.",
-    useCases: [
-      "Professional services",
-      "Regulatory compliance",
-      "Background checks",
-    ],
-  },
-  {
-    id: "cs7",
-    name: "Residency Proof",
-    category: "Identity",
-    issuer: "GovTech Solutions",
-    trustScore: 91,
-    verifications: 67234,
-    price: "Free",
-    staking: "100 AETH",
-    jurisdictions: ["UAE", "SG", "EU"],
-    featured: false,
-    description:
-      "Government-issued residency proof with address verification. Privacy-preserving jurisdiction attestation.",
-    useCases: ["Tax compliance", "Regulatory reporting", "Voting eligibility"],
-  },
-  {
-    id: "cs8",
-    name: "Credit Score Attestation",
-    category: "Financial",
-    issuer: "FinScore Labs",
-    trustScore: 87,
-    verifications: 23456,
-    price: "$20",
-    staking: "200 AETH",
-    jurisdictions: ["US", "UK", "EU"],
-    featured: false,
-    description:
-      "Credit tier attestation using ZK proofs. Prove creditworthiness without revealing exact score.",
-    useCases: [
-      "DeFi lending",
-      "Undercollateralized loans",
-      "Insurance underwriting",
-    ],
-  },
-];
+function formatRegistryDate(value: string): string {
+  return new Intl.DateTimeFormat("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  }).format(new Date(value));
+}
 
-const issuers = [
-  {
-    id: "i1",
-    name: "Aethelred Trust Services",
-    trustScore: 98,
-    verifications: 1021780,
-    specializations: ["Identity", "Compliance"],
-    joined: "Sep 2025",
-    badge: "Founding Issuer",
-  },
-  {
-    id: "i2",
-    name: "SecureVault Compliance",
-    trustScore: 96,
-    verifications: 456821,
-    specializations: ["Financial", "Compliance"],
-    joined: "Oct 2025",
-    badge: "Top Issuer",
-  },
-  {
-    id: "i3",
-    name: "Dubai Chamber Digital",
-    trustScore: 94,
-    verifications: 128470,
-    specializations: ["Corporate", "Government"],
-    joined: "Nov 2025",
-    badge: "Government Partner",
-  },
-  {
-    id: "i4",
-    name: "ComplianceFirst AG",
-    trustScore: 92,
-    verifications: 234521,
-    specializations: ["Compliance", "AML"],
-    joined: "Dec 2025",
-    badge: "Verified",
-  },
-  {
-    id: "i5",
-    name: "Credential Alliance",
-    trustScore: 89,
-    verifications: 89320,
-    specializations: ["Professional", "Education"],
-    joined: "Jan 2026",
-    badge: "Verified",
-  },
-];
+function SchemaCard({ schema }: { schema: SchemaRegistryRecord }) {
+  const fieldNames = Object.keys(schema.schemaDefinition.properties);
+  const visibleFieldNames = fieldNames.slice(0, 8);
 
-const categories = [
-  "All",
-  "Identity",
-  "Financial",
-  "Compliance",
-  "Corporate",
-  "Professional",
-];
+  return (
+    <article
+      className="card flex h-full flex-col p-5"
+      data-schema-id={schema.id}
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-emerald-300">
+          <CheckCircle2 className="h-3 w-3" />
+          Approved
+        </span>
+        <span className="font-mono text-xs text-[var(--text-secondary)]">
+          v{schema.version}
+        </span>
+      </div>
 
-// ============================================================
-// Component
-// ============================================================
+      <h2 className="mt-4 text-base font-semibold text-[var(--text-primary)]">
+        {schema.name}
+      </h2>
+      <p className="mt-2 text-sm leading-6 text-[var(--text-secondary)]">
+        {schema.description}
+      </p>
+
+      <dl className="mt-5 space-y-3 border-t border-[var(--border-primary)] pt-4 text-xs">
+        <div>
+          <dt className="flex items-center gap-1.5 text-[var(--text-tertiary)]">
+            <FileKey2 className="h-3.5 w-3.5" /> Registry ID
+          </dt>
+          <dd className="mt-1 break-all font-mono text-[var(--text-secondary)]">
+            {schema.id}
+          </dd>
+        </div>
+        <div>
+          <dt className="flex items-center gap-1.5 text-[var(--text-tertiary)]">
+            <UserRound className="h-3.5 w-3.5" /> Proposer identity
+          </dt>
+          <dd className="mt-1 break-all font-mono text-[var(--text-secondary)]">
+            {schema.proposedBy}
+          </dd>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <dt className="text-[var(--text-tertiary)]">Governance votes</dt>
+            <dd className="mt-1 text-[var(--text-secondary)]">
+              {schema.approvalVotes} approve / {schema.rejectionVotes} reject
+            </dd>
+          </div>
+          <div>
+            <dt className="text-[var(--text-tertiary)]">Registry updated</dt>
+            <dd className="mt-1 text-[var(--text-secondary)]">
+              {formatRegistryDate(schema.updatedAt)}
+            </dd>
+          </div>
+        </div>
+      </dl>
+
+      <div className="mt-4 border-t border-[var(--border-primary)] pt-4">
+        <div className="text-[10px] font-semibold uppercase tracking-wide text-[var(--text-tertiary)]">
+          Declared fields ({fieldNames.length})
+        </div>
+        {visibleFieldNames.length > 0 ? (
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {visibleFieldNames.map((fieldName) => (
+              <code
+                key={fieldName}
+                className="rounded-md bg-[var(--surface-tertiary)] px-2 py-1 text-[10px] text-[var(--text-secondary)]"
+              >
+                {fieldName}
+              </code>
+            ))}
+            {fieldNames.length > visibleFieldNames.length && (
+              <span className="rounded-md bg-[var(--surface-tertiary)] px-2 py-1 text-[10px] text-[var(--text-tertiary)]">
+                +{fieldNames.length - visibleFieldNames.length} more
+              </span>
+            )}
+          </div>
+        ) : (
+          <p className="mt-2 text-xs text-[var(--text-tertiary)]">
+            This schema declares no properties.
+          </p>
+        )}
+      </div>
+    </article>
+  );
+}
 
 export default function MarketplacePage() {
-  const [searchQuery, setSearchQuery] = useState("");
-  const [selectedCategory, setSelectedCategory] = useState("All");
-  const [selectedJurisdiction, setSelectedJurisdiction] = useState("All");
-  const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
-  const [showIssuerDetail, setShowIssuerDetail] = useState<string | null>(null);
-  const [activeSection, setActiveSection] = useState<"schemas" | "issuers">(
-    "schemas",
-  );
+  const { address, isConnected } = useAccount();
+  const { identity, sessionStatus, sessionError, signIn } = useIdentity();
+  const [page, setPage] = useState(1);
+  const [filterInput, setFilterInput] = useState("");
+  const [nameFilter, setNameFilter] = useState("");
 
-  const filteredSchemas = credentialSchemas.filter((s) => {
-    const matchSearch =
-      s.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      s.issuer.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchCategory =
-      selectedCategory === "All" || s.category === selectedCategory;
-    const matchJurisdiction =
-      selectedJurisdiction === "All" ||
-      s.jurisdictions.includes(selectedJurisdiction);
-    return matchSearch && matchCategory && matchJurisdiction;
+  const canReadRegistry =
+    Boolean(isConnected && address && identity.isRegistered) &&
+    sessionStatus === "authenticated";
+
+  const registryQuery = useQuery({
+    queryKey: [
+      "approved-schema-registry",
+      address?.toLowerCase(),
+      page,
+      nameFilter,
+    ],
+    queryFn: () =>
+      apiClient.listSchemas(page, PAGE_SIZE, {
+        status: "APPROVED",
+        name: nameFilter || undefined,
+      }),
+    enabled: canReadRegistry,
+    staleTime: 30_000,
+    retry: false,
   });
 
-  const featuredSchemas = credentialSchemas.filter((s) => s.featured);
+  const applyFilter = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setPage(1);
+    setNameFilter(filterInput.trim());
+  };
+
+  const clearFilter = () => {
+    setFilterInput("");
+    setNameFilter("");
+    setPage(1);
+  };
+
+  const totalPages = registryQuery.data
+    ? Math.max(1, Math.ceil(registryQuery.data.total / PAGE_SIZE))
+    : 1;
 
   return (
     <AppLayout>
       <div className="space-y-6">
-        {/* Header */}
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold flex items-center gap-3">
-              <Store className="w-7 h-7 text-identity-amber" />
-              Credential Marketplace
-            </h1>
-            <p className="text-[var(--text-secondary)] mt-1">
-              Browse verified credential schemas, discover trusted issuers, and
-              request credentials
-            </p>
-          </div>
-        </div>
+        <header>
+          <h1 className="flex items-center gap-3 text-2xl font-bold">
+            <Store className="h-7 w-7 text-identity-amber" />
+            Approved Schema Registry
+          </h1>
+          <p className="mt-1 text-[var(--text-secondary)]">
+            Authenticated governance records for credential schemas approved by
+            ZeroID.
+          </p>
+        </header>
 
-        {/* Metrics */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          {[
-            {
-              label: "Credential Schemas",
-              value: String(credentialSchemas.length),
-              icon: FileText,
-              color: "text-brand-400",
-              trend: "+3 this month",
-            },
-            {
-              label: "Verified Issuers",
-              value: String(issuers.length),
-              icon: BadgeCheck,
-              color: "text-emerald-400",
-              trend: "All audited",
-            },
-            {
-              label: "Total Verifications",
-              value: "1.3M",
-              icon: ShieldCheck,
-              color: "text-identity-chrome",
-              trend: "+42% growth",
-            },
-            {
-              label: "Avg Trust Score",
-              value: "93",
-              icon: Star,
-              color: "text-identity-amber",
-              trend: "Network minimum: 85",
-            },
-          ].map((m, i) => (
-            <motion.div
-              key={m.label}
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: i * 0.05 }}
-              className="bg-zero-900 border border-zero-800 rounded-2xl p-4"
-            >
-              <div className="flex items-center gap-2 mb-2">
-                <m.icon className={`w-4 h-4 ${m.color}`} />
-                <span className="text-xs text-zero-500">{m.label}</span>
-              </div>
-              <div className="text-xl font-bold">{m.value}</div>
-              <div className="text-xs text-zero-500 mt-1">{m.trend}</div>
-            </motion.div>
-          ))}
-        </div>
-
-        {/* Featured */}
-        <div>
-          <h2 className="font-semibold mb-3 flex items-center gap-2">
-            <Award className="w-4 h-4 text-identity-amber" /> Featured
-            Credentials
+        <section className="rounded-2xl border border-amber-500/20 bg-amber-500/5 p-4">
+          <h2 className="text-sm font-semibold text-amber-200">
+            Registry discovery only
           </h2>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            {featuredSchemas.map((schema, i) => (
-              <motion.div
-                key={schema.id}
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: i * 0.1 }}
-                className="card p-5 border-identity-amber/20 hover:border-identity-amber/40 transition-all cursor-pointer group"
+          <p className="mt-1 text-xs leading-5 text-[var(--text-secondary)]">
+            This registry does not sell or issue credentials. The current
+            issuance API is controlled by authenticated issuers, so no holder
+            request action is presented here.
+          </p>
+        </section>
+
+        {!isConnected || !address ? (
+          <section
+            className="card border-amber-500/20 p-10 text-center"
+            role="status"
+          >
+            <ShieldAlert className="mx-auto mb-3 h-9 w-9 text-amber-300" />
+            <h2 className="font-semibold text-amber-100">
+              Connect a wallet to view approved schemas
+            </h2>
+            <p className="mx-auto mt-2 max-w-xl text-sm text-[var(--text-secondary)]">
+              The governance registry is protected. Use the wallet control in
+              the header before loading registry data.
+            </p>
+          </section>
+        ) : identity.isLoading ? (
+          <section
+            className="card flex items-center justify-center gap-3 p-10 text-sm text-[var(--text-secondary)]"
+            role="status"
+          >
+            <Loader2 className="h-5 w-5 animate-spin text-brand-400" />
+            Checking the connected ZeroID identity...
+          </section>
+        ) : !identity.isRegistered ? (
+          <section
+            className="card border-amber-500/20 p-10 text-center"
+            role="status"
+          >
+            <ShieldAlert className="mx-auto mb-3 h-9 w-9 text-amber-300" />
+            <h2 className="font-semibold text-amber-100">
+              Register this wallet with ZeroID first
+            </h2>
+            <p className="mx-auto mt-2 max-w-xl text-sm text-[var(--text-secondary)]">
+              An active ZeroID identity is required before the authenticated
+              governance registry can be queried.
+            </p>
+            <Link href="/identity" className="btn-primary mt-5 inline-flex">
+              Open identity setup
+            </Link>
+          </section>
+        ) : sessionStatus !== "authenticated" ? (
+          <section
+            className="card border-cyan-500/20 p-10 text-center"
+            role="status"
+          >
+            <FileKey2 className="mx-auto mb-3 h-9 w-9 text-cyan-300" />
+            <h2 className="font-semibold text-cyan-100">
+              Sign in to load approved schemas
+            </h2>
+            <p className="mx-auto mt-2 max-w-xl text-sm text-[var(--text-secondary)]">
+              Sign the one-time ZeroID challenge with the registered wallet. No
+              registry request has been sent for this session yet.
+            </p>
+            {sessionError && (
+              <p
+                className="mx-auto mt-3 max-w-xl text-xs text-red-300"
+                role="alert"
               >
-                <div className="flex items-start justify-between mb-3">
-                  <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-identity-amber/20 to-brand-600/20 border border-identity-amber/20 flex items-center justify-center">
-                    <Fingerprint className="w-5 h-5 text-identity-amber" />
-                  </div>
-                  <span className="px-2 py-0.5 rounded-full bg-identity-amber/10 text-identity-amber text-[10px] font-medium border border-identity-amber/20">
-                    Featured
-                  </span>
-                </div>
-                <h3 className="font-semibold text-sm group-hover:text-brand-400 transition-colors">
-                  {schema.name}
-                </h3>
-                <p className="text-xs text-zero-500 mt-1 line-clamp-2">
-                  {schema.description}
-                </p>
-                <div className="flex items-center gap-3 mt-3 text-xs text-zero-400">
-                  <span className="flex items-center gap-1">
-                    <Star className="w-3 h-3 text-identity-amber" />
-                    {schema.trustScore}
-                  </span>
-                  <span>
-                    {(schema.verifications / 1000).toFixed(0)}k verified
-                  </span>
-                  <span className="ml-auto font-medium text-emerald-400">
-                    {schema.price}
-                  </span>
-                </div>
-              </motion.div>
-            ))}
-          </div>
-        </div>
-
-        {/* Section Toggle */}
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setActiveSection("schemas")}
-            className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${activeSection === "schemas" ? "bg-brand-600 text-white" : "bg-zero-900 border border-zero-800 text-zero-400 hover:text-white"}`}
-          >
-            Credential Schemas
-          </button>
-          <button
-            onClick={() => setActiveSection("issuers")}
-            className={`px-4 py-2 rounded-xl text-sm font-medium transition-all ${activeSection === "issuers" ? "bg-brand-600 text-white" : "bg-zero-900 border border-zero-800 text-zero-400 hover:text-white"}`}
-          >
-            Issuer Leaderboard
-          </button>
-        </div>
-
-        <AnimatePresence mode="wait">
-          {activeSection === "schemas" && (
-            <motion.div
-              key="schemas"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="space-y-4"
+                {sessionError}
+              </p>
+            )}
+            <button
+              type="button"
+              disabled={sessionStatus === "signing"}
+              onClick={() => {
+                void signIn().catch(() => {
+                  // IdentityContext exposes the actionable authentication error.
+                });
+              }}
+              className="btn-primary mt-5 disabled:cursor-wait disabled:opacity-60"
             >
-              {/* Search + Filters */}
-              <div className="flex flex-wrap items-center gap-3">
-                <div className="flex-1 min-w-[250px] relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zero-500" />
+              {sessionStatus === "signing"
+                ? "Signing..."
+                : "Sign in with wallet"}
+            </button>
+          </section>
+        ) : (
+          <>
+            <section className="card p-4">
+              <form
+                onSubmit={applyFilter}
+                className="flex flex-col gap-3 sm:flex-row sm:items-center"
+                role="search"
+              >
+                <label className="relative flex-1">
+                  <span className="sr-only">
+                    Filter approved schemas by name
+                  </span>
+                  <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--text-tertiary)]" />
                   <input
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="Search credentials or issuers..."
-                    className="w-full pl-10 pr-4 py-2.5 bg-zero-900 border border-zero-800 rounded-xl text-sm focus:outline-none focus:border-brand-500"
+                    type="search"
+                    value={filterInput}
+                    onChange={(event) => setFilterInput(event.target.value)}
+                    placeholder="Filter approved schemas by name"
+                    maxLength={100}
+                    className="input w-full pl-10"
                   />
+                </label>
+                <button type="submit" className="btn-primary justify-center">
+                  Apply filter
+                </button>
+                {(nameFilter || filterInput) && (
+                  <button
+                    type="button"
+                    onClick={clearFilter}
+                    className="btn-secondary justify-center"
+                  >
+                    Clear
+                  </button>
+                )}
+              </form>
+            </section>
+
+            {registryQuery.isPending ? (
+              <section
+                className="card flex items-center justify-center gap-3 p-12 text-sm text-[var(--text-secondary)]"
+                role="status"
+              >
+                <Loader2 className="h-5 w-5 animate-spin text-brand-400" />
+                Loading approved governance schemas...
+              </section>
+            ) : registryQuery.error ? (
+              <section
+                className="card flex items-start gap-3 border-red-500/20 p-6 text-red-300"
+                role="alert"
+              >
+                <ShieldAlert className="mt-0.5 h-5 w-5 shrink-0" />
+                <div className="flex-1">
+                  <h2 className="font-medium">Schema registry unavailable</h2>
+                  <p className="mt-1 text-xs text-[var(--text-secondary)]">
+                    {registryQuery.error instanceof Error
+                      ? registryQuery.error.message
+                      : "The authenticated registry request failed."}
+                  </p>
                 </div>
-                <div className="flex items-center gap-2">
-                  {categories.map((cat) => (
-                    <button
-                      key={cat}
-                      onClick={() => setSelectedCategory(cat)}
-                      className={`px-3 py-2 rounded-xl text-xs font-medium transition-all whitespace-nowrap ${
-                        selectedCategory === cat
-                          ? "bg-brand-600 text-white"
-                          : "bg-zero-900 border border-zero-800 text-zero-400 hover:text-white"
-                      }`}
-                    >
-                      {cat}
-                    </button>
-                  ))}
-                </div>
-                <select
-                  value={selectedJurisdiction}
-                  onChange={(e) => setSelectedJurisdiction(e.target.value)}
-                  className="px-3 py-2.5 bg-zero-900 border border-zero-800 rounded-xl text-xs focus:outline-none focus:border-brand-500"
+                <button
+                  type="button"
+                  onClick={() => void registryQuery.refetch()}
+                  className="btn-secondary shrink-0"
                 >
-                  <option value="All">All Jurisdictions</option>
-                  <option value="US">United States</option>
-                  <option value="EU">European Union</option>
-                  <option value="UAE">UAE</option>
-                  <option value="UK">United Kingdom</option>
-                  <option value="SG">Singapore</option>
-                  <option value="Global">Global</option>
-                </select>
-                <div className="flex items-center bg-zero-900 border border-zero-800 rounded-xl overflow-hidden">
-                  <button
-                    onClick={() => setViewMode("grid")}
-                    className={`p-2.5 ${viewMode === "grid" ? "bg-brand-600 text-white" : "text-zero-500 hover:text-white"}`}
+                  <RefreshCw className="h-4 w-4" /> Retry
+                </button>
+              </section>
+            ) : registryQuery.data.items.length === 0 ? (
+              <section className="card p-14 text-center" role="status">
+                <FileText className="mx-auto mb-3 h-10 w-10 text-[var(--text-tertiary)]" />
+                <h2 className="font-semibold">
+                  {nameFilter
+                    ? "No approved schemas match this name"
+                    : "No approved schemas are published"}
+                </h2>
+                <p className="mx-auto mt-2 max-w-xl text-sm text-[var(--text-secondary)]">
+                  {nameFilter
+                    ? "Clear or change the name filter to query the registry again."
+                    : "The backend returned an empty approved-governance registry."}
+                </p>
+              </section>
+            ) : (
+              <>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p
+                    className="text-sm text-[var(--text-secondary)]"
+                    role="status"
                   >
-                    <Grid3X3 className="w-4 h-4" />
+                    {registryQuery.data.total} approved schema
+                    {registryQuery.data.total === 1 ? "" : "s"}
+                    {nameFilter ? ` matching “${nameFilter}”` : ""}
+                  </p>
+                  <p className="text-xs text-[var(--text-tertiary)]">
+                    Page {registryQuery.data.page} of {totalPages}
+                  </p>
+                </div>
+
+                <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+                  {registryQuery.data.items.map((schema) => (
+                    <SchemaCard key={schema.id} schema={schema} />
+                  ))}
+                </section>
+
+                <nav
+                  aria-label="Schema registry pagination"
+                  className="flex items-center justify-between"
+                >
+                  <button
+                    type="button"
+                    disabled={registryQuery.data.page <= 1}
+                    onClick={() =>
+                      setPage((current) => Math.max(1, current - 1))
+                    }
+                    className="btn-secondary disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    <ArrowLeft className="h-4 w-4" /> Previous
                   </button>
                   <button
-                    onClick={() => setViewMode("list")}
-                    className={`p-2.5 ${viewMode === "list" ? "bg-brand-600 text-white" : "text-zero-500 hover:text-white"}`}
+                    type="button"
+                    disabled={!registryQuery.data.hasMore}
+                    onClick={() => setPage((current) => current + 1)}
+                    className="btn-secondary disabled:cursor-not-allowed disabled:opacity-40"
                   >
-                    <List className="w-4 h-4" />
+                    Next <ArrowRight className="h-4 w-4" />
                   </button>
-                </div>
-              </div>
-
-              {/* Results */}
-              {viewMode === "grid" ? (
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {filteredSchemas.map((schema, i) => (
-                    <motion.div
-                      key={schema.id}
-                      initial={{ opacity: 0, y: 10 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ delay: i * 0.03 }}
-                      className="card p-5 hover:border-zero-600 transition-all cursor-pointer group"
-                    >
-                      <div className="flex items-start justify-between mb-3">
-                        <span className="px-2 py-0.5 rounded-full bg-zero-800 text-[10px] text-zero-400">
-                          {schema.category}
-                        </span>
-                        <span className="font-medium text-sm text-emerald-400">
-                          {schema.price}
-                        </span>
-                      </div>
-                      <h3 className="font-semibold text-sm group-hover:text-brand-400 transition-colors">
-                        {schema.name}
-                      </h3>
-                      <p className="text-xs text-zero-500 mt-1 line-clamp-2">
-                        {schema.description}
-                      </p>
-                      <div className="flex items-center gap-1 mt-2">
-                        {schema.jurisdictions.slice(0, 3).map((j) => (
-                          <span
-                            key={j}
-                            className="px-1.5 py-0.5 rounded bg-zero-800 text-[9px] text-zero-400"
-                          >
-                            {j}
-                          </span>
-                        ))}
-                        {schema.jurisdictions.length > 3 && (
-                          <span className="px-1.5 py-0.5 rounded bg-zero-800 text-[9px] text-zero-400">
-                            +{schema.jurisdictions.length - 3}
-                          </span>
-                        )}
-                      </div>
-                      <div className="border-t border-zero-800/50 mt-3 pt-3 flex items-center justify-between">
-                        <div className="flex items-center gap-2 text-xs text-zero-400">
-                          <span className="flex items-center gap-1">
-                            <Star className="w-3 h-3 text-identity-amber" />
-                            {schema.trustScore}
-                          </span>
-                          <span>
-                            {(schema.verifications / 1000).toFixed(0)}k
-                          </span>
-                        </div>
-                        <span className="text-[10px] text-zero-500">
-                          {schema.issuer.split(" ").slice(0, 2).join(" ")}
-                        </span>
-                      </div>
-                      <div className="mt-2">
-                        <span className="text-[10px] text-zero-600">
-                          Stake: {schema.staking}
-                        </span>
-                      </div>
-                      <button className="mt-3 w-full py-2 rounded-lg bg-brand-600/10 hover:bg-brand-600 text-brand-400 hover:text-white text-xs font-medium transition-all">
-                        Request Credential
-                      </button>
-                    </motion.div>
-                  ))}
-                </div>
-              ) : (
-                <div className="card divide-y divide-zero-800/50">
-                  {filteredSchemas.map((schema, i) => (
-                    <motion.div
-                      key={schema.id}
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      transition={{ delay: i * 0.03 }}
-                      className="p-4 flex items-center gap-4 hover:bg-zero-800/20 transition-colors cursor-pointer"
-                    >
-                      <Fingerprint className="w-5 h-5 text-brand-400 shrink-0" />
-                      <div className="flex-1 min-w-0">
-                        <div className="font-medium text-sm">{schema.name}</div>
-                        <div className="text-xs text-zero-500">
-                          {schema.issuer} | {schema.category}
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-1">
-                        {schema.jurisdictions.slice(0, 2).map((j) => (
-                          <span
-                            key={j}
-                            className="px-1.5 py-0.5 rounded bg-zero-800 text-[9px] text-zero-400"
-                          >
-                            {j}
-                          </span>
-                        ))}
-                      </div>
-                      <span className="text-xs text-zero-400">
-                        <Star className="w-3 h-3 inline mr-1 text-identity-amber" />
-                        {schema.trustScore}
-                      </span>
-                      <span className="text-xs text-zero-500">
-                        {(schema.verifications / 1000).toFixed(0)}k
-                      </span>
-                      <span className="font-medium text-sm text-emerald-400">
-                        {schema.price}
-                      </span>
-                      <button className="px-3 py-1.5 rounded-lg bg-brand-600 hover:bg-brand-500 text-white text-xs transition-colors">
-                        Request
-                      </button>
-                    </motion.div>
-                  ))}
-                </div>
-              )}
-            </motion.div>
-          )}
-
-          {/* Issuer Leaderboard */}
-          {activeSection === "issuers" && (
-            <motion.div
-              key="issuers"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-            >
-              <div className="card">
-                <div className="p-4 border-b border-zero-800 flex items-center gap-2">
-                  <Award className="w-4 h-4 text-identity-amber" />
-                  <h2 className="font-semibold">Issuer Leaderboard</h2>
-                </div>
-                <div className="divide-y divide-zero-800/50">
-                  {issuers.map((issuer, i) => (
-                    <motion.div
-                      key={issuer.id}
-                      initial={{ opacity: 0, x: -10 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      transition={{ delay: i * 0.05 }}
-                      onClick={() =>
-                        setShowIssuerDetail(
-                          showIssuerDetail === issuer.id ? null : issuer.id,
-                        )
-                      }
-                      className="p-5 hover:bg-zero-800/20 transition-colors cursor-pointer"
-                    >
-                      <div className="flex items-center gap-4">
-                        <div
-                          className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold ${
-                            i === 0
-                              ? "bg-identity-amber/20 text-identity-amber"
-                              : i === 1
-                                ? "bg-zero-400/20 text-zero-300"
-                                : i === 2
-                                  ? "bg-orange-500/20 text-orange-400"
-                                  : "bg-zero-700/50 text-zero-400"
-                          }`}
-                        >
-                          #{i + 1}
-                        </div>
-                        <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-brand-600/20 to-identity-chrome/20 border border-brand-500/10 flex items-center justify-center">
-                          <Building2 className="w-6 h-6 text-brand-400" />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2">
-                            <span className="font-semibold">{issuer.name}</span>
-                            <span
-                              className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${
-                                issuer.badge === "Founding Issuer"
-                                  ? "bg-brand-500/20 text-brand-400"
-                                  : issuer.badge === "Top Issuer"
-                                    ? "bg-identity-amber/20 text-identity-amber"
-                                    : issuer.badge === "Government Partner"
-                                      ? "bg-identity-steel/20 text-identity-steel"
-                                      : "bg-emerald-500/20 text-emerald-400"
-                              }`}
-                            >
-                              {issuer.badge}
-                            </span>
-                          </div>
-                          <div className="flex items-center gap-2 mt-1">
-                            {issuer.specializations.map((s) => (
-                              <span
-                                key={s}
-                                className="px-1.5 py-0.5 rounded bg-zero-800 text-[9px] text-zero-400"
-                              >
-                                {s}
-                              </span>
-                            ))}
-                          </div>
-                        </div>
-                        <div className="text-right">
-                          <div className="flex items-center gap-1">
-                            <Star className="w-4 h-4 text-identity-amber" />
-                            <span className="font-bold text-lg">
-                              {issuer.trustScore}
-                            </span>
-                          </div>
-                          <div className="text-xs text-zero-500">
-                            {(issuer.verifications / 1000).toFixed(0)}k
-                            verifications
-                          </div>
-                        </div>
-                      </div>
-
-                      <AnimatePresence>
-                        {showIssuerDetail === issuer.id && (
-                          <motion.div
-                            initial={{ height: 0, opacity: 0 }}
-                            animate={{ height: "auto", opacity: 1 }}
-                            exit={{ height: 0, opacity: 0 }}
-                            className="overflow-hidden"
-                          >
-                            <div className="mt-4 ml-20 p-4 bg-zero-800/30 rounded-xl grid grid-cols-3 gap-4">
-                              <div>
-                                <div className="text-xs text-zero-500 mb-1">
-                                  Joined
-                                </div>
-                                <div className="text-sm font-medium">
-                                  {issuer.joined}
-                                </div>
-                              </div>
-                              <div>
-                                <div className="text-xs text-zero-500 mb-1">
-                                  Schemas Published
-                                </div>
-                                <div className="text-sm font-medium">
-                                  {
-                                    credentialSchemas.filter(
-                                      (s) => s.issuer === issuer.name,
-                                    ).length
-                                  }
-                                </div>
-                              </div>
-                              <div>
-                                <div className="text-xs text-zero-500 mb-1">
-                                  Avg Response Time
-                                </div>
-                                <div className="text-sm font-medium text-emerald-400">
-                                  &lt;2s
-                                </div>
-                              </div>
-                            </div>
-                          </motion.div>
-                        )}
-                      </AnimatePresence>
-                    </motion.div>
-                  ))}
-                </div>
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
+                </nav>
+              </>
+            )}
+          </>
+        )}
       </div>
     </AppLayout>
   );

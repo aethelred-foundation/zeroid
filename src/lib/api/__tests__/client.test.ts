@@ -20,6 +20,7 @@ import {
 } from "@/lib/identity/registration";
 import { IDENTITY_SESSION_EXPIRED_EVENT } from "@/lib/identity/session";
 import { CredentialResponseContractError } from "@/lib/credentials/summary";
+import { SchemaRegistryResponseContractError } from "@/lib/schemas/registry";
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -73,6 +74,23 @@ const backendCredential = {
   issuedAt: "2026-06-25T10:00:00.000Z",
   expiresAt: "2027-06-25T10:00:00.000Z",
 };
+const backendSchemaRecord = {
+  id: "12345678-1234-4234-8234-123456789abc",
+  name: "Verified Organization",
+  version: "1.2.0",
+  description: "An approved organization credential schema.",
+  schemaDefinition: {
+    type: "object",
+    properties: { legalName: { type: "string" } },
+  },
+  proposedBy: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  status: "APPROVED",
+  approvalVotes: 4,
+  rejectionVotes: 1,
+  voters: ["bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"],
+  createdAt: "2026-06-23T00:00:00.000Z",
+  updatedAt: "2026-06-24T00:00:00.000Z",
+};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -86,6 +104,23 @@ function jsonResponse<T>(data: T, ok = true, status = 200, statusText = "OK") {
     json: jest.fn().mockResolvedValue({
       success: ok,
       data,
+      requestId: "zid-server-abc",
+    }),
+  };
+}
+
+function schemaListResponse(
+  data = [backendSchemaRecord],
+  pagination = { page: 1, limit: 20, total: data.length, totalPages: 1 },
+) {
+  return {
+    ok: true,
+    status: 200,
+    statusText: "OK",
+    json: jest.fn().mockResolvedValue({
+      success: true,
+      data,
+      pagination,
       requestId: "zid-server-abc",
     }),
   };
@@ -407,8 +442,14 @@ describe("URL building", () => {
   });
 
   it("omits empty/null/undefined query parameter values", async () => {
-    // listSchemas only passes page + limit, so verify no extra keys
-    mockFetch.mockResolvedValue(jsonResponse([]));
+    mockFetch.mockResolvedValue(
+      schemaListResponse([backendSchemaRecord], {
+        page: 1,
+        limit: 10,
+        total: 1,
+        totalPages: 1,
+      }),
+    );
     await apiClient.listSchemas(1, 10);
     const [url] = mockFetch.mock.calls[0];
     const parsed = new URL(url);
@@ -420,10 +461,12 @@ describe("URL building", () => {
   });
 
   it("includes path parameters inline", async () => {
-    mockFetch.mockResolvedValue(jsonResponse({}));
-    await apiClient.getSchema("schema-123");
+    mockFetch.mockResolvedValue(jsonResponse(backendSchemaRecord));
+    await apiClient.getSchema(backendSchemaRecord.id);
     const [url] = mockFetch.mock.calls[0];
-    expect(url).toContain("/api/v1/governance/schemas/schema-123");
+    expect(url).toContain(
+      `/api/v1/governance/schemas/${backendSchemaRecord.id}`,
+    );
   });
 });
 
@@ -832,27 +875,31 @@ describe("apiClient.getCredential()", () => {
 });
 
 describe("apiClient.listSchemas()", () => {
-  it("calls GET /api/v1/governance/schemas with backend pagination", async () => {
-    mockFetch.mockResolvedValue({
-      ok: true,
-      status: 200,
-      statusText: "OK",
-      json: jest.fn().mockResolvedValue({
-        data: [{ id: "schema-1" }],
-        pagination: { page: 2, limit: 15, total: 21, totalPages: 2 },
+  it("calls the approved registry with backend pagination and name filtering", async () => {
+    mockFetch.mockResolvedValue(
+      schemaListResponse([backendSchemaRecord], {
+        page: 2,
+        limit: 15,
+        total: 16,
+        totalPages: 2,
       }),
-    });
+    );
 
-    const result = await apiClient.listSchemas(2, 15);
+    const result = await apiClient.listSchemas(2, 15, {
+      status: "APPROVED",
+      name: "  Organization  ",
+    });
 
     const [url] = mockFetch.mock.calls[0];
     expect(url).toContain("/api/v1/governance/schemas");
     const parsed = new URL(url);
     expect(parsed.searchParams.get("page")).toBe("2");
     expect(parsed.searchParams.get("limit")).toBe("15");
+    expect(parsed.searchParams.get("status")).toBe("APPROVED");
+    expect(parsed.searchParams.get("name")).toBe("Organization");
     expect(result).toEqual({
-      items: [{ id: "schema-1" }],
-      total: 21,
+      items: [backendSchemaRecord],
+      total: 16,
       page: 2,
       pageSize: 15,
       hasMore: false,
@@ -860,21 +907,79 @@ describe("apiClient.listSchemas()", () => {
   });
 
   it("uses default page=1, pageSize=20", async () => {
-    mockFetch.mockResolvedValue(jsonResponse([]));
+    mockFetch.mockResolvedValue(
+      schemaListResponse([], {
+        page: 1,
+        limit: 20,
+        total: 0,
+        totalPages: 0,
+      }),
+    );
     await apiClient.listSchemas();
     const [url] = mockFetch.mock.calls[0];
     const parsed = new URL(url);
     expect(parsed.searchParams.get("page")).toBe("1");
     expect(parsed.searchParams.get("limit")).toBe("20");
   });
+
+  it("attaches the wallet session once without retrying an authenticated read", async () => {
+    storeIdentityAuthToken("registry-session");
+    mockFetch.mockResolvedValue(schemaListResponse());
+
+    await apiClient.listSchemas(1, 20, { status: "APPROVED" });
+
+    const [, init] = mockFetch.mock.calls[0];
+    expect(init.headers.Authorization).toBe("Bearer registry-session");
+    expect(mockWithRetry).not.toHaveBeenCalled();
+  });
+
+  it("rejects an oversized name filter before sending a request", async () => {
+    await expect(
+      apiClient.listSchemas(1, 20, { name: "a".repeat(101) }),
+    ).rejects.toMatchObject({
+      code: "SCHEMA_NAME_FILTER_INVALID",
+      statusCode: 400,
+    });
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("rejects a malformed schema registry response", async () => {
+    mockFetch.mockResolvedValue(
+      schemaListResponse(
+        [{ ...backendSchemaRecord, proposedBy: "not-a-uuid" }],
+        { page: 1, limit: 20, total: 1, totalPages: 1 },
+      ),
+    );
+
+    await expect(
+      apiClient.listSchemas(1, 20, { status: "APPROVED" }),
+    ).rejects.toBeInstanceOf(SchemaRegistryResponseContractError);
+  });
+
+  it("fails closed when a requested approval filter is not honored", async () => {
+    mockFetch.mockResolvedValue(
+      schemaListResponse([{ ...backendSchemaRecord, status: "PROPOSED" }], {
+        page: 1,
+        limit: 20,
+        total: 1,
+        totalPages: 1,
+      }),
+    );
+
+    await expect(
+      apiClient.listSchemas(1, 20, { status: "APPROVED" }),
+    ).rejects.toThrow(/while "APPROVED" was requested/);
+  });
 });
 
 describe("apiClient.getSchema()", () => {
   it("calls GET /api/v1/governance/schemas/{id}", async () => {
-    mockFetch.mockResolvedValue(jsonResponse({ hash: "0xschema" }));
-    await apiClient.getSchema("schema-123");
+    mockFetch.mockResolvedValue(jsonResponse(backendSchemaRecord));
+    await expect(apiClient.getSchema(backendSchemaRecord.id)).resolves.toEqual(
+      backendSchemaRecord,
+    );
     expect(mockFetch.mock.calls[0][0]).toContain(
-      "/api/v1/governance/schemas/schema-123",
+      `/api/v1/governance/schemas/${backendSchemaRecord.id}`,
     );
   });
 });
