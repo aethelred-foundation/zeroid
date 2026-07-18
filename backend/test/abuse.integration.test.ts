@@ -214,6 +214,11 @@ jest.mock('../src/services/tee', () => ({
 jest.mock('../src/services/credential', () => ({
   credentialService: {
     getCredential: jest.fn(async () => null),
+    validateCredentialForUse: jest.fn(async () => ({
+      valid: false,
+      checks: {},
+      credential: {},
+    })),
     issueCredential: jest.fn(async () => ({ id: 'cred-1' })),
     queryCredentials: jest.fn(async () => ({ credentials: [], total: 0 })),
     revokeCredential: jest.fn(async () => ({})),
@@ -1087,13 +1092,34 @@ describe('5 - Privilege escalation', () => {
     });
 
     const { credentialService } = require('../src/services/credential');
-    credentialService.getCredential.mockResolvedValueOnce({
+    const otherUsersCredential = {
       id: 'cred-bob-2',
+      credentialType: 'NATIONAL_ID',
       subjectId: 'identity-bob', // NOT alice
       issuerId: 'identity-issuer',
       claims: { name: 'Bob' },
       claimsHash: 'abc123',
+      proof: {},
       status: 'ACTIVE',
+      issuedAt: new Date(),
+      expiresAt: null,
+    };
+    credentialService.getCredential.mockResolvedValueOnce(
+      otherUsersCredential,
+    );
+    credentialService.validateCredentialForUse.mockResolvedValueOnce({
+      valid: true,
+      checks: {
+        statusActive: true,
+        notExpired: true,
+        integrityValid: true,
+        issuerActive: true,
+        subjectActive: true,
+        signatureValid: true,
+        issuerTrustValid: true,
+        notRevoked: true,
+      },
+      credential: otherUsersCredential,
     });
 
     const res = await request(app as Express)

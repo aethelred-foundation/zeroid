@@ -230,6 +230,11 @@ jest.mock('../src/services/tee', () => ({
 jest.mock('../src/services/credential', () => ({
   credentialService: {
     getCredential: jest.fn(async () => null),
+    validateCredentialForUse: jest.fn(async () => ({
+      valid: false,
+      checks: {},
+      credential: {},
+    })),
     issueCredential: jest.fn(async () => ({ id: 'cred-1' })),
     queryCredentials: jest.fn(async () => ({ credentials: [], total: 0 })),
     revokeCredential: jest.fn(async () => ({})),
@@ -589,7 +594,7 @@ beforeEach(() => {
   for (const k of Object.keys(issuedTokenHashes)) delete issuedTokenHashes[k];
 
   const { credentialService } = require('../src/services/credential');
-  credentialService.getCredential.mockResolvedValue({
+  const credential = {
     id: CREDENTIAL_ID,
     credentialType: 'age_verification',
     issuerId: 'issuer-1',
@@ -600,6 +605,21 @@ beforeEach(() => {
     status: 'ACTIVE',
     issuedAt: new Date(),
     expiresAt: null,
+  };
+  credentialService.getCredential.mockResolvedValue(credential);
+  credentialService.validateCredentialForUse.mockResolvedValue({
+    valid: true,
+    checks: {
+      statusActive: true,
+      notExpired: true,
+      integrityValid: true,
+      issuerActive: true,
+      subjectActive: true,
+      signatureValid: true,
+      issuerTrustValid: true,
+      notRevoked: true,
+    },
+    credential,
   });
 });
 

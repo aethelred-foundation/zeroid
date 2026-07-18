@@ -44,6 +44,7 @@ jest.mock('../src/runtime', () => ({
 
 const mockCredentialService = {
   getCredential: jest.fn(),
+  validateCredentialForUse: jest.fn(),
   verifyCredential: jest.fn(),
 };
 
@@ -184,6 +185,50 @@ function boundProofFixture(includeRequestId = true) {
   };
 }
 
+function activeCredential() {
+  return {
+    id: CREDENTIAL_ID,
+    credentialType: 'age_verification',
+    issuerId: 'issuer-1',
+    subjectId: SUBJECT.id,
+    status: 'ACTIVE',
+    claims: CREDENTIAL_CLAIMS,
+    claimsHash: CREDENTIAL_CLAIMS_HASH,
+    proof: {},
+    issuedAt: new Date('2026-07-18T00:00:00.000Z'),
+    expiresAt: null,
+  };
+}
+
+function trustedCredentialValidation() {
+  return {
+    valid: true,
+    checks: {
+      statusActive: true,
+      notExpired: true,
+      integrityValid: true,
+      issuerActive: true,
+      subjectActive: true,
+      signatureValid: true,
+      issuerTrustValid: true,
+      notRevoked: true,
+    },
+    credential: activeCredential(),
+  };
+}
+
+function untrustedCredentialValidation(failedCheck: string) {
+  const trusted = trustedCredentialValidation();
+  return {
+    ...trusted,
+    valid: false,
+    checks: {
+      ...trusted.checks,
+      [failedCheck]: false,
+    },
+  };
+}
+
 beforeEach(() => {
   jest.clearAllMocks();
   mockPrisma.identity.findUnique.mockResolvedValue(SUBJECT);
@@ -197,14 +242,10 @@ beforeEach(() => {
     async (callback: (tx: typeof mockPrisma) => Promise<unknown>) =>
       callback(mockPrisma),
   );
-  mockCredentialService.getCredential.mockResolvedValue({
-    id: CREDENTIAL_ID,
-    subjectId: SUBJECT.id,
-    status: 'ACTIVE',
-    claims: CREDENTIAL_CLAIMS,
-    claimsHash: CREDENTIAL_CLAIMS_HASH,
-    expiresAt: null,
-  });
+  mockCredentialService.getCredential.mockResolvedValue(activeCredential());
+  mockCredentialService.validateCredentialForUse.mockResolvedValue(
+    trustedCredentialValidation(),
+  );
   mockZkProofService.verifyProof.mockResolvedValue({
     valid: true,
     proofId: 'proof-1',
@@ -421,6 +462,60 @@ describe('verification request routes', () => {
       subjectId: SUBJECT.id,
       credentialId: CREDENTIAL_ID,
     });
+  });
+
+  it.each([
+    ['inactive issuer', 'issuerActive'],
+    ['revoked accreditation', 'issuerTrustValid'],
+    ['invalid issuer signature', 'signatureValid'],
+    ['credential registry revocation', 'notRevoked'],
+  ])(
+    'rejects proof generation for %s without writing VERIFIED evidence',
+    async (_reason, failedCheck) => {
+      mockCredentialService.validateCredentialForUse.mockResolvedValueOnce(
+        untrustedCredentialValidation(failedCheck),
+      );
+
+      const res = await request(buildApp(SUBJECT))
+        .post('/api/v1/verification/zk-proof')
+        .send({
+          credentialId: CREDENTIAL_ID,
+          requestId: REQUEST_ID,
+          circuitName: '0xcircuit',
+          inputs: {},
+          selectiveDisclosure: ['age', 'residency'],
+          audience: VERIFIER.id,
+        });
+
+      expect(res.status).toBe(409);
+      expect(res.body.code).toBe('PROOF_CREDENTIAL_TRUST_INVALID');
+      expect(mockZkProofService.generateProof).not.toHaveBeenCalled();
+      expect(mockPrisma.verification.create).not.toHaveBeenCalled();
+      expect(mockPrisma.verification.updateMany).not.toHaveBeenCalled();
+    },
+  );
+
+  it('revalidates current trust after proof verification before writing VERIFIED', async () => {
+    const fixture = boundProofFixture();
+    mockRedis.get
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(JSON.stringify(fixture.nonceRecord));
+    mockCredentialService.validateCredentialForUse
+      .mockResolvedValueOnce(trustedCredentialValidation())
+      .mockResolvedValueOnce(
+        untrustedCredentialValidation('issuerTrustValid'),
+      );
+
+    const res = await request(buildApp(SUBJECT))
+      .post('/api/v1/verification/zk-verify')
+      .send(fixture.payload);
+
+    expect(mockZkProofService.verifyProof).toHaveBeenCalledTimes(1);
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('PROOF_CREDENTIAL_TRUST_INVALID');
+    expect(mockPrisma.verification.updateMany).not.toHaveBeenCalled();
+    expect(mockPrisma.auditLog.create).not.toHaveBeenCalled();
   });
 
   it('rejects a valid-context nonce that was not issued for the request', async () => {

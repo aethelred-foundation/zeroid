@@ -971,7 +971,14 @@ export class CredentialService {
   // -------------------------------------------------------------------------
   // Verify a credential (check validity, signature, revocation)
   // -------------------------------------------------------------------------
-  async verifyCredential(
+  /**
+   * Re-evaluate every authoritative credential trust signal without writing an
+   * audit event. Security-sensitive consumers (for example ZK proof issuance)
+   * use this immediately before acting so a cache entry or an earlier
+   * verification cannot outlive issuer suspension, accreditation revocation,
+   * key changes, credential revocation, or subject deactivation.
+   */
+  async validateCredentialForUse(
     credentialId: string,
   ): Promise<CredentialVerificationResult> {
     const credential = await prisma.credential.findUnique({
@@ -982,7 +989,13 @@ export class CredentialService {
       throw new CredentialError('Credential not found', 'CRED_NOT_FOUND', 404);
     }
 
-    const verification = await this.evaluateCredentialVerification(credential);
+    return this.evaluateCredentialVerification(credential);
+  }
+
+  async verifyCredential(
+    credentialId: string,
+  ): Promise<CredentialVerificationResult> {
+    const verification = await this.validateCredentialForUse(credentialId);
 
     // Audit log
     await prisma.auditLog.create({

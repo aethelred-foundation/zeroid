@@ -8,7 +8,10 @@ import {
   type PublicSignalSchemaValidation,
 } from '../services/zkproof';
 import { teeService } from '../services/tee';
-import { credentialService } from '../services/credential';
+import {
+  credentialService,
+  type CredentialResponse,
+} from '../services/credential';
 import { prisma, logger, redis, verificationCounter } from '../runtime';
 import { createHash, randomUUID } from 'crypto';
 import { asRouteError, sendRouteError } from '../utils/route-error';
@@ -153,6 +156,57 @@ function buildRouteError(
   return error;
 }
 
+type CredentialTrustValidationPhase =
+  | 'proof_context'
+  | 'proof_generation'
+  | 'proof_persistence'
+  | 'verification_context'
+  | 'verification_finalization';
+
+async function requireAuthoritativelyTrustedCredential(
+  credentialId: string,
+  phase: CredentialTrustValidationPhase,
+): Promise<CredentialResponse> {
+  const validation =
+    await credentialService.validateCredentialForUse(credentialId);
+  if (validation.valid) {
+    return validation.credential;
+  }
+
+  const failedChecks = Object.entries(validation.checks)
+    .filter(([, valid]) => !valid)
+    .map(([check]) => check);
+  logger.warn('proof_credential_trust_validation_failed', {
+    credentialId,
+    phase,
+    failedChecks,
+  });
+  throw buildRouteError(
+    'Credential does not satisfy current trust requirements',
+    'PROOF_CREDENTIAL_TRUST_INVALID',
+    409,
+  );
+}
+
+function assertCredentialProofSnapshotUnchanged(
+  expected: CredentialResponse,
+  current: CredentialResponse,
+): void {
+  if (
+    current.id !== expected.id ||
+    current.credentialType !== expected.credentialType ||
+    current.issuerId !== expected.issuerId ||
+    current.subjectId !== expected.subjectId ||
+    current.claimsHash !== expected.claimsHash
+  ) {
+    throw buildRouteError(
+      'Credential changed during proof processing',
+      'PROOF_CREDENTIAL_CONTEXT_INVALID',
+      409,
+    );
+  }
+}
+
 function normalizePublicSignalValue(
   value: string | number,
   signalName: string,
@@ -249,14 +303,6 @@ function parseNoncePublicSignalValues(
   }
 
   return Object.fromEntries(entries) as Record<string, string>;
-}
-
-function isCredentialExpired(
-  expiresAt: Date | string | null | undefined,
-): boolean {
-  if (!expiresAt) return false;
-  const date = expiresAt instanceof Date ? expiresAt : new Date(expiresAt);
-  return Number.isNaN(date.getTime()) || date <= new Date();
 }
 
 function eligibilityReceiptLookupWhere(
@@ -965,28 +1011,17 @@ router.post(
         }
       }
 
-      // Verify the credential belongs to the requester
-      const credential = await credentialService.getCredential(credentialId);
-      if (!credential) {
-        res
-          .status(404)
-          .json({ error: 'Credential not found', code: 'CRED_NOT_FOUND' });
-        return;
-      }
+      // Load directly from the authoritative store and re-evaluate every
+      // current trust signal. Cached status alone is not sufficient for proof
+      // issuance because issuer or accreditation state can change at any time.
+      const credential = await requireAuthoritativelyTrustedCredential(
+        credentialId,
+        'proof_context',
+      );
       if (credential.subjectId !== identity.id) {
         res.status(403).json({
           error: 'Can only generate proofs for own credentials',
           code: 'PROOF_ACCESS_DENIED',
-        });
-        return;
-      }
-      if (
-        credential.status !== 'ACTIVE' ||
-        isCredentialExpired(credential.expiresAt)
-      ) {
-        res.status(400).json({
-          error: 'Credential is not active or has expired',
-          code: 'CRED_NOT_ACTIVE',
         });
         return;
       }
@@ -1118,6 +1153,20 @@ router.post(
         }
       }
 
+      // Trust is intentionally checked again as the final awaited operation
+      // before proof generation. This closes the window in which issuer,
+      // accreditation, signature/key, or registry state could change while
+      // the witness and nonce context were being assembled.
+      const generationCredential =
+        await requireAuthoritativelyTrustedCredential(
+          credentialId,
+          'proof_generation',
+        );
+      assertCredentialProofSnapshotUnchanged(
+        credential,
+        generationCredential,
+      );
+
       const result = await zkProofService.generateProof({
         circuitName,
         inputs: witnessInputs,
@@ -1138,6 +1187,18 @@ router.post(
       if (!generatedSignalValidation.valid) {
         throw proofSignalValidationError(generatedSignalValidation, 500);
       }
+
+      // Proof generation can be expensive. Do not persist a VERIFIED issuance
+      // record if trust changed while the prover was running.
+      const persistenceCredential =
+        await requireAuthoritativelyTrustedCredential(
+          credentialId,
+          'proof_persistence',
+        );
+      assertCredentialProofSnapshotUnchanged(
+        generationCredential,
+        persistenceCredential,
+      );
 
       // Create verification record
       await prisma.verification.create({
@@ -1453,22 +1514,12 @@ router.post(
         return;
       }
 
-      const credential = await credentialService.getCredential(
+      const credential = await requireAuthoritativelyTrustedCredential(
         nonceRecord.credentialId,
+        'verification_context',
       );
-      if (!credential) {
-        res.status(400).json({
-          error: 'Credential referenced by nonce was not found',
-          code: 'PROOF_CREDENTIAL_NOT_FOUND',
-        });
-        return;
-      }
 
-      if (
-        credential.status !== 'ACTIVE' ||
-        credential.subjectId !== nonceRecord.subjectId ||
-        isCredentialExpired(credential.expiresAt)
-      ) {
+      if (credential.subjectId !== nonceRecord.subjectId) {
         logger.warn('proof_credential_context_mismatch', {
           nonce,
           credentialId: nonceRecord.credentialId,
@@ -1608,6 +1659,28 @@ router.post(
         });
         sendProofSignalValidationFailure(res, signalValidation);
         return;
+      }
+
+      // Cryptographic verification can race issuer suspension, accreditation
+      // revocation, key/signature changes, or credential registry revocation.
+      // Re-evaluate every authoritative trust check immediately before any
+      // durable VERIFIED transition (and before returning an unbound success).
+      const finalCredential =
+        await requireAuthoritativelyTrustedCredential(
+          nonceRecord.credentialId,
+          'verification_finalization',
+        );
+      assertCredentialProofSnapshotUnchanged(credential, finalCredential);
+      if (
+        finalCredential.subjectId !== nonceRecord.subjectId ||
+        digestToFieldElement(finalCredential.claimsHash) !==
+          expectedClaimsHashField
+      ) {
+        throw buildRouteError(
+          'Credential no longer matches the proof issuance context',
+          'PROOF_CREDENTIAL_CONTEXT_INVALID',
+          409,
+        );
       }
 
       const completedAt = boundRequest
