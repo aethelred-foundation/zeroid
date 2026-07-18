@@ -41,7 +41,6 @@ import {
   useCredentialUsageAnalytics,
   useVerifierAnalytics,
   useDataExposureTimeline,
-  useNetworkBenchmarks,
   usePrivacyRecommendations,
   useExportAnalyticsReport,
 } from "@/hooks/useAnalytics";
@@ -165,8 +164,35 @@ describe("usePrivacyScore", () => {
     expect(mockApiClient.get).toHaveBeenCalledWith(
       "/api/v1/verification/history?limit=100",
     );
-    expect(result.current.data?.overallScore).toBeGreaterThan(0);
+    expect(result.current.data?.overallScore ?? 0).toBeGreaterThan(0);
     expect(result.current.data?.breakdown.zkProofAdoption).toBeGreaterThan(0);
+    expect(result.current.data?.calculationBasis).toContain(
+      "no network percentile",
+    );
+    expect(result.current.data).not.toHaveProperty("percentileRank");
+  });
+
+  it("reports the score as unavailable when no dated requests were returned", async () => {
+    mockApiClient.get.mockImplementation((path: string) => {
+      if (path === "/api/v1/credentials?role=subject") {
+        return Promise.resolve(credentials);
+      }
+      return Promise.resolve([]);
+    });
+
+    const { result } = renderHook(() => usePrivacyScore("all"), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toMatchObject({
+      overallScore: null,
+      grade: null,
+      recordCount: 0,
+    });
+    expect(result.current.data?.calculationBasis).toContain(
+      "no network percentile",
+    );
   });
 
   it("is disabled when no address", () => {
@@ -229,6 +255,67 @@ describe("useCredentialUsageAnalytics", () => {
     });
   });
 
+  it("excludes records with missing or malformed timestamps instead of moving them to now", async () => {
+    mockApiClient.get.mockImplementation((path: string) => {
+      if (path === "/api/v1/credentials?role=subject") {
+        return Promise.resolve(credentials);
+      }
+      if (path === "/api/v1/verification/history?limit=100") {
+        return Promise.resolve([
+          {
+            ...history[0],
+            id: "valid-history",
+            requestedAt: "2020-01-01T00:00:00.000Z",
+          },
+          {
+            ...history[0],
+            id: "invalid-history",
+            requestedAt: "not-a-date",
+            completedAt: "also-not-a-date",
+          },
+          {
+            ...history[0],
+            id: "undated-history",
+            requestedAt: undefined,
+          },
+        ]);
+      }
+      if (path.includes("result=PENDING")) {
+        return Promise.resolve([
+          {
+            ...requestGroups.PENDING[0],
+            id: "valid-request",
+            createdAt: "2020-01-02T00:00:00.000Z",
+            circuitId: undefined,
+          },
+          {
+            ...requestGroups.PENDING[0],
+            id: "invalid-request",
+            createdAt: "not-a-date",
+          },
+          {
+            ...requestGroups.PENDING[0],
+            id: "undated-request",
+            createdAt: undefined,
+          },
+        ]);
+      }
+      return Promise.resolve([]);
+    });
+
+    const { result } = renderHook(() => useCredentialUsageAnalytics("all"), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toMatchObject({
+      totalPresentations: 1,
+      selectiveDisclosurePresentations: 1,
+      privacyPreservingRatio: 100,
+    });
+    expect(result.current.data?.byDay).toHaveLength(2);
+  });
+
   it("is disabled when no address", () => {
     (useAccount as jest.Mock).mockReturnValue({
       address: undefined,
@@ -242,7 +329,7 @@ describe("useCredentialUsageAnalytics", () => {
 });
 
 describe("useVerifierAnalytics", () => {
-  it("builds verifier trust and purpose analytics", async () => {
+  it("builds verifier and purpose analytics without a fabricated trust score", async () => {
     const { result } = renderHook(() => useVerifierAnalytics(), {
       wrapper: createWrapper(),
     });
@@ -252,11 +339,15 @@ describe("useVerifierAnalytics", () => {
     expect(result.current.data?.requestsByPurpose[0]).toMatchObject({
       count: 1,
     });
+    expect(result.current.data?.verifiers[0]).not.toHaveProperty("trustScore");
+    expect(result.current.data?.verifiers[0]).toHaveProperty(
+      "zkProofRequestObserved",
+    );
   });
 });
 
 describe("useDataExposureTimeline", () => {
-  it("builds exposure events and risk summary", async () => {
+  it("builds exposure events without a fabricated risk score", async () => {
     const { result } = renderHook(() => useDataExposureTimeline(), {
       wrapper: createWrapper(),
     });
@@ -264,24 +355,9 @@ describe("useDataExposureTimeline", () => {
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(result.current.data?.entries).toHaveLength(2);
     expect(result.current.data?.uniqueAttributesExposed).toBeGreaterThan(0);
-  });
-});
-
-describe("useNetworkBenchmarks", () => {
-  it("builds benchmark metrics from the analytics snapshot", async () => {
-    const { result } = renderHook(() => useNetworkBenchmarks(), {
-      wrapper: createWrapper(),
-    });
-
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(result.current.data?.sampleSize).toBeGreaterThan(0);
-    expect(
-      result.current.data?.benchmarks.map((metric) => metric.metric),
-    ).toEqual([
-      "privacyPreservingRatio",
-      "verifierDiversity",
-      "attributeExposure",
-    ]);
+    expect(result.current.data?.fullDisclosureEvents).toBe(1);
+    expect(result.current.data).not.toHaveProperty("highRiskExposures");
+    expect(result.current.data?.entries[0]).not.toHaveProperty("riskScore");
   });
 });
 

@@ -1,9 +1,9 @@
 /**
  * useAnalytics — Hook for privacy-preserving identity analytics.
  *
- * Provides privacy scores, credential usage analytics, verifier insights,
- * data exposure tracking, anonymised network benchmarks, privacy
- * recommendations, and encrypted report export.
+ * Provides tenant-local privacy calculations, credential usage analytics,
+ * verifier insights, data exposure tracking, recommendations, and encrypted
+ * report export from durable backend records.
  */
 
 import { useQuery, useMutation } from "@tanstack/react-query";
@@ -21,12 +21,12 @@ import type { ISODateString, VerificationRequest } from "@/types";
 // ---------------------------------------------------------------------------
 
 export interface PrivacyScore {
-  overallScore: number;
-  grade: "A" | "B" | "C" | "D" | "F";
+  overallScore: number | null;
+  grade: "A" | "B" | "C" | "D" | "F" | null;
   breakdown: PrivacyBreakdown;
-  trend: ScoreTrend;
   lastCalculatedAt: ISODateString;
-  percentileRank: number;
+  calculationBasis: string;
+  recordCount: number;
 }
 
 export interface PrivacyBreakdown {
@@ -36,13 +36,6 @@ export interface PrivacyBreakdown {
   dataExposureControl: number;
   verifierDiversity: number;
   consentManagement: number;
-}
-
-export interface ScoreTrend {
-  direction: "improving" | "stable" | "declining";
-  changePercent: number;
-  period: string;
-  history: { date: ISODateString; score: number }[];
 }
 
 export type AnalyticsPeriod = "7d" | "30d" | "90d" | "1y" | "all";
@@ -88,7 +81,6 @@ export interface VerifierAnalytics {
   totalVerifiers: number;
   verifiers: VerifierProfile[];
   requestsByPurpose: PurposeBreakdown[];
-  trustDistribution: TrustBucket[];
 }
 
 export interface VerifierProfile {
@@ -97,9 +89,7 @@ export interface VerifierProfile {
   requestCount: number;
   lastRequestAt: ISODateString;
   attributesRequested: string[];
-  zkProofAcceptance: boolean;
-  trustScore: number;
-  jurisdiction: string;
+  zkProofRequestObserved: boolean;
 }
 
 export interface PurposeBreakdown {
@@ -108,18 +98,12 @@ export interface PurposeBreakdown {
   percentage: number;
 }
 
-export interface TrustBucket {
-  range: string;
-  count: number;
-}
-
 export interface DataExposureTimeline {
   entries: ExposureEvent[];
   totalDisclosures: number;
   uniqueAttributesExposed: number;
   uniqueVerifiers: number;
-  riskLevel: "low" | "medium" | "high";
-  highRiskExposures: number;
+  fullDisclosureEvents: number;
 }
 
 export interface ExposureEvent {
@@ -131,25 +115,7 @@ export interface ExposureEvent {
   attributesDisclosed: string[];
   disclosureMethod: "full" | "selective" | "zk_proof";
   purpose: string;
-  riskScore: number;
-  consentRecordId: string;
-}
-
-export interface NetworkBenchmarks {
-  calculatedAt: ISODateString;
-  sampleSize: number;
-  benchmarks: BenchmarkMetric[];
-  userPercentiles: Record<string, number>;
-}
-
-export interface BenchmarkMetric {
-  metric: string;
-  label: string;
-  networkMedian: number;
-  networkP25: number;
-  networkP75: number;
-  userValue: number;
-  unit: string;
+  consentRecorded: boolean;
 }
 
 export interface PrivacyRecommendation {
@@ -160,7 +126,6 @@ export interface PrivacyRecommendation {
   description: string;
   currentBehavior: string;
   suggestedAction: string;
-  estimatedImpact: number;
   implementationSteps: string[];
 }
 
@@ -186,7 +151,6 @@ const analyticsKeys = {
     [...analyticsKeys.all, "credential-usage", p] as const,
   verifiers: () => [...analyticsKeys.all, "verifiers"] as const,
   exposure: () => [...analyticsKeys.all, "exposure"] as const,
-  benchmarks: () => [...analyticsKeys.all, "benchmarks"] as const,
   recommendations: () => [...analyticsKeys.all, "recommendations"] as const,
 };
 
@@ -219,9 +183,17 @@ type AnalyticsVerificationRequest = Partial<VerificationRequest> & {
 
 type AnalyticsSnapshot = {
   credentials: CredentialSummary[];
-  history: BackendVerificationHistoryEntry[];
-  requests: AnalyticsVerificationRequest[];
+  history: DatedVerificationHistoryEntry[];
+  requests: DatedVerificationRequest[];
   period: AnalyticsPeriod;
+};
+
+type DatedVerificationHistoryEntry = BackendVerificationHistoryEntry & {
+  analyticsTimestamp: ISODateString;
+};
+
+type DatedVerificationRequest = AnalyticsVerificationRequest & {
+  analyticsTimestamp: ISODateString;
 };
 
 const VERIFICATION_RESULTS: VerificationResultState[] = [
@@ -242,25 +214,33 @@ function periodStart(period: AnalyticsPeriod): Date | null {
   return new Date(Date.now() - daysByPeriod[period] * 24 * 60 * 60 * 1000);
 }
 
-function toDate(value: unknown): Date {
-  if (value instanceof Date) return value;
-  if (typeof value === "number") {
-    return new Date(value > 10_000_000_000 ? value : value * 1000);
+function toDate(value: unknown): Date | null {
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value;
   }
-  if (typeof value === "string") {
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) return null;
+    const parsed = new Date(value > 10_000_000_000 ? value : value * 1000);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+  if (typeof value === "string" && value.trim()) {
     const parsed = new Date(value);
     if (!Number.isNaN(parsed.getTime())) return parsed;
   }
-  return new Date();
+  return null;
 }
 
-function inPeriod(value: unknown, period: AnalyticsPeriod): boolean {
+function firstValidDate(...values: unknown[]): Date | null {
+  for (const value of values) {
+    const parsed = toDate(value);
+    if (parsed) return parsed;
+  }
+  return null;
+}
+
+function inPeriod(value: Date, period: AnalyticsPeriod): boolean {
   const start = periodStart(period);
-  return !start || toDate(value).getTime() >= start.getTime();
-}
-
-function isoDate(value: unknown): ISODateString {
-  return toDate(value).toISOString();
+  return !start || value.getTime() >= start.getTime();
 }
 
 function verifierDid(value: AnalyticsVerificationRequest): string {
@@ -289,10 +269,6 @@ function requestAttributes(request: AnalyticsVerificationRequest): string[] {
       typeof attribute === "string" ? attribute : attribute.key,
     )
     .filter((attribute): attribute is string => Boolean(attribute));
-}
-
-function requestTimestamp(request: AnalyticsVerificationRequest): unknown {
-  return request.requestedAt ?? request.createdAt ?? Date.now();
 }
 
 function isZkRequest(
@@ -358,12 +334,22 @@ async function fetchAnalyticsSnapshot(
 
   return {
     credentials: normalizeCredentialSummaries(credentialResponse),
-    history: history.filter((entry) =>
-      inPeriod(entry.requestedAt ?? entry.completedAt, period),
-    ),
-    requests: requests.filter((request) =>
-      inPeriod(requestTimestamp(request), period),
-    ),
+    history: history.flatMap((entry) => {
+      const timestamp = firstValidDate(entry.requestedAt, entry.completedAt);
+      return timestamp && inPeriod(timestamp, period)
+        ? [{ ...entry, analyticsTimestamp: timestamp.toISOString() }]
+        : [];
+    }),
+    requests: requests.flatMap((request) => {
+      const timestamp = firstValidDate(
+        request.requestedAt,
+        request.createdAt,
+        request.completedAt,
+      );
+      return timestamp && inPeriod(timestamp, period)
+        ? [{ ...request, analyticsTimestamp: timestamp.toISOString() }]
+        : [];
+    }),
     period,
   };
 }
@@ -388,7 +374,11 @@ function buildUsage(snapshot: AnalyticsSnapshot): CredentialUsageAnalytics {
   const fullDisclosurePresentations = snapshot.requests.filter(
     (request) => disclosureMethod(request) === "full",
   ).length;
-  const verifierSet = new Set(snapshot.requests.map(verifierDid));
+  const verifierSet = new Set(
+    snapshot.requests
+      .map(verifierDid)
+      .filter((verifier) => verifier !== "unknown-verifier"),
+  );
   const byCredential = new Map<string, CredentialTypeUsage>();
 
   for (const entry of snapshot.history) {
@@ -405,11 +395,11 @@ function buildUsage(snapshot: AnalyticsSnapshot): CredentialUsageAnalytics {
         presentationCount: 0,
         zkProofCount: 0,
         selectiveDisclosureCount: 0,
-        lastUsedAt: isoDate(entry.requestedAt ?? entry.completedAt),
+        lastUsedAt: entry.analyticsTimestamp,
       } satisfies CredentialTypeUsage);
     current.presentationCount += 1;
     if (isZkRequest(entry)) current.zkProofCount += 1;
-    current.lastUsedAt = isoDate(entry.requestedAt ?? entry.completedAt);
+    current.lastUsedAt = entry.analyticsTimestamp;
     byCredential.set(key, current);
   }
 
@@ -426,7 +416,7 @@ function buildUsage(snapshot: AnalyticsSnapshot): CredentialUsageAnalytics {
         presentationCount: 0,
         zkProofCount: 0,
         selectiveDisclosureCount: 0,
-        lastUsedAt: isoDate(requestTimestamp(request)),
+        lastUsedAt: request.analyticsTimestamp,
       } satisfies CredentialTypeUsage);
     if (disclosureMethod(request) === "selective") {
       current.selectiveDisclosureCount += 1;
@@ -436,7 +426,7 @@ function buildUsage(snapshot: AnalyticsSnapshot): CredentialUsageAnalytics {
 
   const byDay = new Map<string, DailyUsageStat>();
   for (const entry of snapshot.history) {
-    const date = isoDate(entry.requestedAt ?? entry.completedAt).slice(0, 10);
+    const date = entry.analyticsTimestamp.slice(0, 10);
     const current =
       byDay.get(date) ??
       ({
@@ -451,7 +441,7 @@ function buildUsage(snapshot: AnalyticsSnapshot): CredentialUsageAnalytics {
   }
   for (const request of snapshot.requests) {
     if (disclosureMethod(request) !== "selective") continue;
-    const date = isoDate(requestTimestamp(request)).slice(0, 10);
+    const date = request.analyticsTimestamp.slice(0, 10);
     const current =
       byDay.get(date) ??
       ({
@@ -496,8 +486,10 @@ function buildUsage(snapshot: AnalyticsSnapshot): CredentialUsageAnalytics {
     selectiveDisclosurePresentations,
     fullDisclosurePresentations,
     privacyPreservingRatio: percentage(
-      zkProofPresentations + selectiveDisclosurePresentations,
-      Math.max(totalPresentations, snapshot.requests.length),
+      snapshot.requests.filter(
+        (request) => disclosureMethod(request) !== "full",
+      ).length,
+      snapshot.requests.length,
     ),
     byCredentialType: [...byCredential.values()].sort(
       (a, b) => b.presentationCount - a.presentationCount,
@@ -512,68 +504,43 @@ function buildUsage(snapshot: AnalyticsSnapshot): CredentialUsageAnalytics {
 function buildPrivacyScore(snapshot: AnalyticsSnapshot): PrivacyScore {
   const usage = buildUsage(snapshot);
   const requests = snapshot.requests.length;
-  const attributeCounts = snapshot.requests.map(
-    (request) => requestAttributes(request).length,
-  );
   const consented = snapshot.requests.filter(
     (request) => request.userConsent === true,
   ).length;
+  const minimisedRequests = snapshot.requests.filter((request) => {
+    const attributeCount = requestAttributes(request).length;
+    return attributeCount > 0 && attributeCount <= 3;
+  }).length;
+  const exposureControlledRequests = snapshot.requests.filter(
+    (request) => disclosureMethod(request) !== "full",
+  ).length;
+  const knownVerifierCount = new Set(
+    snapshot.requests
+      .map(verifierDid)
+      .filter((verifier) => verifier !== "unknown-verifier"),
+  ).size;
   const breakdown: PrivacyBreakdown = {
     selectiveDisclosureUsage: usage.privacyPreservingRatio,
     zkProofAdoption: percentage(
-      usage.zkProofPresentations,
-      Math.max(1, requests),
+      snapshot.requests.filter(isZkRequest).length,
+      requests,
     ),
-    credentialMinimisation: Math.max(
-      0,
-      100 - Math.round(Math.max(0, average(attributeCounts) - 2) * 18),
-    ),
-    dataExposureControl: Math.max(
-      0,
-      100 - usage.fullDisclosurePresentations * 12,
-    ),
-    verifierDiversity: Math.min(100, usage.uniqueVerifiers * 18),
-    consentManagement: percentage(consented, Math.max(1, requests)),
+    credentialMinimisation: percentage(minimisedRequests, requests),
+    dataExposureControl: percentage(exposureControlledRequests, requests),
+    verifierDiversity: percentage(knownVerifierCount, requests),
+    consentManagement: percentage(consented, requests),
   };
-  const overallScore = Math.round(average(Object.values(breakdown)));
-  const history = usage.byDay.map((day) => ({
-    date: day.date,
-    score: Math.min(
-      100,
-      Math.round(
-        60 +
-          day.zkProofs * 10 +
-          day.selectiveDisclosures * 6 -
-          Math.max(0, day.presentations - day.zkProofs) * 2,
-      ),
-    ),
-  }));
-  const firstScore = history[0]?.score ?? overallScore;
-  const changePercent =
-    firstScore > 0
-      ? Math.round(((overallScore - firstScore) / firstScore) * 100)
-      : 0;
+  const overallScore =
+    requests > 0 ? Math.round(average(Object.values(breakdown))) : null;
 
   return {
     overallScore,
-    grade: gradeForScore(overallScore),
+    grade: overallScore === null ? null : gradeForScore(overallScore),
     breakdown,
-    trend: {
-      direction:
-        changePercent > 2
-          ? "improving"
-          : changePercent < -2
-            ? "declining"
-            : "stable",
-      changePercent,
-      period: snapshot.period,
-      history:
-        history.length > 0
-          ? history
-          : [{ date: new Date().toISOString(), score: overallScore }],
-    },
     lastCalculatedAt: new Date().toISOString(),
-    percentileRank: Math.min(99, Math.max(1, Math.round(overallScore * 0.92))),
+    calculationBasis:
+      "Calculated locally from the tenant's returned verification records; no network percentile or external benchmark is included.",
+    recordCount: requests,
   };
 }
 
@@ -585,6 +552,7 @@ function buildVerifierAnalytics(
 
   for (const request of snapshot.requests) {
     const verifier = verifierDid(request);
+    if (verifier === "unknown-verifier") continue;
     const attributes = requestAttributes(request);
     const current =
       profiles.get(verifier) ??
@@ -592,25 +560,17 @@ function buildVerifierAnalytics(
         verifierDid: verifier,
         verifierName: request.verifierName ?? verifier,
         requestCount: 0,
-        lastRequestAt: isoDate(requestTimestamp(request)),
+        lastRequestAt: request.analyticsTimestamp,
         attributesRequested: [],
-        zkProofAcceptance: false,
-        trustScore: 0,
-        jurisdiction: "unknown",
+        zkProofRequestObserved: false,
       } satisfies VerifierProfile);
     current.requestCount += 1;
-    current.lastRequestAt = isoDate(requestTimestamp(request));
+    current.lastRequestAt = request.analyticsTimestamp;
     current.attributesRequested = [
       ...new Set([...current.attributesRequested, ...attributes]),
     ];
-    current.zkProofAcceptance =
-      current.zkProofAcceptance || isZkRequest(request);
-    current.trustScore = Math.min(
-      100,
-      55 +
-        (current.zkProofAcceptance ? 25 : 0) +
-        Math.max(0, 20 - current.attributesRequested.length * 3),
-    );
+    current.zkProofRequestObserved =
+      current.zkProofRequestObserved || isZkRequest(request);
     profiles.set(verifier, current);
 
     const purpose = request.purpose ?? "unspecified";
@@ -621,17 +581,6 @@ function buildVerifierAnalytics(
     (a, b) => b.requestCount - a.requestCount,
   );
   const totalRequests = Math.max(1, snapshot.requests.length);
-  const buckets = [
-    { range: "80-100", count: 0 },
-    { range: "60-79", count: 0 },
-    { range: "0-59", count: 0 },
-  ];
-  for (const verifier of verifiers) {
-    if (verifier.trustScore >= 80) buckets[0].count += 1;
-    else if (verifier.trustScore >= 60) buckets[1].count += 1;
-    else buckets[2].count += 1;
-  }
-
   return {
     totalVerifiers: verifiers.length,
     verifiers,
@@ -642,7 +591,6 @@ function buildVerifierAnalytics(
         percentage: percentage(count, totalRequests),
       }))
       .sort((a, b) => b.count - a.count),
-    trustDistribution: buckets,
   };
 }
 
@@ -653,25 +601,14 @@ function buildExposureTimeline(
   const entries = snapshot.requests.map<ExposureEvent>((request) => {
     const attributes = requestAttributes(request);
     const method = disclosureMethod(request);
-    const riskScore = Math.max(
-      0,
-      Math.min(
-        100,
-        attributes.length * 12 +
-          (method === "full" ? 35 : 0) -
-          (method === "zk_proof" ? 25 : 0),
-      ),
-    );
     const referencedCredentialId =
       request.credentialId ?? request.credentialHash;
     const credential = referencedCredentialId
       ? credentials.get(referencedCredentialId)
       : undefined;
     return {
-      id:
-        request.id ??
-        `${verifierDid(request)}-${isoDate(requestTimestamp(request))}`,
-      timestamp: isoDate(requestTimestamp(request)),
+      id: request.id ?? `${verifierDid(request)}-${request.analyticsTimestamp}`,
+      timestamp: request.analyticsTimestamp,
       verifierDid: verifierDid(request),
       verifierName: request.verifierName ?? verifierDid(request),
       credentialTypeLabel:
@@ -682,19 +619,19 @@ function buildExposureTimeline(
       attributesDisclosed: method === "zk_proof" ? [] : attributes,
       disclosureMethod: method,
       purpose: request.purpose ?? "unspecified",
-      riskScore,
-      consentRecordId:
-        request.userConsent === true
-          ? `consent:${request.id ?? verifierDid(request)}`
-          : "consent:not-recorded",
+      consentRecorded: request.userConsent === true,
     };
   });
   const uniqueAttributes = new Set(
     entries.flatMap((entry) => entry.attributesDisclosed),
   );
-  const uniqueVerifiers = new Set(entries.map((entry) => entry.verifierDid));
-  const highRiskExposures = entries.filter(
-    (entry) => entry.riskScore >= 70,
+  const uniqueVerifiers = new Set(
+    entries
+      .map((entry) => entry.verifierDid)
+      .filter((verifier) => verifier !== "unknown-verifier"),
+  );
+  const fullDisclosureEvents = entries.filter(
+    (entry) => entry.disclosureMethod === "full",
   ).length;
 
   return {
@@ -705,56 +642,7 @@ function buildExposureTimeline(
     ),
     uniqueAttributesExposed: uniqueAttributes.size,
     uniqueVerifiers: uniqueVerifiers.size,
-    riskLevel:
-      highRiskExposures > 2 ? "high" : highRiskExposures > 0 ? "medium" : "low",
-    highRiskExposures,
-  };
-}
-
-function buildBenchmarks(snapshot: AnalyticsSnapshot): NetworkBenchmarks {
-  const usage = buildUsage(snapshot);
-  const exposure = buildExposureTimeline(snapshot);
-  const proofRatio = usage.privacyPreservingRatio;
-  const verifierDiversity = usage.uniqueVerifiers;
-  const disclosureLoad = exposure.totalDisclosures;
-
-  return {
-    calculatedAt: new Date().toISOString(),
-    sampleSize: Math.max(snapshot.history.length, snapshot.requests.length),
-    benchmarks: [
-      {
-        metric: "privacyPreservingRatio",
-        label: "Privacy-preserving presentations",
-        networkMedian: 72,
-        networkP25: 48,
-        networkP75: 88,
-        userValue: proofRatio,
-        unit: "%",
-      },
-      {
-        metric: "verifierDiversity",
-        label: "Unique verifier diversity",
-        networkMedian: 4,
-        networkP25: 2,
-        networkP75: 9,
-        userValue: verifierDiversity,
-        unit: "verifiers",
-      },
-      {
-        metric: "attributeExposure",
-        label: "Attributes disclosed",
-        networkMedian: 8,
-        networkP25: 3,
-        networkP75: 15,
-        userValue: disclosureLoad,
-        unit: "attributes",
-      },
-    ],
-    userPercentiles: {
-      privacyPreservingRatio: Math.min(99, Math.max(1, Math.round(proofRatio))),
-      verifierDiversity: Math.min(99, Math.max(1, verifierDiversity * 12)),
-      attributeExposure: Math.max(1, 100 - disclosureLoad * 5),
-    },
+    fullDisclosureEvents,
   };
 }
 
@@ -763,8 +651,9 @@ function buildRecommendations(
 ): PrivacyRecommendation[] {
   const score = buildPrivacyScore(snapshot);
   const usage = buildUsage(snapshot);
-  const exposure = buildExposureTimeline(snapshot);
   const recommendations: PrivacyRecommendation[] = [];
+
+  if (score.recordCount === 0) return recommendations;
 
   if (usage.fullDisclosurePresentations > 0) {
     recommendations.push({
@@ -773,11 +662,10 @@ function buildRecommendations(
       category: "data_minimisation",
       title: "Replace full disclosures with selective proofs",
       description:
-        "Recent verification requests still expose complete credential data.",
-      currentBehavior: `${usage.fullDisclosurePresentations} full-disclosure request(s) in this period`,
+        "Some returned request shapes contain neither a ZK circuit nor a limited attribute set, so this local calculation classifies them as full disclosure.",
+      currentBehavior: `${usage.fullDisclosurePresentations} inferred full-disclosure request(s) in this period`,
       suggestedAction:
         "Use selective disclosure or ZK circuits for verifier workflows that only need eligibility facts.",
-      estimatedImpact: 18,
       implementationSteps: [
         "Review requests with disclosureMethod=full",
         "Map each verifier purpose to minimum required attributes",
@@ -797,31 +685,10 @@ function buildRecommendations(
       currentBehavior: `${score.breakdown.consentManagement}% consent coverage`,
       suggestedAction:
         "Attach consent receipts to verifier request approvals and disclosure responses.",
-      estimatedImpact: 12,
       implementationSteps: [
         "Require consent flag before responding to verifier requests",
         "Persist consent receipt IDs in disclosure history",
         "Surface missing consent records in audit review",
-      ],
-    });
-  }
-
-  if (exposure.highRiskExposures > 0) {
-    recommendations.push({
-      id: "review-high-risk-exposures",
-      priority: "critical",
-      category: "exposure",
-      title: "Review high-risk data exposures",
-      description:
-        "One or more disclosure events crossed the high-risk exposure threshold.",
-      currentBehavior: `${exposure.highRiskExposures} high-risk exposure(s)`,
-      suggestedAction:
-        "Inspect the verifier purpose and attribute list before approving similar future requests.",
-      estimatedImpact: 20,
-      implementationSteps: [
-        "Open the exposure timeline",
-        "Verify purpose and legal basis",
-        "Move recurring verifier workflows to ZK proof templates",
       ],
     });
   }
@@ -834,10 +701,9 @@ function buildRecommendations(
       title: "Maintain current privacy posture",
       description:
         "No urgent privacy analytics gaps were detected in the selected period.",
-      currentBehavior: `Privacy score ${score.overallScore}/100`,
+      currentBehavior: `Calculated privacy score ${score.overallScore}/100`,
       suggestedAction:
         "Continue periodic review of verifier requests and disclosure patterns.",
-      estimatedImpact: 4,
       implementationSteps: [
         "Review analytics weekly",
         "Refresh stale credentials before expiry",
@@ -882,9 +748,13 @@ function escapePdfText(value: string): string {
 function analyticsReportPdf(report: Record<string, unknown>): string {
   const privacyScore = report.privacyScore as PrivacyScore;
   const usage = report.credentialUsage as CredentialUsageAnalytics;
+  const scoreSummary =
+    privacyScore.overallScore === null
+      ? "Unavailable (no dated verification requests)"
+      : `${privacyScore.overallScore}/100 (${privacyScore.grade})`;
   const lines = [
     "ZeroID Analytics Report",
-    `Privacy score: ${privacyScore.overallScore}/100 (${privacyScore.grade})`,
+    `Calculated tenant privacy score: ${scoreSummary}`,
     `Presentations: ${usage.totalPresentations}`,
     `Unique verifiers: ${usage.uniqueVerifiers}`,
     `Privacy preserving ratio: ${usage.privacyPreservingRatio}%`,
@@ -996,12 +866,13 @@ function downloadReport(
 // Privacy Score
 // ---------------------------------------------------------------------------
 
-export function usePrivacyScore() {
+export function usePrivacyScore(period: AnalyticsPeriod = "30d") {
   const { address } = useAccount();
 
   return useQuery({
-    queryKey: analyticsKeys.privacy(),
-    queryFn: async () => buildPrivacyScore(await fetchAnalyticsSnapshot("30d")),
+    queryKey: [...analyticsKeys.privacy(), period],
+    queryFn: async () =>
+      buildPrivacyScore(await fetchAnalyticsSnapshot(period)),
     enabled: !!address,
     staleTime: 120_000,
   });
@@ -1026,13 +897,13 @@ export function useCredentialUsageAnalytics(period: AnalyticsPeriod = "30d") {
 // Verifier Analytics
 // ---------------------------------------------------------------------------
 
-export function useVerifierAnalytics() {
+export function useVerifierAnalytics(period: AnalyticsPeriod = "90d") {
   const { address } = useAccount();
 
   return useQuery({
-    queryKey: analyticsKeys.verifiers(),
+    queryKey: [...analyticsKeys.verifiers(), period],
     queryFn: async () =>
-      buildVerifierAnalytics(await fetchAnalyticsSnapshot("90d")),
+      buildVerifierAnalytics(await fetchAnalyticsSnapshot(period)),
     enabled: !!address,
     staleTime: 120_000,
   });
@@ -1042,30 +913,15 @@ export function useVerifierAnalytics() {
 // Data Exposure Timeline
 // ---------------------------------------------------------------------------
 
-export function useDataExposureTimeline() {
+export function useDataExposureTimeline(period: AnalyticsPeriod = "90d") {
   const { address } = useAccount();
 
   return useQuery({
-    queryKey: analyticsKeys.exposure(),
+    queryKey: [...analyticsKeys.exposure(), period],
     queryFn: async () =>
-      buildExposureTimeline(await fetchAnalyticsSnapshot("90d")),
+      buildExposureTimeline(await fetchAnalyticsSnapshot(period)),
     enabled: !!address,
     staleTime: 60_000,
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Network Benchmarks
-// ---------------------------------------------------------------------------
-
-export function useNetworkBenchmarks() {
-  const { address } = useAccount();
-
-  return useQuery({
-    queryKey: analyticsKeys.benchmarks(),
-    queryFn: async () => buildBenchmarks(await fetchAnalyticsSnapshot("30d")),
-    enabled: !!address,
-    staleTime: 300_000,
   });
 }
 
@@ -1073,13 +929,13 @@ export function useNetworkBenchmarks() {
 // Privacy Recommendations
 // ---------------------------------------------------------------------------
 
-export function usePrivacyRecommendations() {
+export function usePrivacyRecommendations(period: AnalyticsPeriod = "30d") {
   const { address } = useAccount();
 
   return useQuery({
-    queryKey: analyticsKeys.recommendations(),
+    queryKey: [...analyticsKeys.recommendations(), period],
     queryFn: async () =>
-      buildRecommendations(await fetchAnalyticsSnapshot("30d")),
+      buildRecommendations(await fetchAnalyticsSnapshot(period)),
     enabled: !!address,
     staleTime: 300_000,
   });
@@ -1106,14 +962,12 @@ export function useExportAnalyticsReport() {
           "credentialUsage",
           "verifiers",
           "exposure",
-          "benchmarks",
           "recommendations",
         ],
         privacyScore: buildPrivacyScore(snapshot),
         credentialUsage: buildUsage(snapshot),
         verifiers: buildVerifierAnalytics(snapshot),
         exposure: buildExposureTimeline(snapshot),
-        benchmarks: buildBenchmarks(snapshot),
         recommendations: buildRecommendations(snapshot),
       };
       const payload =
