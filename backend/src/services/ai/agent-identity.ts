@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import type { AIAgent as PrismaAIAgent } from '@prisma/client';
 import { prisma, logger, redis } from '../../runtime';
 // tee import removed — not used in this module
 
@@ -6,6 +7,14 @@ const AGENT_RECORD_TTL_SECONDS = 30 * 86400;
 const APPROVAL_RECORD_TTL_SECONDS = 30 * 86400;
 const DELEGATION_RECORD_GRACE_SECONDS = 60;
 const AGENT_VERIFICATION_CHALLENGE_TTL_SECONDS = 300;
+const INTERNAL_ANOMALY_SUSPENSION_ACTOR = 'internal:anomaly-detector';
+const AGENT_PROTOCOLS = new Set<AgentProtocol>([
+  'openai_functions',
+  'anthropic_tool_use',
+  'google_genai',
+  'aethelred_native',
+  'custom',
+]);
 
 // ---------------------------------------------------------------------------
 // Types & Enums
@@ -60,6 +69,8 @@ export interface AgentIdentity {
   suspensionReason?: string;
   metadata: Record<string, unknown>;
   stats: AgentStats;
+  /** Internal optimistic-concurrency version; routes do not expose it. */
+  recordVersion: number;
 }
 
 interface AgentStats {
@@ -172,7 +183,6 @@ export function buildAgentVerificationSigningPayload(
 // ---------------------------------------------------------------------------
 
 export class AgentIdentityService {
-  private agents: Map<string, AgentIdentity> = new Map();
   private delegations: Map<string, DelegationChain> = new Map();
   private approvalRequests: Map<string, HumanApprovalRequest> = new Map();
   private auditEntries: Map<string, AgentAuditEntry[]> = new Map();
@@ -230,54 +240,55 @@ export class AgentIdentityService {
       .update(registration.publicKey)
       .digest('hex');
 
-    const agent: AgentIdentity = {
-      agentId,
-      did,
-      operatorId: registration.operatorId,
-      agentName: registration.agentName,
-      agentDescription: registration.agentDescription,
-      agentProtocol: registration.agentProtocol,
-      status: 'active',
-      capabilities: registration.capabilities,
-      publicKey: registration.publicKey,
-      publicKeyHash,
-      maxDelegationDepth: Math.min(registration.maxDelegationDepth, 5), // hard cap at 5
-      teeAttested: false,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-      metadata: registration.metadata ?? {},
-      stats: {
-        totalActions: 0,
-        actionsToday: 0,
-        successRate: 1.0,
-        averageLatencyMs: 0,
-        anomalyCount: 0,
-      },
-    };
-
-    this.agents.set(agentId, agent);
-
-    // Create DID document in identity store
-    await prisma.auditLog.create({
-      data: {
-        identityId: registration.operatorId,
-        action: 'AGENT_REGISTERED' as any,
-        resourceType: 'agent_identity',
-        resourceId: agentId,
-        details: {
-          did,
-          agentName: agent.agentName,
-          protocol: agent.agentProtocol,
-          capabilityCount: agent.capabilities.length,
+    const maxDelegationDepth = Math.min(registration.maxDelegationDepth, 5);
+    const persisted = await prisma.$transaction(async (tx) => {
+      const created = await tx.aIAgent.create({
+        data: {
+          id: agentId,
+          agentDid: did,
+          name: registration.agentName,
+          description: registration.agentDescription,
+          operatorId: registration.operatorId,
+          controllerDid: operator.did,
+          riskTier: 'LOW',
+          // Preserve the existing public protocol while keeping agentType
+          // compatible with consumers that predate the dedicated column.
+          agentType: registration.agentProtocol,
+          agentProtocol: registration.agentProtocol,
+          publicKey: registration.publicKey,
           publicKeyHash,
+          capabilities: registration.capabilities as any,
+          maxDelegationDepth,
+          status: 'ACTIVE',
+          humanApprovalRequired: registration.capabilities.some(
+            (capability) => capability.requiresApproval,
+          ),
+          teeAttested: false,
+          metadata: (registration.metadata ?? {}) as any,
         },
-      },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          identityId: registration.operatorId,
+          action: 'AGENT_REGISTERED' as any,
+          resourceType: 'agent_identity',
+          resourceId: agentId,
+          details: {
+            did,
+            agentName: registration.agentName,
+            protocol: registration.agentProtocol,
+            capabilityCount: registration.capabilities.length,
+            publicKeyHash,
+          },
+        },
+      });
+
+      return created;
     });
 
-    await this.persistAgent(agent);
-    await redis.set(`agent:did:${did}`, agentId, 'EX', AGENT_RECORD_TTL_SECONDS);
-    await redis.sadd(this.operatorAgentSetKey(registration.operatorId), agentId);
-    await redis.expire(this.operatorAgentSetKey(registration.operatorId), AGENT_RECORD_TTL_SECONDS);
+    const agent = this.fromPrismaAgent(persisted);
+    await this.cacheAgent(agent);
 
     logger.info('agent_registered', {
       agentId,
@@ -293,51 +304,29 @@ export class AgentIdentityService {
   // Get agent profile
   // -------------------------------------------------------------------------
   async getAgent(agentId: string): Promise<AgentIdentity> {
-    const cached = await redis.get(`agent:${agentId}`);
-    if (cached) {
-      const parsed = this.parseStoredAgent(cached);
-      this.agents.set(agentId, parsed);
-      return parsed;
+    // Prisma is authoritative. Never authorize from a stale process/Redis copy;
+    // Redis is refreshed only after the durable row has been validated.
+    const persisted = await prisma.aIAgent.findUnique({ where: { id: agentId } });
+    if (!persisted) {
+      throw new AgentIdentityError('Agent not found', 'AGENT_NOT_FOUND', 404);
     }
 
-    const agent = this.agents.get(agentId);
-    if (agent) return agent;
-
-    throw new AgentIdentityError('Agent not found', 'AGENT_NOT_FOUND', 404);
+    const agent = this.fromPrismaAgent(persisted);
+    await this.cacheAgent(agent);
+    return agent;
   }
 
   // -------------------------------------------------------------------------
   // List agents owned by an operator
   // -------------------------------------------------------------------------
   async listAgentsForOperator(operatorId: string): Promise<AgentIdentity[]> {
-    const indexedIds = await redis.smembers(this.operatorAgentSetKey(operatorId));
-    const candidateIds = new Set(indexedIds);
-
-    for (const [agentId, agent] of this.agents.entries()) {
-      if (agent.operatorId === operatorId) {
-        candidateIds.add(agentId);
-      }
-    }
-
-    const agents: AgentIdentity[] = [];
-    for (const agentId of candidateIds) {
-      try {
-        const agent = await this.getAgent(agentId);
-        if (agent.operatorId === operatorId) {
-          agents.push(agent);
-        } else {
-          await redis.srem(this.operatorAgentSetKey(operatorId), agentId);
-        }
-      } catch (error) {
-        if (error instanceof AgentIdentityError && error.code === 'AGENT_NOT_FOUND') {
-          await redis.srem(this.operatorAgentSetKey(operatorId), agentId);
-          continue;
-        }
-        throw error;
-      }
-    }
-
-    return agents.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+    const persisted = await prisma.aIAgent.findMany({
+      where: { operatorId },
+      orderBy: { createdAt: 'desc' },
+    });
+    const agents = persisted.map((row) => this.fromPrismaAgent(row));
+    await Promise.all(agents.map((agent) => this.cacheAgent(agent)));
+    return agents;
   }
 
   // -------------------------------------------------------------------------
@@ -371,25 +360,52 @@ export class AgentIdentityService {
     }
 
     const previousCapabilities = agent.capabilities.map((c) => c.name);
-    agent.capabilities = capabilities;
-    agent.updatedAt = new Date();
-    this.agents.set(agentId, agent);
-
-    await this.persistAgent(agent);
-
-    await prisma.auditLog.create({
-      data: {
-        identityId: agent.operatorId,
-        action: 'AGENT_CAPABILITIES_UPDATED' as any,
-        resourceType: 'agent_identity',
-        resourceId: agentId,
-        details: {
-          previousCapabilities,
-          newCapabilities: capabilities.map((c) => c.name),
-          updatedBy: requestedBy,
+    const persisted = await prisma.$transaction(async (tx) => {
+      const updated = await tx.aIAgent.updateMany({
+        where: {
+          id: agentId,
+          operatorId: requestedBy,
+          version: agent.recordVersion,
         },
-      },
+        data: {
+          capabilities: capabilities as any,
+          humanApprovalRequired: capabilities.some(
+            (capability) => capability.requiresApproval,
+          ),
+          version: { increment: 1 },
+        },
+      });
+      if (updated.count !== 1) {
+        throw new AgentIdentityError(
+          'Agent was updated concurrently; reload before changing capabilities',
+          'AGENT_CONCURRENT_UPDATE',
+          409,
+        );
+      }
+
+      const row = await tx.aIAgent.findUnique({ where: { id: agentId } });
+      if (!row) {
+        throw new AgentIdentityError('Agent not found', 'AGENT_NOT_FOUND', 404);
+      }
+
+      await tx.auditLog.create({
+        data: {
+          identityId: agent.operatorId,
+          action: 'AGENT_CAPABILITIES_UPDATED' as any,
+          resourceType: 'agent_identity',
+          resourceId: agentId,
+          details: {
+            previousCapabilities,
+            newCapabilities: capabilities.map((c) => c.name),
+            updatedBy: requestedBy,
+          },
+        },
+      });
+
+      return row;
     });
+    const updatedAgent = this.fromPrismaAgent(persisted);
+    await this.cacheAgent(updatedAgent);
 
     logger.info('agent_capabilities_updated', {
       agentId,
@@ -398,7 +414,7 @@ export class AgentIdentityService {
       updatedBy: requestedBy,
     });
 
-    return agent;
+    return updatedAgent;
   }
 
   // -------------------------------------------------------------------------
@@ -511,7 +527,7 @@ export class AgentIdentityService {
       requestedCapabilities: request.requestedCapabilities,
     });
 
-    const agent = await this.getAgent(request.agentId);
+    let agent = await this.getAgent(request.agentId);
     const details: string[] = [];
 
     // 1. Verify agent status
@@ -630,19 +646,23 @@ export class AgentIdentityService {
     }
 
     // 5. Anomaly detection on the verification request
-    await this.detectVerificationAnomaly(agent, request);
+    agent = await this.detectVerificationAnomaly(agent, request);
+
+    if (agent.status !== 'active' && authorized.length > 0) {
+      for (const capability of authorized.splice(0, authorized.length)) {
+        denied.push({
+          name: capability,
+          reason: `Agent status changed to ${agent.status}`,
+        });
+      }
+      details.push(`Agent is ${agent.status} — authorization withdrawn`);
+    }
 
     const verified = authorized.length > 0;
     const latencyMs = performance.now() - startTime;
 
-    // Update agent stats
-    agent.lastActiveAt = new Date();
-    agent.stats.totalActions++;
-    agent.stats.averageLatencyMs = (
-      agent.stats.averageLatencyMs * (agent.stats.totalActions - 1) + latencyMs
-    ) / agent.stats.totalActions;
-    this.agents.set(agent.agentId, agent);
-    await this.persistAgent(agent);
+    // Atomic increments prevent concurrent verifications from losing counters.
+    agent = await this.recordVerificationStats(agent.agentId, latencyMs, verified);
 
     details.push(`Authorized: ${authorized.length}/${request.requestedCapabilities.length} capabilities`);
 
@@ -691,54 +711,92 @@ export class AgentIdentityService {
       );
     }
 
-    agent.status = 'suspended';
-    agent.suspendedAt = new Date();
-    agent.suspendedBy = suspendedBy;
-    agent.suspensionReason = reason;
-    agent.updatedAt = new Date();
-    this.agents.set(agentId, agent);
-
-    // Revoke all active delegations from this agent
-    const delegationIds = await redis.smembers(`delegations:from:${agentId}`);
-    for (const delId of delegationIds) {
-      const delegation = await this.getDelegation(delId);
-      if (!delegation) {
-        await redis.srem(`delegations:from:${agentId}`, delId);
-        continue;
-      }
-      if (delegation && delegation.status === 'active') {
-        delegation.status = 'revoked';
-        delegation.revokedAt = new Date();
-        delegation.revokedBy = suspendedBy;
-        this.delegations.set(delId, delegation);
-        await this.persistDelegation(delegation);
-      }
-    }
-
-    await this.persistAgent(agent);
-
-    await prisma.auditLog.create({
-      data: {
-        identityId: agent.operatorId,
-        action: 'AGENT_SUSPENDED' as any,
-        resourceType: 'agent_identity',
-        resourceId: agentId,
-        details: {
-          suspendedBy,
-          reason,
-          revokedDelegations: delegationIds.length,
-        },
-      },
-    });
-
-    logger.warn('agent_suspended', {
-      agentId,
+    return this.applySuspension(
+      agent,
       suspendedBy,
       reason,
-      revokedDelegations: delegationIds.length,
+      'operator',
+    );
+  }
+
+  /**
+   * Durable suspension transition shared by the owner-authorized public path
+   * and the private anomaly policy. The internal actor string is never accepted
+   * from an API request, so it cannot become a forgeable platform-admin role.
+   */
+  private async applySuspension(
+    current: AgentIdentity,
+    suspendedBy: string,
+    reason: string,
+    source: 'operator' | 'anomaly-threshold',
+  ): Promise<AgentIdentity> {
+    if (current.status === 'suspended') return current;
+    if (current.status !== 'active') {
+      throw new AgentIdentityError(
+        `Agent status ${current.status} cannot transition to suspended`,
+        'AGENT_STATUS_INVALID',
+        409,
+      );
+    }
+
+    const suspendedAt = new Date();
+    const persisted = await prisma.$transaction(async (tx) => {
+      const transitioned = await tx.aIAgent.updateMany({
+        where: { id: current.agentId, status: 'ACTIVE' },
+        data: {
+          status: 'SUSPENDED',
+          suspendedAt,
+          suspendedBy,
+          suspensionReason: reason,
+          version: { increment: 1 },
+        },
+      });
+
+      const row = await tx.aIAgent.findUnique({ where: { id: current.agentId } });
+      if (!row) {
+        throw new AgentIdentityError('Agent not found', 'AGENT_NOT_FOUND', 404);
+      }
+
+      if (transitioned.count === 1) {
+        await tx.auditLog.create({
+          data: {
+            // Anchor the event to the owning tenant. The actual actor and source
+            // are explicit in details; no synthetic Identity/admin is created.
+            identityId: row.operatorId,
+            action: 'AGENT_SUSPENDED' as any,
+            resourceType: 'agent_identity',
+            resourceId: current.agentId,
+            details: {
+              suspendedBy,
+              reason,
+              source,
+              automatic: source === 'anomaly-threshold',
+              anomalyCount: row.anomalyCount,
+              delegationEnforcement: 'source_status_and_cache_revocation',
+            },
+          },
+        });
+      }
+
+      return row;
     });
 
-    return agent;
+    const suspended = this.fromPrismaAgent(persisted);
+    await this.cacheAgent(suspended);
+    const revokedDelegations = await this.revokeDelegationsBestEffort(
+      suspended.agentId,
+      suspendedBy,
+    );
+
+    logger.warn('agent_suspended', {
+      agentId: suspended.agentId,
+      suspendedBy,
+      reason,
+      source,
+      revokedDelegations,
+    });
+
+    return suspended;
   }
 
   // -------------------------------------------------------------------------
@@ -759,7 +817,7 @@ export class AgentIdentityService {
   private async detectVerificationAnomaly(
     agent: AgentIdentity,
     request: AgentVerificationRequest,
-  ): Promise<void> {
+  ): Promise<AgentIdentity> {
     const baseline = this.behaviorBaselines.get(agent.agentId);
     const hour = new Date().getUTCHours();
     const anomalies: string[] = [];
@@ -798,15 +856,26 @@ export class AgentIdentityService {
     }
 
     if (anomalies.length > 0) {
-      await this.recordAnomalyEvent(agent, anomalies.join('; '));
+      return this.recordAnomalyEvent(agent, anomalies.join('; '));
     }
+    return agent;
   }
 
-  private async recordAnomalyEvent(agent: AgentIdentity, details: string): Promise<void> {
-    agent.stats.anomalyCount++;
-    agent.stats.lastAnomalyAt = new Date();
-    this.agents.set(agent.agentId, agent);
-    await this.persistAgent(agent);
+  private async recordAnomalyEvent(
+    agent: AgentIdentity,
+    details: string,
+  ): Promise<AgentIdentity> {
+    const lastAnomalyAt = new Date();
+    const persisted = await prisma.aIAgent.update({
+      where: { id: agent.agentId },
+      data: {
+        anomalyCount: { increment: 1 },
+        lastAnomalyAt,
+        version: { increment: 1 },
+      },
+    });
+    let updatedAgent = this.fromPrismaAgent(persisted);
+    await this.cacheAgent(updatedAgent);
 
     const entry: AgentAuditEntry = {
       entryId: `aae-${crypto.randomUUID()}`,
@@ -829,17 +898,24 @@ export class AgentIdentityService {
       agentId: agent.agentId,
       operatorId: agent.operatorId,
       details,
-      totalAnomalies: agent.stats.anomalyCount,
+      totalAnomalies: updatedAgent.stats.anomalyCount,
     });
 
     // Auto-suspend after repeated anomalies
-    if (agent.stats.anomalyCount >= 10 && agent.status === 'active') {
+    if (updatedAgent.stats.anomalyCount >= 10 && updatedAgent.status === 'active') {
       logger.warn('agent_auto_suspend_threshold', {
-        agentId: agent.agentId,
-        anomalyCount: agent.stats.anomalyCount,
+        agentId: updatedAgent.agentId,
+        anomalyCount: updatedAgent.stats.anomalyCount,
       });
-      await this.suspendAgent(agent.agentId, 'system:anomaly-detector', `Automatic suspension: ${agent.stats.anomalyCount} anomalies detected`);
+      updatedAgent = await this.applySuspension(
+        updatedAgent,
+        INTERNAL_ANOMALY_SUSPENSION_ACTOR,
+        `Automatic suspension: ${updatedAgent.stats.anomalyCount} anomalies detected`,
+        'anomaly-threshold',
+      );
     }
+
+    return updatedAgent;
   }
 
   // -------------------------------------------------------------------------
@@ -1092,7 +1168,12 @@ export class AgentIdentityService {
         await redis.srem(`delegations:to:${agentId}`, delId);
         continue;
       }
-      if (delegation && delegation.status === 'active' && new Date() < delegation.expiresAt) {
+      if (
+        delegation &&
+        delegation.status === 'active' &&
+        new Date() < delegation.expiresAt &&
+        await this.isAgentActive(delegation.fromAgentId)
+      ) {
         for (const cap of delegation.capabilities) {
           caps.add(cap);
         }
@@ -1109,6 +1190,7 @@ export class AgentIdentityService {
 
     // BFS through delegation graph
     for (let depth = 0; depth < 10; depth++) {
+      if (!(await this.isAgentActive(currentId))) break;
       const delegationIds = await redis.smembers(`delegations:from:${currentId}`);
       let found = false;
 
@@ -1160,13 +1242,273 @@ export class AgentIdentityService {
     return this.approvalRequests.get(requestId) ?? null;
   }
 
-  private async persistAgent(agent: AgentIdentity): Promise<void> {
-    await redis.set(
-      `agent:${agent.agentId}`,
-      JSON.stringify(agent),
-      'EX',
-      AGENT_RECORD_TTL_SECONDS,
-    );
+  private async cacheAgent(agent: AgentIdentity): Promise<void> {
+    try {
+      await redis.set(
+        `agent:${agent.agentId}`,
+        JSON.stringify(agent),
+        'EX',
+        AGENT_RECORD_TTL_SECONDS,
+      );
+      await redis.set(
+        `agent:did:${agent.did}`,
+        agent.agentId,
+        'EX',
+        AGENT_RECORD_TTL_SECONDS,
+      );
+      await redis.sadd(this.operatorAgentSetKey(agent.operatorId), agent.agentId);
+      await redis.expire(
+        this.operatorAgentSetKey(agent.operatorId),
+        AGENT_RECORD_TTL_SECONDS,
+      );
+    } catch (error) {
+      // Cache loss must not roll back or hide the authoritative Prisma row.
+      logger.warn('agent_cache_write_failed', {
+        agentId: agent.agentId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private async recordVerificationStats(
+    agentId: string,
+    latencyMs: number,
+    successful: boolean,
+  ): Promise<AgentIdentity> {
+    const persisted = await prisma.aIAgent.update({
+      where: { id: agentId },
+      data: {
+        totalActions: { increment: 1 },
+        successfulActions: { increment: successful ? 1 : 0 },
+        totalLatencyMs: { increment: latencyMs },
+        lastActiveAt: new Date(),
+        version: { increment: 1 },
+      },
+    });
+    const agent = this.fromPrismaAgent(persisted);
+    await this.cacheAgent(agent);
+    return agent;
+  }
+
+  private async isAgentActive(agentId: string): Promise<boolean> {
+    try {
+      return (await this.getAgent(agentId)).status === 'active';
+    } catch (error) {
+      if (error instanceof AgentIdentityError && error.code === 'AGENT_NOT_FOUND') {
+        return false;
+      }
+      throw error;
+    }
+  }
+
+  private async revokeDelegationsBestEffort(
+    agentId: string,
+    revokedBy: string,
+  ): Promise<number> {
+    try {
+      const delegationIds = await redis.smembers(`delegations:from:${agentId}`);
+      let revoked = 0;
+      for (const delegationId of delegationIds) {
+        const delegation = await this.getDelegation(delegationId);
+        if (!delegation) {
+          await redis.srem(`delegations:from:${agentId}`, delegationId);
+          continue;
+        }
+        if (delegation.status === 'active') {
+          delegation.status = 'revoked';
+          delegation.revokedAt = new Date();
+          delegation.revokedBy = revokedBy;
+          this.delegations.set(delegationId, delegation);
+          await this.persistDelegation(delegation);
+          revoked++;
+        }
+      }
+      return revoked;
+    } catch (error) {
+      // Status checks consult Prisma, so suspension still blocks the agent and
+      // any delegated capability sourced from it if Redis is unavailable.
+      logger.error('agent_delegation_cache_revocation_failed', {
+        agentId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return 0;
+    }
+  }
+
+  private fromPrismaAgent(row: PrismaAIAgent): AgentIdentity {
+    if (
+      !row.description ||
+      !row.agentProtocol ||
+      !AGENT_PROTOCOLS.has(row.agentProtocol as AgentProtocol) ||
+      !row.publicKey ||
+      !row.publicKeyHash
+    ) {
+      throw new AgentIdentityError(
+        'Durable agent record is missing protocol or verification-key material',
+        'AGENT_RECORD_INCOMPLETE',
+        503,
+      );
+    }
+
+    const computedPublicKeyHash = crypto
+      .createHash('sha256')
+      .update(row.publicKey)
+      .digest('hex');
+    if (computedPublicKeyHash !== row.publicKeyHash) {
+      throw new AgentIdentityError(
+        'Durable agent verification-key fingerprint is invalid',
+        'AGENT_RECORD_INVALID',
+        503,
+      );
+    }
+
+    const capabilities = this.parsePersistedCapabilities(row.capabilities);
+    const metadata = this.parsePersistedMetadata(row.metadata);
+    if (
+      !Number.isSafeInteger(row.totalActions) ||
+      row.totalActions < 0 ||
+      !Number.isSafeInteger(row.actionsToday) ||
+      row.actionsToday < 0 ||
+      !Number.isSafeInteger(row.successfulActions) ||
+      row.successfulActions < 0 ||
+      row.successfulActions > row.totalActions ||
+      !Number.isFinite(row.totalLatencyMs) ||
+      row.totalLatencyMs < 0 ||
+      !Number.isSafeInteger(row.anomalyCount) ||
+      row.anomalyCount < 0 ||
+      !Number.isSafeInteger(row.version) ||
+      row.version < 0
+    ) {
+      throw new AgentIdentityError(
+        'Durable agent counters are invalid',
+        'AGENT_RECORD_INVALID',
+        503,
+      );
+    }
+
+    const status = this.fromPrismaAgentStatus(row.status);
+    if (
+      status === 'suspended' &&
+      (!row.suspendedAt || !row.suspendedBy || !row.suspensionReason)
+    ) {
+      throw new AgentIdentityError(
+        'Suspended durable agent is missing suspension evidence',
+        'AGENT_RECORD_INCOMPLETE',
+        503,
+      );
+    }
+
+    return {
+      agentId: row.id,
+      did: row.agentDid,
+      operatorId: row.operatorId,
+      agentName: row.name,
+      agentDescription: row.description,
+      agentProtocol: row.agentProtocol as AgentProtocol,
+      status,
+      capabilities,
+      publicKey: row.publicKey,
+      publicKeyHash: row.publicKeyHash,
+      maxDelegationDepth: row.maxDelegationDepth,
+      teeAttested: row.teeAttested,
+      teeAttestationId: row.teeAttestationId ?? undefined,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+      lastActiveAt: row.lastActiveAt ?? undefined,
+      suspendedAt: row.suspendedAt ?? undefined,
+      suspendedBy: row.suspendedBy ?? undefined,
+      suspensionReason: row.suspensionReason ?? undefined,
+      metadata,
+      stats: {
+        totalActions: row.totalActions,
+        actionsToday: row.actionsToday,
+        successRate:
+          row.totalActions === 0
+            ? 1
+            : row.successfulActions / row.totalActions,
+        averageLatencyMs:
+          row.totalActions === 0 ? 0 : row.totalLatencyMs / row.totalActions,
+        anomalyCount: row.anomalyCount,
+        lastAnomalyAt: row.lastAnomalyAt ?? undefined,
+      },
+      recordVersion: row.version,
+    };
+  }
+
+  private fromPrismaAgentStatus(status: PrismaAIAgent['status']): AgentStatus {
+    switch (status) {
+      case 'PENDING_APPROVAL': return 'pending';
+      case 'ACTIVE': return 'active';
+      case 'SUSPENDED': return 'suspended';
+      case 'REVOKED': return 'revoked';
+    }
+  }
+
+  private parsePersistedCapabilities(value: unknown): AgentCapability[] {
+    if (!Array.isArray(value)) {
+      throw new AgentIdentityError(
+        'Durable agent capabilities are invalid',
+        'AGENT_RECORD_INVALID',
+        503,
+      );
+    }
+
+    const validRiskLevels = new Set(['low', 'medium', 'high', 'critical']);
+    for (const item of value) {
+      if (
+        typeof item !== 'object' ||
+        item === null ||
+        Array.isArray(item)
+      ) {
+        throw new AgentIdentityError(
+          'Durable agent capabilities are invalid',
+          'AGENT_RECORD_INVALID',
+          503,
+        );
+      }
+      const capability = item as Record<string, unknown>;
+      const rateLimit = capability.rateLimit;
+      const validRateLimit =
+        rateLimit === undefined ||
+        (
+          typeof rateLimit === 'object' &&
+          rateLimit !== null &&
+          !Array.isArray(rateLimit) &&
+          Number.isSafeInteger((rateLimit as Record<string, unknown>).maxPerHour) &&
+          Number.isSafeInteger((rateLimit as Record<string, unknown>).maxPerDay)
+        );
+      if (
+        typeof capability.name !== 'string' ||
+        typeof capability.description !== 'string' ||
+        !Array.isArray(capability.resourceTypes) ||
+        !capability.resourceTypes.every((entry) => typeof entry === 'string') ||
+        !Array.isArray(capability.actions) ||
+        !capability.actions.every((entry) => typeof entry === 'string') ||
+        typeof capability.riskLevel !== 'string' ||
+        !validRiskLevels.has(capability.riskLevel) ||
+        typeof capability.requiresApproval !== 'boolean' ||
+        !validRateLimit
+      ) {
+        throw new AgentIdentityError(
+          'Durable agent capabilities are invalid',
+          'AGENT_RECORD_INVALID',
+          503,
+        );
+      }
+    }
+    return value as AgentCapability[];
+  }
+
+  private parsePersistedMetadata(value: unknown): Record<string, unknown> {
+    if (value === null) return {};
+    if (typeof value !== 'object' || Array.isArray(value)) {
+      throw new AgentIdentityError(
+        'Durable agent metadata is invalid',
+        'AGENT_RECORD_INVALID',
+        503,
+      );
+    }
+    return value as Record<string, unknown>;
   }
 
   private async persistDelegation(delegation: DelegationChain): Promise<void> {
@@ -1187,23 +1529,6 @@ export class AgentIdentityService {
       'EX',
       APPROVAL_RECORD_TTL_SECONDS,
     );
-  }
-
-  private parseStoredAgent(raw: string): AgentIdentity {
-    const parsed = JSON.parse(raw) as AgentIdentity;
-    return {
-      ...parsed,
-      createdAt: new Date(parsed.createdAt),
-      updatedAt: new Date(parsed.updatedAt),
-      lastActiveAt: parsed.lastActiveAt ? new Date(parsed.lastActiveAt) : undefined,
-      suspendedAt: parsed.suspendedAt ? new Date(parsed.suspendedAt) : undefined,
-      stats: {
-        ...parsed.stats,
-        lastAnomalyAt: parsed.stats.lastAnomalyAt
-          ? new Date(parsed.stats.lastAnomalyAt)
-          : undefined,
-      },
-    };
   }
 
   private parseStoredDelegation(raw: string): DelegationChain {

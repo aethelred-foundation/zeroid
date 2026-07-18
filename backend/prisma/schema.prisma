@@ -341,6 +341,9 @@ model AIAgent {
   controllerDid   String?      // v1 passport: denormalized DID of controlling Identity
   riskTier        RiskLevel    @default(LOW)
   agentType       String       // llm, autonomous, bot, iot
+  agentProtocol   String?      // nullable only for legacy rows; registrations always set it
+  publicKey       String?      // nullable only for legacy rows; required for M2M verification
+  publicKeyHash   String?      // SHA-256 fingerprint of publicKey
   capabilities    Json         // array of capability objects
   delegationChain Json?        // parent agent chain
   maxDelegationDepth Int       @default(3)
@@ -348,6 +351,18 @@ model AIAgent {
   status          AgentStatus  @default(PENDING_APPROVAL)
   humanApprovalRequired Boolean @default(true)
   rateLimitPerMinute Int       @default(60)
+  teeAttested     Boolean      @default(false)
+  teeAttestationId String?
+  totalActions    Int          @default(0)
+  actionsToday    Int          @default(0)
+  successfulActions Int        @default(0)
+  totalLatencyMs  Float        @default(0)
+  anomalyCount    Int          @default(0)
+  lastAnomalyAt   DateTime?
+  suspendedAt     DateTime?
+  suspendedBy     String?
+  suspensionReason String?
+  version         Int          @default(0)
   metadata        Json?
   lastActiveAt    DateTime?
   createdAt       DateTime     @default(now())

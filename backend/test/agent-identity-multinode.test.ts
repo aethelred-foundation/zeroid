@@ -2,8 +2,176 @@ import crypto from 'crypto';
 
 const redisStore = new Map<string, string>();
 const redisSets = new Map<string, Set<string>>();
+const mockAgentRows = new Map<string, Record<string, any>>();
 const mockIdentityFindUnique = jest.fn();
 const mockAuditLogCreate = jest.fn();
+const mockAgentActionCreate = jest.fn();
+
+function mockCloneAgent(row: Record<string, any>): Record<string, any> {
+  return {
+    ...row,
+    capabilities: Array.isArray(row.capabilities)
+      ? row.capabilities.map((capability: Record<string, any>) => ({ ...capability }))
+      : row.capabilities,
+    metadata:
+      row.metadata && typeof row.metadata === 'object'
+        ? { ...row.metadata }
+        : row.metadata,
+  };
+}
+
+function mockApplyAgentData(
+  row: Record<string, any>,
+  data: Record<string, any>,
+): Record<string, any> {
+  const updated = mockCloneAgent(row);
+  for (const [key, value] of Object.entries(data)) {
+    if (
+      value &&
+      typeof value === 'object' &&
+      !Array.isArray(value) &&
+      typeof value.increment === 'number'
+    ) {
+      updated[key] = (updated[key] ?? 0) + value.increment;
+    } else {
+      updated[key] = value;
+    }
+  }
+  updated.updatedAt = new Date();
+  return updated;
+}
+
+function mockAgentMatches(
+  row: Record<string, any>,
+  where: Record<string, any> = {},
+): boolean {
+  return Object.entries(where).every(([key, value]) => row[key] === value);
+}
+
+const mockAIAgentCreate = jest.fn(async ({ data }: { data: Record<string, any> }) => {
+  const now = new Date();
+  const row: Record<string, any> = {
+    id: data.id,
+    agentDid: data.agentDid,
+    name: data.name,
+    description: data.description ?? null,
+    operatorId: data.operatorId,
+    controllerDid: data.controllerDid ?? null,
+    riskTier: data.riskTier ?? 'LOW',
+    agentType: data.agentType,
+    agentProtocol: data.agentProtocol ?? null,
+    publicKey: data.publicKey ?? null,
+    publicKeyHash: data.publicKeyHash ?? null,
+    capabilities: data.capabilities,
+    delegationChain: data.delegationChain ?? null,
+    maxDelegationDepth: data.maxDelegationDepth ?? 3,
+    reputationScore: data.reputationScore ?? 50,
+    status: data.status ?? 'PENDING_APPROVAL',
+    humanApprovalRequired: data.humanApprovalRequired ?? true,
+    rateLimitPerMinute: data.rateLimitPerMinute ?? 60,
+    teeAttested: data.teeAttested ?? false,
+    teeAttestationId: data.teeAttestationId ?? null,
+    totalActions: data.totalActions ?? 0,
+    actionsToday: data.actionsToday ?? 0,
+    successfulActions: data.successfulActions ?? 0,
+    totalLatencyMs: data.totalLatencyMs ?? 0,
+    anomalyCount: data.anomalyCount ?? 0,
+    lastAnomalyAt: data.lastAnomalyAt ?? null,
+    suspendedAt: data.suspendedAt ?? null,
+    suspendedBy: data.suspendedBy ?? null,
+    suspensionReason: data.suspensionReason ?? null,
+    version: data.version ?? 0,
+    metadata: data.metadata ?? null,
+    lastActiveAt: data.lastActiveAt ?? null,
+    createdAt: data.createdAt ?? now,
+    updatedAt: data.updatedAt ?? now,
+  };
+  mockAgentRows.set(row.id, row);
+  return mockCloneAgent(row);
+});
+
+const mockAIAgentFindUnique = jest.fn(async ({
+  where,
+  include,
+}: {
+  where: { id?: string; agentDid?: string };
+  include?: Record<string, unknown>;
+}) => {
+  const row = where.id
+    ? mockAgentRows.get(where.id)
+    : Array.from(mockAgentRows.values()).find(
+        (candidate) => candidate.agentDid === where.agentDid,
+      );
+  if (!row) return null;
+  const result = mockCloneAgent(row);
+  if (include) {
+    result.operator = { did: 'did:aethelred:operator' };
+    result.agentCredentials = [];
+  }
+  return result;
+});
+
+const mockAIAgentFindMany = jest.fn(async ({
+  where,
+}: {
+  where: Record<string, any>;
+}) => Array.from(mockAgentRows.values())
+  .filter((row) => mockAgentMatches(row, where))
+  .sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime())
+  .map(mockCloneAgent));
+
+const mockAIAgentUpdate = jest.fn(async ({
+  where,
+  data,
+}: {
+  where: { id: string };
+  data: Record<string, any>;
+}) => {
+  const row = mockAgentRows.get(where.id);
+  if (!row) throw new Error('AIAgent not found');
+  const updated = mockApplyAgentData(row, data);
+  mockAgentRows.set(where.id, updated);
+  return mockCloneAgent(updated);
+});
+
+const mockAIAgentUpdateMany = jest.fn(async ({
+  where,
+  data,
+}: {
+  where: Record<string, any>;
+  data: Record<string, any>;
+}) => {
+  let count = 0;
+  for (const [id, row] of mockAgentRows.entries()) {
+    if (!mockAgentMatches(row, where)) continue;
+    mockAgentRows.set(id, mockApplyAgentData(row, data));
+    count++;
+  }
+  return { count };
+});
+
+const mockAIAgent = {
+  create: mockAIAgentCreate,
+  findUnique: mockAIAgentFindUnique,
+  findMany: mockAIAgentFindMany,
+  update: mockAIAgentUpdate,
+  updateMany: mockAIAgentUpdateMany,
+};
+
+const mockPrismaTransaction = jest.fn(async (
+  callback: (tx: Record<string, any>) => Promise<unknown>,
+) => callback({
+  aIAgent: mockAIAgent,
+  auditLog: { create: mockAuditLogCreate },
+}));
+
+const mockPrisma = {
+  identity: { findUnique: mockIdentityFindUnique },
+  aIAgent: mockAIAgent,
+  agentAction: { create: mockAgentActionCreate },
+  auditLog: { create: mockAuditLogCreate },
+  $transaction: mockPrismaTransaction,
+};
 
 const mockRedis = {
   set: jest.fn(async (key: string, value: string, ...args: unknown[]) => {
@@ -43,15 +211,15 @@ jest.mock('../src/runtime', () => ({
     error: jest.fn(),
     debug: jest.fn(),
   },
-  prisma: {
-    identity: {
-      findUnique: mockIdentityFindUnique,
-    },
-    auditLog: {
-      create: mockAuditLogCreate,
-    },
-  },
+  prisma: mockPrisma,
   redis: mockRedis,
+  verificationCounter: { inc: jest.fn() },
+}));
+
+// This suite exercises only the eligibility dependency loader. Avoid loading
+// the full proof/TEE route graph, which owns separate integration coverage.
+jest.mock('../src/routes/verification', () => ({
+  eligibilityProofHandler: jest.fn(),
 }));
 
 import {
@@ -60,6 +228,7 @@ import {
   AgentProtocol,
   buildAgentVerificationSigningPayload,
 } from '../src/services/ai/agent-identity';
+import { buildAgentEligibilityDeps } from '../src/routes/ai/agent-eligibility';
 
 const operatorId = 'identity-operator-1';
 const delegatedCapability: AgentCapability = {
@@ -127,11 +296,14 @@ describe('Agent identity multi-node persistence', () => {
     jest.clearAllMocks();
     redisStore.clear();
     redisSets.clear();
+    mockAgentRows.clear();
     mockIdentityFindUnique.mockResolvedValue({
       id: operatorId,
       did: 'did:aethelred:operator',
       status: 'ACTIVE',
     });
+    mockAuditLogCreate.mockResolvedValue({ id: 'audit-entry' });
+    mockAgentActionCreate.mockResolvedValue({ id: 'agent-action' });
   });
 
   it('lists registered agents from a separate service instance', async () => {
@@ -345,7 +517,7 @@ describe('Agent identity multi-node persistence', () => {
 
     const unchangedAgent = await service.getAgent(agent.agentId);
     expect(unchangedAgent.status).toBe('active');
-    expect(unchangedAgent).not.toHaveProperty('suspendedBy');
+    expect(unchangedAgent.suspendedBy).toBeUndefined();
     expect(mockAuditLogCreate).not.toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({ action: 'AGENT_SUSPENDED' }),
@@ -384,5 +556,244 @@ describe('Agent identity multi-node persistence', () => {
         resourceId: agent.agentId,
       }),
     });
+  });
+
+  it('registers agent identity and audit atomically in the eligibility-compatible row', async () => {
+    const service = new AgentIdentityService();
+    const signing = createSigningMaterial();
+
+    const registered = await registerServiceAgent(
+      service,
+      'Eligibility Agent',
+      [delegatedCapability],
+      signing.publicKey,
+    );
+
+    const persisted = mockAgentRows.get(registered.agentId);
+    expect(mockPrismaTransaction).toHaveBeenCalledTimes(1);
+    expect(persisted).toMatchObject({
+      id: registered.agentId,
+      agentDid: registered.did,
+      operatorId,
+      controllerDid: 'did:aethelred:operator',
+      status: 'ACTIVE',
+      agentProtocol: 'aethelred_native',
+      publicKey: signing.publicKey,
+    });
+    expect(mockAuditLogCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        identityId: operatorId,
+        action: 'AGENT_REGISTERED',
+        resourceId: registered.agentId,
+      }),
+    });
+
+    const eligibility = buildAgentEligibilityDeps({
+      id: operatorId,
+      did: 'did:aethelred:operator',
+    } as any);
+    await expect(eligibility.loadAgent(registered.did)).resolves.toMatchObject({
+      agentDid: registered.did,
+      controllerDid: 'did:aethelred:operator',
+      agentStatus: 'ACTIVE',
+      credentialStatus: 'REVOKED',
+    });
+  });
+
+  it('recovers get and list operations from Prisma after Redis loss and process restart', async () => {
+    const writer = new AgentIdentityService();
+    const signing = createSigningMaterial();
+    const registered = await registerServiceAgent(
+      writer,
+      'Restart Durable Agent',
+      [delegatedCapability],
+      signing.publicKey,
+    );
+
+    redisStore.clear();
+    redisSets.clear();
+    const restarted = new AgentIdentityService();
+
+    const recovered = await restarted.getAgent(registered.agentId);
+    const listed = await restarted.listAgentsForOperator(operatorId);
+
+    expect(recovered).toMatchObject({
+      agentId: registered.agentId,
+      did: registered.did,
+      status: 'active',
+      publicKey: signing.publicKey,
+      agentProtocol: 'aethelred_native',
+    });
+    expect(listed.map((agent) => agent.agentId)).toEqual([registered.agentId]);
+    expect(redisStore.has(`agent:${registered.agentId}`)).toBe(true);
+  });
+
+  it('persists capability updates and optimistic versioning across process restart', async () => {
+    const writer = new AgentIdentityService();
+    const signing = createSigningMaterial();
+    const registered = await registerServiceAgent(
+      writer,
+      'Capability Durable Agent',
+      [delegatedCapability],
+      signing.publicKey,
+    );
+    const updatedCapability: AgentCapability = {
+      ...delegatedCapability,
+      description: 'Verify credentials with the durable production policy',
+      riskLevel: 'high',
+    };
+
+    const updated = await writer.updateCapabilities(
+      registered.agentId,
+      [updatedCapability],
+      operatorId,
+    );
+
+    redisStore.clear();
+    redisSets.clear();
+    const recovered = await new AgentIdentityService().getAgent(registered.agentId);
+
+    expect(updated.recordVersion).toBe(1);
+    expect(recovered.recordVersion).toBe(1);
+    expect(recovered.capabilities).toEqual([updatedCapability]);
+    expect(mockAgentRows.get(registered.agentId)?.capabilities).toEqual([
+      updatedCapability,
+    ]);
+    expect(mockAuditLogCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        identityId: operatorId,
+        action: 'AGENT_CAPABILITIES_UPDATED',
+        resourceId: registered.agentId,
+      }),
+    });
+  });
+
+  it('persists verification statistics atomically across process restart', async () => {
+    const writer = new AgentIdentityService();
+    const signing = createSigningMaterial();
+    const registered = await registerServiceAgent(
+      writer,
+      'Statistics Durable Agent',
+      [delegatedCapability],
+      signing.publicKey,
+    );
+    const request = {
+      agentId: registered.agentId,
+      challenge: 'durable-statistics-challenge',
+      requestedCapabilities: ['credential.verify'],
+      context: {
+        purpose: 'durable credential verification',
+        resourceId: 'credential-durable-1',
+      },
+    };
+
+    const result = await writer.verifyAgent({
+      ...request,
+      signature: signVerificationRequest(signing, request),
+    });
+    expect(result.verified).toBe(true);
+
+    redisStore.clear();
+    redisSets.clear();
+    const recovered = await new AgentIdentityService().getAgent(registered.agentId);
+
+    expect(recovered.stats).toMatchObject({
+      totalActions: 1,
+      successRate: 1,
+      anomalyCount: 0,
+    });
+    expect(recovered.stats.averageLatencyMs).toBeGreaterThan(0);
+    expect(mockAgentRows.get(registered.agentId)).toMatchObject({
+      totalActions: 1,
+      successfulActions: 1,
+    });
+  });
+
+  it('fails legacy rows without durable verification material closed', async () => {
+    const writer = new AgentIdentityService();
+    const signing = createSigningMaterial();
+    const registered = await registerServiceAgent(
+      writer,
+      'Legacy Incomplete Agent',
+      [delegatedCapability],
+      signing.publicKey,
+    );
+    const persisted = mockAgentRows.get(registered.agentId)!;
+    mockAgentRows.set(registered.agentId, {
+      ...persisted,
+      agentProtocol: null,
+      publicKey: null,
+      publicKeyHash: null,
+    });
+    redisStore.clear();
+    redisSets.clear();
+
+    await expect(
+      new AgentIdentityService().getAgent(registered.agentId),
+    ).rejects.toMatchObject({
+      code: 'AGENT_RECORD_INCOMPLETE',
+      statusCode: 503,
+    });
+  });
+
+  it('automatically suspends on the tenth anomaly through the private audited path', async () => {
+    const service = new AgentIdentityService();
+    const signing = createSigningMaterial();
+    const registered = await registerServiceAgent(
+      service,
+      'Anomaly Guard Agent',
+      [delegatedCapability],
+      signing.publicKey,
+    );
+    const invalidSignature = Buffer.alloc(64).toString('base64');
+
+    for (let attempt = 1; attempt <= 10; attempt++) {
+      const result = await service.verifyAgent({
+        agentId: registered.agentId,
+        challenge: `invalid-signature-${attempt}`,
+        signature: invalidSignature,
+        requestedCapabilities: ['credential.verify'],
+        context: {
+          purpose: 'anomaly threshold test',
+          resourceId: `credential-${attempt}`,
+        },
+      });
+      expect(result.verified).toBe(false);
+      expect(mockAgentRows.get(registered.agentId)?.anomalyCount).toBe(attempt);
+      expect(mockAgentRows.get(registered.agentId)?.status).toBe(
+        attempt === 10 ? 'SUSPENDED' : 'ACTIVE',
+      );
+    }
+
+    redisStore.clear();
+    redisSets.clear();
+    const recovered = await new AgentIdentityService().getAgent(registered.agentId);
+
+    expect(recovered).toMatchObject({
+      agentId: registered.agentId,
+      status: 'suspended',
+      suspendedBy: 'internal:anomaly-detector',
+      suspensionReason: 'Automatic suspension: 10 anomalies detected',
+      stats: { anomalyCount: 10 },
+    });
+    expect(mockAuditLogCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        identityId: operatorId,
+        action: 'AGENT_SUSPENDED',
+        resourceId: registered.agentId,
+        details: expect.objectContaining({
+          suspendedBy: 'internal:anomaly-detector',
+          source: 'anomaly-threshold',
+          automatic: true,
+          anomalyCount: 10,
+        }),
+      }),
+    });
+    expect(mockIdentityFindUnique).toHaveBeenCalledTimes(1);
+    expect(mockIdentityFindUnique).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'internal:anomaly-detector' },
+      }),
+    );
   });
 });
