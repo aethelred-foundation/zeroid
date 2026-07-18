@@ -31,6 +31,7 @@ export type ServiceErrorCode =
   | 'CONTROLLER_MISMATCH'
   | 'CONTROLLER_NOT_ELIGIBLE'
   | 'AGENT_NOT_AUTHORIZED'
+  | 'PARTNER_PRINCIPAL_MISMATCH'
   // 422 — semantically valid but policy conditions unmet
   | 'POLICY_CONDITIONS_NOT_MET'
   // 400 — bad request
@@ -44,6 +45,7 @@ export type ServiceErrorCode =
   // 5xx / upstream
   | 'ELIGIBILITY_FAILED'
   | 'DISCLOSURE_FAILED'
+  | 'DISCLOSURE_UNAVAILABLE'
   | 'INTERNAL_ERROR';
 
 /**
@@ -65,6 +67,7 @@ export const KNOWN_ERROR_CODES: readonly ServiceErrorCode[] = [
   'CONTROLLER_MISMATCH',
   'CONTROLLER_NOT_ELIGIBLE',
   'AGENT_NOT_AUTHORIZED',
+  'PARTNER_PRINCIPAL_MISMATCH',
   'POLICY_CONDITIONS_NOT_MET',
   'INVALID_IDEMPOTENCY_KEY',
   'VALIDATION_FAILED',
@@ -74,6 +77,7 @@ export const KNOWN_ERROR_CODES: readonly ServiceErrorCode[] = [
   'VP_NONCE_INVALID',
   'ELIGIBILITY_FAILED',
   'DISCLOSURE_FAILED',
+  'DISCLOSURE_UNAVAILABLE',
   'INTERNAL_ERROR',
 ] as const;
 

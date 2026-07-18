@@ -25,7 +25,6 @@ import {
 import { invokeEligibility } from '../../services/eligibility-invoker';
 import {
   agentEligibilityProof,
-  AgentEligibilityError,
 } from '../../services/ai/agent-eligibility';
 import { buildAgentEligibilityDeps } from '../ai/agent-eligibility';
 import {
@@ -73,8 +72,11 @@ const EvidenceParamsSchema = z.object({ decisionId: id });
 
 // ── Real dependency wiring ─────────────────────────────────────────────────
 
-function buildPartnerDeps(): PartnerDeps {
+function buildPartnerDeps(
+  principal: NonNullable<AuthenticatedRequest['identity']>,
+): PartnerDeps {
   return {
+    principal: { id: principal.id, did: principal.did },
     async resolveIdentity(didStr) {
       const identity = await prisma.identity.findUnique({
         where: { did: didStr },
@@ -86,31 +88,14 @@ function buildPartnerDeps(): PartnerDeps {
       return invokeEligibility(identity, input);
     },
     async runAgentScan(req) {
-      const controller = await prisma.identity.findUnique({
-        where: { did: req.controllerDid },
-        select: { id: true, did: true, status: true, publicKey: true },
-      });
-      if (!controller) {
-        throw new AgentEligibilityError('controller not found', 'CONTROLLER_MISMATCH', 403);
-      }
       return agentEligibilityProof(
-        buildAgentEligibilityDeps(
-          controller as NonNullable<AuthenticatedRequest['identity']>,
-        ),
+        buildAgentEligibilityDeps(principal),
         req,
-      );
-    },
-    async recordDisclosureRequest({ decisionId, warrantHash }) {
-      // Deterministic escrow id binding the decision to the warrant; the on-chain
-      // quorum (ConditionalDisclosure.sol) and key-split reconstitution act on it.
-      return (
-        '0x' +
-        createHash('sha256').update(`${decisionId}:${warrantHash}`).digest('hex')
       );
     },
     async getEvidence(decisionId) {
       const entry = await prisma.auditLog.findFirst({
-        where: { resourceId: decisionId },
+        where: { resourceId: decisionId, identityId: principal.id },
         orderBy: { timestamp: 'desc' },
       });
       return entry?.details ?? null;
@@ -130,7 +115,26 @@ function runIdempotent<T>(
   work: () => Promise<T>,
 ): Promise<T> {
   const key = readIdempotencyKey(req.headers['idempotency-key']);
-  const store = createPrismaIdempotencyStore<T>(prisma, scope);
+  const principalId = req.identity?.id;
+  if (!principalId) {
+    return Promise.reject(
+      new Error('authenticated principal is required for idempotent writes'),
+    );
+  }
+  const requestDigest = createHash('sha256')
+    .update(
+      JSON.stringify({
+        method: req.method,
+        path: req.baseUrl + req.path,
+        params: req.params,
+        body: req.body,
+      }),
+    )
+    .digest('hex');
+  const store = createPrismaIdempotencyStore<T>(
+    prisma,
+    `${scope}:${principalId}:${requestDigest}`,
+  );
   return withIdempotency(store, key, work);
 }
 
@@ -150,7 +154,7 @@ router.post(
   async (req: AuthenticatedRequest, res: Response) => {
     try {
       const result = await runIdempotent(req, 'partner.wallet.eligibility', () =>
-        walletEligibility(buildPartnerDeps(), req.body),
+        walletEligibility(buildPartnerDeps(req.identity!), req.body),
       );
       res.status(200).json(result);
     } catch (error) {
@@ -165,7 +169,7 @@ router.post(
   async (req: AuthenticatedRequest, res: Response) => {
     try {
       const result = await runIdempotent(req, 'partner.wallet.disclosure', () =>
-        initiateWalletDisclosure(buildPartnerDeps(), req.body),
+        initiateWalletDisclosure(buildPartnerDeps(req.identity!), req.body),
       );
       res.status(202).json(result);
     } catch (error) {
@@ -180,7 +184,10 @@ router.get(
   async (req: AuthenticatedRequest, res: Response) => {
     try {
       res.status(200).json(
-        await getPartnerEvidence(buildPartnerDeps(), String(req.params.decisionId)),
+        await getPartnerEvidence(
+          buildPartnerDeps(req.identity!),
+          String(req.params.decisionId),
+        ),
       );
     } catch (error) {
       sendError(res, error);
@@ -194,7 +201,10 @@ router.post(
   async (req: AuthenticatedRequest, res: Response) => {
     try {
       const result = await runIdempotent(req, 'partner.cruzible.pool.eligibility', () =>
-        poolEligibility(buildPartnerDeps(), { poolId: req.params.poolId, ...req.body }),
+        poolEligibility(buildPartnerDeps(req.identity!), {
+          poolId: req.params.poolId,
+          ...req.body,
+        }),
       );
       res.status(200).json(result);
     } catch (error) {
@@ -209,7 +219,10 @@ router.post(
   async (req: AuthenticatedRequest, res: Response) => {
     try {
       const result = await runIdempotent(req, 'partner.cruzible.pool.agent-scan', () =>
-        poolAgentScan(buildPartnerDeps(), { poolId: req.params.poolId, ...req.body }),
+        poolAgentScan(buildPartnerDeps(req.identity!), {
+          poolId: req.params.poolId,
+          ...req.body,
+        }),
       );
       res.status(200).json(result);
     } catch (error) {

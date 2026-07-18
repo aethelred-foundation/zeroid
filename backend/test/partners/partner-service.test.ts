@@ -13,10 +13,10 @@ const DENIED = { status: 'DENIED', decisionId: 'dec2' } as never;
 
 function makeDeps(over: Partial<PartnerDeps> = {}): PartnerDeps {
   return {
+    principal: { id: 'i1', did: 'did:owner' },
     resolveIdentity: jest.fn().mockResolvedValue({ id: 'i1', did: 'did:owner' }),
     runEligibility: jest.fn().mockResolvedValue(ALLOWED),
     runAgentScan: jest.fn().mockResolvedValue({ status: 'ALLOWED', decisionId: 'd', actor: {} } as never),
-    recordDisclosureRequest: jest.fn().mockResolvedValue('escrow-1'),
     getEvidence: jest.fn().mockResolvedValue({ auditLogId: 'a1' }),
     ...over,
   };
@@ -44,16 +44,34 @@ describe('walletEligibility', () => {
   });
 
   it('throws OWNER_NOT_FOUND when the identity is unknown', async () => {
-    const deps = makeDeps({ resolveIdentity: jest.fn().mockResolvedValue(null) });
+    const deps = makeDeps({
+      principal: { id: 'ix', did: 'did:x' },
+      resolveIdentity: jest.fn().mockResolvedValue(null),
+    });
     await expect(
       walletEligibility(deps, { ownerDid: 'did:x', credentialId: 'c', policyId: 'P', relyingAppId: 'w' }),
     ).rejects.toMatchObject({ code: 'OWNER_NOT_FOUND', statusCode: 404 });
+  });
+
+  it('rejects an owner DID that does not belong to the caller', async () => {
+    const deps = makeDeps();
+    await expect(
+      walletEligibility(deps, {
+        ownerDid: 'did:someone-else', credentialId: 'c', policyId: 'P', relyingAppId: 'w',
+      }),
+    ).rejects.toMatchObject({
+      code: 'PARTNER_PRINCIPAL_MISMATCH', statusCode: 403,
+    });
+    expect(deps.resolveIdentity).not.toHaveBeenCalled();
   });
 });
 
 describe('poolEligibility', () => {
   it('checks the staker under the pool policy and echoes poolId', async () => {
-    const deps = makeDeps({ resolveIdentity: jest.fn().mockResolvedValue({ id: 'i2', did: 'did:staker' }) });
+    const deps = makeDeps({
+      principal: { id: 'i2', did: 'did:staker' },
+      resolveIdentity: jest.fn().mockResolvedValue({ id: 'i2', did: 'did:staker' }),
+    });
     const res = await poolEligibility(deps, {
       poolId: 'pool-7', stakerDid: 'did:staker', credentialId: 'c1', policyId: 'POOL_P', relyingAppId: 'cruzible',
     });
@@ -66,7 +84,10 @@ describe('poolEligibility', () => {
   });
 
   it('throws STAKER_NOT_FOUND when unknown', async () => {
-    const deps = makeDeps({ resolveIdentity: jest.fn().mockResolvedValue(null) });
+    const deps = makeDeps({
+      principal: { id: 'i2', did: 'x' },
+      resolveIdentity: jest.fn().mockResolvedValue(null),
+    });
     await expect(
       poolEligibility(deps, { poolId: 'p', stakerDid: 'x', credentialId: 'c', policyId: 'P', relyingAppId: 'c' }),
     ).rejects.toMatchObject({ code: 'STAKER_NOT_FOUND', statusCode: 404 });
@@ -76,7 +97,10 @@ describe('poolEligibility', () => {
 describe('poolAgentScan', () => {
   it('delegates to the AI Agent Passport scan and echoes poolId', async () => {
     const runAgentScan = jest.fn().mockResolvedValue({ status: 'ALLOWED', decisionId: 'd', actor: {} } as never);
-    const deps = makeDeps({ runAgentScan });
+    const deps = makeDeps({
+      principal: { id: 'i-controller', did: 'did:ctrl' },
+      runAgentScan,
+    });
     const res = await poolAgentScan(deps, {
       poolId: 'pool-7', agentDid: 'did:agent', controllerDid: 'did:ctrl', subjectDid: 'did:ctrl',
       credentialId: 'c1', policyId: 'P', relyingAppId: 'cruzible',
@@ -87,14 +111,35 @@ describe('poolAgentScan', () => {
     expect(res.poolId).toBe('pool-7');
     expect(res.status).toBe('ALLOWED');
   });
+
+  it('rejects agent scans for another controller or subject', async () => {
+    const runAgentScan = jest.fn();
+    const deps = makeDeps({
+      principal: { id: 'i-controller', did: 'did:ctrl' },
+      runAgentScan,
+    });
+    await expect(
+      poolAgentScan(deps, {
+        poolId: 'pool-7', agentDid: 'did:agent', controllerDid: 'did:other',
+        subjectDid: 'did:ctrl', credentialId: 'c1', policyId: 'P', relyingAppId: 'cruzible',
+      }),
+    ).rejects.toMatchObject({ code: 'PARTNER_PRINCIPAL_MISMATCH', statusCode: 403 });
+    await expect(
+      poolAgentScan(deps, {
+        poolId: 'pool-7', agentDid: 'did:agent', controllerDid: 'did:ctrl',
+        subjectDid: 'did:other', credentialId: 'c1', policyId: 'P', relyingAppId: 'cruzible',
+      }),
+    ).rejects.toMatchObject({ code: 'PARTNER_PRINCIPAL_MISMATCH', statusCode: 403 });
+    expect(runAgentScan).not.toHaveBeenCalled();
+  });
 });
 
 describe('initiateWalletDisclosure', () => {
-  it('records a warrant-bound request and returns the envelope', async () => {
+  it('fails honestly until a persisted quorum escrow is configured', async () => {
     const deps = makeDeps();
-    const res = await initiateWalletDisclosure(deps, { decisionId: 'dec1', warrantHash: '0xwarrant' });
-    expect(deps.recordDisclosureRequest).toHaveBeenCalledWith({ decisionId: 'dec1', warrantHash: '0xwarrant' });
-    expect(res).toEqual({ escrowId: 'escrow-1', warrantHash: '0xwarrant', status: 'REQUESTED' });
+    await expect(
+      initiateWalletDisclosure(deps, { decisionId: 'dec1', warrantHash: '0xwarrant' }),
+    ).rejects.toMatchObject({ code: 'DISCLOSURE_UNAVAILABLE', statusCode: 501 });
   });
 });
 

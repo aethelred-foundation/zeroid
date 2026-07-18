@@ -63,7 +63,7 @@ describe('partner routes', () => {
     mockSvc.walletEligibility.mockResolvedValue({ eligible: true, decision: { status: 'ALLOWED' } });
     const r = await request(makeApp())
       .post('/api/v1/partners/wallet/eligibility')
-      .send({ ownerDid: 'did:o', credentialId: 'c', policyId: 'P', relyingAppId: 'w' });
+      .send({ ownerDid: 'did:partner', credentialId: 'c', policyId: 'P', relyingAppId: 'w' });
     expect(r.status).toBe(200);
     expect(r.body.eligible).toBe(true);
   });
@@ -74,7 +74,7 @@ describe('partner routes', () => {
     );
     const r = await request(makeApp())
       .post('/api/v1/partners/wallet/eligibility')
-      .send({ ownerDid: 'did:o', credentialId: 'c', policyId: 'P', relyingAppId: 'w' });
+      .send({ ownerDid: 'did:partner', credentialId: 'c', policyId: 'P', relyingAppId: 'w' });
     expect(r.status).toBe(404);
     expect(r.body.error).toBe('OWNER_NOT_FOUND');
   });
@@ -82,7 +82,7 @@ describe('partner routes', () => {
   it('returns 400 on an invalid body', async () => {
     const r = await request(makeApp())
       .post('/api/v1/partners/wallet/eligibility')
-      .send({ ownerDid: 'did:o' });
+      .send({ ownerDid: 'did:partner' });
     expect(r.status).toBe(400);
     expect(mockSvc.walletEligibility).not.toHaveBeenCalled();
   });
@@ -91,12 +91,12 @@ describe('partner routes', () => {
     mockSvc.poolEligibility.mockResolvedValue({ poolId: 'pool-7', eligible: true, decision: {} });
     const r = await request(makeApp())
       .post('/api/v1/partners/cruzible/pools/pool-7/eligibility')
-      .send({ stakerDid: 'did:s', credentialId: 'c', policyId: 'P', relyingAppId: 'cr' });
+      .send({ stakerDid: 'did:partner', credentialId: 'c', policyId: 'P', relyingAppId: 'cr' });
     expect(r.status).toBe(200);
     expect(r.body.poolId).toBe('pool-7');
     expect(mockSvc.poolEligibility).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({ poolId: 'pool-7', stakerDid: 'did:s' }),
+      expect.objectContaining({ poolId: 'pool-7', stakerDid: 'did:partner' }),
     );
   });
 
@@ -105,7 +105,7 @@ describe('partner routes', () => {
     const r = await request(makeApp())
       .post('/api/v1/partners/cruzible/pools/pool-7/agent-scan')
       .send({
-        agentDid: 'did:a', controllerDid: 'did:c', subjectDid: 'did:c',
+        agentDid: 'did:a', controllerDid: 'did:partner', subjectDid: 'did:partner',
         credentialId: 'c', policyId: 'P', relyingAppId: 'cr',
       });
     expect(r.status).toBe(200);
@@ -136,11 +136,15 @@ describe('partner routes', () => {
       const r = await request(makeApp())
         .post('/api/v1/partners/wallet/eligibility')
         .set('Idempotency-Key', 'k1')
-        .send({ ownerDid: 'did:o', credentialId: 'c', policyId: 'P', relyingAppId: 'w' });
+        .send({ ownerDid: 'did:partner', credentialId: 'c', policyId: 'P', relyingAppId: 'w' });
       expect(r.status).toBe(200);
       expect(r.body.eligible).toBe(true);
       expect(mockIdem.findUnique).toHaveBeenCalledWith({
-        where: { key: 'partner.wallet.eligibility:k1' },
+        where: {
+          key: expect.stringMatching(
+            /^partner\.wallet\.eligibility:p1:[a-f0-9]{64}:k1$/,
+          ),
+        },
       });
       expect(mockSvc.walletEligibility).not.toHaveBeenCalled();
     });
@@ -151,11 +155,17 @@ describe('partner routes', () => {
       const r = await request(makeApp())
         .post('/api/v1/partners/wallet/eligibility')
         .set('Idempotency-Key', 'k2')
-        .send({ ownerDid: 'did:o', credentialId: 'c', policyId: 'P', relyingAppId: 'w' });
+        .send({ ownerDid: 'did:partner', credentialId: 'c', policyId: 'P', relyingAppId: 'w' });
       expect(r.status).toBe(200);
       expect(mockSvc.walletEligibility).toHaveBeenCalledTimes(1);
       expect(mockIdem.upsert).toHaveBeenCalledWith(
-        expect.objectContaining({ where: { key: 'partner.wallet.eligibility:k2' } }),
+        expect.objectContaining({
+          where: {
+            key: expect.stringMatching(
+              /^partner\.wallet\.eligibility:p1:[a-f0-9]{64}:k2$/,
+            ),
+          },
+        }),
       );
     });
 
@@ -163,7 +173,7 @@ describe('partner routes', () => {
       const r = await request(makeApp())
         .post('/api/v1/partners/wallet/eligibility')
         .set('Idempotency-Key', 'x'.repeat(300))
-        .send({ ownerDid: 'did:o', credentialId: 'c', policyId: 'P', relyingAppId: 'w' });
+        .send({ ownerDid: 'did:partner', credentialId: 'c', policyId: 'P', relyingAppId: 'w' });
       expect(r.status).toBe(400);
       expect(r.body.error).toBe('INVALID_IDEMPOTENCY_KEY');
       expect(mockSvc.walletEligibility).not.toHaveBeenCalled();

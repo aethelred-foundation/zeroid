@@ -164,6 +164,7 @@ app.use(
       'Authorization',
       'X-Request-Id',
       'X-Zeroid-Org-Id',
+      'Idempotency-Key',
     ],
     credentials: true,
     maxAge: 86400,

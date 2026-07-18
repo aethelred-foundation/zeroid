@@ -66,6 +66,8 @@ export interface DisclosureRequestEnvelope {
 
 /** Injected dependencies — the route wires the real implementations. */
 export interface PartnerDeps {
+  /** Immutable caller identity supplied by authentication middleware. */
+  principal: PartnerIdentity;
   resolveIdentity(did: string): Promise<PartnerIdentity | null>;
   /** Reuse the human eligibility logic in-process for `identity`. */
   runEligibility(
@@ -74,10 +76,22 @@ export interface PartnerDeps {
   ): Promise<EligibilityResult>;
   /** Reuse the AI Agent Passport eligibility wrapper. */
   runAgentScan(req: AgentEligibilityProofRequest): Promise<AgentEligibilityProofResponse>;
-  /** Record a warrant-bound conditional-disclosure request; returns the escrow id. */
-  recordDisclosureRequest(input: { decisionId: string; warrantHash: string }): Promise<string>;
   /** Fetch an evidence bundle for a decision/proof id. */
   getEvidence(decisionId: string): Promise<unknown | null>;
+}
+
+function requirePrincipalDid(
+  deps: PartnerDeps,
+  claimedDid: string,
+  role: string,
+): void {
+  if (deps.principal.did !== claimedDid) {
+    throw new PartnerError(
+      `authenticated identity is not the claimed ${role}`,
+      'PARTNER_PRINCIPAL_MISMATCH',
+      403,
+    );
+  }
 }
 
 export class PartnerError extends ServiceError {
@@ -92,6 +106,7 @@ export async function walletEligibility(
   deps: PartnerDeps,
   input: WalletEligibilityInput,
 ): Promise<PartnerEligibilityResult> {
+  requirePrincipalDid(deps, input.ownerDid, 'account owner');
   const identity = await deps.resolveIdentity(input.ownerDid);
   if (!identity) {
     throw new PartnerError('account owner identity not found', 'OWNER_NOT_FOUND', 404);
@@ -110,6 +125,7 @@ export async function poolEligibility(
   deps: PartnerDeps,
   input: PoolEligibilityInput,
 ): Promise<PartnerEligibilityResult & { poolId: string }> {
+  requirePrincipalDid(deps, input.stakerDid, 'staker');
   const identity = await deps.resolveIdentity(input.stakerDid);
   if (!identity) {
     throw new PartnerError('staker identity not found', 'STAKER_NOT_FOUND', 404);
@@ -128,6 +144,8 @@ export async function poolAgentScan(
   deps: PartnerDeps,
   input: PoolAgentScanInput,
 ): Promise<AgentEligibilityProofResponse & { poolId: string }> {
+  requirePrincipalDid(deps, input.controllerDid, 'agent controller');
+  requirePrincipalDid(deps, input.subjectDid, 'eligibility subject');
   const result = await deps.runAgentScan({
     agentDid: input.agentDid,
     controllerDid: input.controllerDid,
@@ -141,14 +159,14 @@ export async function poolAgentScan(
 
 /** Wallet: initiate a warrant-bound conditional-disclosure request (quorum acts off-chain). */
 export async function initiateWalletDisclosure(
-  deps: PartnerDeps,
-  input: WalletDisclosureInput,
+  _deps: PartnerDeps,
+  _input: WalletDisclosureInput,
 ): Promise<DisclosureRequestEnvelope> {
-  const escrowId = await deps.recordDisclosureRequest({
-    decisionId: input.decisionId,
-    warrantHash: input.warrantHash,
-  });
-  return { escrowId, warrantHash: input.warrantHash, status: 'REQUESTED' };
+  throw new PartnerError(
+    'conditional disclosure is unavailable until a persisted quorum escrow is configured',
+    'DISCLOSURE_UNAVAILABLE',
+    501,
+  );
 }
 
 /** Wallet: fetch an evidence bundle (Digital Seal / decision evidence). */
