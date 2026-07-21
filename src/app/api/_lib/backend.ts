@@ -164,7 +164,10 @@ export async function readBackendError(
 ): Promise<string> {
   try {
     const payload = await response.json();
-    return sanitizeBackendErrorMessage(payload.message ?? payload.error, fallback);
+    return sanitizeBackendErrorMessage(
+      payload.message ?? payload.error,
+      fallback,
+    );
   } catch {
     return fallback;
   }
@@ -191,12 +194,15 @@ function normalizeBaseUrl(value: string): string {
   }
 
   if (isProductionRuntime()) {
-    if (url.protocol !== "https:") {
+    const allowPlaintext =
+      process.env.ZEROID_ALLOW_PLAINTEXT_HTTP === "true" &&
+      process.env.NEXT_PUBLIC_CHAIN_ENV === "testnet";
+    if (url.protocol !== "https:" && !allowPlaintext) {
       throw new BackendProxyConfigError(
         "Backend API URL must use HTTPS in production",
       );
     }
-    if (isLocalOrPrivateHostname(url.hostname)) {
+    if (isLocalOrPrivateHostname(url.hostname) && !allowPlaintext) {
       throw new BackendProxyConfigError(
         "Backend API URL must not target local or private hosts in production",
       );

@@ -1,7 +1,13 @@
 import { Sora, DM_Sans, JetBrains_Mono } from "next/font/google";
+import { headers } from "next/headers";
 
 import { AppProviders } from "./providers";
 import "@/styles/globals.css";
+
+// A nonce-based CSP is generated per request by middleware. Rendering pages at
+// request time lets Next.js attach that nonce to its inline bootstrap scripts;
+// statically prerendered HTML cannot carry a request-specific nonce.
+export const dynamic = "force-dynamic";
 
 const sora = Sora({
   subsets: ["latin"],
@@ -24,11 +30,13 @@ const jetbrainsMono = JetBrains_Mono({
   weight: ["400", "500"],
 });
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  const nonce = (await headers()).get("x-nonce") || undefined;
+
   return (
     <html
       lang="en"
@@ -43,11 +51,11 @@ export default function RootLayout({
           content="ZeroID — Self-sovereign identity with zero-knowledge proofs and TEE verification on the Aethelred network"
         />
         <meta name="theme-color" content="#08090b" />
-        <link rel="icon" href="/favicon.ico" />
+        <link rel="icon" type="image/png" href="/zeroid-logo.png" />
         <title>ZeroID | Self-Sovereign Identity</title>
       </head>
       <body className="font-body min-h-screen bg-[var(--surface-primary)]">
-        <AppProviders>{children}</AppProviders>
+        <AppProviders nonce={nonce}>{children}</AppProviders>
       </body>
     </html>
   );

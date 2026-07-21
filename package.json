@@ -7,9 +7,11 @@
   "license": "BUSL-1.1",
   "scripts": {
     "dev": "next dev -p 3003",
+    "prebuild": "node scripts/validate-sdk-runtime.mjs",
     "build": "next build",
     "postbuild": "node scripts/prepare-standalone.mjs",
     "start": "node scripts/start-frontend-production.mjs",
+    "smoke:production": "node scripts/smoke-frontend-production.mjs",
     "lint": "next lint",
     "lint:fix": "next lint --fix",
     "type-check": "tsc --noEmit",

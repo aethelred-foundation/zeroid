@@ -254,6 +254,8 @@ Next.js server:
 ```bash
 cp .env.testnet.example .env.production.local
 # Set the RPC, browser/API URLs, and deployed contract addresses in the file.
+npm --prefix ../aethelred/sdk/typescript ci
+npm --prefix ../aethelred/sdk/typescript run build
 npm ci
 npm run build
 npm run start
@@ -265,6 +267,7 @@ server with:
 
 ```bash
 curl --fail http://127.0.0.1:3003/api/health
+npm run smoke:production
 ```
 
 All `NEXT_PUBLIC_*` values are embedded during `npm run build`; changing them

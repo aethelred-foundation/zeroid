@@ -63,6 +63,15 @@ const nextConfig = {
   },
 
   webpack: (config, { isServer }) => {
+    if (isServer) {
+      // Proof generation and verification only run from client components.
+      // Keeping snarkjs external in the server graph prevents webpack from
+      // traversing ffjavascript's Node-only `web-worker` adapter (which uses a
+      // dynamic require) while preserving snarkjs's browser bundle in the
+      // client graph.
+      config.externals = [...(config.externals || []), "snarkjs"];
+    }
+
     if (!isServer) {
       config.resolve.alias = {
         ...config.resolve.alias,

@@ -3,6 +3,8 @@ import { NextRequest } from "next/server";
 import {
   buildContentSecurityPolicy,
   config,
+  getConfiguredPlaintextConnectSources,
+  isHttpsRequest,
   middleware,
 } from "@/middleware";
 
@@ -35,6 +37,68 @@ describe("security middleware", () => {
     expect(scriptSrc).toContain("'unsafe-inline'");
     expect(scriptSrc).toContain("'unsafe-eval'");
     expect(policy).not.toContain("upgrade-insecure-requests");
+  });
+
+  it("does not upgrade assets when production is served over direct HTTP", () => {
+    const policy = buildContentSecurityPolicy("testNonce123", true, false);
+
+    expect(policy).not.toContain("upgrade-insecure-requests");
+  });
+
+  it("recognizes direct and reverse-proxied HTTPS requests", () => {
+    expect(isHttpsRequest(new NextRequest("https://app.zeroid.test/"))).toBe(
+      true,
+    );
+    expect(isHttpsRequest(new NextRequest("http://127.0.0.1:3003/"))).toBe(
+      false,
+    );
+    expect(
+      isHttpsRequest(
+        new NextRequest("http://zeroid.internal/", {
+          headers: { "x-forwarded-proto": "https" },
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("allows only explicitly configured plaintext connection origins", () => {
+    const plaintextOrigins = getConfiguredPlaintextConnectSources(true, [
+      "http://93.127.132.52:4003/v1",
+      "http://54.165.44.130:8545",
+      "http://93.127.132.52:4003/another-path",
+      "ws://93.127.132.52:4003/ws",
+      "https://secure.example.test",
+      "not-a-url",
+      "http://user:password@example.test",
+    ]);
+
+    expect(plaintextOrigins).toEqual([
+      "http://93.127.132.52:4003",
+      "http://54.165.44.130:8545",
+      "ws://93.127.132.52:4003",
+    ]);
+
+    const policy = buildContentSecurityPolicy(
+      "testNonce123",
+      true,
+      false,
+      plaintextOrigins,
+    );
+    const connectSrc = directive(policy, "connect-src");
+
+    expect(connectSrc).toContain("http://93.127.132.52:4003");
+    expect(connectSrc).toContain("http://54.165.44.130:8545");
+    expect(connectSrc).toContain("ws://93.127.132.52:4003");
+    expect(connectSrc).not.toMatch(/(?:^|\s)http:(?:\s|$)/);
+    expect(connectSrc).not.toMatch(/(?:^|\s)ws:(?:\s|$)/);
+  });
+
+  it("keeps plaintext connection origins disabled without the explicit gate", () => {
+    expect(
+      getConfiguredPlaintextConnectSources(false, [
+        "http://93.127.132.52:4003",
+      ]),
+    ).toEqual([]);
   });
 
   it("attaches a per-request CSP header for document routes", () => {
