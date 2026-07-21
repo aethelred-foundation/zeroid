@@ -8,7 +8,8 @@
   "scripts": {
     "dev": "next dev -p 3003",
     "build": "next build",
-    "start": "next start -p 3003",
+    "postbuild": "node scripts/prepare-standalone.mjs",
+    "start": "node scripts/start-frontend-production.mjs",
     "lint": "next lint",
     "lint:fix": "next lint --fix",
     "type-check": "tsc --noEmit",

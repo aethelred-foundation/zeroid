@@ -46,6 +46,7 @@ The platform combines 12 on-chain smart contracts, 9 ZK circuits (Circom), a TEE
 - [Architecture](#architecture)
 - [Tech Stack](#tech-stack)
 - [Quick Start](#quick-start)
+- [Production frontend on port 3003](#production-frontend-on-port-3003)
 - [Project Structure](#project-structure)
 
 </td>
@@ -207,8 +208,8 @@ forge build
 cd backend && npx prisma migrate dev && cd ..
 
 # Start development servers
-npm run dev           # Frontend  — http://localhost:3000
-npm run dev:api       # API       — http://localhost:3001
+npm run dev                    # Frontend — http://localhost:3003
+npm --prefix backend run dev   # API      — http://localhost:4003
 ```
 
 <details>
@@ -242,6 +243,34 @@ SENTRY_DSN=your-sentry-dsn
 ```
 
 </details>
+
+---
+
+## Production frontend on port 3003
+
+Do not use `npm run dev` on a shared VPS. Build once, then run the compiled
+Next.js server:
+
+```bash
+cp .env.testnet.example .env.production.local
+# Set the RPC, browser/API URLs, and deployed contract addresses in the file.
+npm ci
+npm run build
+npm run start
+```
+
+`npm run start` serves the production build on `0.0.0.0:3003`, so it is
+reachable through the VPS firewall or reverse proxy. Verify it locally on the
+server with:
+
+```bash
+curl --fail http://127.0.0.1:3003/api/health
+```
+
+All `NEXT_PUBLIC_*` values are embedded during `npm run build`; changing them
+requires another build. Keep secrets out of `NEXT_PUBLIC_*` variables. For a
+durable background service, reverse-proxy and restart guidance, use
+[the frontend VPS runbook](docs/production/frontend-vps.md).
 
 ---
 

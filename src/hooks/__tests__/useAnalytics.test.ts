@@ -11,6 +11,7 @@ import React from "react";
 
 const mockAddress = "0x1234567890abcdef1234567890abcdef12345678";
 const credentialId = "d74ed26c-47ac-4b62-94a8-38704c53b876";
+const analyticsTestNow = Date.parse("2026-07-01T00:00:00.000Z");
 
 jest.mock("wagmi", () => ({
   useAccount: jest.fn(() => ({ address: mockAddress, isConnected: true })),
@@ -142,6 +143,7 @@ function mockAnalyticsSources() {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  jest.spyOn(Date, "now").mockReturnValue(analyticsTestNow);
   (useAccount as jest.Mock).mockReturnValue({
     address: mockAddress,
     isConnected: true,
@@ -149,6 +151,10 @@ beforeEach(() => {
   mockAnalyticsSources();
   URL.createObjectURL = jest.fn(() => "blob:zeroid-analytics");
   HTMLAnchorElement.prototype.click = jest.fn();
+});
+
+afterEach(() => {
+  jest.restoreAllMocks();
 });
 
 describe("usePrivacyScore", () => {
