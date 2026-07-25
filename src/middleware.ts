@@ -17,8 +17,7 @@ function configuredBrowserConnectionUrls(): Array<string | undefined> {
 }
 
 export function getConfiguredPlaintextConnectSources(
-  allowPlaintext =
-    process.env.ZEROID_ALLOW_PLAINTEXT_HTTP === "true" &&
+  allowPlaintext = process.env.ZEROID_ALLOW_PLAINTEXT_HTTP === "true" &&
     process.env.NEXT_PUBLIC_CHAIN_ENV === "testnet",
   configuredUrls = configuredBrowserConnectionUrls(),
 ): string[] {

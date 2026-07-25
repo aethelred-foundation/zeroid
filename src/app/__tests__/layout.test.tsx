@@ -8,6 +8,14 @@ jest.mock("next/font/google", () => ({
   JetBrains_Mono: () => ({ variable: "--font-mono" }),
 }));
 
+jest.mock("next/headers", () => ({
+  headers: jest.fn().mockResolvedValue(
+    new Headers({
+      "x-nonce": "test-csp-nonce",
+    }),
+  ),
+}));
+
 // Mock wagmi
 jest.mock("wagmi", () => ({
   WagmiProvider: ({ children }: any) => (
@@ -83,51 +91,37 @@ describe("RootLayout", () => {
     consoleErrorSpy.mockRestore();
   });
 
-  it("renders without crashing", () => {
-    const { container } = render(
-      <RootLayout>
-        <div data-testid="child-content">Hello</div>
-      </RootLayout>,
+  async function renderLayout(children: React.ReactNode) {
+    return render(await RootLayout({ children }));
+  }
+
+  it("renders without crashing", async () => {
+    const { container } = await renderLayout(
+      <div data-testid="child-content">Hello</div>,
     );
     expect(container).toBeTruthy();
   });
 
-  it("renders child content", () => {
-    render(
-      <RootLayout>
-        <div data-testid="child-content">Hello</div>
-      </RootLayout>,
-    );
+  it("renders child content", async () => {
+    await renderLayout(<div data-testid="child-content">Hello</div>);
     expect(screen.getByTestId("child-content")).toBeInTheDocument();
   });
 
-  it("wraps children with providers", () => {
-    render(
-      <RootLayout>
-        <div>Content</div>
-      </RootLayout>,
-    );
+  it("wraps children with providers", async () => {
+    await renderLayout(<div>Content</div>);
     expect(screen.getByTestId("wagmi-provider")).toBeInTheDocument();
     expect(screen.getByTestId("query-provider")).toBeInTheDocument();
     expect(screen.getByTestId("identity-provider")).toBeInTheDocument();
     expect(screen.getByTestId("proof-provider")).toBeInTheDocument();
   });
 
-  it("renders the Toaster component", () => {
-    render(
-      <RootLayout>
-        <div>Content</div>
-      </RootLayout>,
-    );
+  it("renders the Toaster component", async () => {
+    await renderLayout(<div>Content</div>);
     expect(screen.getByTestId("toaster")).toBeInTheDocument();
   });
 
-  it("disables automatic retries for non-idempotent mutations", () => {
-    render(
-      <RootLayout>
-        <div>Content</div>
-      </RootLayout>,
-    );
+  it("disables automatic retries for non-idempotent mutations", async () => {
+    await renderLayout(<div>Content</div>);
 
     expect(QueryClientMock).toHaveBeenCalledWith(
       expect.objectContaining({

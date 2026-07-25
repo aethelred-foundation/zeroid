@@ -55,74 +55,79 @@ export function useBiometric() {
   );
   const [error, setError] = useState<string | null>(null);
 
-  const startScan = useCallback(async (options: StartScanOptions = {}) => {
-    setScanStatus("scanning");
-    setError(null);
-    setVerification(null);
+  const startScan = useCallback(
+    async (options: StartScanOptions = {}) => {
+      setScanStatus("scanning");
+      setError(null);
+      setVerification(null);
 
-    try {
-      const authToken = options.authToken ?? getIdentityAuthToken();
-      if (!authToken) {
-        throw new Error(
-          "An authenticated ZeroID identity session is required before biometric verification can start.",
-        );
-      }
-
-      const subjectDidHash =
-        options.subjectDidHash ??
-        (address
-          ? stringToBytes32(`zeroid:pre-registration-biometric:${address}`)
-          : undefined);
-      if (!subjectDidHash) {
-        throw new Error(
-          "A wallet-bound subject hash is required before biometric verification can start.",
-        );
-      }
-
-      const encryptedBiometricData = readEncryptedCaptureEnvelope(options);
-
-      let enclaveHash = options.enclaveHash;
-      if (!enclaveHash) {
-        const node = selectAttestedBiometricNode(await apiClient.listTEENodes());
-        if (!node) {
+      try {
+        const authToken = options.authToken ?? getIdentityAuthToken();
+        if (!authToken) {
           throw new Error(
-            "No online attested TEE node is available for biometric verification.",
+            "An authenticated ZeroID identity session is required before biometric verification can start.",
           );
         }
-        enclaveHash = node.attestation.enclaveHash;
-      }
 
-      const result = await apiClient.requestBiometricVerification(
-        {
-          subjectDidHash,
+        const subjectDidHash =
+          options.subjectDidHash ??
+          (address
+            ? stringToBytes32(`zeroid:pre-registration-biometric:${address}`)
+            : undefined);
+        if (!subjectDidHash) {
+          throw new Error(
+            "A wallet-bound subject hash is required before biometric verification can start.",
+          );
+        }
+
+        const encryptedBiometricData = readEncryptedCaptureEnvelope(options);
+
+        let enclaveHash = options.enclaveHash;
+        if (!enclaveHash) {
+          const node = selectAttestedBiometricNode(
+            await apiClient.listTEENodes(),
+          );
+          if (!node) {
+            throw new Error(
+              "No online attested TEE node is available for biometric verification.",
+            );
+          }
+          enclaveHash = node.attestation.enclaveHash;
+        }
+
+        const result = await apiClient.requestBiometricVerification(
+          {
+            subjectDidHash,
+            enclaveHash,
+            biometricData: encryptedBiometricData,
+          },
+          authToken,
+        );
+
+        const scanResult: BiometricScanResult = {
+          verificationId: result.verificationId,
+          status: result.status,
           enclaveHash,
-          biometricData: encryptedBiometricData,
-        },
-        authToken,
-      );
+        };
 
-      const scanResult: BiometricScanResult = {
-        verificationId: result.verificationId,
-        status: result.status,
-        enclaveHash,
-      };
+        setVerification(scanResult);
+        if (result.status === "verified") {
+          setScanStatus("success");
+        } else {
+          throw new Error("TEE biometric verification was not approved.");
+        }
 
-      setVerification(scanResult);
-      if (result.status === "verified") {
-        setScanStatus("success");
-      } else {
-        throw new Error("TEE biometric verification was not approved.");
+        return scanResult;
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : "Biometric verification failed";
+        setError(message);
+        setScanStatus("failed");
+        throw err;
       }
-
-      return scanResult;
-    } catch (err) {
-      const message =
-        err instanceof Error ? err.message : "Biometric verification failed";
-      setError(message);
-      setScanStatus("failed");
-      throw err;
-    }
-  }, [address]);
+    },
+    [address],
+  );
 
   return {
     startScan,

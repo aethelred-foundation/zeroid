@@ -1,6 +1,6 @@
-import { NextRequest, type NextResponse } from 'next/server';
-import { createHash } from 'node:crypto';
-import type { EligibilityProofRequest } from '@/lib/eligibility/kycCredential';
+import { NextRequest, type NextResponse } from "next/server";
+import { createHash } from "node:crypto";
+import type { EligibilityProofRequest } from "@/lib/eligibility/kycCredential";
 import {
   BackendProxyConfigError,
   apiJson,
@@ -12,8 +12,8 @@ import {
   readBackendError,
   readJsonObjectBody,
   requireAuthorization,
-} from '../../_lib/backend';
-import { validateBackendEligibilityResult } from '../_lib/contract';
+} from "../../_lib/backend";
+import { validateBackendEligibilityResult } from "../_lib/contract";
 
 const MAX_SUBJECT_DID_LENGTH = 256;
 const MAX_CREDENTIAL_ID_LENGTH = 128;
@@ -22,7 +22,7 @@ const MAX_RELYING_APP_ID_LENGTH = 128;
 const MIN_CONTEXT_NONCE_LENGTH = 8;
 const MAX_CONTEXT_NONCE_LENGTH = 128;
 
-export const dynamic = 'force-dynamic';
+export const dynamic = "force-dynamic";
 
 export async function POST(request: NextRequest) {
   try {
@@ -30,8 +30,8 @@ export async function POST(request: NextRequest) {
     if (!body) {
       return apiJson(
         {
-          error: 'Request body must be a JSON object',
-          code: 'ELIGIBILITY_REQUEST_INVALID',
+          error: "Request body must be a JSON object",
+          code: "ELIGIBILITY_REQUEST_INVALID",
         },
         { status: 400 },
       );
@@ -41,8 +41,8 @@ export async function POST(request: NextRequest) {
     if (!parsed.ok) {
       return apiJson(
         {
-          error: 'Invalid eligibility proof request',
-          code: 'ELIGIBILITY_REQUEST_INVALID',
+          error: "Invalid eligibility proof request",
+          code: "ELIGIBILITY_REQUEST_INVALID",
           details: { missing: parsed.missing },
         },
         { status: 400 },
@@ -54,8 +54,8 @@ export async function POST(request: NextRequest) {
       return apiJson(
         {
           error:
-            'Authorization bearer token required for eligibility proof requests',
-          code: 'ELIGIBILITY_BACKEND_AUTH_REQUIRED',
+            "Authorization bearer token required for eligibility proof requests",
+          code: "ELIGIBILITY_BACKEND_AUTH_REQUIRED",
         },
         { status: 401 },
       );
@@ -70,7 +70,7 @@ export async function POST(request: NextRequest) {
       return apiJson(
         {
           error: error.message,
-          code: 'ELIGIBILITY_REQUEST_INVALID',
+          code: "ELIGIBILITY_REQUEST_INVALID",
         },
         { status: error.statusCode },
       );
@@ -79,7 +79,7 @@ export async function POST(request: NextRequest) {
       return apiJson(
         {
           error: error.message,
-          code: 'ELIGIBILITY_BACKEND_UNAVAILABLE',
+          code: "ELIGIBILITY_BACKEND_UNAVAILABLE",
         },
         { status: 503 },
       );
@@ -87,8 +87,8 @@ export async function POST(request: NextRequest) {
     if (isBackendFetchTimeout(error)) {
       return apiJson(
         {
-          error: 'Backend request timed out',
-          code: 'ELIGIBILITY_BACKEND_TIMEOUT',
+          error: "Backend request timed out",
+          code: "ELIGIBILITY_BACKEND_TIMEOUT",
         },
         { status: 504 },
       );
@@ -96,8 +96,8 @@ export async function POST(request: NextRequest) {
 
     return apiJson(
       {
-        error: 'Internal server error',
-        code: 'INTERNAL_ERROR',
+        error: "Internal server error",
+        code: "INTERNAL_ERROR",
       },
       { status: 500 },
     );
@@ -112,35 +112,35 @@ function parseEligibilityRequest(
   const missing: string[] = [];
   const subjectDid = readBoundedString(
     body,
-    'subjectDid',
+    "subjectDid",
     1,
     MAX_SUBJECT_DID_LENGTH,
     missing,
   );
   const credentialId = readBoundedString(
     body,
-    'credentialId',
+    "credentialId",
     1,
     MAX_CREDENTIAL_ID_LENGTH,
     missing,
   );
   const policyId = readBoundedString(
     body,
-    'policyId',
+    "policyId",
     1,
     MAX_POLICY_ID_LENGTH,
     missing,
   );
   const relyingAppId = readBoundedString(
     body,
-    'relyingAppId',
+    "relyingAppId",
     1,
     MAX_RELYING_APP_ID_LENGTH,
     missing,
   );
   const contextNonce = readBoundedString(
     body,
-    'contextNonce',
+    "contextNonce",
     MIN_CONTEXT_NONCE_LENGTH,
     MAX_CONTEXT_NONCE_LENGTH,
     missing,
@@ -152,7 +152,7 @@ function parseEligibilityRequest(
 
   const options =
     body.options &&
-    typeof body.options === 'object' &&
+    typeof body.options === "object" &&
     !Array.isArray(body.options)
       ? (body.options as Record<string, unknown>)
       : {};
@@ -160,19 +160,19 @@ function parseEligibilityRequest(
   if (
     body.options !== undefined &&
     (!body.options ||
-      typeof body.options !== 'object' ||
+      typeof body.options !== "object" ||
       Array.isArray(body.options))
   ) {
-    return { ok: false, missing: ['options:object'] };
+    return { ok: false, missing: ["options:object"] };
   }
 
   const optionViolations = [
-    'requireOnchainAttestation',
-    'requireNonRevocationProof',
-    'dryRun',
+    "requireOnchainAttestation",
+    "requireNonRevocationProof",
+    "dryRun",
   ].filter((field) => {
     const value = options[field];
-    return value !== undefined && typeof value !== 'boolean';
+    return value !== undefined && typeof value !== "boolean";
   });
 
   if (optionViolations.length > 0) {
@@ -207,9 +207,9 @@ function readBoundedString(
   violations: string[],
 ): string {
   const value = body[field];
-  if (typeof value !== 'string') {
+  if (typeof value !== "string") {
     violations.push(field);
-    return '';
+    return "";
   }
 
   const trimmed = value.trim();
@@ -233,9 +233,9 @@ async function proxyEligibilityProofToBackend(
   const response = await fetch(
     `${apiUrl}/api/v1/verification/eligibility-proof`,
     {
-      method: 'POST',
+      method: "POST",
       headers: buildBackendHeaders(request, authorization),
-      redirect: 'manual',
+      redirect: "manual",
       signal: buildBackendFetchSignal(),
       body: JSON.stringify(payload),
     },
@@ -246,19 +246,19 @@ async function proxyEligibilityProofToBackend(
       {
         error: await readBackendError(
           response,
-          'Backend eligibility proof failed',
+          "Backend eligibility proof failed",
         ),
-        code: 'ELIGIBILITY_BACKEND_ERROR',
+        code: "ELIGIBILITY_BACKEND_ERROR",
       },
       { status: response.status },
     );
   }
 
   const result = await response.json();
-  const policyVersion = payload.policyId.includes('@')
-    ? payload.policyId.slice(payload.policyId.lastIndexOf('@') + 1)
-    : '';
-  const contextHash = `0x${createHash('sha256')
+  const policyVersion = payload.policyId.includes("@")
+    ? payload.policyId.slice(payload.policyId.lastIndexOf("@") + 1)
+    : "";
+  const contextHash = `0x${createHash("sha256")
     .update(
       stableSerialize({
         subjectDid: payload.subjectDid,
@@ -269,7 +269,7 @@ async function proxyEligibilityProofToBackend(
         contextNonce: payload.contextNonce,
       }),
     )
-    .digest('hex')}` as `0x${string}`;
+    .digest("hex")}` as `0x${string}`;
   const contractViolations = validateBackendEligibilityResult(result, {
     subjectDid: payload.subjectDid,
     credentialId: payload.credentialId,
@@ -281,8 +281,8 @@ async function proxyEligibilityProofToBackend(
   if (contractViolations.length > 0) {
     return apiJson(
       {
-        error: 'Backend eligibility proof response failed contract validation',
-        code: 'ELIGIBILITY_BACKEND_CONTRACT_INVALID',
+        error: "Backend eligibility proof response failed contract validation",
+        code: "ELIGIBILITY_BACKEND_CONTRACT_INVALID",
         details: { violations: contractViolations },
       },
       { status: 502 },
@@ -293,7 +293,7 @@ async function proxyEligibilityProofToBackend(
     {
       success: true,
       ...result,
-      source: 'backend',
+      source: "backend",
       timestamp: new Date().toISOString(),
     },
     { status: response.status },
@@ -301,16 +301,16 @@ async function proxyEligibilityProofToBackend(
 }
 
 function stableSerialize(value: unknown): string {
-  if (value === null || typeof value !== 'object') {
+  if (value === null || typeof value !== "object") {
     return JSON.stringify(value);
   }
   if (Array.isArray(value)) {
-    return `[${value.map((item) => stableSerialize(item)).join(',')}]`;
+    return `[${value.map((item) => stableSerialize(item)).join(",")}]`;
   }
 
   const record = value as Record<string, unknown>;
   return `{${Object.keys(record)
     .sort()
     .map((key) => `${JSON.stringify(key)}:${stableSerialize(record[key])}`)
-    .join(',')}}`;
+    .join(",")}}`;
 }

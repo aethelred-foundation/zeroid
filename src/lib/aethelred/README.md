@@ -25,29 +25,29 @@ rewrite.
 
 The deep payoff: the protocol owns the hard parts (DCAP hardware attestation,
 EZKL zkML, ML-DSA-65 PQC, Digital Seals), so ZeroID's "20× moat" features
-*compose* canonical primitives instead of reinventing weaker ones.
+_compose_ canonical primitives instead of reinventing weaker ones.
 
 ---
 
 ## Module map
 
-| Module | Purpose | Key exports |
-|--------|---------|-------------|
-| `client.ts` | Canonical SDK client (network/chain) | `getAethelredClient`, `getVerificationModule`, `getSealsModule` |
-| `encoding.ts` | Canonical ZK wire encoding (32-byte BE field elements, base64) | `fieldElementToBytes`, `encodePublicInput`, `serializeGroth16ProofUncompressed` |
-| `zk.ts` | ZK proof → canonical verify (Groth16) | `verifyZkProofCanonical`, `zkProofToVerifyRequest`, `verifyZeroIdProofCanonical` |
-| `vkeys.ts` | Circuit → registered verifying-key hash | `getVerifyingKeyHash` |
-| `verify.ts` | Flag-gated canonical-vs-bespoke strategy | `isCanonicalVerifyEnabled`, `verifyProofPreferCanonical` |
-| `attestation.ts` | TEE/DCAP attestation verify + platform map | `verifyTeeAttestationCanonical`, `mapTeePlatform` |
-| `seals.ts` | Digital Seals (`x/seal`) | `createDigitalSeal`, `verifyDigitalSeal`, `getDigitalSeal` |
-| `signing.ts` | PQC hybrid (ML-DSA-65 + ECDSA) | `signHybrid`, `isPqcSigningEnabled`, `configurePQCProvider` |
-| `react.ts` *(client-only)* | Canonical React hooks | `useSeal`, `useSealVerification`, `useJob` |
-| `liveness.ts` | EZKL zkML liveness (zkML + DCAP) | `verifyLivenessProof`, `verifyLivenessWithAttestation` |
-| `shamir.ts` | GF(256) t-of-n secret sharing | `splitSecret`, `combineShares` |
-| `disclosure.ts` | Key-split escrow (AEAD + commitment + erasure) | `createDisclosureEscrow`, `reconstituteDisclosure`, `shredShares` |
-| `disclosure-contract.ts` | `ConditionalDisclosure.sol` viem client | `registerEscrowOnChain`, `approveDisclosureOnChain`, … |
-| `disclose.ts` | End-to-end disclosure orchestrator | `discloseIdentityPath` |
-| `index.ts` | Public barrel (server-safe; hooks excluded) | — |
+| Module                     | Purpose                                                        | Key exports                                                                      |
+| -------------------------- | -------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `client.ts`                | Canonical SDK client (network/chain)                           | `getAethelredClient`, `getVerificationModule`, `getSealsModule`                  |
+| `encoding.ts`              | Canonical ZK wire encoding (32-byte BE field elements, base64) | `fieldElementToBytes`, `encodePublicInput`, `serializeGroth16ProofUncompressed`  |
+| `zk.ts`                    | ZK proof → canonical verify (Groth16)                          | `verifyZkProofCanonical`, `zkProofToVerifyRequest`, `verifyZeroIdProofCanonical` |
+| `vkeys.ts`                 | Circuit → registered verifying-key hash                        | `getVerifyingKeyHash`                                                            |
+| `verify.ts`                | Flag-gated canonical-vs-bespoke strategy                       | `isCanonicalVerifyEnabled`, `verifyProofPreferCanonical`                         |
+| `attestation.ts`           | TEE/DCAP attestation verify + platform map                     | `verifyTeeAttestationCanonical`, `mapTeePlatform`                                |
+| `seals.ts`                 | Digital Seals (`x/seal`)                                       | `createDigitalSeal`, `verifyDigitalSeal`, `getDigitalSeal`                       |
+| `signing.ts`               | PQC hybrid (ML-DSA-65 + ECDSA)                                 | `signHybrid`, `isPqcSigningEnabled`, `configurePQCProvider`                      |
+| `react.ts` _(client-only)_ | Canonical React hooks                                          | `useSeal`, `useSealVerification`, `useJob`                                       |
+| `liveness.ts`              | EZKL zkML liveness (zkML + DCAP)                               | `verifyLivenessProof`, `verifyLivenessWithAttestation`                           |
+| `shamir.ts`                | GF(256) t-of-n secret sharing                                  | `splitSecret`, `combineShares`                                                   |
+| `disclosure.ts`            | Key-split escrow (AEAD + commitment + erasure)                 | `createDisclosureEscrow`, `reconstituteDisclosure`, `shredShares`                |
+| `disclosure-contract.ts`   | `ConditionalDisclosure.sol` viem client                        | `registerEscrowOnChain`, `approveDisclosureOnChain`, …                           |
+| `disclose.ts`              | End-to-end disclosure orchestrator                             | `discloseIdentityPath`                                                           |
+| `index.ts`                 | Public barrel (server-safe; hooks excluded)                    | —                                                                                |
 
 `react.ts` is intentionally **not** re-exported from `index.ts` — it is
 `"use client"`. Import hooks directly from `@/lib/aethelred/react` so server
@@ -72,12 +72,12 @@ the pinned protocol SDK.
 
 ## Configuration
 
-| Env var | Values | Effect |
-|---------|--------|--------|
-| `NEXT_PUBLIC_AETHELRED_NETWORK` | `mainnet` \| `testnet` (default) | Canonical client network |
-| `NEXT_PUBLIC_CANONICAL_VERIFY` | `true` | Prefer canonical on-chain ZK verify (else bespoke fallback) |
-| `NEXT_PUBLIC_AETHELRED_VKEYS` | JSON `{ "<circuitId>": "<base64 vkey hash>" }` | Registered verifying-key hashes |
-| `NEXT_PUBLIC_PQC_SIGNING` | `true` | Enable ML-DSA-65 + ECDSA hybrid signing (requires injected backend) |
+| Env var                         | Values                                         | Effect                                                              |
+| ------------------------------- | ---------------------------------------------- | ------------------------------------------------------------------- |
+| `NEXT_PUBLIC_AETHELRED_NETWORK` | `mainnet` \| `testnet` (default)               | Canonical client network                                            |
+| `NEXT_PUBLIC_CANONICAL_VERIFY`  | `true`                                         | Prefer canonical on-chain ZK verify (else bespoke fallback)         |
+| `NEXT_PUBLIC_AETHELRED_VKEYS`   | JSON `{ "<circuitId>": "<base64 vkey hash>" }` | Registered verifying-key hashes                                     |
+| `NEXT_PUBLIC_PQC_SIGNING`       | `true`                                         | Enable ML-DSA-65 + ECDSA hybrid signing (requires injected backend) |
 
 Canonical chain IDs: **mainnet 8821 / testnet 88210** (source: aethelred
 `ecosystem/manifest.json`).

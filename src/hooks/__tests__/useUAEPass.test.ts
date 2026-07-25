@@ -151,7 +151,11 @@ describe("useUAEPass", () => {
     });
 
     expect(mockedApiClient.completeUAEPassVerification).toHaveBeenCalledWith(
-      { authorizationCode: undefined, code: "oauth-code-123", state: "state-3" },
+      {
+        authorizationCode: undefined,
+        code: "oauth-code-123",
+        state: "state-3",
+      },
       "identity-token",
     );
     expect(result.current.verificationStatus).toBe("verified");

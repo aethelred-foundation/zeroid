@@ -132,9 +132,7 @@ export function useUAEPass() {
         return result;
       } catch (err) {
         const message =
-          err instanceof Error
-            ? err.message
-            : "UAE Pass verification failed.";
+          err instanceof Error ? err.message : "UAE Pass verification failed.";
         setVerificationStatus("failed");
         setError(message);
         throw err;

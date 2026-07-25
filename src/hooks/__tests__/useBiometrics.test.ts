@@ -74,12 +74,9 @@ function createWrapper() {
     React.createElement(QueryClientProvider, { client: queryClient }, children);
 }
 
-const enclaveHash =
-  `0x${"a".repeat(64)}` as `0x${string}`;
-const templateHash =
-  `0x${"b".repeat(64)}` as `0x${string}`;
-const subjectDidHash =
-  `0x${"c".repeat(64)}` as `0x${string}`;
+const enclaveHash = `0x${"a".repeat(64)}` as `0x${string}`;
+const templateHash = `0x${"b".repeat(64)}` as `0x${string}`;
+const subjectDidHash = `0x${"c".repeat(64)}` as `0x${string}`;
 const encryptedCapture = "encrypted-biometric-envelope-v1".repeat(3);
 
 function makeNode() {

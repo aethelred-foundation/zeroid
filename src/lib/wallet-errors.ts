@@ -10,7 +10,9 @@
 export function friendlyWalletError(error: unknown): Error {
   const message = error instanceof Error ? error.message : String(error ?? "");
 
-  if (/personal_sign.*(does not exist|not available|not supported)/i.test(message)) {
+  if (
+    /personal_sign.*(does not exist|not available|not supported)/i.test(message)
+  ) {
     return new Error(
       "Your connected wallet could not sign the registration message — the " +
         "request reached the network node instead of a signing wallet. If " +
@@ -21,10 +23,14 @@ export function friendlyWalletError(error: unknown): Error {
   }
 
   if (/user rejected|user denied|4001/i.test(message)) {
-    return new Error("Signature request declined in the wallet. Try again and approve both prompts.");
+    return new Error(
+      "Signature request declined in the wallet. Try again and approve both prompts.",
+    );
   }
 
-  return error instanceof Error ? error : new Error(message || "Wallet request failed");
+  return error instanceof Error
+    ? error
+    : new Error(message || "Wallet request failed");
 }
 
 /**

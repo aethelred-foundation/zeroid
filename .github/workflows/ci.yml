@@ -12,7 +12,10 @@ permissions:
 env:
   NODE_VERSION: "20"
   RUST_VERSION: "1.85"
-  GO_VERSION: "1.25.8"
+  GO_VERSION: "1.25.12"
+  # Immutable Aethelred main SHA. ZeroID consumes the SDK as a sibling
+  # workspace package until @aethelred/sdk has a signed registry release.
+  AETHELRED_REF: 20d6060adc91860736f4ba619fe29cbda54b2cf7
 
 jobs:
   # ===========================================================================
@@ -25,6 +28,12 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - name: Checkout canonical Aethelred SDK source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          repository: aethelred-foundation/aethelred
+          ref: ${{ env.AETHELRED_REF }}
+          path: .aethelred-source
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -32,6 +41,13 @@ jobs:
           cache-dependency-path: |
             package-lock.json
             backend/package-lock.json
+      - name: Build canonical Aethelred SDK
+        working-directory: ./.aethelred-source/sdk/typescript
+        run: |
+          npm ci
+          npm run build
+      - name: Expose canonical SDK as the lockfile-pinned sibling package
+        run: ln -sfn "$GITHUB_WORKSPACE/.aethelred-source" "$GITHUB_WORKSPACE/../aethelred"
       - run: npm ci
       - name: Install backend dependencies
         working-directory: ./backend
@@ -59,6 +75,7 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
         with:
           go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: sdk/go/go.sum
       - name: Install govulncheck
         run: go install golang.org/x/vuln/cmd/govulncheck@latest
       - name: Go Vulnerability Audit
@@ -75,10 +92,23 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - name: Checkout canonical Aethelred SDK source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          repository: aethelred-foundation/aethelred
+          ref: ${{ env.AETHELRED_REF }}
+          path: .aethelred-source
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: "npm"
+      - name: Build canonical Aethelred SDK
+        working-directory: ./.aethelred-source/sdk/typescript
+        run: |
+          npm ci
+          npm run build
+      - name: Expose canonical SDK as the lockfile-pinned sibling package
+        run: ln -sfn "$GITHUB_WORKSPACE/.aethelred-source" "$GITHUB_WORKSPACE/../aethelred"
       - run: npm ci
       - run: npm run lint
       - run: npm run type-check
@@ -94,10 +124,23 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - name: Checkout canonical Aethelred SDK source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          repository: aethelred-foundation/aethelred
+          ref: ${{ env.AETHELRED_REF }}
+          path: .aethelred-source
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: "npm"
+      - name: Build canonical Aethelred SDK
+        working-directory: ./.aethelred-source/sdk/typescript
+        run: |
+          npm ci
+          npm run build
+      - name: Expose canonical SDK as the lockfile-pinned sibling package
+        run: ln -sfn "$GITHUB_WORKSPACE/.aethelred-source" "$GITHUB_WORKSPACE/../aethelred"
       - run: npm ci
       - run: npm run test:ci
       - uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238
@@ -120,7 +163,7 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: "npm"
-      - run: npm ci
+          cache-dependency-path: backend/package-lock.json
       - name: Install backend dependencies
         working-directory: ./backend
         run: npm ci
@@ -200,6 +243,7 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
         with:
           go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: sdk/go/go.sum
       - name: Install govulncheck
         run: go install golang.org/x/vuln/cmd/govulncheck@latest
       - name: Run Go tests
@@ -233,10 +277,23 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - name: Checkout canonical Aethelred SDK source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          repository: aethelred-foundation/aethelred
+          ref: ${{ env.AETHELRED_REF }}
+          path: .aethelred-source
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: "npm"
+      - name: Build canonical Aethelred SDK
+        working-directory: ./.aethelred-source/sdk/typescript
+        run: |
+          npm ci
+          npm run build
+      - name: Expose canonical SDK as the lockfile-pinned sibling package
+        run: ln -sfn "$GITHUB_WORKSPACE/.aethelred-source" "$GITHUB_WORKSPACE/../aethelred"
       - run: npm ci
       - run: npm run readiness:production
 
@@ -261,9 +318,22 @@ jobs:
       ]
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - name: Checkout canonical Aethelred SDK source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          repository: aethelred-foundation/aethelred
+          ref: ${{ env.AETHELRED_REF }}
+          path: .aethelred-source
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: "npm"
+      - name: Build canonical Aethelred SDK
+        working-directory: ./.aethelred-source/sdk/typescript
+        run: |
+          npm ci
+          npm run build
+      - name: Expose canonical SDK as the lockfile-pinned sibling package
+        run: ln -sfn "$GITHUB_WORKSPACE/.aethelred-source" "$GITHUB_WORKSPACE/../aethelred"
       - run: npm ci
       - run: npm run build

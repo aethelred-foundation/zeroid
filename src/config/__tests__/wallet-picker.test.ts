@@ -82,9 +82,14 @@ describe("orderWalletConnectors", () => {
 describe("isAethelredWallet", () => {
   it("matches only the org.aethelred.wallet rdns", () => {
     expect(
-      isAethelredWallet({ id: AETHELRED_WALLET_RDNS, name: "Aethelred Wallet" }),
+      isAethelredWallet({
+        id: AETHELRED_WALLET_RDNS,
+        name: "Aethelred Wallet",
+      }),
     ).toBe(true);
-    expect(isAethelredWallet({ id: METAMASK_RDNS, name: "MetaMask" })).toBe(false);
+    expect(isAethelredWallet({ id: METAMASK_RDNS, name: "MetaMask" })).toBe(
+      false,
+    );
     expect(isAethelredWallet({ name: "Aethelred Wallet" })).toBe(false);
   });
 });

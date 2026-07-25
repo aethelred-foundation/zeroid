@@ -60,17 +60,30 @@ describe("ConditionalDisclosure contract client", () => {
 
   it("requestDisclosureOnChain passes escrowId + warrant", async () => {
     const runner = makeRunner();
-    await requestDisclosureOnChain(runner as DisclosureContractRunner, escrowId, warrant);
+    await requestDisclosureOnChain(
+      runner as DisclosureContractRunner,
+      escrowId,
+      warrant,
+    );
     expect(runner.writeContract).toHaveBeenCalledWith(
-      expect.objectContaining({ functionName: "requestDisclosure", args: [escrowId, warrant] }),
+      expect.objectContaining({
+        functionName: "requestDisclosure",
+        args: [escrowId, warrant],
+      }),
     );
   });
 
   it("approveDisclosureOnChain passes escrowId", async () => {
     const runner = makeRunner();
-    await approveDisclosureOnChain(runner as DisclosureContractRunner, escrowId);
+    await approveDisclosureOnChain(
+      runner as DisclosureContractRunner,
+      escrowId,
+    );
     expect(runner.writeContract).toHaveBeenCalledWith(
-      expect.objectContaining({ functionName: "approveDisclosure", args: [escrowId] }),
+      expect.objectContaining({
+        functionName: "approveDisclosure",
+        args: [escrowId],
+      }),
     );
   });
 
@@ -82,7 +95,10 @@ describe("ConditionalDisclosure contract client", () => {
       escrowId,
     );
     expect(runner.readContract).toHaveBeenCalledWith(
-      expect.objectContaining({ functionName: "isDisclosureAuthorized", args: [escrowId] }),
+      expect.objectContaining({
+        functionName: "isDisclosureAuthorized",
+        args: [escrowId],
+      }),
     );
     expect(ok).toBe(true);
   });
@@ -91,7 +107,10 @@ describe("ConditionalDisclosure contract client", () => {
     const runner = makeRunner();
     await eraseEscrowOnChain(runner as DisclosureContractRunner, escrowId);
     expect(runner.writeContract).toHaveBeenCalledWith(
-      expect.objectContaining({ functionName: "eraseEscrow", args: [escrowId] }),
+      expect.objectContaining({
+        functionName: "eraseEscrow",
+        args: [escrowId],
+      }),
     );
   });
 });

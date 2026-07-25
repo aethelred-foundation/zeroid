@@ -47,8 +47,9 @@ jest.mock("@/lib/tee/attestation", () => ({
   getPlatformLabel: jest.fn((platform: number) =>
     platform === 1 ? "Intel SGX" : "Unknown",
   ),
-  selectBestNode: jest.fn((nodes: any[]) =>
-    nodes.find((node) => node.isOnline && node.attestation.isValid) ?? null,
+  selectBestNode: jest.fn(
+    (nodes: any[]) =>
+      nodes.find((node) => node.isOnline && node.attestation.isValid) ?? null,
   ),
 }));
 
@@ -73,8 +74,7 @@ function createWrapper() {
     React.createElement(QueryClientProvider, { client: queryClient }, children);
 }
 
-const enclaveHash =
-  `0x${"a".repeat(64)}` as `0x${string}`;
+const enclaveHash = `0x${"a".repeat(64)}` as `0x${string}`;
 
 function makeNode(overrides: Record<string, any> = {}) {
   const expiresAt = Math.floor(Date.now() / 1000) + 3_600;

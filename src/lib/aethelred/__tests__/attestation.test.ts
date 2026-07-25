@@ -36,7 +36,9 @@ describe("verifyTeeAttestationCanonical", () => {
       platform: TEEPlatform.INTEL_SGX,
       enclaveHash: "0xabc",
     });
-    mockedGetVerificationModule.mockReturnValue({ verifyTEEAttestation } as never);
+    mockedGetVerificationModule.mockReturnValue({
+      verifyTEEAttestation,
+    } as never);
 
     const result = await verifyTeeAttestationCanonical(attestation, "0xabc");
 
@@ -52,7 +54,9 @@ describe("verifyTeeAttestationCanonical", () => {
       platform: TEEPlatform.UNSPECIFIED,
       error: "bad quote",
     });
-    mockedGetVerificationModule.mockReturnValue({ verifyTEEAttestation } as never);
+    mockedGetVerificationModule.mockReturnValue({
+      verifyTEEAttestation,
+    } as never);
 
     const result = await verifyTeeAttestationCanonical(attestation);
     expect(result.valid).toBe(false);

@@ -122,26 +122,37 @@ function businessHourLoad(hour: number): number {
   return 0.25;
 }
 
-function deterministicJitter(hour: number, salt: number, spread: number): number {
+function deterministicJitter(
+  hour: number,
+  salt: number,
+  spread: number,
+): number {
   return ((hour * 17 + salt * 31) % spread) - Math.floor(spread / 2);
 }
 
-const DEFAULT_LATENCY: LatencyDataPoint[] = Array.from({ length: 24 }, (_, hour) => {
-  const load = businessHourLoad(hour);
-  return {
-    timestamp: `${String(hour).padStart(2, "0")}:00`,
-    p50: 28 + load * 8 + deterministicJitter(hour, 1, 7),
-    p95: 96 + load * 24 + deterministicJitter(hour, 2, 15),
-    p99: 168 + load * 38 + deterministicJitter(hour, 3, 25),
-  };
-});
+const DEFAULT_LATENCY: LatencyDataPoint[] = Array.from(
+  { length: 24 },
+  (_, hour) => {
+    const load = businessHourLoad(hour);
+    return {
+      timestamp: `${String(hour).padStart(2, "0")}:00`,
+      p50: 28 + load * 8 + deterministicJitter(hour, 1, 7),
+      p95: 96 + load * 24 + deterministicJitter(hour, 2, 15),
+      p99: 168 + load * 38 + deterministicJitter(hour, 3, 25),
+    };
+  },
+);
 
 const DEFAULT_ERROR_RATE: ErrorRatePoint[] = Array.from(
   { length: 24 },
   (_, hour) => ({
     timestamp: `${String(hour).padStart(2, "0")}:00`,
     rate: Number(
-      (0.018 + businessHourLoad(hour) * 0.012 + ((hour * 7) % 5) * 0.003).toFixed(3),
+      (
+        0.018 +
+        businessHourLoad(hour) * 0.012 +
+        ((hour * 7) % 5) * 0.003
+      ).toFixed(3),
     ),
   }),
 );

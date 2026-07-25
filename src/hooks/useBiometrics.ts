@@ -88,7 +88,11 @@ export interface EnrolledModality {
 const biometricKeys = {
   all: ["biometrics"] as const,
   status: (address?: string) =>
-    [...biometricKeys.all, "status", address?.toLowerCase() ?? "anonymous"] as const,
+    [
+      ...biometricKeys.all,
+      "status",
+      address?.toLowerCase() ?? "anonymous",
+    ] as const,
 };
 
 type TEEBiometricReceipt = Awaited<
@@ -283,12 +287,14 @@ export function useStartLivenessCheck() {
   const { address } = useAccount();
 
   return useMutation({
-    mutationFn: async (params: {
-      sessionId?: string;
-      frameData: string; // base64-encoded, encrypted for enclave
-      enclaveHash?: Bytes32;
-      modality?: BiometricModality;
-    } & AuthenticatedBiometricParams): Promise<LivenessResult> => {
+    mutationFn: async (
+      params: {
+        sessionId?: string;
+        frameData: string; // base64-encoded, encrypted for enclave
+        enclaveHash?: Bytes32;
+        modality?: BiometricModality;
+      } & AuthenticatedBiometricParams,
+    ): Promise<LivenessResult> => {
       const receipt = await submitBiometricToTEE({
         address,
         authToken: params.authToken,
@@ -338,14 +344,18 @@ export function useCaptureBiometric() {
   const { address } = useAccount();
 
   return useMutation({
-    mutationFn: async (params: {
-      modality: BiometricModality;
-      captureData: string; // base64-encoded, encrypted for enclave
-      enclaveHash?: Bytes32;
-      livenessSessionId: string;
-    } & AuthenticatedBiometricParams): Promise<BiometricCapture> => {
+    mutationFn: async (
+      params: {
+        modality: BiometricModality;
+        captureData: string; // base64-encoded, encrypted for enclave
+        enclaveHash?: Bytes32;
+        livenessSessionId: string;
+      } & AuthenticatedBiometricParams,
+    ): Promise<BiometricCapture> => {
       if (!params.livenessSessionId) {
-        throw new Error("Biometric capture requires a completed liveness session.");
+        throw new Error(
+          "Biometric capture requires a completed liveness session.",
+        );
       }
       const receipt = await submitBiometricToTEE({
         address,
@@ -385,12 +395,14 @@ export function useVerifyBiometric() {
   const { address } = useAccount();
 
   return useMutation({
-    mutationFn: async (params: {
-      templateHash: Bytes32;
-      captureData: string;
-      enclaveHash?: Bytes32;
-      livenessSessionId: string;
-    } & AuthenticatedBiometricParams): Promise<BiometricVerificationResult> => {
+    mutationFn: async (
+      params: {
+        templateHash: Bytes32;
+        captureData: string;
+        enclaveHash?: Bytes32;
+        livenessSessionId: string;
+      } & AuthenticatedBiometricParams,
+    ): Promise<BiometricVerificationResult> => {
       if (!params.templateHash) {
         throw new Error("Biometric verification requires a template hash.");
       }
@@ -476,13 +488,15 @@ export function useEnrollBiometric() {
   const { address } = useAccount();
 
   return useMutation({
-    mutationFn: async (params: {
-      modality: BiometricModality;
-      templateHash: Bytes32;
-      captureData: string;
-      enclaveHash?: Bytes32;
-      livenessSessionId: string;
-    } & AuthenticatedBiometricParams): Promise<EnrolledModality> => {
+    mutationFn: async (
+      params: {
+        modality: BiometricModality;
+        templateHash: Bytes32;
+        captureData: string;
+        enclaveHash?: Bytes32;
+        livenessSessionId: string;
+      } & AuthenticatedBiometricParams,
+    ): Promise<EnrolledModality> => {
       if (!params.templateHash) {
         throw new Error("Biometric enrollment requires a template hash.");
       }
@@ -500,7 +514,10 @@ export function useEnrollBiometric() {
         {
           subjectDidHash,
           enclaveHash,
-          biometricData: requireEncryptedEnvelope(params.captureData, "Enrollment"),
+          biometricData: requireEncryptedEnvelope(
+            params.captureData,
+            "Enrollment",
+          ),
           biometricType: params.modality,
         },
         authToken,
@@ -528,7 +545,9 @@ export function useEnrollBiometric() {
         requiresRenewal: false,
       };
       queryClient.setQueryData(biometricKeys.status(address), status);
-      queryClient.invalidateQueries({ queryKey: biometricKeys.status(address) });
+      queryClient.invalidateQueries({
+        queryKey: biometricKeys.status(address),
+      });
     },
     onError: (err: Error) => {
       toast.error("Enrollment failed", { description: err.message });

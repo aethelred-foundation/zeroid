@@ -512,9 +512,9 @@ export default function DashboardPage() {
                 <div>
                   <p>Authenticated identity session required</p>
                   <p className="mt-1 text-xs text-zero-400">
-                    Sign in from the header to load credential and
-                    verification records. No zero values are shown while these
-                    sources are unavailable.
+                    Sign in from the header to load credential and verification
+                    records. No zero values are shown while these sources are
+                    unavailable.
                   </p>
                 </div>
               </div>

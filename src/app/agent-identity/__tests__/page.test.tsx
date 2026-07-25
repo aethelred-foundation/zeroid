@@ -173,7 +173,9 @@ describe("AgentIdentityPage", () => {
     mockDetailState.data = newAgent;
     render(<AgentIdentityPage />);
 
-    fireEvent.click(screen.getByRole("button", { name: /Credential Verifier/i }));
+    fireEvent.click(
+      screen.getByRole("button", { name: /Credential Verifier/i }),
+    );
 
     expect(screen.getAllByText("Not available")).toHaveLength(2);
     expect(screen.queryByText("100.0%")).not.toBeInTheDocument();

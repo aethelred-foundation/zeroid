@@ -60,7 +60,8 @@ const ALL_STEPS: StepConfig[] = [
   {
     id: "register",
     title: "Identity Registration",
-    subtitle: "Registration is paused until server-side chain verification is ready",
+    subtitle:
+      "Registration is paused until server-side chain verification is ready",
     icon: Globe,
   },
 ];
@@ -308,9 +309,9 @@ export default function IdentityCreation() {
                 Biometric Verification
               </h4>
               <p className="text-sm text-[var(--text-secondary)] mb-6">
-                ZeroID submits a sealed biometric capture envelope to an attested
-                TEE node. This step remains incomplete until the backend returns
-                a verification identifier from the enclave.
+                ZeroID submits a sealed biometric capture envelope to an
+                attested TEE node. This step remains incomplete until the
+                backend returns a verification identifier from the enclave.
               </p>
               {scanStatus === "success" || scanStatus === "complete" ? (
                 <div className="flex items-center justify-center gap-2 text-status-verified">

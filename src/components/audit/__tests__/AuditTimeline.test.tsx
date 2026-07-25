@@ -124,6 +124,8 @@ describe("AuditTimeline", () => {
   });
 
   it("interprets numeric Unix timestamps as seconds", () => {
+    const localMidday = new Date(2023, 10, 15, 12, 0, 0);
+
     render(
       <AuditTimeline
         events={[
@@ -131,7 +133,7 @@ describe("AuditTimeline", () => {
             id: "audit-unix",
             action: "AUTH_LOGIN",
             type: "AUTH_LOGIN",
-            timestamp: 1_700_000_000,
+            timestamp: Math.floor(localMidday.getTime() / 1000),
           },
         ]}
       />,

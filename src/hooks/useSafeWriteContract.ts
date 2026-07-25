@@ -28,7 +28,9 @@ export function useSafeWriteContract() {
       // Preserve the caller's exact arity: only forward `options` when the
       // caller passed it, so `writeContractAsync(params)` stays a 1-arg call.
       const forward = (p: WriteArgs[0]) =>
-        options === undefined ? writeContractAsync(p) : writeContractAsync(p, options);
+        options === undefined
+          ? writeContractAsync(p)
+          : writeContractAsync(p, options);
 
       if (params.gas === undefined && publicClient) {
         try {
@@ -41,7 +43,9 @@ export function useSafeWriteContract() {
             account: params.account ?? address,
             // viem's estimateContractGas is strict on the abi/functionName
             // relation; the runtime shape is correct, so relax the compile check.
-          } as Parameters<NonNullable<typeof publicClient>["estimateContractGas"]>[0]);
+          } as Parameters<
+            NonNullable<typeof publicClient>["estimateContractGas"]
+          >[0]);
           return forward({ ...params, gas: bufferGasLimit(estimate) });
         } catch {
           // Estimation reverted — proceed with the plain write so wagmi/viem

@@ -1,5 +1,11 @@
 import React from "react";
-import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
+import {
+  render,
+  screen,
+  fireEvent,
+  waitFor,
+  act,
+} from "@testing-library/react";
 import ProofGenerator from "@/components/zkp/ProofGenerator";
 
 jest.mock("framer-motion", () => ({

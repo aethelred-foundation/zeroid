@@ -31,9 +31,11 @@ describe("verifyZkProofCanonical", () => {
   });
 
   it("propagates an invalid result with its error", async () => {
-    const verifyZKProof = jest
-      .fn()
-      .mockResolvedValue({ valid: false, verificationTimeMs: 3, error: "bad proof" });
+    const verifyZKProof = jest.fn().mockResolvedValue({
+      valid: false,
+      verificationTimeMs: 3,
+      error: "bad proof",
+    });
     mockedGetVerificationModule.mockReturnValue({ verifyZKProof } as never);
 
     const result = await verifyZkProofCanonical({

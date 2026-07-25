@@ -141,22 +141,13 @@ export async function POST(request: NextRequest) {
       return apiJson({ error: error.message }, { status: 503 });
     }
     if (error instanceof JsonBodyReadError) {
-      return apiJson(
-        { error: error.message },
-        { status: error.statusCode },
-      );
+      return apiJson({ error: error.message }, { status: error.statusCode });
     }
     if (isBackendFetchTimeout(error)) {
-      return apiJson(
-        { error: "Backend request timed out" },
-        { status: 504 },
-      );
+      return apiJson({ error: "Backend request timed out" }, { status: 504 });
     }
 
-    return apiJson(
-      { error: "Internal server error" },
-      { status: 500 },
-    );
+    return apiJson({ error: "Internal server error" }, { status: 500 });
   }
 }
 
@@ -167,16 +158,21 @@ function readBoundedString(
 ): string | undefined {
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
-  if (trimmed.length < minLength || trimmed.length > maxLength) return undefined;
+  if (trimmed.length < minLength || trimmed.length > maxLength)
+    return undefined;
   return trimmed;
 }
 
 function readInputsObject(value: unknown): Record<string, unknown> | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    return undefined;
   const entries = Object.entries(value as Record<string, unknown>);
-  if (entries.length === 0 || entries.length > MAX_INPUT_FIELDS) return undefined;
+  if (entries.length === 0 || entries.length > MAX_INPUT_FIELDS)
+    return undefined;
   if (
-    entries.some(([key]) => key.length === 0 || key.length > MAX_INPUT_FIELD_LENGTH)
+    entries.some(
+      ([key]) => key.length === 0 || key.length > MAX_INPUT_FIELD_LENGTH,
+    )
   ) {
     return undefined;
   }
@@ -189,7 +185,9 @@ function readStringArray(
   maxItemLength: number,
 ): string[] | undefined {
   if (!Array.isArray(value) || value.length > maxItems) return undefined;
-  const normalized = value.map((item) => readBoundedString(item, maxItemLength));
+  const normalized = value.map((item) =>
+    readBoundedString(item, maxItemLength),
+  );
   return normalized.every((item): item is string => Boolean(item))
     ? normalized
     : undefined;

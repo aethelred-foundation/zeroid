@@ -300,11 +300,7 @@ export default function ProofGenerator({
         {/* Stage steps */}
         <div className="space-y-2">
           {(
-            [
-              "loading-wasm",
-              "loading-zkey",
-              "generating-proof",
-            ] as ProofStage[]
+            ["loading-wasm", "loading-zkey", "generating-proof"] as ProofStage[]
           ).map((s, idx) => {
             const config = stageConfig[s];
             const Icon = config.icon;

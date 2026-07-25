@@ -26,8 +26,9 @@ jest.mock("next/link", () => ({
 }));
 
 jest.mock("lucide-react", () => {
-  const icon = (name: string) => (props: any) =>
-    <div data-testid={`icon-${name}`} {...props} />;
+  const icon = (name: string) => (props: any) => (
+    <div data-testid={`icon-${name}`} {...props} />
+  );
   return {
     Wallet: icon("wallet"),
     ShieldCheck: icon("shield-check"),
@@ -48,7 +49,10 @@ const mockConnectors = [
   { id: "walletconnect", uid: "walletconnect-1", name: "WalletConnect" },
 ];
 
-const mockUseAccount = jest.fn(() => ({ address: undefined, isConnected: false }));
+const mockUseAccount = jest.fn(() => ({
+  address: undefined,
+  isConnected: false,
+}));
 jest.mock("wagmi", () => ({
   useAccount: () => mockUseAccount(),
   useConnect: () => ({
@@ -196,7 +200,9 @@ describe("IdentityCreation — default testnet flow", () => {
     });
     expect(registrationButton).toBeDisabled();
     expect(
-      screen.getByText(/wallet will not be asked to sign or submit a transaction/i),
+      screen.getByText(
+        /wallet will not be asked to sign or submit a transaction/i,
+      ),
     ).toBeInTheDocument();
     expect(mockCreateIdentity).not.toHaveBeenCalled();
     expect(screen.queryByText("Identity Registered")).not.toBeInTheDocument();
@@ -240,7 +246,9 @@ describe("IdentityCreation — enterprise flow (flags on)", () => {
     connected();
     render(<IdentityCreation />);
     fireEvent.click(screen.getByText("Next")); // → UAE Pass (optional)
-    expect(screen.getByText("UAE Pass Identity Verification")).toBeInTheDocument();
+    expect(
+      screen.getByText("UAE Pass Identity Verification"),
+    ).toBeInTheDocument();
     expect(screen.getByText("Skip")).toBeInTheDocument();
     expect(screen.getByText(/Optional/)).toBeInTheDocument();
   });

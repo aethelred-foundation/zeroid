@@ -108,8 +108,7 @@ function summarizeNetwork(nodes: TEENode[]): TEENetworkStatus {
   const average = (values: number[]) =>
     values.length
       ? Math.round(
-          (values.reduce((sum, value) => sum + value, 0) / values.length) *
-            100,
+          (values.reduce((sum, value) => sum + value, 0) / values.length) * 100,
         ) / 100
       : 0;
 
@@ -154,7 +153,9 @@ export function useAttestationStatus(enclaveId: string | undefined) {
   const apiQuery = useQuery({
     queryKey: ["attestation", enclaveId],
     queryFn: async () =>
-      apiClient.getAttestation(enclaveId as Bytes32) as Promise<AttestationReport>,
+      apiClient.getAttestation(
+        enclaveId as Bytes32,
+      ) as Promise<AttestationReport>,
     enabled: hasValidEnclaveId,
     staleTime: 30_000,
   });

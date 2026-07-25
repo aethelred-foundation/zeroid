@@ -55,7 +55,9 @@ describe("Shamir GF(256) secret sharing", () => {
     const shares = splitSecret(new Uint8Array([1, 2, 3]), 2, 4);
     expect(() => combineShares([])).toThrow(/no shares/);
     expect(() => combineShares([shares[0], shares[0]])).toThrow(/duplicate/);
-    expect(() => combineShares([{ x: 0, y: new Uint8Array(3) }, shares[1]])).toThrow(/invalid share index/);
+    expect(() =>
+      combineShares([{ x: 0, y: new Uint8Array(3) }, shares[1]]),
+    ).toThrow(/invalid share index/);
     expect(() =>
       combineShares([shares[0], { x: 9, y: new Uint8Array(2) }]),
     ).toThrow(/inconsistent share length/);

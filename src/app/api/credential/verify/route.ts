@@ -34,7 +34,10 @@ export async function POST(request: NextRequest) {
     const attributeName =
       body.attributeName === undefined
         ? undefined
-        : readOptionalBoundedString(body.attributeName, MAX_ATTRIBUTE_NAME_LENGTH);
+        : readOptionalBoundedString(
+            body.attributeName,
+            MAX_ATTRIBUTE_NAME_LENGTH,
+          );
 
     if (!credentialId || !proof) {
       return apiJson(
@@ -85,22 +88,13 @@ export async function POST(request: NextRequest) {
       return apiJson({ error: error.message }, { status: 503 });
     }
     if (error instanceof JsonBodyReadError) {
-      return apiJson(
-        { error: error.message },
-        { status: error.statusCode },
-      );
+      return apiJson({ error: error.message }, { status: error.statusCode });
     }
     if (isBackendFetchTimeout(error)) {
-      return apiJson(
-        { error: "Backend request timed out" },
-        { status: 504 },
-      );
+      return apiJson({ error: "Backend request timed out" }, { status: 504 });
     }
 
-    return apiJson(
-      { error: "Internal server error" },
-      { status: 500 },
-    );
+    return apiJson({ error: "Internal server error" }, { status: 500 });
   }
 }
 
@@ -114,7 +108,9 @@ function readOptionalBoundedString(
   return trimmed;
 }
 
-function readProofPayload(value: unknown): string | Record<string, unknown> | undefined {
+function readProofPayload(
+  value: unknown,
+): string | Record<string, unknown> | undefined {
   if (typeof value === "string") {
     const trimmed = value.trim();
     if (trimmed.length === 0 || trimmed.length > MAX_PROOF_STRING_LENGTH) {

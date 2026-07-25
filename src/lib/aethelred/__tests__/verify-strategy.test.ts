@@ -33,7 +33,9 @@ const fallback = jest.fn().mockResolvedValue(fallbackResult);
 
 describe("getVerifyingKeyHash", () => {
   it("returns the registered hash from the env registry", () => {
-    process.env.NEXT_PUBLIC_AETHELRED_VKEYS = JSON.stringify({ "0xage": "VK64" });
+    process.env.NEXT_PUBLIC_AETHELRED_VKEYS = JSON.stringify({
+      "0xage": "VK64",
+    });
     expect(getVerifyingKeyHash("0xage")).toBe("VK64");
   });
   it("returns null when the circuit is unregistered", () => {
@@ -58,7 +60,9 @@ describe("verifyProofPreferCanonical", () => {
 
   it("uses canonical when enabled and the vkey is registered", async () => {
     process.env.NEXT_PUBLIC_CANONICAL_VERIFY = "true";
-    process.env.NEXT_PUBLIC_AETHELRED_VKEYS = JSON.stringify({ "0xage": "VK64" });
+    process.env.NEXT_PUBLIC_AETHELRED_VKEYS = JSON.stringify({
+      "0xage": "VK64",
+    });
     mockedCanonical.mockResolvedValue({ ...fallbackResult, valid: true });
     await verifyProofPreferCanonical(zkProof, fallback);
     expect(mockedCanonical).toHaveBeenCalledWith(zkProof, "VK64");

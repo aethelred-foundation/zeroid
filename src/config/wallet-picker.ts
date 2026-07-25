@@ -40,7 +40,8 @@ function isDiscoveredWallet(connector: PickerConnector): boolean {
 
 function rank(connector: PickerConnector): number {
   if (connector.id === AETHELRED_WALLET_RDNS) return 0;
-  if (connector.id === METAMASK_RDNS || /metamask/i.test(connector.name)) return 1;
+  if (connector.id === METAMASK_RDNS || /metamask/i.test(connector.name))
+    return 1;
   if (connector.id === GENERIC_INJECTED_ID) return 3;
   return 2;
 }

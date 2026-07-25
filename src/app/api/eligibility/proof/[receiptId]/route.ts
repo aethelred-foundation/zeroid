@@ -1,4 +1,4 @@
-import { NextRequest } from 'next/server';
+import { NextRequest } from "next/server";
 import {
   BackendProxyConfigError,
   apiJson,
@@ -8,12 +8,12 @@ import {
   isBackendFetchTimeout,
   readBackendError,
   requireAuthorization,
-} from '../../../_lib/backend';
-import { validateBackendEligibilityResult } from '../../_lib/contract';
+} from "../../../_lib/backend";
+import { validateBackendEligibilityResult } from "../../_lib/contract";
 
 const RECEIPT_ID_PATTERN = /^[A-Za-z0-9._:-]{3,128}$/;
 
-export const dynamic = 'force-dynamic';
+export const dynamic = "force-dynamic";
 
 export async function GET(
   request: NextRequest,
@@ -25,8 +25,8 @@ export async function GET(
     if (!RECEIPT_ID_PATTERN.test(receiptId)) {
       return apiJson(
         {
-          error: 'Invalid eligibility receipt id',
-          code: 'ELIGIBILITY_RECEIPT_ID_INVALID',
+          error: "Invalid eligibility receipt id",
+          code: "ELIGIBILITY_RECEIPT_ID_INVALID",
         },
         { status: 400 },
       );
@@ -36,8 +36,8 @@ export async function GET(
     if (!authorization) {
       return apiJson(
         {
-          error: 'Authorization bearer token required for receipt lookup',
-          code: 'ELIGIBILITY_RECEIPT_AUTH_REQUIRED',
+          error: "Authorization bearer token required for receipt lookup",
+          code: "ELIGIBILITY_RECEIPT_AUTH_REQUIRED",
         },
         { status: 401 },
       );
@@ -49,9 +49,9 @@ export async function GET(
         receiptId,
       )}`,
       {
-        method: 'GET',
+        method: "GET",
         headers: buildBackendHeaders(request, authorization),
-        redirect: 'manual',
+        redirect: "manual",
         signal: buildBackendFetchSignal(),
       },
     );
@@ -61,9 +61,9 @@ export async function GET(
         {
           error: await readBackendError(
             response,
-            'Backend eligibility receipt lookup failed',
+            "Backend eligibility receipt lookup failed",
           ),
-          code: 'ELIGIBILITY_RECEIPT_BACKEND_ERROR',
+          code: "ELIGIBILITY_RECEIPT_BACKEND_ERROR",
         },
         { status: response.status },
       );
@@ -75,8 +75,8 @@ export async function GET(
       return apiJson(
         {
           error:
-            'Backend eligibility receipt response failed contract validation',
-          code: 'ELIGIBILITY_RECEIPT_CONTRACT_INVALID',
+            "Backend eligibility receipt response failed contract validation",
+          code: "ELIGIBILITY_RECEIPT_CONTRACT_INVALID",
           details: { violations: contractViolations },
         },
         { status: 502 },
@@ -87,7 +87,7 @@ export async function GET(
       {
         success: true,
         ...result,
-        source: 'backend',
+        source: "backend",
         timestamp: new Date().toISOString(),
       },
       { status: response.status },
@@ -97,7 +97,7 @@ export async function GET(
       return apiJson(
         {
           error: error.message,
-          code: 'ELIGIBILITY_BACKEND_UNAVAILABLE',
+          code: "ELIGIBILITY_BACKEND_UNAVAILABLE",
         },
         { status: 503 },
       );
@@ -105,8 +105,8 @@ export async function GET(
     if (isBackendFetchTimeout(error)) {
       return apiJson(
         {
-          error: 'Backend request timed out',
-          code: 'ELIGIBILITY_BACKEND_TIMEOUT',
+          error: "Backend request timed out",
+          code: "ELIGIBILITY_BACKEND_TIMEOUT",
         },
         { status: 504 },
       );
@@ -114,8 +114,8 @@ export async function GET(
 
     return apiJson(
       {
-        error: 'Internal server error',
-        code: 'INTERNAL_ERROR',
+        error: "Internal server error",
+        code: "INTERNAL_ERROR",
       },
       { status: 500 },
     );
