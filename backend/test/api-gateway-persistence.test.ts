@@ -107,6 +107,7 @@ import { APIGateway, apiGateway } from '../src/services/enterprise/api-gateway';
 describe('APIGateway persistence', () => {
   beforeEach(() => {
     process.env = { ...ORIGINAL_ENV };
+    process.env.ENTERPRISE_SECRET_HASH_PEPPER = 't'.repeat(64);
     jest.clearAllMocks();
     for (const key of Object.keys(redisStore)) delete redisStore[key];
   });
@@ -169,17 +170,13 @@ describe('APIGateway persistence', () => {
       'enterprise-api-key',
       result.apiKey,
     );
-    const legacyHash = crypto
-      .createHash('sha256')
-      .update(result.apiKey)
-      .digest('hex');
-
     expect(mockApiKeyCreate).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({
         keyHash: expectedHash,
       }),
     }));
-    expect(expectedHash).not.toBe(legacyHash);
+    expect(expectedHash).toHaveLength(64);
+    expect(expectedHash).not.toContain(result.apiKey);
 
     mockApiKeyFindUnique.mockResolvedValue({
       id: result.apiKeyId,
@@ -542,10 +539,7 @@ describe('APIGateway persistence', () => {
       revokedAt: null,
       revokedReason: null,
     });
-    const keyHash = crypto
-      .createHash('sha256')
-      .update(result.apiKey)
-      .digest('hex');
+    const keyHash = hmacEnterpriseSecret('enterprise-api-key', result.apiKey);
 
     mockApiKeyFindUnique.mockResolvedValue({
       id: result.apiKeyId,
@@ -601,10 +595,7 @@ describe('APIGateway persistence', () => {
       rateLimit: { requestsPerSecond: 1, burstSize: 1 },
       metadata: {},
     });
-    const keyHash = crypto
-      .createHash('sha256')
-      .update(result.apiKey)
-      .digest('hex');
+    const keyHash = hmacEnterpriseSecret('enterprise-api-key', result.apiKey);
 
     mockApiKeyFindUnique.mockResolvedValue({
       id: result.apiKeyId,
@@ -652,10 +643,7 @@ describe('APIGateway persistence', () => {
       rateLimit: { requestsPerSecond: 100, burstSize: 100 },
       metadata: {},
     });
-    const keyHash = crypto
-      .createHash('sha256')
-      .update(result.apiKey)
-      .digest('hex');
+    const keyHash = hmacEnterpriseSecret('enterprise-api-key', result.apiKey);
 
     mockApiKeyFindUnique.mockResolvedValue({
       id: result.apiKeyId,

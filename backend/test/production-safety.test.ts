@@ -300,14 +300,14 @@ describe('production safety controls', () => {
     ]);
   });
 
-  it('resolves CORS_ORIGINS=* to origin reflection for test networks', () => {
-    expect(getAllowedCorsOrigins({ CORS_ORIGINS: '*' } as NodeJS.ProcessEnv)).toBe(true);
-    // Wildcard wins even when mixed with explicit origins.
+  it('rejects wildcard CORS semantics and keeps only explicit origins', () => {
+    expect(getAllowedCorsOrigins({ CORS_ORIGINS: '*' } as NodeJS.ProcessEnv)).toEqual([]);
+    // A wildcard cannot override an explicit allowlist.
     expect(
       getAllowedCorsOrigins({
         CORS_ORIGINS: 'http://localhost:3003,*',
       } as NodeJS.ProcessEnv),
-    ).toBe(true);
+    ).toEqual(['http://localhost:3003']);
     // Explicit lists still resolve to a deduplicated allowlist.
     expect(
       getAllowedCorsOrigins({

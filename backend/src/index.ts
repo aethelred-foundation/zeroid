@@ -2,6 +2,7 @@ import express, { Request, Response, NextFunction } from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
 import compression from 'compression';
+import { rateLimit } from 'express-rate-limit';
 
 import { credentialRoutes } from './routes/credentials';
 import { verificationRoutes } from './routes/verification';
@@ -156,9 +157,14 @@ export function buildHelmetOptions(
 app.use(helmet(buildHelmetOptions()));
 
 // CORS
+const allowedCorsOrigins = new Set(getAllowedCorsOrigins());
 app.use(
   cors({
-    origin: getAllowedCorsOrigins(),
+    origin: (origin, callback) => {
+      // Requests without Origin are non-browser or same-origin. Browser
+      // cross-origin requests must match the configured allowlist exactly.
+      callback(null, origin === undefined || allowedCorsOrigins.has(origin));
+    },
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
     allowedHeaders: [
       'Content-Type',
@@ -353,7 +359,22 @@ const globalLimiter = createRateLimiter({
   maxRequests: 120,
   keyPrefix: 'rl:global',
 });
+const localApiAbuseGuard = rateLimit({
+  windowMs: 60_000,
+  limit: 240,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  message: {
+    error: 'Too many requests',
+    code: 'RATE_LIMIT_EXCEEDED',
+    retryAfter: 60,
+  },
+});
 app.use('/api', setSensitiveApiCacheHeaders);
+// Keep a process-local limiter in front of the Redis sliding-window limiter.
+// Redis remains the authoritative distributed control; this guard also
+// protects development/testnet if their Redis instance is briefly unavailable.
+app.use('/api', localApiAbuseGuard);
 app.use('/api', globalLimiter);
 
 // ---------------------------------------------------------------------------

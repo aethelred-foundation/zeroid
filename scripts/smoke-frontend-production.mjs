@@ -122,8 +122,8 @@ if (missingConnectOrigins.length > 0) {
 }
 
 const inlineScripts = [
-  ...html.matchAll(/<script([^>]*)>([\s\S]*?)<\/script>/g),
-].filter((match) => !/\bsrc=/.test(match[1]));
+  ...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi),
+].filter((match) => !/\bsrc\s*=/i.test(match[1]));
 if (inlineScripts.length === 0) {
   throw new Error(
     "The production page did not contain Next.js bootstrap scripts.",
