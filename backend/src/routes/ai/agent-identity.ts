@@ -1,4 +1,5 @@
 import { Router, Response } from 'express';
+import { rateLimit } from 'express-rate-limit';
 import { z } from 'zod';
 import { logger } from '../../runtime';
 import { AuthenticatedRequest, authMiddleware } from '../../middleware/auth';
@@ -223,6 +224,19 @@ const ApprovalPathResponseSchema = z
 const router = Router();
 
 // All agent identity routes require authentication
+router.use(
+  rateLimit({
+    windowMs: 60_000,
+    limit: 60,
+    standardHeaders: 'draft-8',
+    legacyHeaders: false,
+    message: {
+      error: 'Too many requests',
+      code: 'RATE_LIMIT_EXCEEDED',
+      retryAfter: 60,
+    },
+  }),
+);
 router.use(authMiddleware);
 router.use(apiRateLimiter);
 

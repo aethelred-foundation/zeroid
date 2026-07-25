@@ -122,7 +122,7 @@ if (missingConnectOrigins.length > 0) {
 }
 
 const inlineScripts = [
-  ...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi),
+  ...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script\b[^>]*>/gi),
 ].filter((match) => !/\bsrc\s*=/i.test(match[1]));
 if (inlineScripts.length === 0) {
   throw new Error(
