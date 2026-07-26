@@ -13,7 +13,11 @@ jest.mock("wagmi", () => ({
 // that exact subpath (not the barrel `wagmi/connectors`) or the real ESM module
 // loads and jest fails to transform it.
 jest.mock("wagmi/connectors/injected", () => ({
-  injected: jest.fn(() => "injected-connector"),
+  injected: jest.fn((options: any) =>
+    options?.target
+      ? "aethelred-injected-connector"
+      : "generic-injected-connector",
+  ),
 }));
 
 import {
@@ -56,9 +60,12 @@ describe("wagmi config", () => {
     expect(config.chains[0].id).toBe(activeChain.id);
   });
 
-  it("wires only the audited injected connector (no unaudited peer SDKs)", () => {
+  it("wires the first-party Aethelred connector before the audited fallback", () => {
     const config = wagmiConfig as any;
-    expect(config.connectors).toEqual(["injected-connector"]);
+    expect(config.connectors).toEqual([
+      "aethelred-injected-connector",
+      "generic-injected-connector",
+    ]);
   });
 
   it("createZeroIdWalletConfig is exercised (function coverage)", () => {
