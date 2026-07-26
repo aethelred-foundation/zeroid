@@ -7,12 +7,14 @@
 
 import { http, createConfig, createStorage } from "wagmi";
 import { injected } from "wagmi/connectors/injected";
+import type { EIP1193Provider } from "viem";
 import {
   aethelredMainnet,
   aethelredTestnet,
   aethelredDevnet,
   activeChain,
 } from "./chains";
+import { AETHELRED_CONNECTOR_ID } from "./wallet-picker";
 
 // ---------------------------------------------------------------------------
 // SSR-Safe Storage
@@ -46,7 +48,24 @@ export const wagmiConfig = createZeroIdWalletConfig();
 // ---------------------------------------------------------------------------
 
 function createZeroIdWalletConfig() {
-  const connectors = [injected({ shimDisconnect: true })];
+  const connectors = [
+    injected({
+      shimDisconnect: true,
+      target: {
+        id: AETHELRED_CONNECTOR_ID,
+        name: "Aethelred Wallet",
+        provider: () => {
+          if (typeof window === "undefined") return undefined;
+          return (
+            window as Window & {
+              aethelred?: EIP1193Provider;
+            }
+          ).aethelred;
+        },
+      },
+    }),
+    injected({ shimDisconnect: true }),
+  ];
 
   // Testnet and devnet share the confirmed EVM chain id (7332), so one 7332
   // transport covers both; mainnet is the distinct id.
