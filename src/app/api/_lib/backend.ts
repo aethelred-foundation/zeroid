@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-const DEFAULT_DEVELOPMENT_BACKEND_URL = "http://localhost:4000";
+const DEFAULT_DEVELOPMENT_BACKEND_URL = "http://localhost:4003";
 const DEFAULT_BACKEND_FETCH_TIMEOUT_MS = 10_000;
 const MIN_BACKEND_FETCH_TIMEOUT_MS = 100;
 const MAX_BACKEND_FETCH_TIMEOUT_MS = 60_000;

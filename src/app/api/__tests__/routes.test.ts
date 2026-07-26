@@ -726,7 +726,7 @@ describe("POST /api/proof/generate", () => {
     await POST(request);
 
     expect(mockFetch).toHaveBeenCalledWith(
-      expect.stringContaining("localhost:4000"),
+      expect.stringContaining("localhost:4003"),
       expect.anything(),
     );
 

@@ -8,6 +8,8 @@ const originalZeroIdEnv = process.env.ZEROID_ENV;
 const originalBackendUrl = process.env.ZEROID_BACKEND_API_URL;
 const originalPlaintextGate = process.env.ZEROID_ALLOW_PLAINTEXT_HTTP;
 const originalChainEnv = process.env.NEXT_PUBLIC_CHAIN_ENV;
+const originalPublicZeroIdApiUrl = process.env.NEXT_PUBLIC_ZEROID_API_URL;
+const originalPublicApiUrl = process.env.NEXT_PUBLIC_API_URL;
 
 function restoreEnvironment() {
   const restore = (name: string, value: string | undefined) => {
@@ -23,6 +25,8 @@ function restoreEnvironment() {
   restore("ZEROID_BACKEND_API_URL", originalBackendUrl);
   restore("ZEROID_ALLOW_PLAINTEXT_HTTP", originalPlaintextGate);
   restore("NEXT_PUBLIC_CHAIN_ENV", originalChainEnv);
+  restore("NEXT_PUBLIC_ZEROID_API_URL", originalPublicZeroIdApiUrl);
+  restore("NEXT_PUBLIC_API_URL", originalPublicApiUrl);
 }
 
 describe("production backend URL", () => {
@@ -74,5 +78,21 @@ describe("production backend URL", () => {
         "Backend API URL must not include credentials, query, or fragment",
       ),
     );
+  });
+});
+
+describe("development backend URL", () => {
+  beforeEach(() => {
+    process.env.NODE_ENV = "development";
+    delete process.env.ZEROID_ENV;
+    delete process.env.ZEROID_BACKEND_API_URL;
+    delete process.env.NEXT_PUBLIC_ZEROID_API_URL;
+    delete process.env.NEXT_PUBLIC_API_URL;
+  });
+
+  afterEach(restoreEnvironment);
+
+  it("defaults the same-origin gateway to the documented ZeroID API port", () => {
+    expect(getBackendApiBaseUrl()).toBe("http://localhost:4003");
   });
 });
