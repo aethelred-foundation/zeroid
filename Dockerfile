@@ -8,7 +8,7 @@
 ARG AETHELRED_REF=20d6060adc91860736f4ba619fe29cbda54b2cf7
 
 # Stage 1: Canonical protocol SDK
-FROM node:20-alpine AS protocol
+FROM node:20.19.5-alpine3.22 AS protocol
 ARG AETHELRED_REF
 RUN apk add --no-cache git
 WORKDIR /workspace
@@ -23,7 +23,7 @@ RUN npm ci --no-fund \
   && npm run build
 
 # Stage 2: Dependencies
-FROM node:20-alpine AS deps
+FROM node:20.19.5-alpine3.22 AS deps
 RUN apk add --no-cache libc6-compat
 WORKDIR /workspace/zeroid
 COPY --from=protocol /workspace/aethelred/sdk/typescript /workspace/aethelred/sdk/typescript
@@ -31,7 +31,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --no-fund
 
 # Stage 3: Build
-FROM node:20-alpine AS builder
+FROM node:20.19.5-alpine3.22 AS builder
 WORKDIR /workspace/zeroid
 COPY --from=deps /workspace/aethelred/sdk/typescript /workspace/aethelred/sdk/typescript
 COPY --from=deps /workspace/zeroid/node_modules ./node_modules
@@ -40,7 +40,7 @@ ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
 
 # Stage 4: Production
-FROM node:20-alpine AS runner
+FROM node:20.19.5-alpine3.22 AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1

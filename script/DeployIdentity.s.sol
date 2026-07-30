@@ -29,6 +29,8 @@ import {SelectiveDisclosure} from "../contracts/SelectiveDisclosure.sol";
  *           ZEROID_ADMIN            (optional) DEFAULT_ADMIN_ROLE holder
  *           ZEROID_VOTING_PERIOD    (optional) governance voting period, seconds (default 3 days)
  *           ZEROID_QUORUM           (optional) governance quorum (default 1)
+ *           ZEROID_EXPECTED_CHAIN_ID (optional) abort if the RPC reports another chain
+ *           ZEROID_WRITE_MANIFEST   (optional; default false) write deployments/<chainId>.json
  *
  * Usage (testnet):
  *   PRIVATE_KEY=0x<funded> forge script script/DeployIdentity.s.sol:DeployIdentity \
@@ -55,6 +57,9 @@ contract DeployIdentity is Script {
         uint256 deployerKey = vm.envUint("PRIVATE_KEY");
         address deployer = vm.addr(deployerKey);
         address admin = vm.envOr("ZEROID_ADMIN", deployer);
+        uint256 expectedChainId = vm.envOr("ZEROID_EXPECTED_CHAIN_ID", block.chainid);
+        require(block.chainid == expectedChainId, "RPC chain ID does not match ZEROID_EXPECTED_CHAIN_ID");
+
         uint64 votingPeriod = uint64(vm.envOr("ZEROID_VOTING_PERIOD", uint256(3 days)));
         uint256 quorum = vm.envOr("ZEROID_QUORUM", uint256(1));
 
@@ -93,7 +98,21 @@ contract DeployIdentity is Script {
         console2.log("NEXT_PUBLIC_CREDENTIAL_REGISTRY_ADDRESS=%s", address(credentials));
         console2.log("NEXT_PUBLIC_SELECTIVE_DISCLOSURE_ADDRESS=%s", address(disclosure));
 
-        _writeManifest(admin, deployer, address(identity), address(zkVerifier), address(revocation), address(governance), address(credentials), address(disclosure));
+        if (vm.envOr("ZEROID_WRITE_MANIFEST", false)) {
+            _writeManifest(
+                admin,
+                deployer,
+                address(identity),
+                address(zkVerifier),
+                address(revocation),
+                address(governance),
+                address(credentials),
+                address(disclosure)
+            );
+        } else {
+            console2.log("");
+            console2.log("Deployment manifest not written (ZEROID_WRITE_MANIFEST is false).");
+        }
     }
 
     /// @dev Record the deployment as a committed source of truth in

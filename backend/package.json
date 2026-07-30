@@ -1,6 +1,7 @@
 {
   "name": "@aethelred/zeroid-backend",
   "version": "1.0.0",
+  "packageManager": "npm@10.8.2",
   "description": "ZeroID — Self-Sovereign Identity dApp Backend API",
   "main": "dist/index.js",
   "scripts": {

@@ -13,17 +13,22 @@ Prisma migrations, then serves.
 ```bash
 cd backend
 cp .env.testnet.example .env
-# set a real API signing secret (>=32 chars):
-sed -i "s/^JWT_SECRET=.*/JWT_SECRET=$(openssl rand -hex 32)/" .env
+# Replace every REPLACE_ value. Use independent random values for the database
+# password, JWT secret, and OID4VCI storage pepper.
 docker compose up --build
 ```
 
 Then:
+
 - Liveness: `curl http://localhost:4003/health` → `{ status: "ok", ... }`
 - Readiness: `curl http://localhost:4003/ready` → DB / Redis / production-safety / circuit-artifact checks.
 
 Point the frontend at it with `NEXT_PUBLIC_ZEROID_API_URL=http://localhost:4003` (or the
 dApp server's IP:4003 with the port open).
+
+The bounded webhook retry worker starts inside the API process and stops during
+graceful API shutdown. There is no separate worker service to deploy. The Rust
+TEE crate is a library/test target, not a network daemon.
 
 ## Run it (native, no Docker)
 
@@ -47,14 +52,17 @@ npm run build && npm start     # or: npm run dev  (ts-node-dev, hot reload)
 
 Minimal env to start (see `.env.testnet.example` for the full annotated set):
 
-| Var | Purpose |
-| --- | ------- |
-| `JWT_SECRET` | API auth signing — **must be ≥32 chars**; startup aborts otherwise |
-| `DATABASE_URL` | Postgres (`postgresql://…`) |
-| `REDIS_URL` | Redis (`redis://…`) |
-| `PORT` | API port (use `4003` to match the frontend default) |
-| `KMS_PROVIDER` | `local` for testnet dev signing; `aws-kms`/`gcp-kms`/`azure-kms` for production |
-| `NODE_ENV` | keep **non-production** on testnet so local credential signing is permitted |
+| Var                  | Purpose                                                                         |
+| -------------------- | ------------------------------------------------------------------------------- |
+| `JWT_SECRET`         | API auth signing — **must be ≥32 chars**; startup aborts otherwise              |
+| `DATABASE_URL`       | Postgres (`postgresql://…`)                                                     |
+| `REDIS_URL`          | Redis (`redis://…`)                                                             |
+| `PORT`               | API port (use `4003` to match the frontend default)                             |
+| `KMS_PROVIDER`       | `local` for testnet dev signing; `aws-kms`/`gcp-kms`/`azure-kms` for production |
+| `NODE_ENV`           | keep **non-production** on testnet so local credential signing is permitted     |
+| `AETHELRED_CHAIN_ID` | `7332` for wallet registration and sign-in domain separation                    |
+| `CORS_ORIGINS`       | comma-separated, exact frontend origins; wildcards are ignored                  |
+| `ZEROID_AUTH_ORIGIN` | exact frontend origin embedded in wallet sign-in messages                       |
 
 ## Signing custody (testnet vs production)
 

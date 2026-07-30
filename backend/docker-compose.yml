@@ -1,18 +1,18 @@
 # ZeroID backend stack for testnet: Postgres + Redis + the API on :4003.
-#   cp .env.testnet.example .env   # then set a real JWT_SECRET
+#   cp .env.testnet.example .env   # then replace every REPLACE_ value
 #   docker compose up --build
 # The API waits for healthy Postgres + Redis, runs Prisma migrations, then serves.
 services:
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: zeroid
-      POSTGRES_PASSWORD: zeroid
-      POSTGRES_DB: zeroid
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in backend/.env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in backend/.env}
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB in backend/.env}
     volumes:
       - zeroid-pg:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U zeroid -d zeroid"]
+      test: ["CMD-SHELL", 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
       interval: 5s
       timeout: 3s
       retries: 12
@@ -27,6 +27,8 @@ services:
 
   api:
     build: .
+    init: true
+    restart: unless-stopped
     env_file: .env
     depends_on:
       postgres:
@@ -36,7 +38,7 @@ services:
     # These point the API at the compose services and override any localhost
     # values in .env (which are for running the API without Docker).
     environment:
-      DATABASE_URL: postgresql://zeroid:zeroid@postgres:5432/zeroid
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       REDIS_URL: redis://redis:6379
       PORT: "4003"
     ports:

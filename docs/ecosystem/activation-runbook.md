@@ -1,8 +1,14 @@
 # ZeroID — Deployment & Activation Runbook
 
-The operational checklist for a hardened testnet deployment. Several cryptographic
-and evidence capabilities intentionally remain unavailable and require reviewed
-implementation work; running these commands alone does not make them live.
+This document covers capability activation after a deployment. It is not the
+public-testnet install guide. The single source of truth for a fresh deployment,
+including the exact six-contract topology, environment files, hosting, smoke
+tests, and recovery procedure, is
+[`deployments/PUBLIC_TESTNET_RUNBOOK.md`](../../deployments/PUBLIC_TESTNET_RUNBOOK.md).
+
+Several cryptographic and evidence capabilities intentionally remain
+unavailable and require reviewed implementation work; running activation
+commands alone does not make them live.
 
 ## Pilot critical path (priority order — consultant 2026-06-29)
 
@@ -18,8 +24,9 @@ first. Execute in this exact order; defer the esoteric tech.
    challenge consumption, state revalidation, proof result, decision, and sealed
    audit evidence must commit together. Agent flows also require a signed,
    one-time agent-operation challenge.
-4. **Deploy the foundational contracts** — §1 (`forge script Deploy.s.sol`),
-   then record reviewed addresses and roles in deployment evidence.
+4. **Deploy the six foundational identity contracts** using
+   `script/DeployIdentity.s.sol:DeployIdentity` and the canonical public-testnet
+   runbook, then record reviewed addresses and roles in deployment evidence.
 5. **Close the W2c on-chain verification gate** — verify a known Groth16 proof
    via the target precompile, confirm byte compatibility, and register the exact
    pinned verification key before changing client configuration.
@@ -32,15 +39,14 @@ adapters only afterwards — they are differentiators, not the critical path.
 
 ## 0. Environment
 
-Smart-contract deploy (`script/Deploy.s.sol`):
+Core identity deployment:
 
 ```bash
-export AETHELRED_RPC="https://evm-rpc-testnet.aethelred.network"
-export ZEROID_ADMIN="0x...account with admin/pauser"
-export ZEROID_BURN_SINK="0x...protocol burn address"
-export ZEROID_CRUZIBLE_SINK="0x...Cruzible staking sink"
-export ZEROID_BURN_BPS=5000           # 50% burn / 50% Cruzible
-export ZEROID_DISCLOSURE_THRESHOLD=2  # compliance quorum size
+export AETHELRED_RPC_URL="http://<rpc-host>:8545"
+export ZEROID_EXPECTED_CHAIN_ID=7332
+export ZEROID_ADMIN="0x...durable governance account"
+export ZEROID_VOTING_PERIOD=259200
+export ZEROID_QUORUM=1
 ```
 
 App / backend (`.env`):
@@ -64,15 +70,21 @@ OID4VP_ISSUER_JWKS='{"issuer-key-1":{...public jwk...}}' # verifier trust store
 
 ## 1. Deploy contracts
 
-```bash
-forge script script/Deploy.s.sol:Deploy --rpc-url "$AETHELRED_RPC" --broadcast --verify
-```
-Then grant operational roles (admin):
-- `ConditionalDisclosure.grantRole(ESCROW_ISSUER_ROLE, <backend signer>)`
-- `ConditionalDisclosure.grantRole(COMPLIANCE_OFFICER_ROLE, <each quorum member>)`
-- `*.grantRole(PAUSER_ROLE, <incident responders>)`
+Do not duplicate the broadcast command here. Follow the preflight, non-broadcast
+simulation, broadcast, manifest validation, and resume procedure in the
+canonical public-testnet runbook. It deploys, in dependency order:
 
-Record the two addresses into the app `.env` (above).
+1. `ZeroID`
+2. `ZKCredentialVerifier`
+3. `AccumulatorRevocation`
+4. `GovernanceModule`
+5. `CredentialRegistry`
+6. `SelectiveDisclosure`
+
+`script/DeploySupplemental.s.sol:DeploySupplemental` deploys the optional
+`FeeRouter` and `ConditionalDisclosure` economic/compliance pair. It is not part
+of the six-contract public-testnet identity deployment, must not be mixed into
+its manifest, and requires a separate approval.
 
 ## 2. Database migration
 
@@ -102,12 +114,12 @@ new application build.
 
 ## 3. Activation gates (flip only after end-to-end verification)
 
-| Gate | Verify | Then flip |
-|------|--------|-----------|
+| Gate              | Verify                                                                                                                                                              | Then flip                                                                                    |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
 | **W2c** ZK verify | produce a Groth16 proof from a ZeroID circuit; verify via the chain precompile; confirm snarkjs→arkworks byte format (G2 limb order/compression) against that proof | register vkeys → set `NEXT_PUBLIC_AETHELRED_VKEYS`, then `NEXT_PUBLIC_CANONICAL_VERIFY=true` |
-| **W3c** DCAP | TEE worker emits a real quote; `verifyTeeAttestationCanonical` returns valid; bind to a Digital Seal | wire `attestation.ts` call sites |
-| **W4c** PQC | inject a real ML-DSA-65 provider; `signHybrid` round-trips a verifiable hybrid signature | `NEXT_PUBLIC_PQC_SIGNING=true` |
-| **Phase 2b** zkML | train model → ONNX → EZKL circuit/keys; register `Circuit`; `verifyLivenessProof` passes on a real proof | add the circuit hash to `NEXT_PUBLIC_AETHELRED_VKEYS` |
+| **W3c** DCAP      | TEE worker emits a real quote; `verifyTeeAttestationCanonical` returns valid; bind to a Digital Seal                                                                | wire `attestation.ts` call sites                                                             |
+| **W4c** PQC       | inject a real ML-DSA-65 provider; `signHybrid` round-trips a verifiable hybrid signature                                                                            | `NEXT_PUBLIC_PQC_SIGNING=true`                                                               |
+| **Phase 2b** zkML | train model → ONNX → EZKL circuit/keys; register `Circuit`; `verifyLivenessProof` passes on a real proof                                                            | add the circuit hash to `NEXT_PUBLIC_AETHELRED_VKEYS`                                        |
 
 ## 4. Smoke
 

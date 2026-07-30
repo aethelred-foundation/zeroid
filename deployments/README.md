@@ -1,91 +1,96 @@
-# ZeroID deployments
+# ZeroID deployment artifacts
 
-Source of truth for the deployed ZeroID identity contracts and the governance
-model behind them. Each `<chainId>.json` in this directory is written by
-`script/DeployIdentity.s.sol` and committed — the addresses live here, not in a
-paste in someone's `.env`.
+The canonical fresh Aethelred public-testnet procedure is
+[`PUBLIC_TESTNET_RUNBOOK.md`](PUBLIC_TESTNET_RUNBOOK.md). Do not deploy from a
+branch name or from an older command copied from chat.
 
-## Governance model (read before deploying)
+## Canonical identity topology
 
-Every core contract's constructor grants the **admin** address
-`DEFAULT_ADMIN_ROLE` plus every operational role — it is total authority
-(upgrade parameters, pause, grant/revoke roles). Two rules follow:
+`script/DeployIdentity.s.sol:DeployIdentity` deploys exactly six contracts:
 
-1. **Admin ≠ deployer.** The deployer is a hot key that only pays gas; it should
-   not end up as the permanent authority. Pass `ZEROID_ADMIN` explicitly. The
-   deploy script refuses to make the deployer the admin unless you opt in with
-   `ZEROID_ALLOW_DEPLOYER_ADMIN=true` (acceptable on a throwaway testnet, never
-   for mainnet).
-2. **Admin custody scales with the network.**
-   - **Testnet:** a team-controlled key (or a simple multisig) is fine.
-   - **Mainnet:** the admin MUST be a **multisig (e.g. Safe) behind a timelock**.
-     Migrate roles to it before any real credentials are issued.
+1. `ZeroID`
+2. `ZKCredentialVerifier`
+3. `AccumulatorRevocation`
+4. `GovernanceModule`
+5. `CredentialRegistry`
+6. `SelectiveDisclosure`
 
-## Deploy (the one command)
+It writes `deployments/<chainId>.json` only when
+`ZEROID_WRITE_MANIFEST=true`. The public-testnet runbook first uses
+`ZEROID_WRITE_MANIFEST=false` for a mandatory non-broadcast simulation.
+`ZEROID_EXPECTED_CHAIN_ID=7332` prevents deployment through an RPC connected to
+another chain.
 
-From the repo root, with a **funded deployer** key and a **durable admin**:
+`script/DeploySupplemental.s.sol:DeploySupplemental` is optional and separate.
+It deploys `FeeRouter` and `ConditionalDisclosure`; it is not a replacement for
+the six-contract identity suite and its addresses do not belong in the identity
+manifest.
 
-```bash
-PRIVATE_KEY=0x<funded-gas-payer> \
-ZEROID_ADMIN=0x<durable-governance-account> \
-forge script script/DeployIdentity.s.sol:DeployIdentity \
-  --rpc-url http://<validator-ip>:8545 --broadcast --legacy --slow --gas-estimate-multiplier 200
-```
+## Governance model
 
-Optional: `ZEROID_VOTING_PERIOD` (governance voting period, seconds; default
-3 days), `ZEROID_QUORUM` (default 1).
+Every core contract constructor grants `ZEROID_ADMIN` the default admin role
+and its operational roles. That account can pause, grant/revoke roles, and
+change governed configuration.
 
-The run prints the six addresses in `NEXT_PUBLIC_*` form (paste into
-`.env.local`, template `.env.testnet.example`) **and** writes
-`deployments/<chainId>.json`. Commit that manifest.
+- The deployer is a temporary gas payer and must not be the durable admin.
+- The deployment script rejects deployer-as-admin unless
+  `ZEROID_ALLOW_DEPLOYER_ADMIN=true` is explicitly set for a throwaway
+  environment.
+- Testnet uses an approved team-controlled governance account.
+- A production network requires reviewed multisignature/timelock custody before
+  real credentials are issued.
 
-## Manifest format (`<chainId>.json`)
+## Manifest format
 
 ```json
 {
   "chainId": 7332,
   "blockNumber": 0,
   "timestamp": 0,
-  "admin": "0x…",
-  "deployer": "0x…",
-  "identityRegistry": "0x…",
-  "zkVerifier": "0x…",
-  "accumulatorRevocation": "0x…",
-  "governanceModule": "0x…",
-  "credentialRegistry": "0x…",
-  "selectiveDisclosure": "0x…"
+  "admin": "0x...",
+  "deployer": "0x...",
+  "identityRegistry": "0x...",
+  "zkVerifier": "0x...",
+  "accumulatorRevocation": "0x...",
+  "governanceModule": "0x...",
+  "credentialRegistry": "0x...",
+  "selectiveDisclosure": "0x..."
 }
 ```
 
-## Operational roles (grant when the actors exist)
+The manifest is a candidate until bytecode, constructor relationships, admin
+custody, governance values, and transaction receipts are verified. Commit an
+accepted manifest through a normal review. Never commit private keys or `.env`
+files.
 
-The deploy gives the admin everything. As real operators come online, the admin
-delegates specific roles with `script/GrantRoles.s.sol` (each granted only if its
-env var is set, so it is safe to re-run):
-
-| Role | Contract | Actor env var | Who |
-| ---- | -------- | ------------- | --- |
-| `ISSUER_ROLE` | CredentialRegistry | `ZEROID_BACKEND_SIGNER` | the backend credential signer |
-| `CIRCUIT_MANAGER_ROLE` | ZKCredentialVerifier | `ZEROID_CIRCUIT_MANAGER` | registers the trusted-setup verifying keys (`ceremony/`) |
-| `REVOCATION_AUTHORITY_ROLE` | AccumulatorRevocation | `ZEROID_REVOCATION_AUTHORITY` | the revocation service |
+Apply an accepted manifest to a copied frontend environment template:
 
 ```bash
-ZEROID_ADMIN_KEY=0x<admin-key> \
-NEXT_PUBLIC_CREDENTIAL_REGISTRY_ADDRESS=0x.. NEXT_PUBLIC_ZK_VERIFIER_ADDRESS=0x.. \
-NEXT_PUBLIC_ACCUMULATOR_REVOCATION_ADDRESS=0x.. \
-ZEROID_BACKEND_SIGNER=0x.. \
-forge script script/GrantRoles.s.sol:GrantRoles --rpc-url http://<validator-ip>:8545 --broadcast --legacy --slow
+cp .env.testnet.example .env.production.local
+node scripts/apply-deployment-manifest.mjs \
+  --manifest deployments/7332.json \
+  --chain-id 7332 \
+  --env .env.production.local
 ```
 
-## Checklist for a "run once, correctly" deploy
+The updater validates the chain ID, all six nonzero unique EVM addresses, and
+replaces stale address lines without changing unrelated configuration.
 
-- [ ] `ZEROID_ADMIN` set to a durable account (multisig for mainnet).
-- [ ] Deployer funded on the target chain.
-- [ ] `deployments/<chainId>.json` committed after the run.
-- [ ] `.env.local` filled from the printed `NEXT_PUBLIC_*` addresses.
-- [ ] Operational roles granted to their actors (`GrantRoles`) once they exist.
-- [ ] Verification keys registered on-chain once the ceremony is finalized —
-      `ceremony/scripts/07-register-vkeys.sh --broadcast` with the
-      `CIRCUIT_MANAGER_ROLE` key (registers into the `ZKCredentialVerifier` from
-      this manifest; see `ceremony/README.md`).
-- [ ] (Mainnet) admin migrated to a multisig + timelock before real issuance.
+## Operational roles
+
+Delegate only after each actor address and custody arrangement is reviewed:
+
+| Role                        | Contract                | Actor variable                |
+| --------------------------- | ----------------------- | ----------------------------- |
+| `ISSUER_ROLE`               | `CredentialRegistry`    | `ZEROID_BACKEND_SIGNER`       |
+| `CIRCUIT_MANAGER_ROLE`      | `ZKCredentialVerifier`  | `ZEROID_CIRCUIT_MANAGER`      |
+| `REVOCATION_AUTHORITY_ROLE` | `AccumulatorRevocation` | `ZEROID_REVOCATION_AUTHORITY` |
+
+`script/GrantRoles.s.sol:GrantRoles` is safe to rerun because it grants only
+roles whose actor variables are set. A multisignature/timelock admin must
+execute equivalent reviewed calls through its custody process rather than
+exporting an admin key.
+
+Register verification keys only after the trusted-setup artifacts and hashes
+are approved. See `ceremony/README.md`; key registration is not part of the base
+contract broadcast.

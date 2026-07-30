@@ -116,9 +116,9 @@ or service working directory can be rolled back.
 
 Prefer exposing only ports 80/443 and proxying the public ZeroID hostname to
 `127.0.0.1:3003`. If the team temporarily exposes port 3003 directly for
-testnet, restrict it at the firewall where practical. The frontend API origin
-must also be present in the backend's `CORS_ORIGINS` and
-`ZEROID_ALLOWED_ORIGINS` configuration.
+testnet, restrict it at the firewall where practical. The frontend origin must
+also be present in the backend's `CORS_ORIGINS` configuration and match
+`ZEROID_AUTH_ORIGIN` for wallet sign-in messages.
 
 The production build is complete only when `npm run build` succeeds. Starting
 an old `.next` directory after a failed build is not a valid deployment.

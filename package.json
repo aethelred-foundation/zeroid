@@ -2,6 +2,7 @@
   "name": "@aethelred/zeroid",
   "version": "1.0.0",
   "private": true,
+  "packageManager": "npm@10.8.2",
   "description": "ZeroID — Self-sovereign identity with ZK proofs and TEE verification on the Aethelred network",
   "author": "Aethelred Foundation",
   "license": "BUSL-1.1",
@@ -37,6 +38,7 @@
     "circuits:verify": "snarkjs zkey verify build/circuits/age/age_proof.r1cs pot12_final.ptau build/circuits/age/age_proof_final.zkey",
     "contracts:compile": "forge build",
     "contracts:test": "forge test",
+    "deployments:test": "node --test scripts/apply-deployment-manifest.test.mjs",
     "analyze": "ANALYZE=true next build",
     "security:audit": "npm audit --omit=dev --audit-level=low",
     "security:audit:all": "npm audit --omit=dev --audit-level=low && npm --prefix backend audit --omit=dev --audit-level=low && npm run routes:validate && npm run workflows:validate"

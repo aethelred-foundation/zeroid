@@ -195,8 +195,9 @@ npm ci
 cd backend && npm ci && cd ..
 
 # Configure
-cp .env.example .env
-# Edit .env with your configuration
+cp .env.example .env.local
+cp backend/.env.testnet.example backend/.env
+# Edit both files; frontend and API variables are intentionally separate.
 
 # Compile ZK circuits
 cd circuits && ./build.sh && cd ..
@@ -211,6 +212,10 @@ cd backend && npx prisma migrate dev && cd ..
 npm run dev                    # Frontend — http://localhost:3003
 npm --prefix backend run dev   # API      — http://localhost:4003
 ```
+
+For a fresh Aethelred public-testnet deployment, do not infer broadcast,
+contract, or hosting commands from this development quick start. Use the
+[canonical public-testnet runbook](deployments/PUBLIC_TESTNET_RUNBOOK.md).
 
 <details>
 <summary>Environment variables</summary>
@@ -351,7 +356,7 @@ zeroid/
 ├── test/                           # End-to-end and integration tests
 ├── docs/                           # Architecture and security documentation
 ├── .github/workflows/              # CI/CD pipeline
-└── .env.example                    # Environment template
+└── .env.example                    # Frontend build environment template
 ```
 
 ---
@@ -370,9 +375,6 @@ cd backend && npm test && cd ..
 # Smart contracts — Foundry
 forge test -vvv
 forge coverage
-
-# Smart contracts — Hardhat
-npx hardhat test
 
 # ZK circuits
 cd circuits && npm test && cd ..

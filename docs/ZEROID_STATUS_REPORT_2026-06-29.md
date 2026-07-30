@@ -133,7 +133,7 @@ Production hardening on the economic + disclosure contracts: OpenZeppelin Access
 
 ### 5.5 Economic flywheel — `FeeRouter.sol`
 
-Per-operation fee → configurable **burn** + **Cruzible** staking-sink split (CEI, pausable, role-gated, with `totalBurned/totalToCruzible/totalRouted` accounting). Deployed via `script/Deploy.s.sol` (env-driven; testnet + mainnet from one script).
+Per-operation fee → configurable **burn** + **Cruzible** staking-sink split (CEI, pausable, role-gated, with `totalBurned/totalToCruzible/totalRouted` accounting). Optional supplemental deployment via `script/DeploySupplemental.s.sol` (env-driven; testnet + mainnet from one script).
 
 ### 5.6 Partner integration surface — `/api/v1/partners/*`
 
@@ -204,7 +204,7 @@ These are deliberately separated into **infra-gated** (code is ready; needs infr
 | **W4c — PQC** | Inject a real ML-DSA-65 provider; set `NEXT_PUBLIC_PQC_SIGNING=true`. |
 | **Phase 2b — zkML** | Train liveness model → ONNX → EZKL circuit/keys; register the circuit. |
 | **DB migration apply** | Schema is additive and `prisma generate` is done; `prisma migrate deploy` not yet run (needs Postgres). Two additive migrations: AI Agent Passport v1, idempotency v1 (tracked SQL copies in `docs/ecosystem/`). |
-| **Deployed addresses** | `Deploy.s.sol` compiles; not broadcast to testnet → no `FeeRouter`/`ConditionalDisclosure` addresses in env yet. |
+| **Deployed addresses** | `DeploySupplemental.s.sol` compiles; not broadcast to testnet → no `FeeRouter`/`ConditionalDisclosure` addresses in env yet. |
 
 ### Genuine work remaining
 - **Real TEE / EZKL / PQC backends** — currently adapters + interfaces + flags; the real provider implementations are pending (these need the chain-side infra to exist).

@@ -1,5 +1,5 @@
 # ZeroID backend — Express + Prisma(Postgres) + Redis. Node >= 20.
-FROM node:20-slim AS build
+FROM node:20.19.5-bookworm-slim AS build
 WORKDIR /app
 # Prisma needs openssl at generate/runtime.
 RUN apt-get update && apt-get install -y --no-install-recommends openssl && rm -rf /var/lib/apt/lists/*
@@ -10,7 +10,7 @@ COPY tsconfig.json ./
 COPY src ./src
 RUN npx prisma generate && npm run build
 
-FROM node:20-slim AS runtime
+FROM node:20.19.5-bookworm-slim AS runtime
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends openssl && rm -rf /var/lib/apt/lists/*
 ENV NODE_ENV=production

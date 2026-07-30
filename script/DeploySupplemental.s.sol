@@ -6,10 +6,14 @@ import {FeeRouter} from "../contracts/FeeRouter.sol";
 import {ConditionalDisclosure} from "../contracts/ConditionalDisclosure.sol";
 
 /**
- * @title Deploy
- * @notice Deploys ZeroID's economic + compliance contracts to an Aethelred
- *         network. Configuration is read from the environment so the same
- *         script serves testnet and mainnet:
+ * @title DeploySupplemental
+ * @notice Deploys ZeroID's OPTIONAL economic + compliance contracts to an
+ *         Aethelred network. This is not the public-testnet identity-suite
+ *         deployment. The canonical six-contract identity deployment is
+ *         script/DeployIdentity.s.sol:DeployIdentity.
+ *
+ *         Configuration is read from the environment so the same script serves
+ *         testnet and mainnet:
  *
  *           ZEROID_ADMIN                 admin (DEFAULT_ADMIN_ROLE + PAUSER_ROLE)
  *           ZEROID_BURN_SINK             protocol burn address
@@ -18,7 +22,7 @@ import {ConditionalDisclosure} from "../contracts/ConditionalDisclosure.sol";
  *           ZEROID_DISCLOSURE_THRESHOLD  compliance quorum size (default 2)
  *
  * Usage:
- *   forge script script/Deploy.s.sol:Deploy \
+ *   forge script script/DeploySupplemental.s.sol:DeploySupplemental \
  *     --rpc-url $AETHELRED_RPC --broadcast --verify
  *
  * Post-deploy (admin), grant operational roles:
@@ -26,7 +30,7 @@ import {ConditionalDisclosure} from "../contracts/ConditionalDisclosure.sol";
  *   ConditionalDisclosure: ESCROW_ISSUER_ROLE to the ZeroID backend signer,
  *     COMPLIANCE_OFFICER_ROLE to each quorum member, PAUSER_ROLE to responders.
  */
-contract Deploy is Script {
+contract DeploySupplemental is Script {
     function run() external returns (FeeRouter feeRouter, ConditionalDisclosure disclosure) {
         address admin = vm.envAddress("ZEROID_ADMIN");
         address burnSink = vm.envAddress("ZEROID_BURN_SINK");
