@@ -111,7 +111,7 @@ Implemented application pages:
 
 Key frontend component families:
 
-- AI: `AgentCard`, `AgentDelegationGraph`, `ComplianceCopilot`, `RiskHeatmap`, `ThreatFeed`
+- AI: `AgentCard`, `AgentDelegationGraph`, `ComplianceAssistant`, `RiskHeatmap`, `ThreatFeed`
 - Analytics: `PrivacyScoreBreakdown`
 - Audit: `AuditTimeline`
 - Biometrics: `LivenessCheck`
@@ -842,4 +842,3 @@ But the repository is not production-ready today. The most important blockers ar
 Recommended consultant conclusion to seek:
 
 What is the fastest credible path from this broad pre-production platform to a narrow, real, enterprise pilot that can withstand technical diligence from organizations such as EDGE, Presight, or TII?
-

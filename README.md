@@ -98,7 +98,7 @@ The platform combines 12 on-chain smart contracts, 9 ZK circuits (Circom), a TEE
 - AI agent identity registry and verification
 - Behavioral biometrics for fraud detection
 - Real-time risk scoring engine
-- Compliance copilot for regulatory guidance
+- Compliance risk assistant for regulatory guidance
 
 </td>
 <td width="50%">
@@ -137,7 +137,7 @@ graph TB
     end
 
     subgraph AI / ML Services
-        E[Agent Identity / Fraud Detection<br/>Risk Scoring / Compliance Copilot<br/>Behavioral Biometrics]
+        E[Agent Identity / Fraud Detection<br/>Risk Scoring / Compliance Assistant<br/>Behavioral Biometrics]
     end
 
     subgraph Rust SDK
@@ -302,7 +302,7 @@ zeroid/
 │   │   ├── routes/                 # Express API routes
 │   │   ├── services/               # Core services
 │   │   │   ├── ai/                 # Agent identity, behavioral biometrics,
-│   │   │   │                       #   compliance copilot, fraud detection, risk scoring
+│   │   │   │                       #   compliance assistant, fraud detection, risk scoring
 │   │   │   ├── compliance/         # Data sovereignty, jurisdiction engine,
 │   │   │   │                       #   regulatory reporting, sanctions screening
 │   │   │   └── enterprise/         # API gateway, OIDC bridge, SLA monitor, webhooks

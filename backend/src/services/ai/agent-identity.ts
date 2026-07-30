@@ -17,9 +17,9 @@ const MAX_AUDIENCE_SIGNATURE_FAILURES_PER_HOUR = 20;
 const APPROVAL_REQUEST_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_DELEGATION_TRAVERSAL_DEPTH = 5;
 const AGENT_PROTOCOLS = new Set<AgentProtocol>([
-  "openai_functions",
-  "anthropic_tool_use",
-  "google_genai",
+  "function_tools",
+  "structured_tools",
+  "generative_tools",
   "aethelred_native",
   "custom",
 ]);
@@ -30,9 +30,9 @@ const AGENT_PROTOCOLS = new Set<AgentProtocol>([
 
 export type AgentStatus = "pending" | "active" | "suspended" | "revoked";
 export type AgentProtocol =
-  | "openai_functions"
-  | "anthropic_tool_use"
-  | "google_genai"
+  | "function_tools"
+  | "structured_tools"
+  | "generative_tools"
   | "aethelred_native"
   | "custom";
 export type ApprovalStatus =

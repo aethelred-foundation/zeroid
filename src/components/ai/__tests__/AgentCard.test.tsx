@@ -62,7 +62,7 @@ const mockAgent = {
   id: "agent-1",
   did: "did:aethelred:mainnet:0x1234567890abcdef1234567890abcdef",
   name: "Test Agent",
-  type: "llm" as const,
+  type: "model_client" as const,
   status: "active" as const,
   capabilities: [
     { id: "cap-1", label: "Data Analysis", description: "Analyzes data" },
@@ -85,7 +85,7 @@ describe("AgentCard", () => {
   it("displays agent name, type label, and status", () => {
     render(<AgentCard agent={mockAgent} />);
     expect(screen.getByText("Test Agent")).toBeInTheDocument();
-    expect(screen.getByText("LLM Agent")).toBeInTheDocument();
+    expect(screen.getByText("Model Client")).toBeInTheDocument();
     expect(screen.getByText("Active")).toBeInTheDocument();
   });
 

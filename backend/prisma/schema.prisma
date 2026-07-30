@@ -375,7 +375,7 @@ model AIAgent {
   operatorId      String
   controllerDid   String?      // v1 passport: denormalized DID of controlling Identity
   riskTier        RiskLevel    @default(LOW)
-  agentType       String       // llm, autonomous, bot, iot
+  agentType       String       // model_client, autonomous, bot, iot
   agentProtocol   String?      // nullable only for legacy rows; registrations always set it
   publicKey       String?      // nullable only for legacy rows; required for M2M verification
   publicKeyHash   String?      // SHA-256 fingerprint of publicKey

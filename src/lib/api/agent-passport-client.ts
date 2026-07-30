@@ -9,9 +9,9 @@
 import { apiClient } from "./client";
 
 export const AGENT_PROTOCOLS = [
-  "openai_functions",
-  "anthropic_tool_use",
-  "google_genai",
+  "function_tools",
+  "structured_tools",
+  "generative_tools",
   "aethelred_native",
   "custom",
 ] as const;

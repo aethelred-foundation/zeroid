@@ -34,9 +34,9 @@ const RegisterAgentSchema = z.object({
   agentName: z.string().min(3).max(100),
   agentDescription: z.string().min(10).max(1000),
   agentProtocol: z.enum([
-    'openai_functions',
-    'anthropic_tool_use',
-    'google_genai',
+    'function_tools',
+    'structured_tools',
+    'generative_tools',
     'aethelred_native',
     'custom',
   ]),
@@ -162,9 +162,9 @@ const AgentOperationContextSchema = z
     callerAgentId: z.string().trim().min(1).max(200).optional(),
     callerProtocol: z
       .enum([
-        'openai_functions',
-        'anthropic_tool_use',
-        'google_genai',
+        'function_tools',
+        'structured_tools',
+        'generative_tools',
         'aethelred_native',
         'custom',
       ])

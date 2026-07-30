@@ -16,7 +16,7 @@ ZeroID and the Aethelred L1 were built without coordination, so ZeroID re-implem
 - Cosmos SDK v0.50 / CometBFT v0.38 L1 (Go 1.24/1.25), Proof-of-Useful-Work.
 - Custom Rust VM (`crates/vm`) with **EVM-compatible** Solidity 0.8.20 contracts.
 - On-chain ZK precompiles: **Groth16 + PLONK + EZKL over BN254/BLS12-381** (arkworks).
-- **EZKL** zkML prover; verifiable LLM inference via Freivalds.
+- **EZKL** zkML prover; verifiable model inference via Freivalds.
 - Real **DCAP TEE attestation**, hardware-agnostic across 6 platforms; **Digital Seals** (`x/seal`), `x/vault`.
 - Post-quantum crypto: **ML-DSA-65 + ECDSA hybrid signatures, ML-KEM-768**, BLS12-381, HSM.
 - Canonical multi-language SDKs (`@aethelred/sdk` TS, plus Py/Go/Rust) governed by `sdk/version-matrix.json` (release train 2026.Q1, OpenAPI v1, REST v1).
