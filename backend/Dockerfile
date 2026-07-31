@@ -19,6 +19,7 @@ COPY prisma ./prisma
 RUN npm ci --omit=dev && npx prisma generate
 COPY --from=build /app/dist ./dist
 EXPOSE 4003
-# Apply reviewed, versioned migrations before starting. Schema drift and unsafe
-# destructive changes now fail the deployment instead of being forced at boot.
-CMD ["sh", "-c", "npx prisma migrate deploy && exec node dist/index.js"]
+# The read-only preflight stops P3005 before Prisma touches an untracked
+# non-empty schema. Compose runs this command in a one-shot migration service;
+# keeping it as the image default also protects direct container runs.
+CMD ["sh", "-c", "node dist/ops/database-migration-preflight.js && npx prisma migrate deploy && exec node dist/index.js"]

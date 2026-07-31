@@ -11,6 +11,7 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:migrate:prod": "prisma migrate deploy",
+    "database:preflight": "node dist/ops/database-migration-preflight.js",
     "type-check": "tsc --noEmit",
     "lint": "eslint src --ext .ts",
     "test": "jest --runInBand",

@@ -441,7 +441,8 @@ The bounded webhook retry worker runs inside that API process; there is no
 separate worker service. `crates/zeroid-tee` is a library/test target, not a
 deployable network daemon.
 
-For a fresh testnet database:
+For a fresh testnet database, choose a `POSTGRES_DB` name that has never been
+used in this Postgres cluster:
 
 ```bash
 cd backend
@@ -487,6 +488,7 @@ Validate and start:
 docker compose config --quiet
 docker compose build
 docker compose up -d
+docker compose logs --no-color migrate
 docker compose ps
 
 for attempt in {1..30}; do
@@ -501,14 +503,36 @@ for attempt in {1..30}; do
 done
 ```
 
-The API container runs `prisma migrate deploy` before startup. A fresh database
-needs no baseline repair. For any reused database:
+The one-shot `migrate` service runs the read-only database preflight and then
+`prisma migrate deploy`. The API starts only after that service succeeds. If a
+non-empty database has no migration history, preflight stops before P3005 and
+leaves the API stopped instead of restarting:
 
-1. take and verify a backup;
-2. compare the schema with `backend/prisma/schema.prisma`;
-3. if it was created by `prisma db push`, follow the one-time baseline procedure
-   in `backend/README.md`;
-4. never use `db push --accept-data-loss`.
+```bash
+docker compose ps --all migrate api
+docker compose logs --no-color migrate
+```
+
+For an already-initialized named volume, changing `POSTGRES_DB` alone does not
+create a database. To preserve the old database and create a fresh public-
+testnet database in the same volume, use an explicit new name:
+
+```bash
+docker compose stop api
+docker compose up -d postgres
+docker compose exec -T postgres sh -eu -c \
+  'createdb --username "$POSTGRES_USER" --owner "$POSTGRES_USER" zeroid_testnet_20260731'
+```
+
+Then update both `POSTGRES_DB` and the database-name component of `DATABASE_URL`
+in `backend/.env`, and rerun `docker compose up -d --build`.
+
+To preserve and baseline the existing database instead, follow
+`backend/README.md#safe-database-migration-and-p3005-recovery`: take and verify a
+backup, capture and review a schema diff, and run `prisma migrate resolve
+--applied` only for migrations whose complete SQL effects the audit proves are
+already present. Never delete the volume, edit `_prisma_migrations` directly,
+or use `db push --accept-data-loss`.
 
 On the base testnet, `/ready` may correctly return HTTP `503` with
 `circuitArtifacts: degraded` while audited proving artifacts are absent. That

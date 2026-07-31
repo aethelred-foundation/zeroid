@@ -94,13 +94,12 @@ npx prisma migrate deploy        # applies the committed ZeroID baseline and
                                  # every later reviewed migration
 ```
 
-For a database previously provisioned with `prisma db push`, first take and
-verify a backup, compare it with `prisma/schema.prisma`, and mark the baseline
-as already applied exactly once:
-
-```bash
-npx prisma migrate resolve --applied 20260718000000_zeroid_baseline
-```
+For a database previously provisioned with `prisma db push`, follow
+`backend/README.md#safe-database-migration-and-p3005-recovery`. Take and verify
+a backup, audit the live schema against every committed migration, and mark
+only migrations whose complete SQL effects are already present. Marking only
+the first migration is unsafe when later migration effects were also introduced
+by `db push`.
 
 Do not run `db push --accept-data-loss` in testnet or production.
 
