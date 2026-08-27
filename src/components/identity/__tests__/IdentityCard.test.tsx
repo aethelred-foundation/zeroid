@@ -110,9 +110,38 @@ describe("IdentityCard", () => {
     expect(screen.getByText(/Failed to load identity/)).toBeInTheDocument();
   });
 
-  it('shows "No Identity" state when no identity exists', () => {
+  it("shows the not-registered onboarding prompt when no identity exists", () => {
     render(<IdentityCard />);
-    expect(screen.getByText("No Identity")).toBeInTheDocument();
+    expect(screen.getByText("No identity yet")).toBeInTheDocument();
+    // The prompt is actionable: a CTA into the identity-creation flow.
+    const cta = screen.getByRole("link", { name: /create zeroid/i });
+    expect(cta).toHaveAttribute("href", "/identity");
+  });
+
+  it("shows the onboarding prompt for the hook's real unregistered shape", () => {
+    // useIdentity always returns a truthy identity object; unregistered is
+    // signalled by isRegistered:false + profile:null, not a null identity.
+    mockUseIdentity.mockReturnValue({
+      identity: {
+        did: `0x${"0".repeat(64)}`,
+        didHash: `0x${"0".repeat(64)}`,
+        hasIdentity: false,
+        isRegistered: false,
+        profile: null,
+        delegates: [],
+        credentialCount: 0,
+        verificationCount: 0,
+        verificationStatus: "unverified",
+        createdAt: undefined,
+      },
+      isLoading: false,
+      error: null,
+    });
+    render(<IdentityCard />);
+    expect(screen.getByText("No identity yet")).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: /create zeroid/i }),
+    ).toHaveAttribute("href", "/identity");
   });
 
   it("displays credential and verification counts", () => {
@@ -277,28 +306,30 @@ describe("IdentityCard", () => {
     expect(screen.getByText(/did:aethelred/)).toBeInTheDocument();
   });
 
-  it('shows "--" for Created date when createdAt is missing', () => {
+  it("shows unavailable evidence for Created when createdAt is missing", () => {
     const noDateIdentity = { ...mockIdentity, createdAt: undefined };
     render(<IdentityCard identity={noDateIdentity as any} />);
-    expect(screen.getByText("--")).toBeInTheDocument();
+    expect(screen.getByText("—")).toBeInTheDocument();
   });
 
   it("formats createdAt date properly", () => {
     render(<IdentityCard identity={mockIdentity as any} />);
     expect(screen.getByText("Created")).toBeInTheDocument();
-    // Should show month/year format like "Jun 25"
-    expect(screen.getByText(/Jun/)).toBeInTheDocument();
+    // Should show month/full-year format like "Jun 2025" — a 2-digit year
+    // ("Jun 25") reads as a day of month.
+    expect(screen.getByText(/Jun \d{4}/)).toBeInTheDocument();
   });
 
-  it("defaults credentialCount and verificationCount to 0", () => {
+  it("does not invent zero credential and verification counts", () => {
     const noCountIdentity = {
       ...mockIdentity,
       credentialCount: undefined,
       verificationCount: undefined,
     };
     render(<IdentityCard identity={noCountIdentity as any} />);
-    const zeros = screen.getAllByText("0");
-    expect(zeros.length).toBe(2);
+    const unavailable = screen.getAllByText("—");
+    expect(unavailable.length).toBe(2);
+    expect(screen.queryByText("0")).not.toBeInTheDocument();
   });
 
   it("renders Aethelred Network footer text", () => {
@@ -322,13 +353,21 @@ describe("IdentityCard", () => {
     expect(screen.getByText("did:short")).toBeInTheDocument();
   });
 
-  it("falls back to unverified status for unknown verificationStatus", () => {
+  it("does not infer unverified status from an unknown verification value", () => {
     const unknownStatusIdentity = {
       ...mockIdentity,
       verificationStatus: "unknown_status" as any,
     };
     render(<IdentityCard identity={unknownStatusIdentity} />);
-    expect(screen.getByText("Unverified")).toBeInTheDocument();
+    expect(screen.getByText("Evidence unavailable")).toBeInTheDocument();
+    expect(screen.queryByText("Unverified")).not.toBeInTheDocument();
+  });
+
+  it("does not render an invalid created date", () => {
+    const invalidDateIdentity = { ...mockIdentity, createdAt: "not-a-date" };
+    render(<IdentityCard identity={invalidDateIdentity as any} />);
+    expect(screen.getByText("—")).toBeInTheDocument();
+    expect(screen.queryByText("Invalid Date")).not.toBeInTheDocument();
   });
 
   it("triggers hover start handler to show shimmer", () => {

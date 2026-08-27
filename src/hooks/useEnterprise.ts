@@ -9,7 +9,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAccount } from "wagmi";
 import { toast } from "sonner";
-import { apiClient, ZeroIDApiError } from "@/lib/api/client";
+import { apiClient } from "@/lib/api/client";
 import type { ISODateString } from "@/types";
 
 // ---------------------------------------------------------------------------
@@ -378,10 +378,6 @@ function normalizeUsageMetrics(
   };
 }
 
-function unsupportedEnterpriseFlow(message: string, code: string): never {
-  throw new ZeroIDApiError(message, code, 501);
-}
-
 // ---------------------------------------------------------------------------
 // API Keys
 // ---------------------------------------------------------------------------
@@ -493,11 +489,14 @@ export function useRegisterWebhook() {
 export function useTestWebhook() {
   return useMutation({
     mutationFn: async (webhookId: string): Promise<WebhookTestResult> => {
-      void webhookId;
-      unsupportedEnterpriseFlow(
-        "Ad-hoc webhook test delivery is not exposed by the backend API.",
-        "ENTERPRISE_WEBHOOK_TEST_UNAVAILABLE",
-      );
+      const result = await apiClient.post<
+        Omit<WebhookTestResult, "webhookId" | "testedAt">
+      >(`/api/v1/enterprise/webhooks/${webhookId}/test`, {});
+      return {
+        webhookId,
+        ...result,
+        testedAt: new Date().toISOString(),
+      };
     },
     onSuccess: (data) => {
       if (data.delivered) {

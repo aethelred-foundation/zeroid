@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { createHash } from 'crypto';
 import { isIP } from 'net';
-import { redis, logger } from '../index';
+import { redis, logger } from '../runtime';
 import { isProductionRuntime } from '../services/production-safety';
 
 const RATE_LIMIT_WINDOW_SCRIPT = `

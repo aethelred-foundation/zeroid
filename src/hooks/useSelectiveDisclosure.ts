@@ -8,17 +8,91 @@
 import { useAccount } from "wagmi";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ZeroIDApiError } from "@/lib/api/client";
+import { apiClient } from "@/lib/api/client";
+import { getIdentityAuthToken } from "@/lib/identity/registration";
 import type {
   DisclosureRequest,
   DisclosureResponse,
   DisclosureHistoryEntry,
   DisclosureAttribute,
   DisclosurePolicy,
+  VerificationRequest,
+  ZKProof,
 } from "@/types";
+import { VerificationStatus } from "@/types";
 
-function unsupportedDisclosureFlow(message: string, code: string): never {
-  throw new ZeroIDApiError(message, code, 501);
+function requireIdentityAuthToken(): string {
+  const token = getIdentityAuthToken();
+  if (!token) {
+    throw new Error("An authenticated ZeroID identity session is required.");
+  }
+  return token;
+}
+
+function attributeKeys(attributes: DisclosureAttribute[]): string[] {
+  return attributes.map((attribute) => attribute.key).filter(Boolean);
+}
+
+function policyString(
+  policy: DisclosurePolicy,
+  key: string,
+): string | undefined {
+  const value = policy[key];
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function credentialHashForDisclosure(
+  _attributes: DisclosureAttribute[],
+  policy: DisclosurePolicy,
+): string {
+  const credentialHash = policyString(policy, "credentialHash");
+  if (/^0x[0-9a-fA-F]{64}$/.test(credentialHash ?? "")) {
+    return credentialHash as string;
+  }
+
+  throw new Error(
+    "Disclosure request requires the holder credential's 32-byte credentialHash commitment.",
+  );
+}
+
+function parseGeneratedProof(proofData: string): ZKProof {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(proofData);
+  } catch {
+    throw new Error(
+      "Disclosure response requires a generated ZK proof JSON payload.",
+    );
+  }
+
+  if (
+    !parsed ||
+    typeof parsed !== "object" ||
+    typeof (parsed as { circuitId?: unknown }).circuitId !== "string" ||
+    typeof (parsed as { proofHash?: unknown }).proofHash !== "string" ||
+    !(parsed as { proof?: unknown }).proof
+  ) {
+    throw new Error(
+      "Disclosure response requires a complete generated ZK proof.",
+    );
+  }
+
+  return parsed as ZKProof;
+}
+
+function verificationToDisclosureRequest(
+  request: VerificationRequest,
+): DisclosureRequest {
+  return {
+    ...request,
+    requestedAttributes: request.requestedAttributes.map(
+      (key) => ({ key }) as DisclosureAttribute,
+    ),
+    policy: {
+      purpose: request.purpose,
+      expiresAt: request.expiresAt,
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -37,12 +111,25 @@ export function useCreateDisclosureRequest() {
       purpose: string;
       expiresIn?: number;
     }): Promise<{ requestId: string; challenge: string }> => {
-      void params;
       void address;
-      unsupportedDisclosureFlow(
-        "Selective disclosure request creation is not exposed by the backend API. Use context-bound ZK proof generation and verification endpoints.",
-        "DISCLOSURE_REQUEST_CREATE_UNAVAILABLE",
+      const request = await apiClient.createVerificationRequest(
+        {
+          subjectDid: params.subjectDid,
+          credentialHash: credentialHashForDisclosure(
+            params.requestedAttributes,
+            params.policy,
+          ),
+          requestedAttributes: attributeKeys(params.requestedAttributes),
+          circuitId:
+            policyString(params.policy, "circuitId") ?? "selective_disclosure",
+          expiresAt:
+            Math.floor(Date.now() / 1000) + Number(params.expiresIn ?? 86_400),
+          purpose: params.purpose,
+          requiredAttributes: params.requestedAttributes,
+        } as never,
+        requireIdentityAuthToken(),
       );
+      return { requestId: request.id, challenge: request.id };
     },
     onSuccess: (data) => {
       toast.success("Disclosure request created", {
@@ -73,12 +160,21 @@ export function useBuildDisclosureResponse() {
       credentialIds: string[];
       zkProof: string;
     }): Promise<DisclosureResponse> => {
-      void params;
       void address;
-      unsupportedDisclosureFlow(
-        "Selective disclosure responses are not exposed by the backend API. Submit generated ZK proofs through /api/v1/verification/zk-verify.",
-        "DISCLOSURE_RESPONSE_UNAVAILABLE",
+      const result = await apiClient.respondToVerification(
+        params.requestId,
+        {
+          consent: true,
+          proof: parseGeneratedProof(params.zkProof),
+        },
+        requireIdentityAuthToken(),
       );
+      return {
+        requestId: result.requestId,
+        selectedAttributes: params.selectedAttributes,
+        verification: result,
+        credentialIds: params.credentialIds,
+      };
     },
     onSuccess: () => {
       toast.success("Disclosure response submitted", {
@@ -102,11 +198,14 @@ export function usePendingDisclosures() {
 
   return useQuery<DisclosureRequest[]>({
     queryKey: ["pendingDisclosures", address],
-    queryFn: () =>
-      unsupportedDisclosureFlow(
-        "Pending disclosure requests are not exposed by the backend API.",
-        "DISCLOSURE_PENDING_UNAVAILABLE",
-      ),
+    queryFn: async () => {
+      const requests = await apiClient.get<VerificationRequest[]>(
+        "/api/v1/verification/requests?role=subject&result=PENDING&limit=100",
+      );
+      return requests
+        .filter((request) => request.status === VerificationStatus.Pending)
+        .map(verificationToDisclosureRequest);
+    },
     enabled: !!address,
     staleTime: 10_000,
     refetchInterval: 15_000,
@@ -120,12 +219,15 @@ export function usePendingDisclosures() {
 export function useDisclosureRequest(requestId: string | undefined) {
   return useQuery<DisclosureRequest>({
     queryKey: ["disclosureRequest", requestId],
-    queryFn: () => {
-      void requestId;
-      unsupportedDisclosureFlow(
-        "Disclosure request detail is not exposed by the backend API.",
-        "DISCLOSURE_DETAIL_UNAVAILABLE",
+    queryFn: async () => {
+      const requests = await apiClient.get<VerificationRequest[]>(
+        "/api/v1/verification/requests?role=subject&result=PENDING&limit=100",
       );
+      const request = requests.find((candidate) => candidate.id === requestId);
+      if (!request) {
+        throw new Error(`Disclosure request ${requestId} was not found.`);
+      }
+      return verificationToDisclosureRequest(request);
     },
     enabled: !!requestId,
     staleTime: 30_000,
@@ -144,13 +246,15 @@ export function useDisclosureHistory(page = 1, pageSize = 20) {
 
   return useQuery<{ items: DisclosureHistoryEntry[]; total: number }>({
     queryKey: ["disclosureHistory", address, page],
-    queryFn: () => {
-      void params;
-      void address;
-      unsupportedDisclosureFlow(
-        "Disclosure history is not exposed by the backend API.",
-        "DISCLOSURE_HISTORY_UNAVAILABLE",
+    queryFn: async () => {
+      params.set("limit", String(pageSize));
+      const items = await apiClient.get<DisclosureHistoryEntry[]>(
+        `/api/v1/verification/history?${params.toString()}`,
       );
+      return {
+        items,
+        total: items.length,
+      };
     },
     enabled: !!address,
     staleTime: 30_000,

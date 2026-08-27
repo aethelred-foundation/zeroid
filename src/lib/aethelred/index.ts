@@ -39,11 +39,7 @@ export {
   type VerifyTEEResult,
 } from "./attestation";
 
-export {
-  createDigitalSeal,
-  verifyDigitalSeal,
-  getDigitalSeal,
-} from "./seals";
+export { createDigitalSeal, verifyDigitalSeal, getDigitalSeal } from "./seals";
 
 export {
   verifyLivenessProof,

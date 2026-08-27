@@ -12,6 +12,7 @@ const MIN_POLICY_RECEIPT_SECRET_LENGTH = 48;
 const MIN_ENTERPRISE_SECRET_HASH_PEPPER_LENGTH = 48;
 const MIN_IDENTITY_RECOVERY_HASH_PEPPER_LENGTH = 48;
 const MIN_GOVERNMENT_CACHE_HASH_PEPPER_LENGTH = 48;
+const MIN_OID4VCI_STORAGE_HASH_PEPPER_LENGTH = 48;
 const DEFAULT_DEVELOPMENT_CORS_ORIGINS = ['http://localhost:3000'];
 const REQUIRED_SECRET_KEY_BYTES = 32;
 const MAX_PRODUCTION_SANCTIONS_LIST_AGE_HOURS = 24;
@@ -88,6 +89,26 @@ function isTrue(value: string | undefined): boolean {
   return value?.toLowerCase() === 'true';
 }
 
+function isParseableJson(value: string): boolean {
+  try {
+    JSON.parse(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** JSON object with `kty` and a private component (`d` for EC/OKP/RSA, `k` for oct). */
+function isPrivateJwkJson(value: string): boolean {
+  try {
+    const jwk = JSON.parse(value) as Record<string, unknown>;
+    if (typeof jwk !== 'object' || jwk === null || typeof jwk.kty !== 'string') return false;
+    return typeof jwk.d === 'string' || typeof jwk.k === 'string';
+  } catch {
+    return false;
+  }
+}
+
 export function getMetricsAuthToken(env: NodeJS.ProcessEnv = process.env): string | undefined {
   const token = env.METRICS_AUTH_TOKEN?.trim();
   return token && token.length > 0 ? token : undefined;
@@ -141,11 +162,15 @@ export function checkedProductionSafetyControls(): string[] {
     'TRUSTED_PROXY',
     'DIRECT_CLIENT_IP_MODE',
     'CORS_ORIGINS',
+    'ZEROID_AUTH_ORIGIN',
     'METRICS_PUBLIC_DISABLED_OR_METRICS_AUTH_TOKEN',
     'SANCTIONS_SCREENING_DISABLED_OR_SANCTIONS_LIST_SIGNATURE_PUBLIC_KEYS_JSON',
     'SANCTIONS_LIST_MAX_AGE_HOURS',
     'SANCTIONS_SCREENING_STORE_FILE',
     'WEBHOOK_SECRET_ENCRYPTION_KEY',
+    'OID4VCI_ISSUER_JWK',
+    'OID4VCI_STORAGE_HASH_PEPPER',
+    'OID4VP_ISSUER_JWKS',
     'POLICY_RECEIPT_SIGNING_SECRET',
     'REGULATORY_REPORT_STORE_DIR',
     'DATA_SOVEREIGNTY_STORE_FILE',
@@ -167,6 +192,13 @@ export function checkedProductionSafetyControls(): string[] {
   ];
 }
 
+/**
+ * Resolve the explicit CORS origin allowlist for the API.
+ *
+ * Wildcards are deliberately ignored in every environment. Testnet and local
+ * deployments must list their frontend origins explicitly so enabling browser
+ * credentials can never be combined with origin reflection.
+ */
 export function getAllowedCorsOrigins(
   env: NodeJS.ProcessEnv = process.env,
 ): string[] {
@@ -176,7 +208,7 @@ export function getAllowedCorsOrigins(
     .filter(Boolean);
 
   if (configured && configured.length > 0) {
-    return [...new Set(configured)];
+    return [...new Set(configured.filter((origin) => origin !== '*'))];
   }
 
   return [...DEFAULT_DEVELOPMENT_CORS_ORIGINS];
@@ -263,11 +295,17 @@ export function collectProductionSafetyViolations(
 
   validateTrustedProxyConfig(env, violations);
 
+  const configuredCorsOrigins = parseCsv(env.CORS_ORIGINS);
   const corsOrigins = getAllowedCorsOrigins(env);
   if (!env.CORS_ORIGINS?.trim()) {
     violations.push({
       control: 'CORS_ORIGINS',
       risk: 'Production CORS allowlist is missing and would fall back to localhost',
+    });
+  } else if (configuredCorsOrigins.includes('*')) {
+    violations.push({
+      control: 'CORS_ORIGINS',
+      risk: 'Production CORS must be an explicit origin allowlist; wildcard origins are not accepted',
     });
   } else {
     const unsafeOrigin = corsOrigins.find(
@@ -279,6 +317,30 @@ export function collectProductionSafetyViolations(
         risk: `Production CORS origin is not allowed: ${unsafeOrigin}`,
       });
     }
+  }
+
+  const authOrigin = env.ZEROID_AUTH_ORIGIN?.trim();
+  if (!authOrigin) {
+    violations.push({
+      control: 'ZEROID_AUTH_ORIGIN',
+      risk: 'Production wallet authentication requires an explicit HTTPS application origin for domain-bound sign-in messages',
+    });
+  } else if (!isTrustedCorsOrigin(authOrigin)) {
+    violations.push({
+      control: 'ZEROID_AUTH_ORIGIN',
+      risk: 'Production wallet authentication origin must be a public HTTPS origin without credentials, path, query, or fragment',
+    });
+  } else if (
+    Boolean(env.CORS_ORIGINS?.trim()) &&
+    !configuredCorsOrigins.includes('*') &&
+    Array.isArray(corsOrigins) &&
+    corsOrigins.every((origin) => isTrustedCorsOrigin(origin)) &&
+    !corsOrigins.includes(authOrigin)
+  ) {
+    violations.push({
+      control: 'ZEROID_AUTH_ORIGIN',
+      risk: 'Wallet authentication origin must also be present in the production CORS allowlist',
+    });
   }
 
   if (!isMetricsEndpointDisabled(env)) {
@@ -346,6 +408,49 @@ export function collectProductionSafetyViolations(
     violations.push({
       control: 'WEBHOOK_SECRET_ENCRYPTION_KEY',
       risk: `Webhook secret encryption key must decode to ${REQUIRED_SECRET_KEY_BYTES} bytes`,
+    });
+  }
+
+  // OpenID4VCI issuer signing key: without it the issuer would silently fall
+  // back to an ephemeral key — credentials become unverifiable after restart.
+  const oid4vciIssuerJwk = env.OID4VCI_ISSUER_JWK?.trim();
+  if (!oid4vciIssuerJwk) {
+    violations.push({
+      control: 'OID4VCI_ISSUER_JWK',
+      risk: 'OpenID4VCI would issue credentials with an ephemeral signing key; issued credentials become unverifiable after every restart',
+    });
+  } else if (!isPrivateJwkJson(oid4vciIssuerJwk)) {
+    violations.push({
+      control: 'OID4VCI_ISSUER_JWK',
+      risk: 'OID4VCI_ISSUER_JWK must be a JSON private JWK (kty plus a private component)',
+    });
+  }
+
+  const oid4vciStorageHashPepper = env.OID4VCI_STORAGE_HASH_PEPPER?.trim();
+  if (!oid4vciStorageHashPepper) {
+    violations.push({
+      control: 'OID4VCI_STORAGE_HASH_PEPPER',
+      risk: 'OpenID4VCI bearer codes, access tokens, tx_codes, and nonce envelopes require a deployment-specific storage pepper',
+    });
+  } else if (oid4vciStorageHashPepper.length < MIN_OID4VCI_STORAGE_HASH_PEPPER_LENGTH) {
+    violations.push({
+      control: 'OID4VCI_STORAGE_HASH_PEPPER',
+      risk: `OpenID4VCI storage hash pepper must be at least ${MIN_OID4VCI_STORAGE_HASH_PEPPER_LENGTH} characters`,
+    });
+  } else if (isKnownUnsafeSharedSecret(oid4vciStorageHashPepper)) {
+    violations.push({
+      control: 'OID4VCI_STORAGE_HASH_PEPPER',
+      risk: 'OpenID4VCI storage hash pepper must not use a known development or test placeholder',
+    });
+  }
+
+  // OpenID4VP issuer trust store: absence is fail-closed by design (the
+  // verifier 401s), but a malformed value is a silent misconfiguration.
+  const oid4vpIssuerJwks = env.OID4VP_ISSUER_JWKS?.trim();
+  if (oid4vpIssuerJwks && !isParseableJson(oid4vpIssuerJwks)) {
+    violations.push({
+      control: 'OID4VP_ISSUER_JWKS',
+      risk: 'OID4VP_ISSUER_JWKS is set but is not valid JSON; every SD-JWT presentation would be rejected as VP_TOKEN_INVALID',
     });
   }
 

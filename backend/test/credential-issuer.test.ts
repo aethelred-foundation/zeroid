@@ -45,7 +45,7 @@ const mockLogger = {
 const mockIdentityFindUnique = jest.fn();
 const mockIssuerKeyHistoryFindFirst = jest.fn();
 
-jest.mock('../src/index', () => {
+jest.mock('../src/runtime', () => {
   const { Registry, Counter } = require('prom-client');
   const registry = new Registry();
   return {
@@ -309,7 +309,7 @@ describe('CRED-01: Issuer-scoped credential verification', () => {
     });
     delete process.env.ALLOW_LOCAL_CREDENTIAL_SIGNING;
 
-    jest.mock('../src/index', () => {
+    jest.mock('../src/runtime', () => {
       const { Registry, Counter } = require('prom-client');
       const registry = new Registry();
       return {
@@ -565,7 +565,7 @@ describe('CRED-01: Issuer-scoped credential verification', () => {
       status: 'ACTIVE',
     });
 
-    jest.mock('../src/index', () => {
+    jest.mock('../src/runtime', () => {
       const { Registry, Counter } = require('prom-client');
       const registry = new Registry();
       return {
@@ -635,7 +635,7 @@ describe('CRED-01: Issuer-scoped credential verification', () => {
     process.env.KMS_PROVIDER = 'local';
     process.env.ALLOW_LOCAL_CREDENTIAL_SIGNING = 'true';
 
-    jest.mock('../src/index', () => {
+    jest.mock('../src/runtime', () => {
       const { Registry, Counter } = require('prom-client');
       const registry = new Registry();
       return {
@@ -693,7 +693,7 @@ describe('CRED-01: Issuer-scoped credential verification', () => {
     process.env.ALLOW_LEGACY_HMAC_CREDENTIAL_SIGNING = 'true';
     process.env.CREDENTIAL_SIGNING_SECRET = 'test-hmac-secret';
 
-    jest.mock('../src/index', () => {
+    jest.mock('../src/runtime', () => {
       const { Registry, Counter } = require('prom-client');
       const registry = new Registry();
       return {

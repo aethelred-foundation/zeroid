@@ -10,6 +10,7 @@ import {
   LayoutDashboard,
   Fingerprint,
   BadgeCheck,
+  ShieldCheck,
   ScanEye,
   Vote,
   ClipboardList,
@@ -23,8 +24,6 @@ import {
   GitBranch,
   BarChart3,
   ShieldAlert,
-  Puzzle,
-  UserCog,
 } from "lucide-react";
 
 import { Sidebar } from "./Sidebar";
@@ -66,6 +65,12 @@ export const NAV_SECTIONS: NavSection[] = [
         label: "Credentials",
         href: "/credentials",
         icon: <BadgeCheck className={ICON_SIZE} />,
+      },
+      {
+        label: "Eligibility",
+        href: "/eligibility",
+        icon: <ShieldCheck className={ICON_SIZE} />,
+        badge: "Core",
       },
       {
         label: "Verification",
@@ -119,11 +124,6 @@ export const NAV_SECTIONS: NavSection[] = [
         href: "/marketplace",
         icon: <Store className={ICON_SIZE} />,
       },
-      {
-        label: "Integrations",
-        href: "/integrations",
-        icon: <Puzzle className={ICON_SIZE} />,
-      },
     ],
   },
   {
@@ -143,11 +143,6 @@ export const NAV_SECTIONS: NavSection[] = [
         label: "Revocation",
         href: "/revocation",
         icon: <ShieldAlert className={ICON_SIZE} />,
-      },
-      {
-        label: "Admin",
-        href: "/admin",
-        icon: <UserCog className={ICON_SIZE} />,
       },
       {
         label: "Settings",
@@ -182,6 +177,12 @@ const SEARCH_ITEMS = [
     href: "/credentials",
     section: "Core",
     icon: <BadgeCheck className="w-4 h-4" />,
+  },
+  {
+    label: "Eligibility",
+    href: "/eligibility",
+    section: "Core",
+    icon: <ShieldCheck className="w-4 h-4" />,
   },
   {
     label: "Verification",
@@ -232,12 +233,6 @@ const SEARCH_ITEMS = [
     icon: <Store className="w-4 h-4" />,
   },
   {
-    label: "Integrations",
-    href: "/integrations",
-    section: "Enterprise",
-    icon: <Puzzle className="w-4 h-4" />,
-  },
-  {
     label: "Governance",
     href: "/governance",
     section: "System",
@@ -254,12 +249,6 @@ const SEARCH_ITEMS = [
     href: "/revocation",
     section: "System",
     icon: <ShieldAlert className="w-4 h-4" />,
-  },
-  {
-    label: "Admin",
-    href: "/admin",
-    section: "System",
-    icon: <UserCog className="w-4 h-4" />,
   },
   {
     label: "Settings",
@@ -284,6 +273,12 @@ const SEARCH_ITEMS = [
     href: "/verification",
     section: "Actions",
     icon: <ScanEye className="w-4 h-4" />,
+  },
+  {
+    label: "Run Eligibility Proof",
+    href: "/eligibility",
+    section: "Actions",
+    icon: <ShieldCheck className="w-4 h-4" />,
   },
   {
     label: "Register AI Agent",
@@ -489,7 +484,7 @@ export function AppLayout({ children }: AppLayoutProps) {
       {/* Noise texture */}
       <div className="noise-overlay" />
 
-      {/* Desktop floating dock */}
+      {/* Desktop labeled sidebar */}
       <Sidebar
         collapsed={false}
         onToggle={() => {}}
@@ -527,7 +522,7 @@ export function AppLayout({ children }: AppLayoutProps) {
       </AnimatePresence>
 
       {/* Main content area — offset for dock on desktop */}
-      <div className="lg:pl-[76px] flex flex-col min-h-screen relative z-10">
+      <div className="lg:pl-[248px] flex flex-col min-h-screen relative z-10">
         <Header
           onMenuClick={() => setMobileSidebarOpen(true)}
           onSearchClick={openSearch}
@@ -535,7 +530,7 @@ export function AppLayout({ children }: AppLayoutProps) {
         />
 
         <main className="flex-1">
-          <div className="mx-auto max-w-[1320px] px-5 sm:px-8 lg:px-10 pb-8">
+          <div className="mx-auto max-w-[1320px] px-5 sm:px-8 lg:px-10 pt-7 pb-8">
             <motion.div
               key={pathname}
               initial={{ opacity: 0, y: 12 }}
@@ -559,14 +554,6 @@ export function AppLayout({ children }: AppLayoutProps) {
               <span>Aethelred Network</span>
             </div>
             <div className="flex items-center gap-4">
-              <span className="flex items-center gap-1.5">
-                <span className="relative flex h-[5px] w-[5px]">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-60" />
-                  <span className="relative inline-flex rounded-full h-[5px] w-[5px] bg-emerald-500" />
-                </span>
-                <span className="text-emerald-500">Online</span>
-              </span>
-              <span className="w-px h-3 bg-zero-800" />
               <span className="font-mono text-zero-700">v1.0.0</span>
             </div>
           </div>

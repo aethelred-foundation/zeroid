@@ -14,10 +14,12 @@ import {
 } from "../chains";
 
 describe("chains config", () => {
-  it("exports canonical chain IDs (ecosystem/manifest.json)", () => {
-    expect(AETHELRED_MAINNET_ID).toBe(8821);
-    expect(AETHELRED_TESTNET_ID).toBe(88210);
-    expect(AETHELRED_DEVNET_ID).toBe(88211);
+  it("exports canonical EVM chain IDs (confirmed 7332; ecosystem/manifest.json)", () => {
+    expect(AETHELRED_MAINNET_ID).toBe(7331);
+    // Testnet and devnet share the confirmed live EVM id (7332): same chain,
+    // different endpoints.
+    expect(AETHELRED_TESTNET_ID).toBe(7332);
+    expect(AETHELRED_DEVNET_ID).toBe(7332);
   });
 
   it("defines mainnet chain with correct properties", () => {
@@ -35,11 +37,13 @@ describe("chains config", () => {
     expect(aethelredTestnet.testnet).toBe(true);
   });
 
-  it("defines devnet chain with localhost RPC", () => {
+  it("defines devnet chain with local aethelredd RPC", () => {
     expect(aethelredDevnet).toBeDefined();
     expect(aethelredDevnet.id).toBe(AETHELRED_DEVNET_ID);
+    // Local `aethelredd start --json-rpc.enable` node; 127.0.0.1 (not
+    // "localhost") avoids IPv6/hosts-file resolution surprises.
     expect(aethelredDevnet.rpcUrls.default.http[0]).toBe(
-      "http://localhost:8545",
+      "http://127.0.0.1:8545",
     );
   });
 

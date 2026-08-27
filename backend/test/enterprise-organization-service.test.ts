@@ -7,7 +7,7 @@ const mockOrganizationMemberUpsert = jest.fn();
 const mockIdentityFindUnique = jest.fn();
 const mockAuditLogCreate = jest.fn();
 
-jest.mock('../src/index', () => ({
+jest.mock('../src/runtime', () => ({
   prisma: {
     organization: {
       create: mockOrganizationCreate,

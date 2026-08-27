@@ -1,0 +1,39 @@
+{
+  "schema": "zeroid.circuit_manifest.v1",
+  "name": "eligibility_policy_context_v1",
+  "version": "2026.06.1",
+  "policyId": "zeroid://policy/regulated-digital-services/age-jurisdiction@2026.06.1",
+  "circuitId": "zkc_eligibility_policy_context_v1",
+  "circuitName": "eligibility_policy_context_v1",
+  "verificationKeyId": "vk_eligibility_policy_context_v1_2026_06_27",
+  "source": "circuits/eligibility/eligibility_context_proof.circom",
+  "publicSignals": [
+    "claimsHash",
+    "ageThresholdYears",
+    "residencyCountryCode",
+    "currentTimestamp",
+    "policyVersionHash",
+    "contextCommitment"
+  ],
+  "noPublicOutputs": true,
+  "privateInputsRedacted": [
+    "dateOfBirth",
+    "dobYear",
+    "dobMonth",
+    "dobDay",
+    "nationality",
+    "revocationNonce",
+    "sanctionsScreeningResult",
+    "riskTier",
+    "issuerSignature",
+    "policyVersionHashWitness",
+    "contextCommitmentWitness"
+  ],
+  "artifacts": {
+    "r1cs": "build/circuits/eligibility_context_v1/eligibility_context_proof.r1cs",
+    "sym": "build/circuits/eligibility_context_v1/eligibility_context_proof.sym",
+    "wasm": "build/circuits/eligibility_context_v1/eligibility_context_proof_js/eligibility_context_proof.wasm",
+    "zkey": "build/circuits/eligibility_context_v1/eligibility_context_proof_final.zkey",
+    "vkey": "build/circuits/eligibility_context_v1/verification_key.json"
+  }
+}

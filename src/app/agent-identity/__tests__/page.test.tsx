@@ -1,325 +1,295 @@
-import React from "react";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 
-// Mock next/navigation
-jest.mock("next/navigation", () => ({
-  useRouter: () => ({ push: jest.fn(), back: jest.fn() }),
-  usePathname: () => "/agent-identity",
-  useSearchParams: () => new URLSearchParams(),
-}));
+const mockRefetchAgents = jest.fn();
+const mockRefetchApprovals = jest.fn();
+const mockRegister = jest.fn();
+const mockSuspend = jest.fn();
+const mockResolveApproval = jest.fn();
 
-// AI Agent Passport v1 hooks — avoid needing a QueryClientProvider in this test
-const mockCreateAgentMutate = jest.fn().mockResolvedValue({});
-jest.mock("@/hooks/useAIAgents", () => ({
-  useAIAgents: () => ({ data: [] }),
-  useCreateAIAgent: () => ({
-    mutateAsync: mockCreateAgentMutate,
-    isPending: false,
-  }),
-}));
+let mockAgentsState: Record<string, unknown>;
+let mockApprovalsState: Record<string, unknown>;
+let mockDetailState: Record<string, unknown>;
 
-// Mock framer-motion
-jest.mock("framer-motion", () => ({
-  motion: new Proxy(
-    {},
-    {
-      get: (_target: any, prop: string) => {
-        return React.forwardRef((props: any, ref: any) => {
-          const {
-            initial,
-            animate,
-            exit,
-            transition,
-            whileHover,
-            whileTap,
-            variants,
-            layout,
-            layoutId,
-            ...rest
-          } = props;
-          const Tag = prop as any;
-          return <Tag ref={ref} {...rest} />;
-        });
-      },
-    },
-  ),
-  AnimatePresence: ({ children }: any) => <>{children}</>,
-}));
-
-// Mock AppLayout
 jest.mock("@/components/layout/AppLayout", () => ({
   __esModule: true,
-  default: ({ children }: any) => (
-    <div data-testid="app-layout">{children}</div>
-  ),
+  default: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+
+jest.mock("@/hooks/useAgentIdentity", () => ({
+  useAgents: () => mockAgentsState,
+  useApprovalQueue: () => mockApprovalsState,
+  useAgent: () => mockDetailState,
+  useRegisterAgent: () => ({
+    mutateAsync: mockRegister,
+    isPending: false,
+    error: null,
+  }),
+  useSuspendAgent: () => ({
+    mutateAsync: mockSuspend,
+    isPending: false,
+    error: null,
+  }),
+  useApproveAction: () => ({
+    mutate: mockResolveApproval,
+    isPending: false,
+    variables: undefined,
+  }),
 }));
 
 import AgentIdentityPage from "../page";
 
+const agent = {
+  agentId: "agent-001",
+  did: "did:aethelred:agent:0123456789abcdef0123456789abcdef",
+  operatorId: "identity-001",
+  agentName: "Credential Verifier",
+  agentDescription: "Verifies credentials for relying applications.",
+  agentProtocol: "aethelred_native",
+  status: "active" as const,
+  capabilities: [
+    {
+      name: "credential.verify",
+      description: "Verify a credential presentation.",
+      resourceTypes: ["credential"],
+      actions: ["verify"],
+      riskLevel: "medium" as const,
+      requiresApproval: false,
+    },
+  ],
+  publicKeyHash:
+    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  maxDelegationDepth: 2,
+  teeAttested: false,
+  createdAt: "2026-07-18T08:00:00.000Z",
+  updatedAt: "2026-07-18T08:01:00.000Z",
+  lastActiveAt: "2026-07-18T08:01:00.000Z",
+  stats: {
+    totalActions: 12,
+    successRate: 0.75,
+    averageLatencyMs: 18.5,
+  },
+  metadata: {},
+};
+
+beforeEach(() => {
+  jest.clearAllMocks();
+  mockRegister.mockResolvedValue({ agentId: "new-agent" });
+  mockSuspend.mockResolvedValue({ status: "suspended" });
+  mockAgentsState = {
+    accessState: "ready",
+    data: [agent],
+    isPending: false,
+    isError: false,
+    error: null,
+    refetch: mockRefetchAgents,
+  };
+  mockApprovalsState = {
+    accessState: "ready",
+    data: [],
+    isPending: false,
+    isError: false,
+    error: null,
+    refetch: mockRefetchApprovals,
+  };
+  mockDetailState = {
+    data: agent,
+    isPending: false,
+    isError: false,
+    error: null,
+    refetch: jest.fn(),
+  };
+});
+
 describe("AgentIdentityPage", () => {
-  it("renders without crashing", () => {
+  it("gates the registry on a connected wallet", () => {
+    mockAgentsState.accessState = "wallet-required";
     render(<AgentIdentityPage />);
-    expect(screen.getByTestId("app-layout")).toBeInTheDocument();
-  });
 
-  it("displays the page heading", () => {
-    render(<AgentIdentityPage />);
     expect(
-      screen.getByText("AI Agent Identity Management"),
+      screen.getByText(/Connect your operator wallet/i),
     ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Register agent/i }),
+    ).toBeNull();
   });
 
-  it("shows Register Agent button", () => {
+  it("gates the registry on an authenticated identity session", () => {
+    mockAgentsState.accessState = "sign-in-required";
     render(<AgentIdentityPage />);
-    expect(screen.getByText("Register Agent")).toBeInTheDocument();
+
+    expect(
+      screen.getByRole("link", { name: /identity sign-in/i }),
+    ).toHaveAttribute("href", "/identity");
   });
 
-  it("renders agent cards in grid view by default", () => {
-    render(<AgentIdentityPage />);
-    expect(screen.getAllByText("ComplianceBot-Alpha").length).toBeGreaterThan(
-      0,
-    );
-    expect(screen.getAllByText("KYC-Processor-v3").length).toBeGreaterThan(0);
+  it("renders honest loading, error, and retry states", () => {
+    mockAgentsState.isPending = true;
+    const { rerender } = render(<AgentIdentityPage />);
+    expect(screen.getByText(/Loading registered agents/i)).toBeInTheDocument();
+
+    mockAgentsState.isPending = false;
+    mockAgentsState.isError = true;
+    mockAgentsState.error = new Error("Agent registry unavailable");
+    rerender(<AgentIdentityPage />);
+    expect(screen.getByText("Agent registry unavailable")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(mockRefetchAgents).toHaveBeenCalled();
   });
 
-  it("opens registration wizard when Register Agent is clicked", () => {
+  it("shows a real empty state without sample agents", () => {
+    mockAgentsState.data = [];
     render(<AgentIdentityPage />);
-    fireEvent.click(screen.getByText("Register Agent"));
-    expect(screen.getByText("Register New Agent")).toBeInTheDocument();
-    expect(screen.getByText("Step 1 of 4")).toBeInTheDocument();
+
+    expect(screen.getByText("No registered agents")).toBeInTheDocument();
+    expect(screen.queryByText("ComplianceBot-Alpha")).toBeNull();
   });
 
-  it("switches to list view", () => {
+  it("renders and searches only returned agent records and statistics", async () => {
     render(<AgentIdentityPage />);
-    // Find the list view toggle button (second button in the view toggle group)
-    const listButtons = screen.getAllByRole("button");
-    const listViewButton = listButtons.find((b) => {
-      const icon = b.querySelector("[data-testid]");
-      return icon?.getAttribute("data-testid") === "icon-list";
+
+    expect(screen.getByText("Credential Verifier")).toBeInTheDocument();
+    expect(screen.getByText("12 actions")).toBeInTheDocument();
+    expect(screen.queryByText("Anomalies")).not.toBeInTheDocument();
+    expect(screen.queryByText("TradingAgent-Gamma")).toBeNull();
+
+    fireEvent.change(screen.getByRole("searchbox", { name: "Search agents" }), {
+      target: { value: "no-match" },
     });
-    if (listViewButton) {
-      fireEvent.click(listViewButton);
-      // In list view, agents should still be visible
-      expect(screen.getAllByText("ComplianceBot-Alpha").length).toBeGreaterThan(
-        0,
-      );
-    }
-  });
-
-  it("filters agents by search query", () => {
-    render(<AgentIdentityPage />);
-    const searchInput = screen.getByPlaceholderText(
-      "Search agents by name or type...",
-    );
-    fireEvent.change(searchInput, { target: { value: "Compliance" } });
-    expect(screen.getAllByText("ComplianceBot-Alpha").length).toBeGreaterThan(
-      0,
-    );
-    // TradingAgent-Gamma still appears in HITL queue, but should not be in the filtered agent grid
-    // Verify DataGuard-Sentinel (Security type, not matching 'Compliance') is not shown
-    expect(screen.queryByText("DataGuard-Sentinel")).not.toBeInTheDocument();
-  });
-
-  it("navigates through wizard steps", () => {
-    render(<AgentIdentityPage />);
-    fireEvent.click(screen.getByText("Register Agent"));
-    expect(screen.getByText("Step 1 of 4")).toBeInTheDocument();
-    expect(screen.getByText("Agent Name")).toBeInTheDocument();
-
-    // Go to step 2
-    fireEvent.click(screen.getByText("Next"));
-    expect(screen.getByText("Step 2 of 4")).toBeInTheDocument();
-    expect(screen.getByText("Select Capabilities")).toBeInTheDocument();
-
-    // Go to step 3
-    fireEvent.click(screen.getByText("Next"));
-    expect(screen.getByText("Step 3 of 4")).toBeInTheDocument();
-    expect(screen.getByText("Human-in-the-Loop")).toBeInTheDocument();
-
-    // Go to step 4 (Review)
-    fireEvent.click(screen.getByText("Next"));
-    expect(screen.getByText("Step 4 of 4")).toBeInTheDocument();
-    // "Register Agent" text appears both as main page button and wizard final button
-    expect(screen.getAllByText("Register Agent").length).toBeGreaterThanOrEqual(
-      2,
-    );
-  });
-
-  it("goes back in wizard steps", () => {
-    render(<AgentIdentityPage />);
-    fireEvent.click(screen.getByText("Register Agent"));
-    // Go to step 2
-    fireEvent.click(screen.getByText("Next"));
-    expect(screen.getByText("Step 2 of 4")).toBeInTheDocument();
-    // Go back
-    fireEvent.click(screen.getByText("Back"));
-    expect(screen.getByText("Step 1 of 4")).toBeInTheDocument();
-  });
-
-  it("switches to Capability Matrix tab", () => {
-    render(<AgentIdentityPage />);
-    fireEvent.click(screen.getByText("Capability Matrix"));
-    expect(screen.getByText("Agent Capability Matrix")).toBeInTheDocument();
-    expect(screen.getByText("KYC Verification")).toBeInTheDocument();
-    expect(screen.getByText("Sanctions Screening")).toBeInTheDocument();
-  });
-
-  it("switches to Delegation Chains tab", () => {
-    render(<AgentIdentityPage />);
-    fireEvent.click(screen.getByText("Delegation Chains"));
-    expect(
-      screen.getByText("Delegation Chain Visualization"),
-    ).toBeInTheDocument();
-    expect(screen.getByText("Root Admin (0x7a3...f21d)")).toBeInTheDocument();
-  });
-
-  it("displays HITL approval queue", () => {
-    render(<AgentIdentityPage />);
-    expect(screen.getByText("Human-in-the-Loop Queue")).toBeInTheDocument();
-    expect(
-      screen.getByText("Execute swap: 50,000 USDC -> ETH"),
-    ).toBeInTheDocument();
-  });
-
-  it("displays real-time activity log", () => {
-    render(<AgentIdentityPage />);
-    expect(screen.getByText("Real-time Activity")).toBeInTheDocument();
-    expect(
-      screen.getByText("Completed sanctions screening batch (247 entities)"),
-    ).toBeInTheDocument();
-  });
-
-  it("closes wizard via Cancel on step 0", () => {
-    render(<AgentIdentityPage />);
-    fireEvent.click(screen.getByText("Register Agent"));
-    expect(screen.getByText("Register New Agent")).toBeInTheDocument();
-    fireEvent.click(screen.getByText("Cancel"));
-    expect(screen.queryByText("Register New Agent")).not.toBeInTheDocument();
-  });
-
-  it("selects an agent card in grid view", () => {
-    render(<AgentIdentityPage />);
-    // Click on an agent card to select it (covers line 236 selectedAgent highlight)
-    const agentCards = screen.getAllByText("ComplianceBot-Alpha");
-    // Click the first one (in the grid)
-    fireEvent.click(
-      agentCards[0].closest('[class*="cursor-pointer"]') || agentCards[0],
-    );
-    // The agent should now be selected (border-brand-500 class applied)
-    expect(screen.getByTestId("app-layout")).toBeInTheDocument();
-  });
-
-  it("switches to list view and back to grid view", () => {
-    const { container } = render(<AgentIdentityPage />);
-
-    // Helper to find toggle buttons
-    const findToggleButtons = () => {
-      const allBtns = Array.from(container.querySelectorAll("button"));
-      return allBtns.filter((btn) => {
-        const parent = btn.parentElement;
-        if (!parent) return false;
-        const siblingButtons = parent.querySelectorAll(":scope > button");
-        return siblingButtons.length === 2 && btn.className.includes("p-2.5");
-      });
-    };
-
-    // Find toggle buttons
-    let togglePair = findToggleButtons();
-    expect(togglePair.length).toBe(2);
-
-    // Switch to list view (click second button)
-    fireEvent.click(togglePair[1]);
-    expect(screen.getAllByText("ComplianceBot-Alpha").length).toBeGreaterThan(
-      0,
-    );
-
-    // Re-query after re-render to get fresh DOM references
-    togglePair = findToggleButtons();
-    expect(togglePair.length).toBe(2);
-
-    // Switch back to grid view (click first button - covers line 218 onClick)
-    fireEvent.click(togglePair[0]);
-    expect(screen.getAllByText("ComplianceBot-Alpha").length).toBeGreaterThan(
-      0,
-    );
-  });
-
-  it("selects an agent in list view", () => {
-    render(<AgentIdentityPage />);
-    // Switch to list view first
-    const viewToggle = screen.getByPlaceholderText(
-      "Search agents by name or type...",
-    ).parentElement?.parentElement;
-    const buttons = viewToggle?.querySelectorAll("button");
-    if (buttons && buttons.length >= 2) {
-      fireEvent.click(buttons[buttons.length - 1]);
-    }
-    // Click on an agent in list view (covers lines 289-294)
-    const agentName = screen.getAllByText("ComplianceBot-Alpha")[0];
-    const clickTarget =
-      agentName.closest('[class*="cursor-pointer"]') || agentName;
-    fireEvent.click(clickTarget);
-    expect(screen.getByTestId("app-layout")).toBeInTheDocument();
-  });
-
-  it("closes wizard by clicking backdrop overlay", () => {
-    render(<AgentIdentityPage />);
-    fireEvent.click(screen.getByText("Register Agent"));
-    expect(screen.getByText("Register New Agent")).toBeInTheDocument();
-    // Click the backdrop overlay (line 511) to close
-    const backdrop = document.querySelector(".backdrop-blur-sm");
-    if (backdrop) {
-      fireEvent.click(backdrop);
-    }
-    expect(screen.queryByText("Register New Agent")).not.toBeInTheDocument();
-  });
-
-  it("completes wizard by clicking Register Agent on final step", async () => {
-    render(<AgentIdentityPage />);
-    fireEvent.click(screen.getByText("Register Agent"));
-    // Fill the v1 passport name (step 0) before navigating
-    fireEvent.change(screen.getByPlaceholderText("e.g., ComplianceBot-v2"), {
-      target: { value: "Compliance Copilot v1" },
-    });
-    // Navigate to final step
-    fireEvent.click(screen.getByText("Next"));
-    fireEvent.click(screen.getByText("Next"));
-    fireEvent.click(screen.getByText("Next"));
-    expect(screen.getByText("Step 4 of 4")).toBeInTheDocument();
-    // Click the wizard's Register Agent button (last match)
-    const registerButtons = screen.getAllByText("Register Agent");
-    fireEvent.click(registerButtons[registerButtons.length - 1]);
-    // Registers via the v1 hook, then closes the wizard
+    expect(screen.getByText(/No agents match/)).toBeInTheDocument();
     await waitFor(() =>
-      expect(screen.queryByText("Register New Agent")).not.toBeInTheDocument(),
-    );
-    expect(mockCreateAgentMutate).toHaveBeenCalledWith(
-      expect.objectContaining({ displayName: "Compliance Copilot v1" }),
+      expect(screen.queryByText("Credential Verifier")).toBeNull(),
     );
   });
 
-  it("shows agents with different statuses and capabilities in grid", () => {
+  it("shows derived performance statistics as unavailable without actions", () => {
+    const newAgent = { ...agent, stats: { totalActions: 0 } };
+    mockAgentsState.data = [newAgent];
+    mockDetailState.data = newAgent;
     render(<AgentIdentityPage />);
-    // Verify suspended agent appears
-    expect(screen.getAllByText("AuditTrail-Monitor").length).toBeGreaterThan(0);
-    // Verify inactive agent appears
-    expect(screen.getAllByText("DataGuard-Sentinel").length).toBeGreaterThan(0);
-    // Verify agents with > 2 capabilities show +N
-    expect(screen.getAllByText(/\+\d/).length).toBeGreaterThan(0);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /Credential Verifier/i }),
+    );
+
+    expect(screen.getAllByText("Not available")).toHaveLength(2);
+    expect(screen.queryByText("100.0%")).not.toBeInTheDocument();
   });
 
-  it("displays M2M verification stats with positive and negative changes", () => {
+  it("submits the exact backend registration fields with TEE disabled", async () => {
     render(<AgentIdentityPage />);
-    expect(screen.getByText("M2M Verification Stats")).toBeInTheDocument();
-    expect(screen.getByText("+12%")).toBeInTheDocument();
-    expect(screen.getByText("-5%")).toBeInTheDocument();
-    expect(screen.getByText("-40%")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Register agent" }));
+    const dialog = screen.getByRole("dialog");
+
+    fireEvent.change(within(dialog).getByLabelText("Agent name"), {
+      target: { value: "Policy Verifier" },
+    });
+    fireEvent.change(within(dialog).getByLabelText("Agent description"), {
+      target: { value: "Verifies policy-bound credential presentations." },
+    });
+    fireEvent.change(
+      within(dialog).getByLabelText("Ed25519 public key (PEM)"),
+      {
+        target: {
+          value:
+            "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n-----END PUBLIC KEY-----",
+        },
+      },
+    );
+    fireEvent.change(within(dialog).getByLabelText("Capability name"), {
+      target: { value: "credential.verify" },
+    });
+    fireEvent.change(within(dialog).getByLabelText("Description"), {
+      target: { value: "Verify credential presentations." },
+    });
+    fireEvent.change(
+      within(dialog).getByLabelText("Resource types (comma-separated)"),
+      { target: { value: "credential, presentation" } },
+    );
+    fireEvent.change(
+      within(dialog).getByLabelText("Actions (comma-separated)"),
+      {
+        target: { value: "read, verify" },
+      },
+    );
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Register agent" }),
+    );
+
+    await waitFor(() =>
+      expect(mockRegister).toHaveBeenCalledWith({
+        agentName: "Policy Verifier",
+        agentDescription: "Verifies policy-bound credential presentations.",
+        agentProtocol: "aethelred_native",
+        capabilities: [
+          {
+            name: "credential.verify",
+            description: "Verify credential presentations.",
+            resourceTypes: ["credential", "presentation"],
+            actions: ["read", "verify"],
+            riskLevel: "low",
+            requiresApproval: true,
+          },
+        ],
+        publicKey:
+          "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n-----END PUBLIC KEY-----",
+        maxDelegationDepth: 2,
+        teeRequired: false,
+      }),
+    );
   });
 
-  it("shows agent controls section", () => {
+  it("performs real owner suspension from the selected agent", async () => {
     render(<AgentIdentityPage />);
-    expect(screen.getByText("Suspend All Agents")).toBeInTheDocument();
-    expect(screen.getByText("Revoke Agent")).toBeInTheDocument();
-    expect(screen.getByText("Rotate Credentials")).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", { name: /Credential Verifier/ }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Suspend agent" }));
+    fireEvent.change(screen.getByLabelText("Suspension reason"), {
+      target: { value: "Operator security review" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Confirm suspension" }));
+
+    await waitFor(() =>
+      expect(mockSuspend).toHaveBeenCalledWith({
+        agentId: agent.agentId,
+        reason: "Operator security review",
+      }),
+    );
+  });
+
+  it("resolves the real approval queue action", () => {
+    mockApprovalsState.data = [
+      {
+        id: "approval-001",
+        requestId: "approval-001",
+        agentId: agent.agentId,
+        operatorId: agent.operatorId,
+        action: "credential.verify",
+        actionType: "credential.verify",
+        actionDescription: "credential.verify on credential:cred-001",
+        resourceType: "credential",
+        resourceId: "cred-001",
+        riskLevel: "medium",
+        context: {},
+        status: "pending",
+        requestedAt: "2026-07-18T08:00:00.000Z",
+        createdAt: "2026-07-18T08:00:00.000Z",
+        expiresAt: "2026-07-19T08:00:00.000Z",
+      },
+    ];
+    render(<AgentIdentityPage />);
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+
+    expect(mockResolveApproval).toHaveBeenCalledWith({
+      requestId: "approval-001",
+      approved: true,
+      note: "Approved by the owning operator.",
+    });
   });
 });

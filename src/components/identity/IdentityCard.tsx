@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion } from "framer-motion";
 import {
   Shield,
   ShieldCheck,
@@ -9,10 +9,11 @@ import {
   Copy,
   ExternalLink,
   Fingerprint,
-  Award,
   Clock,
   CheckCircle2,
+  ArrowRight,
 } from "lucide-react";
+import Link from "next/link";
 import { useIdentity } from "@/hooks/useIdentity";
 import type { DID, IdentityProfile } from "@/types";
 
@@ -27,7 +28,8 @@ type IdentityVerificationState =
   | "pending"
   | "revoked"
   | "expired"
-  | "unverified";
+  | "unverified"
+  | "unavailable";
 
 const statusConfig: Record<
   IdentityVerificationState,
@@ -63,7 +65,46 @@ const statusConfig: Record<
     icon: Shield,
     color: "#fbbf24",
   },
+  unavailable: {
+    label: "Evidence unavailable",
+    badge: "badge-expired",
+    icon: Shield,
+    color: "#9ca3af",
+  },
 };
+
+function getVerificationState(value: unknown): IdentityVerificationState {
+  return typeof value === "string" && value in statusConfig
+    ? (value as IdentityVerificationState)
+    : "unavailable";
+}
+
+function displayCount(value: unknown): string {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+    ? value.toLocaleString()
+    : "—";
+}
+
+function displayCreatedAt(value: unknown): string {
+  if (
+    typeof value !== "string" &&
+    typeof value !== "number" &&
+    !(value instanceof Date)
+  ) {
+    return "—";
+  }
+  const raw =
+    typeof value === "number" && value > 0 && value < 10_000_000_000
+      ? value * 1_000
+      : value;
+  const date = new Date(raw);
+  return Number.isNaN(date.getTime())
+    ? "—"
+    : date.toLocaleDateString("en-US", {
+        month: "short",
+        year: "numeric",
+      });
+}
 
 function truncateDID(did: string, chars = 8): string {
   if (did.length <= chars * 2 + 3) return did;
@@ -75,6 +116,12 @@ function getDidString(did: string | DID | undefined): string {
   return typeof did === "string" ? did : did.uri;
 }
 
+/**
+ * The identity rendered as a physical object: a brushed-titanium card with the
+ * DID laser-engraved into the metal and the verification state as a hallmark
+ * stamp. Registered and unregistered states are the same object — one etched,
+ * one still blank.
+ */
 export default function IdentityCard({
   identity: identityProp,
   compact = false,
@@ -83,13 +130,11 @@ export default function IdentityCard({
   const { identity: contextIdentity, isLoading, error } = useIdentity();
   const identity = identityProp ?? contextIdentity;
   const did = getDidString(identity?.did);
-  const verificationStatus = (identity?.verificationStatus ??
-    "unverified") as IdentityVerificationState;
-  const credentialCount = identity?.credentialCount ?? 0;
-  const verificationCount = identity?.verificationCount ?? 0;
+  const verificationStatus = getVerificationState(identity?.verificationStatus);
+  const credentialCount = displayCount(identity?.credentialCount);
+  const verificationCount = displayCount(identity?.verificationCount);
   const createdAt = identity?.createdAt;
   const [copied, setCopied] = useState(false);
-  const [isHovered, setIsHovered] = useState(false);
 
   const handleCopyDID = async () => {
     if (!did) return;
@@ -100,22 +145,22 @@ export default function IdentityCard({
     } catch {}
   };
 
-  if (isLoading) {
+  if (identityProp === undefined && isLoading) {
     return (
-      <div className="bento p-7 animate-pulse h-full">
+      <div className="titanium-card p-7 animate-pulse h-full">
         <div className="flex items-center gap-4 mb-6">
           <div
-            className="w-14 h-14 rounded-2xl"
-            style={{ background: "rgba(255,255,255,0.04)" }}
+            className="w-12 h-12 rounded-xl"
+            style={{ background: "rgba(255,255,255,0.05)" }}
           />
           <div className="flex-1 space-y-3">
             <div
               className="h-4 rounded-lg w-3/4"
-              style={{ background: "rgba(255,255,255,0.04)" }}
+              style={{ background: "rgba(255,255,255,0.05)" }}
             />
             <div
               className="h-3 rounded-lg w-1/2"
-              style={{ background: "rgba(255,255,255,0.04)" }}
+              style={{ background: "rgba(255,255,255,0.05)" }}
             />
           </div>
         </div>
@@ -123,7 +168,7 @@ export default function IdentityCard({
     );
   }
 
-  if (error) {
+  if (identityProp === undefined && error) {
     return (
       <div
         className="bento p-7"
@@ -139,49 +184,70 @@ export default function IdentityCard({
     );
   }
 
-  if (!identity) {
+  // The hook always returns an identity object (with hasIdentity/profile
+  // fields), so "no identity" must be detected from its contents: a wallet is
+  // unregistered when it has neither a backend profile nor an on-chain DID.
+  const notRegistered =
+    !identity ||
+    ((identity as { isRegistered?: boolean }).isRegistered === false &&
+      !(identity as { profile?: unknown }).profile);
+
+  if (notRegistered) {
+    // A blank card: the same titanium object, not yet engraved.
     return (
-      <div
-        className="bento p-7 h-full"
-        style={{ borderStyle: "dashed", borderColor: "rgba(255,255,255,0.06)" }}
-      >
-        <div className="flex flex-col items-center justify-center gap-4 py-8 text-center">
-          <div
-            className="w-14 h-14 rounded-2xl flex items-center justify-center"
-            style={{ background: "rgba(255,255,255,0.03)" }}
-          >
-            <Shield className="w-7 h-7 text-zero-500" />
+      <div className="titanium-card p-7 h-full flex flex-col">
+        <div className="flex items-start justify-between">
+          <span className="engraved-faint text-[13px] font-display font-semibold tracking-[0.22em] uppercase">
+            ZeroID
+          </span>
+          <span className="hallmark engraved-faint">Unminted</span>
+        </div>
+
+        <div className="flex-1 flex flex-col items-center justify-center gap-4 py-8 text-center">
+          <div className="icon-chip">
+            <Shield className="w-[18px] h-[18px]" />
           </div>
           <div>
-            <p className="text-zero-300 text-[14px] font-display font-medium mb-1">
-              No Identity
+            <p className="engraved text-[15px] font-display font-semibold mb-1">
+              No identity yet
             </p>
-            <p className="text-zero-500 text-[12px] font-body">
-              Create your ZeroID to get started.
+            <p className="engraved-faint text-[12px] font-body max-w-[240px]">
+              Create your ZeroID to request credentials and run proofs.
             </p>
           </div>
+          <Link href="/identity" className="btn-primary btn-sm mt-1">
+            Create ZeroID
+            <ArrowRight className="w-4 h-4" />
+          </Link>
+        </div>
+
+        {/* The engraving line waiting for a DID */}
+        <div className="mt-auto">
+          <p className="engraved-faint text-[10px] font-mono tracking-[0.3em] uppercase">
+            ····&nbsp;····&nbsp;····&nbsp;····
+          </p>
         </div>
       </div>
     );
   }
 
-  const status = statusConfig[verificationStatus] ?? statusConfig.unverified;
+  const status = statusConfig[verificationStatus];
   const StatusIcon = status.icon;
 
   if (compact) {
     return (
       <motion.div
-        className="card-interactive p-4"
+        className="titanium-card cursor-pointer p-4"
         whileHover={{ scale: 1.005 }}
         onClick={onViewDetails}
       >
-        <div className="flex items-center gap-3">
-          <div className="shield-gradient w-10 h-10 rounded-xl flex items-center justify-center">
-            <Fingerprint className="w-5 h-5 text-white" />
+        <div className="flex items-center gap-3 relative z-10">
+          <div className="icon-chip icon-chip-sm">
+            <Fingerprint className="w-4 h-4" />
           </div>
           <div className="flex-1 min-w-0">
-            <p className="text-[13px] font-medium truncate font-body">
-              {truncateDID(did)}
+            <p className="engraved text-[13px] font-mono truncate">
+              {did ? truncateDID(did) : "DID unavailable"}
             </p>
             <span className={status.badge}>{status.label}</span>
           </div>
@@ -192,99 +258,46 @@ export default function IdentityCard({
 
   return (
     <motion.div
-      className="relative overflow-hidden rounded-3xl h-full group"
-      onHoverStart={() => setIsHovered(true)}
-      onHoverEnd={() => setIsHovered(false)}
+      className="titanium-card h-full"
       initial={{ opacity: 0, y: 16 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
     >
-      {/* Background layers */}
-      <div
-        className="absolute inset-0"
-        style={{
-          background:
-            "linear-gradient(165deg, #2a2d38 0%, #1a1c26 35%, #111318 65%, #1a1d28 100%)",
-        }}
-      />
-
-      {/* Chrome edge light */}
-      <div
-        className="absolute inset-0"
-        style={{
-          background:
-            "linear-gradient(180deg, rgba(192,196,204,0.06) 0%, transparent 35%)",
-        }}
-      />
-
-      {/* Hover shimmer */}
-      <AnimatePresence>
-        {isHovered && (
-          <motion.div
-            className="absolute inset-0"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.4 }}
-            style={{
-              background:
-                "linear-gradient(125deg, rgba(192,196,204,0.05) 0%, transparent 40%, rgba(168,173,184,0.03) 100%)",
-            }}
-          />
-        )}
-      </AnimatePresence>
-
-      {/* Content */}
-      <div className="relative z-10 p-7 text-white h-full flex flex-col">
-        {/* Header row */}
-        <div className="flex items-start justify-between mb-8">
-          <div className="flex items-center gap-4">
-            <motion.div
-              className="w-14 h-14 rounded-2xl flex items-center justify-center"
-              style={{
-                background:
-                  "linear-gradient(135deg, rgba(192,196,204,0.12), rgba(192,196,204,0.04))",
-                border: "1px solid rgba(255, 255, 255, 0.08)",
-              }}
-              animate={isHovered ? { scale: [1, 1.05, 1] } : {}}
-              transition={{ duration: 0.5 }}
-            >
-              <Fingerprint className="w-7 h-7 text-chrome-200" />
-            </motion.div>
+      <div className="relative z-10 p-7 h-full flex flex-col">
+        {/* Etched wordmark + hallmark */}
+        <div className="flex items-start justify-between mb-9">
+          <div className="flex items-center gap-3.5">
+            <div className="icon-chip">
+              <Fingerprint className="w-[19px] h-[19px]" />
+            </div>
             <div>
-              <h3 className="text-[18px] font-bold tracking-tight font-display">
+              <h3 className="engraved text-[15px] font-display font-semibold tracking-[0.22em] uppercase leading-none">
                 ZeroID
               </h3>
-              <p className="text-white/30 text-[11px] font-mono mt-0.5">
+              <p className="engraved-faint text-[10px] font-mono tracking-[0.18em] uppercase mt-1.5">
                 Self-Sovereign
               </p>
             </div>
           </div>
 
-          <div
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-medium font-body"
-            style={{
-              background: `rgba(${status.color === "#34d399" ? "52,211,153" : status.color === "#fbbf24" ? "251,191,36" : "192,196,204"}, 0.08)`,
-              border: `1px solid rgba(${status.color === "#34d399" ? "52,211,153" : status.color === "#fbbf24" ? "251,191,36" : "192,196,204"}, 0.15)`,
-              color: status.color,
-            }}
-          >
-            <StatusIcon className="w-3.5 h-3.5" />
+          <div className="hallmark" style={{ color: status.color }}>
+            <StatusIcon className="w-3 h-3" />
             {status.label}
           </div>
         </div>
 
-        {/* DID */}
-        <div className="mb-8">
-          <p className="text-white/25 text-label-sm uppercase mb-2 font-body">
+        {/* Engraved DID */}
+        <div className="mb-9">
+          <p className="engraved-faint text-[10px] font-body uppercase tracking-[0.18em] mb-2">
             Decentralized Identifier
           </p>
           <div className="flex items-center gap-2.5">
-            <p className="font-mono text-[14px] tracking-wide text-white/70">
-              {truncateDID(did, 14)}
+            <p className="engraved font-mono text-[15px] tracking-[0.06em] tnum">
+              {did ? truncateDID(did, 14) : "DID unavailable"}
             </p>
             <button
               onClick={handleCopyDID}
+              disabled={!did}
               className="p-1.5 rounded-lg hover:bg-white/5 transition-colors"
               aria-label="Copy DID"
             >
@@ -297,50 +310,44 @@ export default function IdentityCard({
           </div>
         </div>
 
-        {/* Stats row */}
-        <div className="grid grid-cols-3 gap-3 mb-8">
+        {/* Etched figures — hairline-divided, no sub-cards */}
+        <div
+          className="grid grid-cols-3 mb-8"
+          style={{
+            borderTop: "1px solid rgba(255,255,255,0.06)",
+            borderBottom: "1px solid rgba(255,255,255,0.06)",
+          }}
+        >
           {[
-            { icon: Award, value: credentialCount, label: "Credentials" },
+            { value: credentialCount, label: "Credentials" },
+            { value: verificationCount, label: "Verifications" },
             {
-              icon: ShieldCheck,
-              value: verificationCount,
-              label: "Verifications",
-            },
-            {
-              icon: Clock,
-              value: createdAt
-                ? new Date(createdAt).toLocaleDateString("en-US", {
-                    month: "short",
-                    year: "2-digit",
-                  })
-                : "--",
+              value: displayCreatedAt(createdAt),
               label: "Created",
             },
-          ].map((stat) => (
+          ].map((stat, i) => (
             <div
               key={stat.label}
-              className="rounded-2xl p-4 text-center"
-              style={{
-                background: "rgba(255, 255, 255, 0.03)",
-                border: "1px solid rgba(255, 255, 255, 0.05)",
-              }}
+              className="py-4 text-center"
+              style={
+                i > 0
+                  ? { borderLeft: "1px solid rgba(255,255,255,0.06)" }
+                  : undefined
+              }
             >
-              <p className="text-[22px] font-bold font-display leading-none mb-1">
+              <p className="engraved text-[20px] font-display font-semibold leading-none mb-1.5 tnum">
                 {stat.value}
               </p>
-              <p className="text-white/30 text-[10px] font-body uppercase tracking-wider">
+              <p className="engraved-faint text-[9px] font-body uppercase tracking-[0.16em]">
                 {stat.label}
               </p>
             </div>
           ))}
         </div>
 
-        {/* Footer */}
-        <div
-          className="mt-auto flex items-center justify-between pt-5"
-          style={{ borderTop: "1px solid rgba(255, 255, 255, 0.05)" }}
-        >
-          <p className="text-white/20 text-[10px] font-mono tracking-wider uppercase">
+        {/* Foot etch */}
+        <div className="mt-auto flex items-center justify-between">
+          <p className="engraved-faint text-[10px] font-mono tracking-[0.24em] uppercase">
             Aethelred Network
           </p>
           {onViewDetails && (

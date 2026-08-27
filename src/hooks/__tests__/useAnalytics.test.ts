@@ -1,20 +1,17 @@
 /**
  * useAnalytics — Unit Tests
  *
- * Tests for privacy-preserving analytics hooks: privacy score,
- * credential usage, verifier analytics, exposure timeline,
- * benchmarks, recommendations, and export.
+ * Tests for API-backed privacy analytics derived from credentials and durable
+ * verification records.
  */
 
 import { renderHook, waitFor, act } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import React from "react";
 
-// ---------------------------------------------------------------------------
-// Mocks
-// ---------------------------------------------------------------------------
-
 const mockAddress = "0x1234567890abcdef1234567890abcdef12345678";
+const credentialId = "d74ed26c-47ac-4b62-94a8-38704c53b876";
+const analyticsTestNow = Date.parse("2026-07-01T00:00:00.000Z");
 
 jest.mock("wagmi", () => ({
   useAccount: jest.fn(() => ({ address: mockAddress, isConnected: true })),
@@ -30,17 +27,6 @@ jest.mock("sonner", () => ({
 const mockToast = jest.requireMock("sonner").toast;
 
 jest.mock("@/lib/api/client", () => ({
-  ZeroIDApiError: class ZeroIDApiError extends Error {
-    code: string;
-    statusCode: number;
-
-    constructor(message: string, code: string, statusCode: number) {
-      super(message);
-      this.name = "ZeroIDApiError";
-      this.code = code;
-      this.statusCode = statusCode;
-    }
-  },
   apiClient: {
     get: jest.fn(),
     post: jest.fn(),
@@ -56,14 +42,9 @@ import {
   useCredentialUsageAnalytics,
   useVerifierAnalytics,
   useDataExposureTimeline,
-  useNetworkBenchmarks,
   usePrivacyRecommendations,
   useExportAnalyticsReport,
 } from "@/hooks/useAnalytics";
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 function createWrapper() {
   const queryClient = new QueryClient({
@@ -73,30 +54,151 @@ function createWrapper() {
     React.createElement(QueryClientProvider, { client: queryClient }, children);
 }
 
+const credentials = [
+  {
+    id: credentialId,
+    credentialType: "KYC_LEVEL_2",
+    issuerId: "issuer-record-17",
+    subjectId: "subject-record-8",
+    claimsHash:
+      "3f3bd8d3d60d1412f98f8f366f0bbbea21c10ac40db80a9e28fa8911223e7f4b",
+    proof: { type: "DataIntegrityProof" },
+    issuedAt: "2026-06-01T00:00:00.000Z",
+    expiresAt: "2027-06-01T00:00:00.000Z",
+    status: "ACTIVE",
+  },
+];
+
+const history = [
+  {
+    id: "hist-1",
+    verificationType: "ZK_PROOF",
+    result: "VERIFIED",
+    requestedAt: "2026-06-20T10:00:00.000Z",
+    credentialId,
+    verifierId: "did:aethelred:verifier:edge",
+  },
+  {
+    id: "hist-2",
+    verificationType: "CREDENTIAL_CHECK",
+    result: "VERIFIED",
+    requestedAt: "2026-06-21T10:00:00.000Z",
+    credentialId,
+    verifierId: "did:aethelred:verifier:presight",
+  },
+];
+
+const requestGroups = {
+  PENDING: [
+    {
+      id: "req-1",
+      verifierDid: "did:aethelred:verifier:edge",
+      verifierName: "EDGE",
+      credentialId,
+      requestedAttributes: ["ageOver18", "nationality"],
+      circuitId: "age-proof",
+      purpose: "facility_access",
+      userConsent: true,
+      createdAt: 1_782_000_000,
+    },
+  ],
+  VERIFIED: [
+    {
+      id: "req-2",
+      verifierDid: "did:aethelred:verifier:presight",
+      verifierName: "Presight",
+      credentialId,
+      requestedAttributes: [
+        "fullName",
+        "dateOfBirth",
+        "passport",
+        "nationality",
+      ],
+      purpose: "model_governance",
+      userConsent: false,
+      createdAt: 1_782_086_400,
+    },
+  ],
+  FAILED: [],
+  EXPIRED: [],
+};
+
+function mockAnalyticsSources() {
+  mockApiClient.get.mockImplementation((path: string) => {
+    if (path === "/api/v1/credentials?role=subject") {
+      return Promise.resolve(credentials);
+    }
+    if (path === "/api/v1/verification/history?limit=100") {
+      return Promise.resolve(history);
+    }
+    const status = Object.keys(requestGroups).find((key) =>
+      path.includes(`result=${key}`),
+    ) as keyof typeof requestGroups | undefined;
+    if (status) {
+      return Promise.resolve(requestGroups[status]);
+    }
+    return Promise.resolve([]);
+  });
+}
+
 beforeEach(() => {
   jest.clearAllMocks();
+  jest.spyOn(Date, "now").mockReturnValue(analyticsTestNow);
   (useAccount as jest.Mock).mockReturnValue({
     address: mockAddress,
     isConnected: true,
   });
+  mockAnalyticsSources();
+  URL.createObjectURL = jest.fn(() => "blob:zeroid-analytics");
+  HTMLAnchorElement.prototype.click = jest.fn();
 });
 
-// ===========================================================================
-// usePrivacyScore
-// ===========================================================================
+afterEach(() => {
+  jest.restoreAllMocks();
+});
 
 describe("usePrivacyScore", () => {
-  it("fails closed instead of calling a stale privacy score route", async () => {
+  it("derives privacy score from durable credential and verification APIs", async () => {
     const { result } = renderHook(() => usePrivacyScore(), {
       wrapper: createWrapper(),
     });
 
-    await waitFor(() => expect(result.current.isError).toBe(true));
-    expect(result.current.error).toMatchObject({
-      code: "ANALYTICS_PRIVACY_SCORE_UNAVAILABLE",
-      statusCode: 501,
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(mockApiClient.get).toHaveBeenCalledWith(
+      "/api/v1/credentials?role=subject",
+    );
+    expect(mockApiClient.get).toHaveBeenCalledWith(
+      "/api/v1/verification/history?limit=100",
+    );
+    expect(result.current.data?.overallScore ?? 0).toBeGreaterThan(0);
+    expect(result.current.data?.breakdown.zkProofAdoption).toBeGreaterThan(0);
+    expect(result.current.data?.calculationBasis).toContain(
+      "no network percentile",
+    );
+    expect(result.current.data).not.toHaveProperty("percentileRank");
+  });
+
+  it("reports the score as unavailable when no dated requests were returned", async () => {
+    mockApiClient.get.mockImplementation((path: string) => {
+      if (path === "/api/v1/credentials?role=subject") {
+        return Promise.resolve(credentials);
+      }
+      return Promise.resolve([]);
     });
-    expect(mockApiClient.get).not.toHaveBeenCalled();
+
+    const { result } = renderHook(() => usePrivacyScore("all"), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toMatchObject({
+      overallScore: null,
+      grade: null,
+      recordCount: 0,
+    });
+    expect(result.current.data?.calculationBasis).toContain(
+      "no network percentile",
+    );
   });
 
   it("is disabled when no address", () => {
@@ -110,32 +212,114 @@ describe("usePrivacyScore", () => {
     expect(result.current.fetchStatus).toBe("idle");
   });
 });
-
-// ===========================================================================
-// useCredentialUsageAnalytics
-// ===========================================================================
 
 describe("useCredentialUsageAnalytics", () => {
-  it("fails closed instead of calling a stale usage analytics route", async () => {
-    const { result } = renderHook(() => useCredentialUsageAnalytics(), {
+  it("builds credential usage analytics for the selected period", async () => {
+    const { result } = renderHook(() => useCredentialUsageAnalytics("30d"), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toMatchObject({
+      period: "30d",
+      totalPresentations: 2,
+      uniqueVerifiers: 2,
+      zkProofPresentations: 1,
+    });
+    expect(result.current.data?.byCredentialType[0]).toMatchObject({
+      credentialTypeLabel: "KYC Level 2",
+      credentialId,
+      presentationCount: 2,
+    });
+  });
+
+  it("fails closed when the credential API returns the legacy UI shape", async () => {
+    mockApiClient.get.mockImplementation((path: string) => {
+      if (path === "/api/v1/credentials?role=subject") {
+        return Promise.resolve([
+          {
+            id: credentialId,
+            hash: "0xlegacy",
+            schemaName: "Legacy credential",
+            status: "verified",
+          },
+        ]);
+      }
+      if (path === "/api/v1/verification/history?limit=100") {
+        return Promise.resolve(history);
+      }
+      return Promise.resolve([]);
+    });
+
+    const { result } = renderHook(() => useCredentialUsageAnalytics("30d"), {
       wrapper: createWrapper(),
     });
 
     await waitFor(() => expect(result.current.isError).toBe(true));
     expect(result.current.error).toMatchObject({
-      code: "ANALYTICS_CREDENTIAL_USAGE_UNAVAILABLE",
-      statusCode: 501,
+      name: "CredentialResponseContractError",
     });
-    expect(mockApiClient.get).not.toHaveBeenCalled();
   });
 
-  it("does not call the stale route with a custom period", async () => {
-    const { result } = renderHook(() => useCredentialUsageAnalytics("90d"), {
+  it("excludes records with missing or malformed timestamps instead of moving them to now", async () => {
+    mockApiClient.get.mockImplementation((path: string) => {
+      if (path === "/api/v1/credentials?role=subject") {
+        return Promise.resolve(credentials);
+      }
+      if (path === "/api/v1/verification/history?limit=100") {
+        return Promise.resolve([
+          {
+            ...history[0],
+            id: "valid-history",
+            requestedAt: "2020-01-01T00:00:00.000Z",
+          },
+          {
+            ...history[0],
+            id: "invalid-history",
+            requestedAt: "not-a-date",
+            completedAt: "also-not-a-date",
+          },
+          {
+            ...history[0],
+            id: "undated-history",
+            requestedAt: undefined,
+          },
+        ]);
+      }
+      if (path.includes("result=PENDING")) {
+        return Promise.resolve([
+          {
+            ...requestGroups.PENDING[0],
+            id: "valid-request",
+            createdAt: "2020-01-02T00:00:00.000Z",
+            circuitId: undefined,
+          },
+          {
+            ...requestGroups.PENDING[0],
+            id: "invalid-request",
+            createdAt: "not-a-date",
+          },
+          {
+            ...requestGroups.PENDING[0],
+            id: "undated-request",
+            createdAt: undefined,
+          },
+        ]);
+      }
+      return Promise.resolve([]);
+    });
+
+    const { result } = renderHook(() => useCredentialUsageAnalytics("all"), {
       wrapper: createWrapper(),
     });
 
-    await waitFor(() => expect(result.current.isError).toBe(true));
-    expect(mockApiClient.get).not.toHaveBeenCalled();
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toMatchObject({
+      totalPresentations: 1,
+      selectiveDisclosurePresentations: 1,
+      privacyPreservingRatio: 100,
+    });
+    expect(result.current.data?.byDay).toHaveLength(2);
   });
 
   it("is disabled when no address", () => {
@@ -149,166 +333,96 @@ describe("useCredentialUsageAnalytics", () => {
     expect(result.current.fetchStatus).toBe("idle");
   });
 });
-
-// ===========================================================================
-// useVerifierAnalytics
-// ===========================================================================
 
 describe("useVerifierAnalytics", () => {
-  it("fails closed instead of calling a stale verifier analytics route", async () => {
+  it("builds verifier and purpose analytics without a fabricated trust score", async () => {
     const { result } = renderHook(() => useVerifierAnalytics(), {
       wrapper: createWrapper(),
     });
 
-    await waitFor(() => expect(result.current.isError).toBe(true));
-    expect(result.current.error).toMatchObject({
-      code: "ANALYTICS_VERIFIERS_UNAVAILABLE",
-      statusCode: 501,
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data?.totalVerifiers).toBe(2);
+    expect(result.current.data?.requestsByPurpose[0]).toMatchObject({
+      count: 1,
     });
-    expect(mockApiClient.get).not.toHaveBeenCalled();
-  });
-
-  it("is disabled when no address", () => {
-    (useAccount as jest.Mock).mockReturnValue({
-      address: undefined,
-      isConnected: false,
-    });
-    const { result } = renderHook(() => useVerifierAnalytics(), {
-      wrapper: createWrapper(),
-    });
-    expect(result.current.fetchStatus).toBe("idle");
+    expect(result.current.data?.verifiers[0]).not.toHaveProperty("trustScore");
+    expect(result.current.data?.verifiers[0]).toHaveProperty(
+      "zkProofRequestObserved",
+    );
   });
 });
-
-// ===========================================================================
-// useDataExposureTimeline
-// ===========================================================================
 
 describe("useDataExposureTimeline", () => {
-  it("fails closed instead of calling a stale exposure analytics route", async () => {
+  it("builds exposure events without a fabricated risk score", async () => {
     const { result } = renderHook(() => useDataExposureTimeline(), {
       wrapper: createWrapper(),
     });
 
-    await waitFor(() => expect(result.current.isError).toBe(true));
-    expect(result.current.error).toMatchObject({
-      code: "ANALYTICS_EXPOSURE_UNAVAILABLE",
-      statusCode: 501,
-    });
-    expect(mockApiClient.get).not.toHaveBeenCalled();
-  });
-
-  it("is disabled when no address", () => {
-    (useAccount as jest.Mock).mockReturnValue({
-      address: undefined,
-      isConnected: false,
-    });
-    const { result } = renderHook(() => useDataExposureTimeline(), {
-      wrapper: createWrapper(),
-    });
-    expect(result.current.fetchStatus).toBe("idle");
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data?.entries).toHaveLength(2);
+    expect(result.current.data?.uniqueAttributesExposed).toBeGreaterThan(0);
+    expect(result.current.data?.fullDisclosureEvents).toBe(1);
+    expect(result.current.data).not.toHaveProperty("highRiskExposures");
+    expect(result.current.data?.entries[0]).not.toHaveProperty("riskScore");
   });
 });
-
-// ===========================================================================
-// useNetworkBenchmarks
-// ===========================================================================
-
-describe("useNetworkBenchmarks", () => {
-  it("fails closed instead of calling a stale benchmark route", async () => {
-    const { result } = renderHook(() => useNetworkBenchmarks(), {
-      wrapper: createWrapper(),
-    });
-
-    await waitFor(() => expect(result.current.isError).toBe(true));
-    expect(result.current.error).toMatchObject({
-      code: "ANALYTICS_BENCHMARKS_UNAVAILABLE",
-      statusCode: 501,
-    });
-    expect(mockApiClient.get).not.toHaveBeenCalled();
-  });
-
-  it("is disabled when no address", () => {
-    (useAccount as jest.Mock).mockReturnValue({
-      address: undefined,
-      isConnected: false,
-    });
-    const { result } = renderHook(() => useNetworkBenchmarks(), {
-      wrapper: createWrapper(),
-    });
-    expect(result.current.fetchStatus).toBe("idle");
-  });
-});
-
-// ===========================================================================
-// usePrivacyRecommendations
-// ===========================================================================
 
 describe("usePrivacyRecommendations", () => {
-  it("fails closed instead of calling a stale recommendation route", async () => {
+  it("derives recommendations from exposure and consent gaps", async () => {
     const { result } = renderHook(() => usePrivacyRecommendations(), {
       wrapper: createWrapper(),
     });
 
-    await waitFor(() => expect(result.current.isError).toBe(true));
-    expect(result.current.error).toMatchObject({
-      code: "ANALYTICS_RECOMMENDATIONS_UNAVAILABLE",
-      statusCode: 501,
-    });
-    expect(mockApiClient.get).not.toHaveBeenCalled();
-  });
-
-  it("is disabled when no address", () => {
-    (useAccount as jest.Mock).mockReturnValue({
-      address: undefined,
-      isConnected: false,
-    });
-    const { result } = renderHook(() => usePrivacyRecommendations(), {
-      wrapper: createWrapper(),
-    });
-    expect(result.current.fetchStatus).toBe("idle");
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data?.length).toBeGreaterThan(0);
+    expect(result.current.data?.[0].implementationSteps.length).toBeGreaterThan(
+      0,
+    );
   });
 });
 
-// ===========================================================================
-// useExportAnalyticsReport
-// ===========================================================================
-
 describe("useExportAnalyticsReport", () => {
-  it("fails closed instead of calling a stale analytics export route", async () => {
+  it("exports a generated analytics report without a stale backend export route", async () => {
     const { result } = renderHook(() => useExportAnalyticsReport(), {
       wrapper: createWrapper(),
     });
 
+    let exported;
     await act(async () => {
-      await expect(
-        result.current.mutateAsync({ format: "pdf", period: "30d" }),
-      ).rejects.toMatchObject({
-        code: "ANALYTICS_EXPORT_UNAVAILABLE",
-        statusCode: 501,
+      exported = await result.current.mutateAsync({
+        format: "json",
+        period: "30d",
       });
     });
 
     expect(mockApiClient.post).not.toHaveBeenCalled();
-    expect(mockToast.error).toHaveBeenCalledWith("Export failed", {
-      description: "Analytics report export is not exposed by the backend API.",
+    expect(URL.createObjectURL).toHaveBeenCalled();
+    expect(mockToast.success).toHaveBeenCalledWith(
+      "Analytics report exported",
+      expect.objectContaining({
+        description: expect.stringContaining("JSON report"),
+      }),
+    );
+    expect(exported).toMatchObject({
+      format: "json",
+      downloadUrl: "blob:zeroid-analytics",
     });
-    expect(mockToast.success).not.toHaveBeenCalled();
   });
 
-  it("shows error toast on unsupported export", async () => {
+  it("shows error toast on source API failure", async () => {
+    mockApiClient.get.mockRejectedValue(new Error("Analytics sources offline"));
     const { result } = renderHook(() => useExportAnalyticsReport(), {
       wrapper: createWrapper(),
     });
 
     await act(async () => {
       try {
-        await result.current.mutateAsync({ format: "json" });
+        await result.current.mutateAsync({ format: "csv" });
       } catch {}
     });
 
     expect(mockToast.error).toHaveBeenCalledWith("Export failed", {
-      description: "Analytics report export is not exposed by the backend API.",
+      description: "Analytics sources offline",
     });
   });
 });

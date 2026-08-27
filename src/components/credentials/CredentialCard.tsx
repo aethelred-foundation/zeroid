@@ -11,37 +11,31 @@ import {
   ChevronUp,
   User,
   Building2,
-  Calendar,
   FileText,
   AlertTriangle,
 } from "lucide-react";
-import type { Credential, CredentialAttribute } from "@/types";
+import type {
+  CredentialSummary,
+  CredentialSummaryStatus,
+} from "@/lib/credentials/summary";
 
 interface CredentialCardProps {
-  credential: Credential;
-  onRevoke?: (id: string) => void;
+  credential: CredentialSummary;
   onVerify?: (id: string) => void;
 }
 
-type CredentialCardStatus =
-  | "verified"
-  | "pending"
-  | "revoked"
-  | "expired"
-  | "unverified";
-
 const statusConfig: Record<
-  CredentialCardStatus,
+  CredentialSummaryStatus,
   { label: string; badge: string; color: string; icon: typeof ShieldCheck }
 > = {
-  verified: {
-    label: "Verified",
+  active: {
+    label: "Active",
     badge: "badge-verified",
     color: "text-status-verified",
     icon: ShieldCheck,
   },
-  pending: {
-    label: "Pending",
+  suspended: {
+    label: "Suspended",
     badge: "badge-pending",
     color: "text-status-pending",
     icon: Clock,
@@ -58,8 +52,8 @@ const statusConfig: Record<
     color: "text-status-expired",
     icon: AlertTriangle,
   },
-  unverified: {
-    label: "Unverified",
+  unknown: {
+    label: "Unknown",
     badge: "badge-pending",
     color: "text-[var(--text-tertiary)]",
     icon: Shield,
@@ -68,11 +62,15 @@ const statusConfig: Record<
 
 const schemaIcons: Record<string, typeof FileText> = {
   identity: User,
-  organization: Building2,
-  document: FileText,
+  kyc: ShieldCheck,
+  accreditation: Building2,
+  professional: Building2,
+  education: FileText,
+  employment: Building2,
+  custom: FileText,
 };
 
-function formatDate(date: string | number): string {
+function formatDate(date: string): string {
   return new Date(date).toLocaleDateString("en-US", {
     year: "numeric",
     month: "short",
@@ -80,43 +78,29 @@ function formatDate(date: string | number): string {
   });
 }
 
-function isExpiringSoon(expiresAt?: string | number): boolean {
+function isExpiringSoon(expiresAt?: string | null): boolean {
   if (!expiresAt) return false;
   const daysUntilExpiry =
     (new Date(expiresAt).getTime() - Date.now()) / (1000 * 60 * 60 * 24);
   return daysUntilExpiry > 0 && daysUntilExpiry <= 30;
 }
 
-function normalizeCredentialStatus(
-  status: Credential["status"],
-): CredentialCardStatus {
-  if (
-    status === "verified" ||
-    status === "pending" ||
-    status === "revoked" ||
-    status === "expired"
-  ) {
-    return status;
-  }
-  return "unverified";
+function shortenIdentifier(value: string): string {
+  return value.length > 32
+    ? `${value.slice(0, 18)}…${value.slice(-10)}`
+    : value;
 }
 
 export default function CredentialCard({
   credential,
-  onRevoke,
   onVerify,
 }: CredentialCardProps) {
   const [isExpanded, setIsExpanded] = useState(false);
 
-  const statusKey = normalizeCredentialStatus(credential.status);
+  const statusKey = credential.status;
   const status = statusConfig[statusKey];
   const StatusIcon = status.icon;
-  const schemaType = credential.schemaType ?? "document";
-  const SchemaIcon = schemaIcons[schemaType] ?? FileText;
-  const credentialName =
-    credential.name ?? credential.schemaName ?? "Credential";
-  const issuerLabel =
-    credential.issuer ?? credential.issuerDid?.uri ?? "Unknown issuer";
+  const SchemaIcon = schemaIcons[credential.category] ?? FileText;
   const expiringSoon = isExpiringSoon(credential.expiresAt);
 
   return (
@@ -139,9 +123,9 @@ export default function CredentialCard({
             className={`
               relative w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0
               ${
-                statusKey === "verified"
+                statusKey === "active"
                   ? "bg-status-verified/10"
-                  : statusKey === "pending"
+                  : statusKey === "suspended"
                     ? "bg-status-pending/10"
                     : statusKey === "revoked"
                       ? "bg-status-revoked/10"
@@ -152,16 +136,16 @@ export default function CredentialCard({
             <Shield className={`w-6 h-6 ${status.color}`} />
             <motion.div
               className={`absolute -top-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-[var(--surface-elevated)] ${
-                statusKey === "verified"
+                statusKey === "active"
                   ? "bg-status-verified"
-                  : statusKey === "pending"
+                  : statusKey === "suspended"
                     ? "bg-status-pending"
                     : statusKey === "revoked"
                       ? "bg-status-revoked"
                       : "bg-[var(--text-tertiary)]"
               }`}
               animate={
-                statusKey === "pending"
+                statusKey === "suspended"
                   ? { scale: [1, 1.3, 1], opacity: [1, 0.7, 1] }
                   : {}
               }
@@ -173,7 +157,7 @@ export default function CredentialCard({
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 mb-1">
               <h3 className="font-semibold text-[var(--text-primary)] truncate">
-                {credentialName}
+                {credential.typeLabel}
               </h3>
               <span className={status.badge}>
                 <StatusIcon className="w-3 h-3" />
@@ -183,11 +167,11 @@ export default function CredentialCard({
             <div className="flex items-center gap-3 text-xs text-[var(--text-secondary)]">
               <span className="flex items-center gap-1">
                 <SchemaIcon className="w-3 h-3" />
-                {schemaType}
+                {credential.category}
               </span>
               <span className="flex items-center gap-1">
                 <Building2 className="w-3 h-3" />
-                {issuerLabel}
+                Issuer {shortenIdentifier(credential.issuerId)}
               </span>
             </div>
             {expiringSoon && (
@@ -244,50 +228,35 @@ export default function CredentialCard({
                 </div>
               </div>
 
-              {/* Attributes */}
-              {credential.attributes && credential.attributes.length > 0 && (
+              <div className="space-y-2 rounded-xl bg-[var(--surface-secondary)] p-3 text-xs">
                 <div>
-                  <p className="text-xs text-[var(--text-tertiary)] uppercase tracking-wider mb-2">
-                    Attributes
+                  <p className="text-[var(--text-tertiary)]">Credential ID</p>
+                  <p className="break-all font-mono text-[var(--text-primary)]">
+                    {credential.id}
                   </p>
-                  <div className="space-y-1.5">
-                    {credential.attributes.map((attr: CredentialAttribute) => (
-                      <div
-                        key={attr.key}
-                        className="flex items-center justify-between py-1.5 px-3 rounded-lg bg-[var(--surface-secondary)] text-sm"
-                      >
-                        <span className="text-[var(--text-secondary)]">
-                          {attr.key}
-                        </span>
-                        <span className="font-mono text-[var(--text-primary)]">
-                          {attr.value}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
                 </div>
-              )}
+                <div>
+                  <p className="text-[var(--text-tertiary)]">
+                    Claims commitment
+                  </p>
+                  <p className="break-all font-mono text-[var(--text-primary)]">
+                    {credential.claimsHash}
+                  </p>
+                </div>
+              </div>
 
               {/* Actions */}
               <div className="flex items-center gap-2 pt-2">
-                {onVerify && statusKey !== "verified" && (
-                  <button
-                    onClick={() => onVerify(credential.id)}
-                    className="btn-primary btn-sm flex-1"
-                  >
-                    <ShieldCheck className="w-3.5 h-3.5" />
-                    Verify
-                  </button>
-                )}
-                {onRevoke && statusKey === "verified" && (
-                  <button
-                    onClick={() => onRevoke(credential.id)}
-                    className="btn-danger btn-sm flex-1"
-                  >
-                    <ShieldAlert className="w-3.5 h-3.5" />
-                    Revoke
-                  </button>
-                )}
+                {onVerify &&
+                  (statusKey === "active" || statusKey === "suspended") && (
+                    <button
+                      onClick={() => onVerify(credential.id)}
+                      className="btn-primary btn-sm flex-1"
+                    >
+                      <ShieldCheck className="w-3.5 h-3.5" />
+                      Validate
+                    </button>
+                  )}
               </div>
             </div>
           </motion.div>

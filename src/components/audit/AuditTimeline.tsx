@@ -1,123 +1,94 @@
 "use client";
 
-import { useState, useMemo } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion } from "framer-motion";
 import {
-  ShieldCheck,
-  ShieldAlert,
-  FileText,
   Clock,
-  Eye,
-  UserCheck,
+  FileText,
+  Fingerprint,
+  History,
   KeyRound,
   Loader2,
-  Filter,
-  ChevronDown,
+  ShieldAlert,
+  ShieldCheck,
 } from "lucide-react";
-import { useAudit } from "@/hooks/useAudit";
-import type { AuditEvent, AuditEventType } from "@/types";
+import type { AuditLogEntry } from "@/types";
 
 interface AuditTimelineProps {
-  did?: string;
-  limit?: number;
+  events?: AuditLogEntry[];
+  isLoading?: boolean;
+  error?: Error | null;
+  emptyMessage?: string;
 }
 
-const eventConfig: Record<
-  AuditEventType,
-  { label: string; icon: typeof ShieldCheck; color: string; bgColor: string }
-> = {
-  "credential-issued": {
-    label: "Credential Issued",
-    icon: FileText,
-    color: "text-status-verified",
-    bgColor: "bg-status-verified/10",
-  },
-  "credential-revoked": {
-    label: "Credential Revoked",
-    icon: ShieldAlert,
-    color: "text-status-revoked",
-    bgColor: "bg-status-revoked/10",
-  },
-  "credential-verified": {
-    label: "Credential Verified",
-    icon: ShieldCheck,
-    color: "text-brand-500",
-    bgColor: "bg-brand-500/10",
-  },
-  "proof-generated": {
-    label: "Proof Generated",
-    icon: KeyRound,
-    color: "text-identity-chrome",
-    bgColor: "bg-identity-chrome/10",
-  },
-  "proof-verified": {
-    label: "Proof Verified",
-    icon: ShieldCheck,
-    color: "text-status-verified",
-    bgColor: "bg-status-verified/10",
-  },
-  "identity-created": {
-    label: "Identity Created",
-    icon: UserCheck,
-    color: "text-brand-500",
-    bgColor: "bg-brand-500/10",
-  },
-  "selective-disclosure": {
-    label: "Selective Disclosure",
-    icon: Eye,
-    color: "text-status-pending",
-    bgColor: "bg-status-pending/10",
-  },
-};
+function stringField(event: AuditLogEntry, key: string): string | undefined {
+  const value = event[key];
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
 
-function formatTimestamp(ts: string | number): { date: string; time: string } {
-  const d = new Date(ts);
+function eventAction(event: AuditLogEntry): string | undefined {
+  return event.action ?? stringField(event, "type");
+}
+
+function actionLabel(action: string): string {
+  return action
+    .split(/[_-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(" ");
+}
+
+function formatTimestamp(
+  timestamp: AuditLogEntry["timestamp"],
+): { date: string; time: string } | null {
+  let date: Date;
+  if (typeof timestamp === "number" && Number.isFinite(timestamp)) {
+    date = new Date(timestamp > 10_000_000_000 ? timestamp : timestamp * 1000);
+  } else if (typeof timestamp === "string" && timestamp.trim()) {
+    date = new Date(timestamp);
+  } else {
+    return null;
+  }
+  if (Number.isNaN(date.getTime())) return null;
   return {
-    date: d.toLocaleDateString("en-US", {
+    date: date.toLocaleDateString("en-US", {
       month: "short",
       day: "numeric",
       year: "numeric",
     }),
-    time: d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }),
+    time: date.toLocaleTimeString("en-US", {
+      hour: "2-digit",
+      minute: "2-digit",
+    }),
   };
 }
 
-/** An audit event attributable to an AI agent passport (v1). */
-function isAgentAction(event: AuditEvent): boolean {
-  const e = event as AuditEvent & {
-    agentDid?: string;
-    agentActionId?: string;
-    actionType?: string;
-  };
-  return Boolean(
-    e.agentDid || e.agentActionId || e.actionType === "ELIGIBILITY_PROOF_REQUEST",
-  );
+function iconForResource(resourceType?: string) {
+  switch (resourceType) {
+    case "credential":
+      return ShieldCheck;
+    case "verification":
+      return Fingerprint;
+    case "identity":
+      return KeyRound;
+    case "schema":
+      return FileText;
+    default:
+      return History;
+  }
 }
 
-export default function AuditTimeline({ did, limit = 50 }: AuditTimelineProps) {
-  const { events, isLoading, error } = useAudit(did, limit);
-  const [filterType, setFilterType] = useState<AuditEventType | "all">("all");
-  const [showFilter, setShowFilter] = useState(false);
-  const [agentOnly, setAgentOnly] = useState(false);
-
-  const filteredEvents = useMemo(() => {
-    if (!events) return [];
-    let result: AuditEvent[] = events;
-    if (filterType !== "all") {
-      result = result.filter((e: AuditEvent) => e.type === filterType);
-    }
-    if (agentOnly) {
-      result = result.filter((e: AuditEvent) => isAgentAction(e));
-    }
-    return result;
-  }, [events, filterType, agentOnly]);
-
+export default function AuditTimeline({
+  events = [],
+  isLoading = false,
+  error = null,
+  emptyMessage = "No audit records were returned.",
+}: AuditTimelineProps) {
   if (isLoading) {
     return (
-      <div className="card p-8 flex items-center justify-center gap-2">
-        <Loader2 className="w-5 h-5 animate-spin text-brand-500" />
+      <div className="card flex items-center justify-center gap-2 p-8">
+        <Loader2 className="h-5 w-5 animate-spin text-brand-500" />
         <span className="text-sm text-[var(--text-secondary)]">
-          Loading audit trail...
+          Loading server audit records...
         </span>
       </div>
     );
@@ -126,161 +97,104 @@ export default function AuditTimeline({ did, limit = 50 }: AuditTimelineProps) {
   if (error) {
     return (
       <div className="card p-6">
-        <div className="flex items-center gap-2 text-red-400">
-          <ShieldAlert className="w-5 h-5" />
-          <p className="text-sm">Failed to load audit events</p>
+        <div className="flex items-start gap-2 text-red-400">
+          <ShieldAlert className="mt-0.5 h-5 w-5" />
+          <div>
+            <p className="text-sm font-medium">Audit records unavailable</p>
+            <p className="mt-1 text-xs text-[var(--text-secondary)]">
+              {error.message}
+            </p>
+          </div>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="space-y-4">
-      {/* Header with filter */}
+    <section className="space-y-4" aria-label="Audit timeline">
       <div className="flex items-center justify-between">
-        <h3 className="font-semibold text-[var(--text-primary)] flex items-center gap-2">
-          <Clock className="w-4 h-4 text-brand-500" />
+        <h2 className="flex items-center gap-2 font-semibold text-[var(--text-primary)]">
+          <Clock className="h-4 w-4 text-brand-500" />
           Audit Timeline
-        </h3>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setAgentOnly((v) => !v)}
-            className={`btn-sm ${agentOnly ? "btn-primary" : "btn-ghost"}`}
-            aria-pressed={agentOnly}
-          >
-            <UserCheck className="w-3.5 h-3.5" />
-            Agent actions
-          </button>
-          <div className="relative">
-            <button
-              onClick={() => setShowFilter(!showFilter)}
-              className="btn-ghost btn-sm"
-            >
-            <Filter className="w-3.5 h-3.5" />
-            {filterType === "all"
-              ? "All Events"
-              : eventConfig[filterType]?.label}
-            <ChevronDown
-              className={`w-3.5 h-3.5 transition-transform ${showFilter ? "rotate-180" : ""}`}
-            />
-          </button>
-          <AnimatePresence>
-            {showFilter && (
-              <motion.div
-                className="absolute right-0 mt-1 z-20 w-48 rounded-xl border border-[var(--border-primary)] bg-[var(--surface-elevated)] shadow-lg overflow-hidden"
-                initial={{ opacity: 0, y: -5 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -5 }}
-              >
-                <button
-                  onClick={() => {
-                    setFilterType("all");
-                    setShowFilter(false);
-                  }}
-                  className={`w-full text-left px-4 py-2 text-sm hover:bg-[var(--surface-secondary)] ${
-                    filterType === "all"
-                      ? "text-brand-500 font-medium"
-                      : "text-[var(--text-secondary)]"
-                  }`}
-                >
-                  All Events
-                </button>
-                {(Object.keys(eventConfig) as AuditEventType[]).map((type) => (
-                  <button
-                    key={type}
-                    onClick={() => {
-                      setFilterType(type);
-                      setShowFilter(false);
-                    }}
-                    className={`w-full text-left px-4 py-2 text-sm hover:bg-[var(--surface-secondary)] ${
-                      filterType === type
-                        ? "text-brand-500 font-medium"
-                        : "text-[var(--text-secondary)]"
-                    }`}
-                  >
-                    {eventConfig[type].label}
-                  </button>
-                ))}
-              </motion.div>
-            )}
-          </AnimatePresence>
-          </div>
-        </div>
+        </h2>
+        <span className="text-xs text-[var(--text-tertiary)]">
+          {events.length} returned
+        </span>
       </div>
 
-      {/* Timeline */}
-      {filteredEvents.length === 0 ? (
+      {events.length === 0 ? (
         <div className="card p-8 text-center">
-          <Clock className="w-8 h-8 text-[var(--text-tertiary)] mx-auto mb-2" />
-          <p className="text-sm text-[var(--text-secondary)]">
-            No audit events found
-          </p>
+          <Clock className="mx-auto mb-2 h-8 w-8 text-[var(--text-tertiary)]" />
+          <p className="text-sm text-[var(--text-secondary)]">{emptyMessage}</p>
         </div>
       ) : (
         <div className="relative">
-          {/* Vertical line */}
-          <div className="absolute left-5 top-0 bottom-0 w-px bg-[var(--border-primary)]" />
-
+          <div className="absolute bottom-0 left-5 top-0 w-px bg-[var(--border-primary)]" />
           <div className="space-y-1">
-            {filteredEvents.map((event: AuditEvent, idx: number) => {
-              const config =
-                eventConfig[event.type] ?? eventConfig["credential-verified"];
-              const EventIcon = config.icon;
-              const { date, time } = formatTimestamp(
-                event.timestamp ?? Date.now(),
-              );
+            {events.map((event, index) => {
+              const action = eventAction(event);
+              const resourceType =
+                event.entityType ?? stringField(event, "resourceType");
+              const resourceId =
+                event.entityId ?? stringField(event, "resourceId");
+              const EventIcon = iconForResource(resourceType);
+              const timestamp = formatTimestamp(event.timestamp);
 
               return (
                 <motion.div
                   key={event.id}
-                  className="relative pl-12 py-3"
+                  className="relative py-3 pl-12"
                   initial={{ opacity: 0, x: -10 }}
                   animate={{ opacity: 1, x: 0 }}
-                  transition={{ duration: 0.2, delay: idx * 0.03 }}
+                  transition={{ duration: 0.2, delay: index * 0.03 }}
                 >
-                  {/* Timeline dot */}
-                  <div
-                    className={`absolute left-3 top-4 w-5 h-5 rounded-full ${config.bgColor} flex items-center justify-center ring-4 ring-[var(--surface-primary)]`}
-                  >
-                    <EventIcon className={`w-3 h-3 ${config.color}`} />
+                  <div className="absolute left-3 top-4 flex h-5 w-5 items-center justify-center rounded-full bg-brand-500/10 ring-4 ring-[var(--surface-primary)]">
+                    <EventIcon className="h-3 w-3 text-brand-500" />
                   </div>
 
-                  {/* Event card */}
                   <div className="card p-4">
-                    <div className="flex items-start justify-between gap-2">
-                      <div>
-                        <p className={`text-sm font-medium ${config.color}`}>
-                          {config.label}
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-[var(--text-primary)]">
+                          {action ? actionLabel(action) : "Action unavailable"}
                         </p>
-                        {isAgentAction(event) && (
-                          <p className="text-[11px] text-status-pending mt-0.5 flex items-center gap-1">
-                            <UserCheck className="w-3 h-3" />
-                            AI Agent{" "}
-                            {(event as { agentDid?: string }).agentDid ?? "agent"}{" "}
-                            acting for{" "}
-                            {(event as { controllerDid?: string })
-                              .controllerDid ?? "controller"}
+                        {action && (
+                          <p className="mt-0.5 break-all font-mono text-[10px] text-[var(--text-tertiary)]">
+                            {action}
+                          </p>
+                        )}
+                        {resourceType && (
+                          <p className="mt-2 text-xs text-[var(--text-secondary)]">
+                            Resource: {resourceType}
+                            {resourceId ? ` / ${resourceId}` : ""}
                           </p>
                         )}
                         {event.description && (
-                          <p className="text-xs text-[var(--text-secondary)] mt-0.5">
+                          <p className="mt-1 text-xs text-[var(--text-secondary)]">
                             {event.description}
                           </p>
                         )}
                         {event.transactionHash && (
-                          <p className="text-[10px] font-mono text-[var(--text-tertiary)] mt-1">
-                            tx: {event.transactionHash.slice(0, 10)}...
-                            {event.transactionHash.slice(-6)}
+                          <p className="mt-1 break-all font-mono text-[10px] text-[var(--text-tertiary)]">
+                            Transaction: {event.transactionHash}
                           </p>
                         )}
                       </div>
-                      <div className="text-right flex-shrink-0">
-                        <p className="text-xs text-[var(--text-secondary)]">
-                          {date}
-                        </p>
-                        <p className="text-[10px] text-[var(--text-tertiary)]">
-                          {time}
-                        </p>
+                      <div className="flex-shrink-0 text-right">
+                        {timestamp ? (
+                          <>
+                            <p className="text-xs text-[var(--text-secondary)]">
+                              {timestamp.date}
+                            </p>
+                            <p className="text-[10px] text-[var(--text-tertiary)]">
+                              {timestamp.time}
+                            </p>
+                          </>
+                        ) : (
+                          <p className="text-xs text-amber-300">
+                            Timestamp unavailable
+                          </p>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -290,6 +204,6 @@ export default function AuditTimeline({ did, limit = 50 }: AuditTimelineProps) {
           </div>
         </div>
       )}
-    </div>
+    </section>
   );
 }

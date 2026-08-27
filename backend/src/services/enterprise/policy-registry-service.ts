@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { prisma } from '../../index';
+import { prisma } from '../../runtime';
 import {
   ENTERPRISE_APPROVAL_CLASSES,
   ENTERPRISE_ROLES,

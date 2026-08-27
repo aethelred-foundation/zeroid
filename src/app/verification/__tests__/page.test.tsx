@@ -1,50 +1,18 @@
 import React from "react";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 
-jest.mock("next/navigation", () => ({
-  useRouter: () => ({ push: jest.fn(), back: jest.fn() }),
-  usePathname: () => "/verification",
-  useSearchParams: () => new URLSearchParams(),
-}));
-
+const mockUseAccount = jest.fn();
 jest.mock("wagmi", () => ({
-  useAccount: jest.fn(() => ({
-    address: "0x1234567890abcdef1234567890abcdef12345678",
-    isConnected: true,
-  })),
-  useReadContract: jest.fn(() => ({ data: undefined, isLoading: false })),
-  useWriteContract: jest.fn(() => ({
-    writeContractAsync: jest.fn(),
-    isPending: false,
-  })),
-  useWaitForTransactionReceipt: jest.fn(() => ({ isLoading: false })),
+  useAccount: () => mockUseAccount(),
 }));
 
-jest.mock("framer-motion", () => ({
-  motion: new Proxy(
-    {},
-    {
-      get: (_target: unknown, prop: string) => {
-        return React.forwardRef((props: any, ref: any) => {
-          const {
-            initial,
-            animate,
-            exit,
-            transition,
-            whileHover,
-            whileTap,
-            variants,
-            ...rest
-          } = props;
-          const Tag = prop as any;
-          return <Tag ref={ref} {...rest} />;
-        });
-      },
-    },
+jest.mock("next/link", () => ({
+  __esModule: true,
+  default: ({ children, href, ...props }: React.ComponentProps<"a">) => (
+    <a href={href} {...props}>
+      {children}
+    </a>
   ),
-  AnimatePresence: ({ children }: any) => <>{children}</>,
-  useAnimation: () => ({ start: jest.fn() }),
-  useInView: () => true,
 }));
 
 jest.mock("@/components/layout/AppLayout", () => ({
@@ -54,200 +22,259 @@ jest.mock("@/components/layout/AppLayout", () => ({
   ),
 }));
 
-const mockUseVerification = jest.fn();
+const mockUseIdentity = jest.fn();
+jest.mock("@/contexts/IdentityContext", () => ({
+  useIdentity: () => mockUseIdentity(),
+}));
+
+const mockUsePendingVerifications = jest.fn();
+const mockUseVerificationHistory = jest.fn();
+const mockUseDeclineVerification = jest.fn();
 jest.mock("@/hooks/useVerification", () => ({
-  useVerification: () => mockUseVerification(),
-}));
-
-jest.mock("@/hooks/useZKProof", () => ({
-  useZKProof: () => ({
-    proofHistory: [],
-  }),
-}));
-
-jest.mock("@/components/verification/VerificationFlow", () => ({
-  __esModule: true,
-  default: () => <div data-testid="verification-flow">Verification Flow</div>,
-}));
-
-jest.mock("@/components/verification/SelectiveDisclosureBuilder", () => ({
-  __esModule: true,
-  default: () => (
-    <div data-testid="selective-disclosure">Selective Disclosure Builder</div>
-  ),
-}));
-
-jest.mock("@/components/zkp/ProofVisualization", () => ({
-  __esModule: true,
-  default: ({ proofId, onClose }: any) => (
-    <div data-testid="proof-visualization">
-      Proof: {proofId} <button onClick={onClose}>Close</button>
-    </div>
-  ),
-}));
-
-jest.mock("@/components/ui/StatusBadge", () => ({
-  StatusBadge: ({ status }: any) => (
-    <span data-testid="status-badge">{status}</span>
-  ),
+  usePendingVerifications: () => mockUsePendingVerifications(),
+  useVerificationHistory: () => mockUseVerificationHistory(),
+  useDeclineVerification: () => mockUseDeclineVerification(),
 }));
 
 import VerificationPage from "../page";
 
-const defaultVerificationData = {
-  verificationHistory: [
-    {
-      id: "v1",
-      proofType: "Age",
-      verifier: "Cruzible",
-      status: "verified",
-      timestamp: "2025-03-01",
-    },
-    {
-      id: "v2",
-      proofType: "KYC",
-      verifier: "NoblePay",
-      status: "pending",
-      timestamp: "2025-03-02",
-    },
-  ],
-  pendingRequests: [
-    { id: "r1", type: "Age Verification", requester: "Cruzible" },
-  ],
+const pendingRefetch = jest.fn();
+const historyRefetch = jest.fn();
+const declineMutate = jest.fn();
+const signIn = jest.fn().mockResolvedValue(undefined);
+
+const pendingRequest = {
+  id: "request-1",
+  verifierDid: "did:aethelred:testnet:verifier",
+  subjectDid: "did:aethelred:testnet:subject",
+  credentialHash: `0x${"1".repeat(64)}`,
+  requestedAttributes: ["age", "residency"],
+  circuitId: `0x${"2".repeat(64)}`,
+  status: "pending",
+  createdAt: 1_767_225_600,
+  expiresAt: 1_785_715_200,
+  purpose: "Regulated onboarding",
+  userConsent: false,
 };
+
+const historyRecords = [
+  {
+    requestId: "history-verified",
+    verified: true,
+    attributeResults: [],
+    verifiedAt: 1_767_225_600,
+  },
+  {
+    requestId: "history-pending",
+    verified: false,
+    attributeResults: [],
+    verifiedAt: 1_767_225_600,
+    error: "PENDING",
+  },
+];
+
+function queryState<T>(data: T, refetch: jest.Mock) {
+  return {
+    data,
+    error: null,
+    isLoading: false,
+    isFetching: false,
+    refetch,
+  };
+}
 
 describe("VerificationPage", () => {
   beforeEach(() => {
-    mockUseVerification.mockReturnValue(defaultVerificationData);
+    jest.clearAllMocks();
+    mockUseAccount.mockReturnValue({ isConnected: true });
+    mockUseIdentity.mockReturnValue({
+      identity: { isLoading: false, isRegistered: true },
+      sessionStatus: "authenticated",
+      sessionError: null,
+      signIn,
+    });
+    mockUsePendingVerifications.mockReturnValue(
+      queryState([pendingRequest], pendingRefetch),
+    );
+    mockUseVerificationHistory.mockReturnValue(
+      queryState({ items: historyRecords, total: 2 }, historyRefetch),
+    );
+    mockUseDeclineVerification.mockReturnValue({
+      mutate: declineMutate,
+      isPending: false,
+      variables: undefined,
+      error: null,
+    });
   });
 
-  it("renders without crashing", () => {
+  it("renders authenticated server records by default", () => {
     render(<VerificationPage />);
+
     expect(screen.getByTestId("app-layout")).toBeInTheDocument();
-  });
-
-  it("displays the page heading", () => {
-    render(<VerificationPage />);
-    expect(screen.getByText("Verification")).toBeInTheDocument();
-  });
-
-  it("shows pending requests badge", () => {
-    render(<VerificationPage />);
-    expect(screen.getByText(/1 pending request/)).toBeInTheDocument();
-  });
-
-  it("shows generate proof tab by default with verification flow", () => {
-    render(<VerificationPage />);
-    expect(screen.getByTestId("verification-flow")).toBeInTheDocument();
-    expect(screen.getByText("How ZK Proofs Work")).toBeInTheDocument();
-  });
-
-  it("switches to Respond to Request tab", () => {
-    render(<VerificationPage />);
-    fireEvent.click(screen.getByText("Respond to Request"));
-    expect(screen.getByTestId("selective-disclosure")).toBeInTheDocument();
-  });
-
-  it("switches to History tab and shows verification history", () => {
-    render(<VerificationPage />);
-    fireEvent.click(screen.getByText("History"));
-    expect(screen.getByText("Verification History")).toBeInTheDocument();
-    expect(screen.getByText("Age Proof")).toBeInTheDocument();
-    expect(screen.getByText("KYC Proof")).toBeInTheDocument();
-  });
-
-  it("clicking a verification in history shows proof visualization", () => {
-    render(<VerificationPage />);
-    fireEvent.click(screen.getByText("History"));
-    fireEvent.click(screen.getByText("Age Proof"));
-    expect(screen.getByTestId("proof-visualization")).toBeInTheDocument();
-    expect(screen.getByText("Proof: v1")).toBeInTheDocument();
-  });
-
-  it("closing proof visualization hides it", () => {
-    render(<VerificationPage />);
-    fireEvent.click(screen.getByText("History"));
-    fireEvent.click(screen.getByText("Age Proof"));
-    expect(screen.getByTestId("proof-visualization")).toBeInTheDocument();
-    fireEvent.click(screen.getByText("Close"));
-    expect(screen.queryByTestId("proof-visualization")).not.toBeInTheDocument();
-  });
-
-  it('shows plural "requests" when pendingRequests > 1', () => {
-    mockUseVerification.mockReturnValue({
-      ...defaultVerificationData,
-      pendingRequests: [
-        { id: "r1", type: "Age Verification", requester: "Cruzible" },
-        { id: "r2", type: "KYC Verification", requester: "NoblePay" },
-      ],
-    });
-    render(<VerificationPage />);
-    expect(screen.getByText(/2 pending requests/)).toBeInTheDocument();
-  });
-
-  it("hides pending requests badge when no pending requests", () => {
-    mockUseVerification.mockReturnValue({
-      ...defaultVerificationData,
-      pendingRequests: [],
-    });
-    render(<VerificationPage />);
-    expect(screen.queryByText(/pending request/)).not.toBeInTheDocument();
-  });
-
-  it("shows empty state when verification history is empty", () => {
-    mockUseVerification.mockReturnValue({
-      verificationHistory: [],
-      pendingRequests: [],
-    });
-    render(<VerificationPage />);
-    fireEvent.click(screen.getByText("History"));
-    expect(screen.getByText("No verifications yet")).toBeInTheDocument();
     expect(
-      screen.getByText("Generate your first ZK proof to get started"),
+      screen.getByRole("heading", { name: "Verification" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Regulated onboarding")).toBeInTheDocument();
+    expect(
+      screen.getByText("did:aethelred:testnet:verifier"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("age, residency")).toBeInTheDocument();
+  });
+
+  it("fails closed when artifact and deployment evidence is unavailable", () => {
+    render(<VerificationPage />);
+
+    expect(
+      screen.getByRole("heading", { name: "Proof response is unavailable" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("No trusted manifest exposed")).toBeInTheDocument();
+    expect(screen.getByText("No pinned evidence exposed")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Proof response unavailable" }),
+    ).toBeDisabled();
+  });
+
+  it("allows a holder to durably decline without proof artifacts", () => {
+    render(<VerificationPage />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Decline request" }));
+    expect(declineMutate).toHaveBeenCalledWith("request-1");
+  });
+
+  it("does not expose static circuit support or unconditional privacy claims", () => {
+    render(<VerificationPage />);
+
+    expect(screen.queryByText("Supported Proofs")).not.toBeInTheDocument();
+    expect(screen.queryByText("Verify On-chain")).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("Zero Knowledge Guarantee"),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("Generate Proof")).not.toBeInTheDocument();
+  });
+
+  it("formats Unix-second timestamps as real dates instead of 1970", () => {
+    render(<VerificationPage />);
+
+    expect(screen.getByText(/2026/)).toBeInTheDocument();
+    expect(screen.queryByText(/1970/)).not.toBeInTheDocument();
+  });
+
+  it("switches to recorded history without inventing proof types or verifiers", () => {
+    render(<VerificationPage />);
+    fireEvent.click(screen.getByRole("button", { name: "History" }));
+
+    expect(screen.getByText("history-verified")).toBeInTheDocument();
+    expect(screen.getByText("history-pending")).toBeInTheDocument();
+    expect(screen.getByText("Verified")).toBeInTheDocument();
+    expect(screen.getByText("Pending")).toBeInTheDocument();
+    expect(screen.getAllByText("Verification record")).toHaveLength(2);
+    expect(screen.queryByText(/Unknown verifier/)).not.toBeInTheDocument();
+  });
+
+  it("shows an API-specific empty state for pending requests", () => {
+    mockUsePendingVerifications.mockReturnValue(queryState([], pendingRefetch));
+    render(<VerificationPage />);
+
+    expect(
+      screen.getByText("No pending requests returned"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/did not return a pending verification request/),
     ).toBeInTheDocument();
   });
 
-  it("shows empty state when verification history is null", () => {
-    mockUseVerification.mockReturnValue({
-      verificationHistory: null,
-      pendingRequests: null,
-    });
+  it("shows an API-specific empty state for history", () => {
+    mockUseVerificationHistory.mockReturnValue(
+      queryState({ items: [], total: 0 }, historyRefetch),
+    );
     render(<VerificationPage />);
-    fireEvent.click(screen.getByText("History"));
-    expect(screen.getByText("No verifications yet")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "History" }));
+
+    expect(
+      screen.getByText("No verification records returned"),
+    ).toBeInTheDocument();
   });
 
-  it("renders revoked status styling for history items", () => {
-    mockUseVerification.mockReturnValue({
-      verificationHistory: [
-        {
-          id: "v1",
-          proofType: "Age",
-          verifier: "Cruzible",
-          status: "verified",
-          timestamp: "2025-03-01",
-        },
-        {
-          id: "v2",
-          proofType: "KYC",
-          verifier: "NoblePay",
-          status: "pending",
-          timestamp: "2025-03-02",
-        },
-        {
-          id: "v3",
-          proofType: "AML",
-          verifier: "Exchange",
-          status: "revoked",
-          timestamp: "2025-03-03",
-        },
-      ],
-      pendingRequests: [],
+  it("renders loading and request errors truthfully", () => {
+    mockUsePendingVerifications.mockReturnValue({
+      ...queryState([], pendingRefetch),
+      isLoading: true,
+    });
+    const { rerender } = render(<VerificationPage />);
+    expect(
+      screen.getByText("Loading authenticated verification records..."),
+    ).toBeInTheDocument();
+
+    mockUsePendingVerifications.mockReturnValue({
+      ...queryState([], pendingRefetch),
+      error: new Error("Verification service unavailable"),
+      isLoading: false,
+    });
+    rerender(<VerificationPage />);
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Verification service unavailable",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(pendingRefetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("refreshes only the active record source", () => {
+    render(<VerificationPage />);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Refresh verification records" }),
+    );
+    expect(pendingRefetch).toHaveBeenCalledTimes(1);
+    expect(historyRefetch).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "History" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Refresh verification records" }),
+    );
+    expect(historyRefetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not query protected content in the disconnected UI", () => {
+    mockUseAccount.mockReturnValue({ isConnected: false });
+    mockUseIdentity.mockReturnValue({
+      identity: { isLoading: false, isRegistered: false },
+      sessionStatus: "anonymous",
+      sessionError: null,
+      signIn,
     });
     render(<VerificationPage />);
-    fireEvent.click(screen.getByText("History"));
-    const badges = screen.getAllByTestId("status-badge");
-    expect(badges.length).toBe(3);
-    expect(badges[2]).toHaveTextContent("revoked");
+
+    expect(screen.getByText("Connect your wallet")).toBeInTheDocument();
+    expect(screen.queryByText("Regulated onboarding")).not.toBeInTheDocument();
+  });
+
+  it("directs an unregistered wallet to identity setup", () => {
+    mockUseIdentity.mockReturnValue({
+      identity: { isLoading: false, isRegistered: false },
+      sessionStatus: "sign-in-required",
+      sessionError: null,
+      signIn,
+    });
+    render(<VerificationPage />);
+
+    expect(screen.getByText("Register this wallet first")).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: "Open identity setup" }),
+    ).toHaveAttribute("href", "/identity");
+  });
+
+  it("requires the one-time wallet sign-in before showing records", () => {
+    mockUseIdentity.mockReturnValue({
+      identity: { isLoading: false, isRegistered: true },
+      sessionStatus: "sign-in-required",
+      sessionError: null,
+      signIn,
+    });
+    render(<VerificationPage />);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Sign in with wallet" }),
+    );
+    expect(signIn).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText("Regulated onboarding")).not.toBeInTheDocument();
   });
 });

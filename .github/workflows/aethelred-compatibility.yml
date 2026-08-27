@@ -13,8 +13,9 @@ on:
 
 env:
   NODE_VERSION: "20"
-  # Pin to the protocol SHA recorded in aethelred `ecosystem/manifest.json`.
-  AETHELRED_REF: main
+  # Immutable Aethelred main SHA verified on 2026-07-25. Dependabot-style
+  # updates should move this pin deliberately after conformance passes.
+  AETHELRED_REF: 20d6060adc91860736f4ba619fe29cbda54b2cf7
 
 jobs:
   conformance:
@@ -31,7 +32,6 @@ jobs:
           repository: aethelred-foundation/aethelred
           ref: ${{ env.AETHELRED_REF }}
           path: aethelred
-          token: ${{ secrets.AETHELRED_REPO_TOKEN }}
 
       - name: Setup Node
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020

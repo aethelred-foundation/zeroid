@@ -12,15 +12,18 @@ jest.mock("@/lib/aethelred/attestation");
 
 const mockedGetVerificationModule =
   getVerificationModule as jest.MockedFunction<typeof getVerificationModule>;
-const mockedVerifyTee =
-  verifyTeeAttestationCanonical as jest.MockedFunction<
-    typeof verifyTeeAttestationCanonical
-  >;
+const mockedVerifyTee = verifyTeeAttestationCanonical as jest.MockedFunction<
+  typeof verifyTeeAttestationCanonical
+>;
 
 const LIVE = encodePublicInput("1");
 const NOT_LIVE = encodePublicInput("0");
 
-function mockZk(result: { valid: boolean; verificationTimeMs: number; error?: string }) {
+function mockZk(result: {
+  valid: boolean;
+  verificationTimeMs: number;
+  error?: string;
+}) {
   const verifyZKProof = jest.fn().mockResolvedValue(result);
   mockedGetVerificationModule.mockReturnValue({ verifyZKProof } as never);
   return verifyZKProof;
@@ -35,7 +38,10 @@ describe("verifyLivenessProof", () => {
     const verifyZKProof = mockZk({ valid: true, verificationTimeMs: 30 });
     const r = await verifyLivenessProof(input);
     expect(verifyZKProof).toHaveBeenCalledWith(
-      expect.objectContaining({ proofSystem: ProofSystem.EZKL, verifyingKeyHash: "vk" }),
+      expect.objectContaining({
+        proofSystem: ProofSystem.EZKL,
+        verifyingKeyHash: "vk",
+      }),
     );
     expect(r.zkVerified).toBe(true);
     expect(r.live).toBe(true);
@@ -62,7 +68,11 @@ describe("verifyLivenessWithAttestation", () => {
   it("requires BOTH zkML and TEE when an attestation is supplied", async () => {
     mockZk({ valid: true, verificationTimeMs: 10 });
     mockedVerifyTee.mockResolvedValue({ valid: true, platform: 1 as never });
-    const r = await verifyLivenessWithAttestation(input, {} as never, "0xenclave");
+    const r = await verifyLivenessWithAttestation(
+      input,
+      {} as never,
+      "0xenclave",
+    );
     expect(r.live).toBe(true);
     expect(r.teeVerified).toBe(true);
   });

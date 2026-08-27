@@ -1,15 +1,13 @@
-"use client";
-
 import { Sora, DM_Sans, JetBrains_Mono } from "next/font/google";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { WagmiProvider } from "wagmi";
-import { ThemeProvider } from "next-themes";
-import { Toaster } from "sonner";
-import { useState } from "react";
-import { wagmiConfig } from "@/config/wagmi";
-import { IdentityProvider } from "@/contexts/IdentityContext";
-import { ProofProvider } from "@/contexts/ProofContext";
+import { headers } from "next/headers";
+
+import { AppProviders } from "./providers";
 import "@/styles/globals.css";
+
+// A nonce-based CSP is generated per request by middleware. Rendering pages at
+// request time lets Next.js attach that nonce to its inline bootstrap scripts;
+// statically prerendered HTML cannot carry a request-specific nonce.
+export const dynamic = "force-dynamic";
 
 const sora = Sora({
   subsets: ["latin"],
@@ -32,27 +30,12 @@ const jetbrainsMono = JetBrains_Mono({
   weight: ["400", "500"],
 });
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  const [queryClient] = useState(
-    () =>
-      new QueryClient({
-        defaultOptions: {
-          queries: {
-            staleTime: 30_000,
-            gcTime: 5 * 60_000,
-            retry: 2,
-            refetchOnWindowFocus: false,
-          },
-          mutations: {
-            retry: 1,
-          },
-        },
-      }),
-  );
+  const nonce = (await headers()).get("x-nonce") || undefined;
 
   return (
     <html
@@ -68,39 +51,11 @@ export default function RootLayout({
           content="ZeroID — Self-sovereign identity with zero-knowledge proofs and TEE verification on the Aethelred network"
         />
         <meta name="theme-color" content="#08090b" />
-        <link rel="icon" href="/favicon.ico" />
+        <link rel="icon" type="image/png" href="/zeroid-logo.png" />
         <title>ZeroID | Self-Sovereign Identity</title>
       </head>
       <body className="font-body min-h-screen bg-[var(--surface-primary)]">
-        <ThemeProvider
-          attribute="class"
-          defaultTheme="dark"
-          enableSystem={false}
-        >
-          <WagmiProvider config={wagmiConfig}>
-            <QueryClientProvider client={queryClient}>
-              <IdentityProvider>
-                <ProofProvider>
-                  {children}
-                  <Toaster
-                    position="bottom-right"
-                    toastOptions={{
-                      className: "font-body",
-                      style: {
-                        background: "rgba(14, 15, 18, 0.95)",
-                        backdropFilter: "blur(24px)",
-                        border: "1px solid rgba(255, 255, 255, 0.07)",
-                        color: "#eceef1",
-                        borderRadius: "16px",
-                        boxShadow: "0 20px 60px rgba(0,0,0,0.5)",
-                      },
-                    }}
-                  />
-                </ProofProvider>
-              </IdentityProvider>
-            </QueryClientProvider>
-          </WagmiProvider>
-        </ThemeProvider>
+        <AppProviders nonce={nonce}>{children}</AppProviders>
       </body>
     </html>
   );

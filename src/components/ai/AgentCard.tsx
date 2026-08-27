@@ -26,7 +26,7 @@ import {
 // Types
 // ============================================================================
 
-type AgentType = "llm" | "autonomous" | "bot";
+type AgentType = "model_client" | "autonomous" | "bot";
 type AgentStatus = "active" | "suspended" | "inactive" | "pending_review";
 
 interface AgentCapability {
@@ -76,8 +76,8 @@ const AGENT_TYPE_CONFIG: Record<
   AgentType,
   { label: string; icon: typeof Bot; color: string; bg: string }
 > = {
-  llm: {
-    label: "LLM Agent",
+  model_client: {
+    label: "Model Client",
     icon: Brain,
     color: "text-violet-400",
     bg: "bg-violet-500/10",

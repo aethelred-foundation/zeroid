@@ -1,0 +1,67 @@
+# ZeroID backend stack for testnet: Postgres + Redis + the API on :4003.
+#   cp .env.testnet.example .env   # then replace every REPLACE_ value
+#   docker compose up --build
+# A one-shot service migrates healthy Postgres; the API then waits for Redis.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in backend/.env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in backend/.env}
+      POSTGRES_DB: ${POSTGRES_DB:?set POSTGRES_DB in backend/.env}
+    volumes:
+      - zeroid-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  migrate:
+    build: .
+    init: true
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    command:
+      [
+        "sh",
+        "-c",
+        "node dist/ops/database-migration-preflight.js && npx prisma migrate deploy",
+      ]
+
+  api:
+    build: .
+    init: true
+    restart: unless-stopped
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    # These point the API at the compose services and override any localhost
+    # values in .env (which are for running the API without Docker).
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379
+      PORT: "4003"
+    command: ["node", "dist/index.js"]
+    ports:
+      - "4003:4003"
+
+volumes:
+  zeroid-pg:

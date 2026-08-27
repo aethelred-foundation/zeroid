@@ -34,7 +34,7 @@ describe('API JWT asymmetric signing', () => {
       expiresAt: Date;
     } | null = null;
 
-    jest.doMock('../src/index', () => ({
+    jest.doMock('../src/runtime', () => ({
       prisma: {
         session: {
           create: jest.fn(async ({ data }) => {
@@ -106,7 +106,7 @@ describe('API JWT asymmetric signing', () => {
     process.env.API_JWT_ALGORITHM = 'RS256';
     process.env.API_JWT_KEY_ID = 'api-jwt-key-2026-05';
 
-    jest.doMock('../src/index', () => ({
+    jest.doMock('../src/runtime', () => ({
       prisma: {
         session: {
           create: jest.fn(),
@@ -170,7 +170,7 @@ describe('API JWT asymmetric signing', () => {
     process.env.API_JWT_KEY_ID = 'api-jwt-key-2026-05';
 
     const sessionFindUnique = jest.fn();
-    jest.doMock('../src/index', () => ({
+    jest.doMock('../src/runtime', () => ({
       prisma: {
         session: {
           create: jest.fn(),

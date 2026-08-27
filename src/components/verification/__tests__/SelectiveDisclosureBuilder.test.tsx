@@ -4,7 +4,18 @@ import SelectiveDisclosureBuilder from "@/components/verification/SelectiveDiscl
 
 jest.mock("framer-motion", () => ({
   motion: {
-    div: ({ children, ...props }: any) => <div {...props}>{children}</div>,
+    div: ({
+      children,
+      layout: _layout,
+      layoutId: _layoutId,
+      initial: _initial,
+      animate: _animate,
+      exit: _exit,
+      transition: _transition,
+      whileHover: _whileHover,
+      whileTap: _whileTap,
+      ...props
+    }: any) => <div {...props}>{children}</div>,
   },
   AnimatePresence: ({ children }: any) => children,
 }));

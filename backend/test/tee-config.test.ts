@@ -38,7 +38,7 @@ describe('TEE production configuration', () => {
       };
     });
 
-    jest.doMock('../src/index', () => {
+    jest.doMock('../src/runtime', () => {
       const { Registry } = require('prom-client');
       return {
         logger: {
@@ -73,7 +73,7 @@ describe('TEE production configuration', () => {
     dnsLookupSpy.mockRestore();
     jest.dontMock('https');
     jest.dontMock('prom-client');
-    jest.dontMock('../src/index');
+    jest.dontMock('../src/runtime');
     jest.resetModules();
     global.fetch = ORIGINAL_FETCH;
     process.env = ORIGINAL_ENV;

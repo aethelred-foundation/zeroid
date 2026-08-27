@@ -13,6 +13,14 @@
  */
 
 import { ZeroIDApiError, apiClient, buildApiUrl } from "@/lib/api/client";
+import {
+  clearIdentityAuthToken,
+  getIdentityAuthToken,
+  storeIdentityAuthToken,
+} from "@/lib/identity/registration";
+import { IDENTITY_SESSION_EXPIRED_EVENT } from "@/lib/identity/session";
+import { CredentialResponseContractError } from "@/lib/credentials/summary";
+import { SchemaRegistryResponseContractError } from "@/lib/schemas/registry";
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -30,10 +38,23 @@ jest.mock("@/lib/utils", () => ({
     mockWithRetry(...(args as [() => Promise<unknown>, number])),
   withTimeout: (...args: unknown[]) =>
     mockWithTimeout(...(args as [Promise<unknown>, number, string?])),
+  generateUUID: () => "12345678-1234-4234-8234-123456789abc",
 }));
 
 jest.mock("@/config/constants", () => ({
   API_BASE_URL: "https://api.zeroid.aethelred.network",
+  TEE_SERVICE_URL: "https://tee.zeroid.aethelred.network",
+  TEE_ENDPOINTS: {
+    NODE_STATUS: "/api/v1/tee/nodes/status",
+    ATTESTATION_VERIFY: "/api/v1/tee/attestation/verify",
+    BIOMETRIC_ENROLL: "/api/v1/tee/biometric/enroll",
+    BIOMETRIC_VERIFY: "/api/v1/tee/biometric/verify",
+  },
+  TEE_FRESHNESS_REQUIREMENTS: {
+    IntelSGX: 86_400,
+    AMDSEV: 86_400,
+    ArmTrustZone: 43_200,
+  },
 }));
 
 // Global fetch mock
@@ -42,6 +63,34 @@ const mockFetch = jest.fn();
 
 const REQUEST_ID_PATTERN =
   /^zid-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const backendCredential = {
+  id: "12345678-1234-4234-8234-123456789abc",
+  credentialType: "KYC_LEVEL_2",
+  issuerId: "issuer-identity-id",
+  subjectId: "subject-identity-id",
+  claimsHash: "a".repeat(64),
+  proof: { type: "issuer-signature" },
+  status: "ACTIVE",
+  issuedAt: "2026-06-25T10:00:00.000Z",
+  expiresAt: "2027-06-25T10:00:00.000Z",
+};
+const backendSchemaRecord = {
+  id: "12345678-1234-4234-8234-123456789abc",
+  name: "Verified Organization",
+  version: "1.2.0",
+  description: "An approved organization credential schema.",
+  schemaDefinition: {
+    type: "object",
+    properties: { legalName: { type: "string" } },
+  },
+  proposedBy: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  status: "APPROVED",
+  approvalVotes: 4,
+  rejectionVotes: 1,
+  voters: ["bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"],
+  createdAt: "2026-06-23T00:00:00.000Z",
+  updatedAt: "2026-06-24T00:00:00.000Z",
+};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -55,6 +104,23 @@ function jsonResponse<T>(data: T, ok = true, status = 200, statusText = "OK") {
     json: jest.fn().mockResolvedValue({
       success: ok,
       data,
+      requestId: "zid-server-abc",
+    }),
+  };
+}
+
+function schemaListResponse(
+  data = [backendSchemaRecord],
+  pagination = { page: 1, limit: 20, total: data.length, totalPages: 1 },
+) {
+  return {
+    ok: true,
+    status: 200,
+    statusText: "OK",
+    json: jest.fn().mockResolvedValue({
+      success: true,
+      data,
+      pagination,
       requestId: "zid-server-abc",
     }),
   };
@@ -94,6 +160,7 @@ function parseFailResponse(status = 200) {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  clearIdentityAuthToken();
   window.sessionStorage.clear();
   // Default: withRetry just calls fn once
   mockWithRetry.mockImplementation(async (fn: () => Promise<unknown>) => fn());
@@ -169,23 +236,61 @@ describe("request internals (tested via apiClient methods)", () => {
   });
 
   it("uses the stored session token for protected routes by default", async () => {
-    window.sessionStorage.setItem("zeroid.identity.authToken", "stored-token");
-    mockFetch.mockResolvedValue(jsonResponse({ hash: "0xcred" }));
+    storeIdentityAuthToken("stored-token");
+    mockFetch.mockResolvedValue(jsonResponse(backendCredential));
 
-    await apiClient.getCredential("0xcred" as `0x${string}`);
+    await apiClient.getCredential(backendCredential.id);
 
     const [, init] = mockFetch.mock.calls[0];
     expect(init.headers["Authorization"]).toBe("Bearer stored-token");
   });
 
   it("does not send the stored session token to public health checks", async () => {
-    window.sessionStorage.setItem("zeroid.identity.authToken", "stored-token");
+    storeIdentityAuthToken("stored-token");
     mockFetch.mockResolvedValue(jsonResponse({ status: "ok" }));
 
     await apiClient.health();
 
     const [, init] = mockFetch.mock.calls[0];
     expect(init.headers["Authorization"]).toBeUndefined();
+  });
+
+  it("clears and broadcasts a rejected protected session on 401", async () => {
+    const expired = jest.fn();
+    window.addEventListener(IDENTITY_SESSION_EXPIRED_EVENT, expired);
+    storeIdentityAuthToken("expired-token");
+    mockFetch.mockResolvedValue(
+      errorResponse("AUTH_TOKEN_INVALID", "Session expired", 401),
+    );
+
+    try {
+      await expect(
+        apiClient.getCredential(backendCredential.id),
+      ).rejects.toMatchObject({ statusCode: 401 });
+      expect(getIdentityAuthToken()).toBeUndefined();
+      expect(expired).toHaveBeenCalledTimes(1);
+    } finally {
+      window.removeEventListener(IDENTITY_SESSION_EXPIRED_EVENT, expired);
+    }
+  });
+
+  it("does not let a stale request clear a newer wallet session", async () => {
+    const expired = jest.fn();
+    window.addEventListener(IDENTITY_SESSION_EXPIRED_EVENT, expired);
+    storeIdentityAuthToken("new-wallet-token");
+    mockFetch.mockResolvedValue(
+      errorResponse("AUTH_TOKEN_INVALID", "Old session expired", 401),
+    );
+
+    try {
+      await expect(
+        apiClient.getCredential(backendCredential.id, "old-wallet-token"),
+      ).rejects.toMatchObject({ statusCode: 401 });
+      expect(getIdentityAuthToken()).toBe("new-wallet-token");
+      expect(expired).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener(IDENTITY_SESSION_EXPIRED_EVENT, expired);
+    }
   });
 
   it("throws ZeroIDApiError with PARSE_ERROR when response JSON is invalid", async () => {
@@ -326,8 +431,8 @@ describe("URL building", () => {
   });
 
   it("appends query parameters", async () => {
-    mockFetch.mockResolvedValue(jsonResponse({ items: [], total: 0 }));
-    await apiClient.listCredentials("0xsubject" as `0x${string}`, 2, 20);
+    mockFetch.mockResolvedValue(jsonResponse([]));
+    await apiClient.listCredentials(2, 20);
     const [url] = mockFetch.mock.calls[0];
     const parsed = new URL(url);
     expect(parsed.searchParams.get("subject")).toBeNull();
@@ -337,8 +442,14 @@ describe("URL building", () => {
   });
 
   it("omits empty/null/undefined query parameter values", async () => {
-    // listSchemas only passes page + limit, so verify no extra keys
-    mockFetch.mockResolvedValue(jsonResponse([]));
+    mockFetch.mockResolvedValue(
+      schemaListResponse([backendSchemaRecord], {
+        page: 1,
+        limit: 10,
+        total: 1,
+        totalPages: 1,
+      }),
+    );
     await apiClient.listSchemas(1, 10);
     const [url] = mockFetch.mock.calls[0];
     const parsed = new URL(url);
@@ -350,10 +461,12 @@ describe("URL building", () => {
   });
 
   it("includes path parameters inline", async () => {
-    mockFetch.mockResolvedValue(jsonResponse({}));
-    await apiClient.getSchema("schema-123");
+    mockFetch.mockResolvedValue(jsonResponse(backendSchemaRecord));
+    await apiClient.getSchema(backendSchemaRecord.id);
     const [url] = mockFetch.mock.calls[0];
-    expect(url).toContain("/api/v1/governance/schemas/schema-123");
+    expect(url).toContain(
+      `/api/v1/governance/schemas/${backendSchemaRecord.id}`,
+    );
   });
 });
 
@@ -366,6 +479,15 @@ describe("retry behaviour", () => {
     mockFetch.mockResolvedValue(jsonResponse({ status: "ok" }));
     await apiClient.health();
     expect(mockWithRetry).toHaveBeenCalledWith(expect.any(Function), 2);
+  });
+
+  it("does not retry authenticated reads with the same rejected bearer token", async () => {
+    storeIdentityAuthToken("session-token");
+    mockFetch.mockResolvedValue(jsonResponse(backendCredential));
+
+    await apiClient.getCredential(backendCredential.id);
+
+    expect(mockWithRetry).toHaveBeenCalledWith(expect.any(Function), 0);
   });
 
   it("retries GET requests on failure", async () => {
@@ -505,23 +627,162 @@ describe("apiClient.registerIdentity()", () => {
   });
 });
 
+describe("apiClient wallet authentication", () => {
+  it("creates a wallet challenge without attaching an existing bearer token", async () => {
+    storeIdentityAuthToken("old-token");
+    mockFetch.mockResolvedValue(
+      jsonResponse({
+        challengeId: "a".repeat(64),
+        message: "server sign-in message",
+        expiresAt: "2026-07-18T10:05:00.000Z",
+      }),
+    );
+
+    const result = await apiClient.createIdentityAuthChallenge(
+      "0x1234567890abcdef1234567890abcdef12345678",
+    );
+
+    const [url, init] = mockFetch.mock.calls[0];
+    expect(url).toContain("/api/v1/identity/auth/challenge");
+    expect(init.method).toBe("POST");
+    expect(init.headers["Authorization"]).toBeUndefined();
+    expect(JSON.parse(init.body)).toEqual({
+      address: "0x1234567890abcdef1234567890abcdef12345678",
+    });
+    expect(result.message).toBe("server sign-in message");
+  });
+
+  it("exchanges the signed challenge without sending a stale bearer token", async () => {
+    storeIdentityAuthToken("old-token");
+    mockFetch.mockResolvedValue(
+      jsonResponse({
+        identity: {
+          id: "identity-1",
+          did: "did:aethelred:testnet:0x1234",
+          status: "ACTIVE",
+        },
+        token: "new-token",
+        sessionId: "session-1",
+      }),
+    );
+
+    const result = await apiClient.loginWithWallet({
+      challengeId: "b".repeat(64),
+      signature: `0x${"c".repeat(130)}`,
+    });
+
+    const [url, init] = mockFetch.mock.calls[0];
+    expect(url).toContain("/api/v1/identity/auth/login");
+    expect(init.headers["Authorization"]).toBeUndefined();
+    expect(result.token).toBe("new-token");
+  });
+
+  it("validates the current bearer principal through identity/me", async () => {
+    mockFetch.mockResolvedValue(
+      jsonResponse({
+        id: "identity-1",
+        did: "did:aethelred:testnet:0x1234",
+        status: "ACTIVE",
+      }),
+    );
+
+    const result = await apiClient.getCurrentIdentity("session-token");
+
+    const [url, init] = mockFetch.mock.calls[0];
+    expect(url).toContain("/api/v1/identity/me");
+    expect(init.headers["Authorization"]).toBe("Bearer session-token");
+    expect(result.id).toBe("identity-1");
+  });
+});
+
+describe("apiClient UAE Pass government verification", () => {
+  it("starts UAE Pass verification with the stored identity token by default", async () => {
+    storeIdentityAuthToken("stored-token");
+    mockFetch.mockResolvedValue(
+      jsonResponse({
+        authUrl: "https://uaepass.example/authorize",
+        state: "state-1",
+        expiresInSeconds: 600,
+      }),
+    );
+
+    const result = await apiClient.startUAEPassVerification(
+      "https://app.zeroid.test/identity/uae-pass/callback",
+    );
+
+    expect(result.state).toBe("state-1");
+    const [url, init] = mockFetch.mock.calls[0];
+    expect(url).toContain("/api/v1/identity/government/uae-pass/start");
+    expect(init.method).toBe("POST");
+    expect(init.headers["Authorization"]).toBe("Bearer stored-token");
+    expect(JSON.parse(init.body)).toEqual({
+      redirectUri: "https://app.zeroid.test/identity/uae-pass/callback",
+    });
+  });
+
+  it("completes UAE Pass verification with code and state", async () => {
+    mockFetch.mockResolvedValue(
+      jsonResponse({
+        verified: true,
+        provider: "UAE_PASS",
+        referenceId: "uaepass-ref-1",
+        verifiedFields: ["fullName"],
+        verifiedAt: "2026-06-25T10:00:00.000Z",
+        expiresAt: "2027-06-25T10:00:00.000Z",
+      }),
+    );
+
+    const result = await apiClient.completeUAEPassVerification(
+      { code: "oauth-code-123", state: "state-1" },
+      "explicit-token",
+    );
+
+    expect(result.verified).toBe(true);
+    const [url, init] = mockFetch.mock.calls[0];
+    expect(url).toContain("/api/v1/identity/government/uae-pass/callback");
+    expect(init.headers["Authorization"]).toBe("Bearer explicit-token");
+    expect(JSON.parse(init.body)).toEqual({
+      code: "oauth-code-123",
+      state: "state-1",
+    });
+  });
+
+  it("fetches authenticated government verification status", async () => {
+    storeIdentityAuthToken("stored-token");
+    mockFetch.mockResolvedValue(
+      jsonResponse({
+        verified: true,
+        provider: "UAE_PASS",
+        referenceId: "uaepass-ref-2",
+        verifiedFields: ["fullName"],
+        verifiedAt: "2026-06-25T10:00:00.000Z",
+        expiresAt: "2027-06-25T10:00:00.000Z",
+      }),
+    );
+
+    const result = await apiClient.getGovernmentVerificationStatus();
+
+    expect(result?.referenceId).toBe("uaepass-ref-2");
+    const [url, init] = mockFetch.mock.calls[0];
+    expect(url).toContain("/api/v1/identity/government/status");
+    expect(init.method).toBe("GET");
+    expect(init.headers["Authorization"]).toBe("Bearer stored-token");
+  });
+});
+
 describe("apiClient.listCredentials()", () => {
-  it("passes backend pagination and role query params", async () => {
+  it("normalizes backend records and preserves backend pagination", async () => {
     mockFetch.mockResolvedValue({
       ok: true,
       status: 200,
       statusText: "OK",
       json: jest.fn().mockResolvedValue({
-        data: [{ id: "cred-1" }],
+        data: [backendCredential],
         pagination: { page: 3, limit: 5, total: 11, totalPages: 3 },
       }),
     });
 
-    const result = await apiClient.listCredentials(
-      "0xsub" as `0x${string}`,
-      3,
-      5,
-    );
+    const result = await apiClient.listCredentials(3, 5);
 
     const [url] = mockFetch.mock.calls[0];
     const parsed = new URL(url);
@@ -530,7 +791,21 @@ describe("apiClient.listCredentials()", () => {
     expect(parsed.searchParams.get("role")).toBe("subject");
     expect(parsed.searchParams.get("subject")).toBeNull();
     expect(result).toEqual({
-      items: [{ id: "cred-1" }],
+      items: [
+        {
+          id: backendCredential.id,
+          credentialType: "KYC_LEVEL_2",
+          typeLabel: "KYC Level 2",
+          category: "kyc",
+          issuerId: "issuer-identity-id",
+          subjectId: "subject-identity-id",
+          claimsHash: "a".repeat(64),
+          proofAvailable: true,
+          status: "active",
+          issuedAt: "2026-06-25T10:00:00.000Z",
+          expiresAt: "2027-06-25T10:00:00.000Z",
+        },
+      ],
       total: 11,
       page: 3,
       pageSize: 5,
@@ -540,45 +815,91 @@ describe("apiClient.listCredentials()", () => {
 
   it("uses default page=1, pageSize=12 when not specified", async () => {
     mockFetch.mockResolvedValue(jsonResponse([]));
-    await apiClient.listCredentials("0xsub" as `0x${string}`);
+    await apiClient.listCredentials();
     const [url] = mockFetch.mock.calls[0];
     const parsed = new URL(url);
     expect(parsed.searchParams.get("page")).toBe("1");
     expect(parsed.searchParams.get("limit")).toBe("12");
   });
+
+  it("rejects records that do not satisfy the credential summary contract", async () => {
+    mockFetch.mockResolvedValue(
+      jsonResponse([{ ...backendCredential, claimsHash: "0xnot-a-digest" }]),
+    );
+
+    await expect(apiClient.listCredentials()).rejects.toBeInstanceOf(
+      CredentialResponseContractError,
+    );
+  });
 });
 
 describe("apiClient.getCredential()", () => {
-  it("calls GET /api/v1/credentials/{hash}", async () => {
-    mockFetch.mockResolvedValue(jsonResponse({ hash: "0xcred" }));
-    const result = await apiClient.getCredential("0xcred" as `0x${string}`);
-    expect(result).toEqual({ hash: "0xcred" });
-    expect(mockFetch.mock.calls[0][0]).toContain("/api/v1/credentials/0xcred");
+  it("fetches a backend UUID and normalizes the response", async () => {
+    mockFetch.mockResolvedValue(jsonResponse(backendCredential));
+
+    const result = await apiClient.getCredential(backendCredential.id);
+
+    expect(result).toMatchObject({
+      id: backendCredential.id,
+      typeLabel: "KYC Level 2",
+      category: "kyc",
+      claimsHash: backendCredential.claimsHash,
+      proofAvailable: true,
+      status: "active",
+    });
+    expect(mockFetch.mock.calls[0][0]).toContain(
+      `/api/v1/credentials/${backendCredential.id}`,
+    );
+  });
+
+  it("rejects a non-UUID credential id before sending a request", async () => {
+    await expect(
+      apiClient.getCredential("0xlegacy-hash"),
+    ).rejects.toMatchObject({
+      code: "CREDENTIAL_ID_INVALID",
+      statusCode: 400,
+    });
+
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("rejects a malformed credential response", async () => {
+    mockFetch.mockResolvedValue(
+      jsonResponse({ ...backendCredential, claimsHash: undefined }),
+    );
+
+    await expect(
+      apiClient.getCredential(backendCredential.id),
+    ).rejects.toBeInstanceOf(CredentialResponseContractError);
   });
 });
 
 describe("apiClient.listSchemas()", () => {
-  it("calls GET /api/v1/governance/schemas with backend pagination", async () => {
-    mockFetch.mockResolvedValue({
-      ok: true,
-      status: 200,
-      statusText: "OK",
-      json: jest.fn().mockResolvedValue({
-        data: [{ id: "schema-1" }],
-        pagination: { page: 2, limit: 15, total: 21, totalPages: 2 },
+  it("calls the approved registry with backend pagination and name filtering", async () => {
+    mockFetch.mockResolvedValue(
+      schemaListResponse([backendSchemaRecord], {
+        page: 2,
+        limit: 15,
+        total: 16,
+        totalPages: 2,
       }),
-    });
+    );
 
-    const result = await apiClient.listSchemas(2, 15);
+    const result = await apiClient.listSchemas(2, 15, {
+      status: "APPROVED",
+      name: "  Organization  ",
+    });
 
     const [url] = mockFetch.mock.calls[0];
     expect(url).toContain("/api/v1/governance/schemas");
     const parsed = new URL(url);
     expect(parsed.searchParams.get("page")).toBe("2");
     expect(parsed.searchParams.get("limit")).toBe("15");
+    expect(parsed.searchParams.get("status")).toBe("APPROVED");
+    expect(parsed.searchParams.get("name")).toBe("Organization");
     expect(result).toEqual({
-      items: [{ id: "schema-1" }],
-      total: 21,
+      items: [backendSchemaRecord],
+      total: 16,
       page: 2,
       pageSize: 15,
       hasMore: false,
@@ -586,22 +907,157 @@ describe("apiClient.listSchemas()", () => {
   });
 
   it("uses default page=1, pageSize=20", async () => {
-    mockFetch.mockResolvedValue(jsonResponse([]));
+    mockFetch.mockResolvedValue(
+      schemaListResponse([], {
+        page: 1,
+        limit: 20,
+        total: 0,
+        totalPages: 0,
+      }),
+    );
     await apiClient.listSchemas();
     const [url] = mockFetch.mock.calls[0];
     const parsed = new URL(url);
     expect(parsed.searchParams.get("page")).toBe("1");
     expect(parsed.searchParams.get("limit")).toBe("20");
   });
+
+  it("attaches the wallet session once without retrying an authenticated read", async () => {
+    storeIdentityAuthToken("registry-session");
+    mockFetch.mockResolvedValue(schemaListResponse());
+
+    await apiClient.listSchemas(1, 20, { status: "APPROVED" });
+
+    const [, init] = mockFetch.mock.calls[0];
+    expect(init.headers.Authorization).toBe("Bearer registry-session");
+    expect(mockWithRetry).not.toHaveBeenCalled();
+  });
+
+  it("rejects an oversized name filter before sending a request", async () => {
+    await expect(
+      apiClient.listSchemas(1, 20, { name: "a".repeat(101) }),
+    ).rejects.toMatchObject({
+      code: "SCHEMA_NAME_FILTER_INVALID",
+      statusCode: 400,
+    });
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("rejects a malformed schema registry response", async () => {
+    mockFetch.mockResolvedValue(
+      schemaListResponse(
+        [{ ...backendSchemaRecord, proposedBy: "not-a-uuid" }],
+        { page: 1, limit: 20, total: 1, totalPages: 1 },
+      ),
+    );
+
+    await expect(
+      apiClient.listSchemas(1, 20, { status: "APPROVED" }),
+    ).rejects.toBeInstanceOf(SchemaRegistryResponseContractError);
+  });
+
+  it("fails closed when a requested approval filter is not honored", async () => {
+    mockFetch.mockResolvedValue(
+      schemaListResponse([{ ...backendSchemaRecord, status: "PROPOSED" }], {
+        page: 1,
+        limit: 20,
+        total: 1,
+        totalPages: 1,
+      }),
+    );
+
+    await expect(
+      apiClient.listSchemas(1, 20, { status: "APPROVED" }),
+    ).rejects.toThrow(/while "APPROVED" was requested/);
+  });
 });
 
 describe("apiClient.getSchema()", () => {
   it("calls GET /api/v1/governance/schemas/{id}", async () => {
-    mockFetch.mockResolvedValue(jsonResponse({ hash: "0xschema" }));
-    await apiClient.getSchema("schema-123");
-    expect(mockFetch.mock.calls[0][0]).toContain(
-      "/api/v1/governance/schemas/schema-123",
+    mockFetch.mockResolvedValue(jsonResponse(backendSchemaRecord));
+    await expect(apiClient.getSchema(backendSchemaRecord.id)).resolves.toEqual(
+      backendSchemaRecord,
     );
+    expect(mockFetch.mock.calls[0][0]).toContain(
+      `/api/v1/governance/schemas/${backendSchemaRecord.id}`,
+    );
+  });
+
+  it("rejects a non-UUID schema id before sending a request", async () => {
+    await expect(apiClient.getSchema("42")).rejects.toThrow(/must be a UUID/);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+});
+
+describe("apiClient.createSchemaProposal()", () => {
+  const proposalInput = {
+    name: "  Verified Organization  ",
+    version: " 1.2.0 ",
+    description: "  An approved organization credential schema.  ",
+    schemaDefinition: backendSchemaRecord.schemaDefinition,
+  };
+
+  it("posts the exact backend create-schema body and validates the response", async () => {
+    const proposedRecord = { ...backendSchemaRecord, status: "PROPOSED" };
+    mockFetch.mockResolvedValue(jsonResponse(proposedRecord, true, 201));
+
+    await expect(
+      apiClient.createSchemaProposal(proposalInput),
+    ).resolves.toEqual(proposedRecord);
+
+    const [url, init] = mockFetch.mock.calls[0];
+    expect(url).toContain("/api/v1/governance/schemas");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body)).toEqual({
+      name: "Verified Organization",
+      version: "1.2.0",
+      description: "An approved organization credential schema.",
+      schemaDefinition: backendSchemaRecord.schemaDefinition,
+    });
+  });
+
+  it("fails closed if creation does not return a proposed record", async () => {
+    mockFetch.mockResolvedValue(jsonResponse(backendSchemaRecord, true, 201));
+
+    await expect(apiClient.createSchemaProposal(proposalInput)).rejects.toThrow(
+      /while "PROPOSED" was requested/,
+    );
+  });
+});
+
+describe("apiClient.voteOnSchema()", () => {
+  it.each([
+    [true, true],
+    [false, false],
+  ])("posts the exact approve=%s vote body", async (_label, approve) => {
+    const votedRecord = {
+      ...backendSchemaRecord,
+      status: "PROPOSED",
+      approvalVotes: approve ? 1 : 0,
+      rejectionVotes: approve ? 0 : 1,
+    };
+    mockFetch.mockResolvedValue(jsonResponse(votedRecord));
+
+    await expect(
+      apiClient.voteOnSchema(backendSchemaRecord.id, approve),
+    ).resolves.toEqual(votedRecord);
+
+    const [url, init] = mockFetch.mock.calls[0];
+    expect(url).toContain(
+      `/api/v1/governance/schemas/${backendSchemaRecord.id}/vote`,
+    );
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body)).toEqual({ approve });
+  });
+
+  it("rejects invalid schema ids and vote choices before sending a request", async () => {
+    await expect(apiClient.voteOnSchema("42", true)).rejects.toThrow(
+      /must be a UUID/,
+    );
+    await expect(
+      apiClient.voteOnSchema(backendSchemaRecord.id, "abstain" as any),
+    ).rejects.toMatchObject({ code: "SCHEMA_VOTE_INVALID" });
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 });
 
@@ -691,14 +1147,42 @@ describe("apiClient.submitProof()", () => {
 });
 
 describe("apiClient.listProofRequests()", () => {
-  it("fails closed because the backend does not expose a proof request inbox", async () => {
-    await expect(
-      apiClient.listProofRequests("0xdid" as `0x${string}`, "auth"),
-    ).rejects.toMatchObject({
-      code: "PROOF_REQUEST_INBOX_UNAVAILABLE",
-      statusCode: 501,
+  it("loads pending durable proof requests from the backend inbox", async () => {
+    mockFetch.mockResolvedValue(
+      jsonResponse([
+        {
+          id: "req-1",
+          verifierDid: "did:aethelred:verifier",
+          subjectDid: "did:aethelred:subject",
+          credentialHash: "0xcred",
+          requestedAttributes: ["age", "residency"],
+          circuitId: "0xcircuit",
+          status: "pending",
+          createdAt: 1760000000,
+          expiresAt: 1760086400,
+          purpose: "Regulated service onboarding",
+          userConsent: false,
+        },
+      ]),
+    );
+
+    const requests = await apiClient.listProofRequests(
+      "0xdid" as `0x${string}`,
+      "auth",
+    );
+
+    expect(requests[0]).toMatchObject({
+      id: "req-1",
+      circuitId: "0xcircuit",
+      purpose: "Regulated service onboarding",
+      fulfilled: false,
     });
-    expect(mockFetch).not.toHaveBeenCalled();
+    expect(mockFetch.mock.calls[0][0]).toContain(
+      "/api/v1/verification/requests",
+    );
+    expect(mockFetch.mock.calls[0][1].headers.Authorization).toBe(
+      "Bearer auth",
+    );
   });
 });
 
@@ -734,59 +1218,371 @@ describe("apiClient.getVerificationResult()", () => {
   });
 });
 
-describe("apiClient.listTEENodes()", () => {
-  it("fails closed because node discovery is not exposed", async () => {
-    await expect(apiClient.listTEENodes()).rejects.toMatchObject({
-      code: "TEE_NODE_DISCOVERY_UNAVAILABLE",
-      statusCode: 501,
+describe("apiClient.generateEligibilityProof()", () => {
+  it("posts the v1 eligibility proof request to the backend contract endpoint", async () => {
+    mockFetch.mockResolvedValue(
+      jsonResponse({
+        status: "ALLOWED",
+        decisionId: "dec_123",
+        policyId:
+          "zeroid://policy/regulated-digital-services/age-jurisdiction@2026.06.1",
+        policyVersion: "2026.06.1",
+        subjectDid: "did:aethelred:mainnet:0xholder",
+        credentialId: "cred_1",
+        relyingAppId: "edge-secure-data-room",
+        proof: {
+          proofId: "zkp_123",
+          circuitId: "zkc_eligibility_policy_context_v1",
+          circuitName: "eligibility_policy_context_v1",
+          verificationKeyId: "vk_eligibility_policy_context_v1_2026_06_27",
+          manifestDigest:
+            "0x1f48ddf10a370c1ab6af80f17e359f0c00700b5151a7ee1db835dfdb3cde25e5",
+          policyBindingDigest:
+            "0xc339f81323c5288c23a30a0fcbc3140bdb60f79193101cbc8ee0fc42eda45e0c",
+          contextHash:
+            "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          verifiedAt: "2026-06-23T10:00:00.000Z",
+          publicSignals: {},
+          privateInputsRedacted: [],
+        },
+        evaluation: {
+          ageOverThreshold: true,
+          residencyAllowed: true,
+          nationalityAllowed: true,
+          sanctionsClear: true,
+          riskAccepted: true,
+          credentialActive: true,
+          credentialNotExpired: true,
+          nonRevocationChecked: true,
+          onchainAttested: true,
+          teeAttested: true,
+          minimumAge: 21,
+          computedAge: 33,
+          allowedResidencies: ["AE"],
+          deniedReasons: [],
+        },
+        evidence: {
+          auditLogId: "aud_123",
+          auditHash:
+            "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          regulatoryReportId: "reg_123",
+          receiptHash:
+            "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          receiptHashAlgorithm: "sha256-canonical-json-v1",
+          policyRegistry: "zeroid://policy-registry/core",
+          artifactDigest:
+            "0xdddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          manifestPath: "circuits/manifest/eligibility_v1.json",
+          manifestDigest:
+            "0x1f48ddf10a370c1ab6af80f17e359f0c00700b5151a7ee1db835dfdb3cde25e5",
+          sourceDigest:
+            "0xac4d4468fd32692373b5a5942a94588120bfbbda82b151da8aa92a12fd6393e3",
+          policyBindingDigest:
+            "0xc339f81323c5288c23a30a0fcbc3140bdb60f79193101cbc8ee0fc42eda45e0c",
+          artifactStatus: "SOURCE_VALIDATED_ARTIFACTS_PENDING",
+          evidenceChain: [],
+        },
+        issuedAt: "2026-06-23T10:00:00.000Z",
+      }),
+    );
+
+    const request = {
+      subjectDid: "did:aethelred:mainnet:0xholder",
+      credentialId: "cred_1",
+      policyId:
+        "zeroid://policy/regulated-digital-services/age-jurisdiction@2026.06.1",
+      relyingAppId: "edge-secure-data-room",
+      contextNonce: "nonce-1234567890",
+      options: { requireNonRevocationProof: true },
+    };
+
+    const result = await apiClient.generateEligibilityProof(request, "auth");
+
+    expect(result.status).toBe("ALLOWED");
+    expect(mockFetch.mock.calls[0][0]).toContain(
+      "/api/v1/verification/eligibility-proof",
+    );
+    expect(JSON.parse(mockFetch.mock.calls[0][1].body)).toEqual(request);
+    expect(mockFetch.mock.calls[0][1].headers.Authorization).toBe(
+      "Bearer auth",
+    );
+  });
+});
+
+describe("apiClient.getEligibilityProofReceipt()", () => {
+  it("retrieves a durable eligibility proof receipt by decision id", async () => {
+    mockFetch.mockResolvedValue(
+      jsonResponse({
+        verificationId: "verification-1",
+        status: "ALLOWED",
+        decisionId: "dec_123",
+        policyId:
+          "zeroid://policy/regulated-digital-services/age-jurisdiction@2026.06.1",
+        policyVersion: "2026.06.1",
+        credentialId: "cred_1",
+        verifierId: "subject-1",
+        subjectId: "subject-1",
+        relyingAppId: "edge-secure-data-room",
+        proof: {
+          proofId: "zkp_123",
+          circuitId: "zkc_eligibility_policy_context_v1",
+          circuitName: "eligibility_policy_context_v1",
+          verificationKeyId: "vk_eligibility_policy_context_v1_2026_06_27",
+          manifestDigest:
+            "0x1f48ddf10a370c1ab6af80f17e359f0c00700b5151a7ee1db835dfdb3cde25e5",
+          sourceDigest:
+            "0xac4d4468fd32692373b5a5942a94588120bfbbda82b151da8aa92a12fd6393e3",
+          policyBindingDigest:
+            "0xc339f81323c5288c23a30a0fcbc3140bdb60f79193101cbc8ee0fc42eda45e0c",
+          contextHash:
+            "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          publicSignals: {
+            claimsHash:
+              "0x1111111111111111111111111111111111111111111111111111111111111111",
+          },
+          privateInputsRedacted: ["dobYear"],
+          disclosurePolicy: {
+            rawFieldsDisclosed: [],
+            disclosureBudget: { rawFieldCount: 0 },
+          },
+        },
+        evidence: {
+          auditLogId: "aud_123",
+          auditHash:
+            "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          receiptHash:
+            "0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          receiptHashAlgorithm: "sha256-canonical-json-v1",
+          manifestPath: "circuits/manifest/eligibility_v1.json",
+          manifestDigest:
+            "0x1f48ddf10a370c1ab6af80f17e359f0c00700b5151a7ee1db835dfdb3cde25e5",
+          sourceDigest:
+            "0xac4d4468fd32692373b5a5942a94588120bfbbda82b151da8aa92a12fd6393e3",
+          policyBindingDigest:
+            "0xc339f81323c5288c23a30a0fcbc3140bdb60f79193101cbc8ee0fc42eda45e0c",
+          artifactStatus: "SOURCE_VALIDATED_ARTIFACTS_PENDING",
+          auditDetails: { proofId: "zkp_123" },
+        },
+        evaluation: {
+          ageOverThreshold: true,
+          teeAttested: true,
+        },
+        deniedReasons: [],
+        requestedAt: "2026-06-23T10:00:00.000Z",
+        completedAt: "2026-06-23T10:00:01.000Z",
+      }),
+    );
+
+    const result = await apiClient.getEligibilityProofReceipt(
+      "dec_123",
+      "auth",
+    );
+
+    expect(result.verificationId).toBe("verification-1");
+    expect(result.evidence.auditDetails).toMatchObject({ proofId: "zkp_123" });
+    expect(mockFetch.mock.calls[0][0]).toContain(
+      "/api/v1/verification/eligibility-proof/dec_123",
+    );
+    expect(mockFetch.mock.calls[0][1].method).toBe("GET");
+    expect(mockFetch.mock.calls[0][1].headers.Authorization).toBe(
+      "Bearer auth",
+    );
+  });
+
+  it("rejects malformed receipt ids before fetch", async () => {
+    await expect(
+      apiClient.getEligibilityProofReceipt("../bad", "auth"),
+    ).rejects.toMatchObject({
+      code: "ELIGIBILITY_RECEIPT_ID_INVALID",
+      statusCode: 400,
     });
     expect(mockFetch).not.toHaveBeenCalled();
+  });
+});
+
+describe("apiClient.listTEENodes()", () => {
+  it("loads TEE nodes from the TEE service", async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: jest.fn().mockResolvedValue({
+        nodes: [
+          {
+            id: "tee-1",
+            operator: "0x0000000000000000000000000000000000000001",
+            attestation: { isValid: true, expiresAt: 9999999999 },
+            platform: 1,
+            name: "SGX UAE Node",
+            region: "AE",
+            isOnline: true,
+            uptimePercent: 99.9,
+            verificationsProcessed: 12_000,
+            avgLatencyMs: 42,
+          },
+        ],
+      }),
+    });
+
+    const nodes = await apiClient.listTEENodes();
+
+    expect(nodes).toHaveLength(1);
+    expect(nodes[0].name).toBe("SGX UAE Node");
+    expect(mockFetch.mock.calls[0][0]).toBe(
+      "https://tee.zeroid.aethelred.network/api/v1/tee/nodes/status",
+    );
   });
 });
 
 describe("apiClient.getAttestation()", () => {
-  it("fails closed because enclave-hash lookup is not exposed", async () => {
-    await expect(
-      apiClient.getAttestation("0xenc" as `0x${string}`),
-    ).rejects.toMatchObject({
-      code: "TEE_ATTESTATION_LOOKUP_UNAVAILABLE",
-      statusCode: 501,
+  it("verifies and returns an attestation from the TEE service", async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: jest.fn().mockResolvedValue({
+        attestation: {
+          enclaveHash: "0xenc",
+          platform: 1,
+          attestedAt: 1760000000,
+          expiresAt: 1760086400,
+          reportDataHash: "0xreport",
+          nodeOperator: "0x0000000000000000000000000000000000000001",
+          isValid: true,
+          attestationType: "remote",
+        },
+      }),
     });
-    expect(mockFetch).not.toHaveBeenCalled();
+
+    const attestation = await apiClient.getAttestation(
+      "0xenc" as `0x${string}`,
+    );
+
+    expect(attestation.isValid).toBe(true);
+    expect(mockFetch.mock.calls[0][0]).toBe(
+      "https://tee.zeroid.aethelred.network/api/v1/tee/attestation/verify",
+    );
+    expect(JSON.parse(mockFetch.mock.calls[0][1].body)).toEqual({
+      enclaveHash: "0xenc",
+    });
   });
 });
 
 describe("apiClient.requestBiometricVerification()", () => {
-  it("fails closed because biometric verification is not exposed", async () => {
+  it("submits biometric verification to the TEE service", async () => {
     const payload = {
       subjectDidHash: "0xsub" as `0x${string}`,
       enclaveHash: "0xenc" as `0x${string}`,
       biometricData: "base64data",
     };
-    await expect(
-      apiClient.requestBiometricVerification(payload, "auth"),
-    ).rejects.toMatchObject({
-      code: "BIOMETRIC_VERIFICATION_UNAVAILABLE",
-      statusCode: 501,
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: jest.fn().mockResolvedValue({
+        success: true,
+        verificationId: "bio-1",
+        biometricHash: "0xbio",
+      }),
     });
-    expect(mockFetch).not.toHaveBeenCalled();
+
+    const result = await apiClient.requestBiometricVerification(
+      payload,
+      "auth",
+    );
+
+    expect(result).toEqual({
+      success: true,
+      verificationId: "bio-1",
+      status: "verified",
+      biometricHash: "0xbio",
+      enclaveHash: "0xenc",
+      error: undefined,
+    });
+    expect(mockFetch.mock.calls[0][0]).toBe(
+      "https://tee.zeroid.aethelred.network/api/v1/tee/biometric/verify",
+    );
+    expect(JSON.parse(mockFetch.mock.calls[0][1].body)).toEqual({
+      subjectDidHash: "0xsub",
+      enclaveHash: "0xenc",
+      encryptedBiometricData: "base64data",
+      biometricType: "face",
+    });
+  });
+
+  it("submits biometric enrollment to the TEE service", async () => {
+    const payload = {
+      subjectDidHash: "0xsub" as `0x${string}`,
+      enclaveHash: "0xenc" as `0x${string}`,
+      biometricData: "base64data",
+      biometricType: "fingerprint",
+    };
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: jest.fn().mockResolvedValue({
+        success: true,
+        enrollmentId: "enroll-1",
+        templateHash: "0xtemplate",
+      }),
+    });
+
+    const result = await apiClient.enrollBiometric(payload, "auth");
+
+    expect(result).toEqual({
+      success: true,
+      verificationId: "enroll-1",
+      status: "verified",
+      biometricHash: "0xtemplate",
+      enclaveHash: "0xenc",
+      error: undefined,
+    });
+    expect(mockFetch.mock.calls[0][0]).toBe(
+      "https://tee.zeroid.aethelred.network/api/v1/tee/biometric/enroll",
+    );
+    expect(JSON.parse(mockFetch.mock.calls[0][1].body)).toEqual({
+      subjectDidHash: "0xsub",
+      enclaveHash: "0xenc",
+      encryptedBiometricData: "base64data",
+      biometricType: "fingerprint",
+    });
   });
 });
 
 describe("apiClient.createVerificationRequest()", () => {
-  it("fails closed because verifier-created requests are not exposed", async () => {
+  it("creates a durable verifier proof request through the backend", async () => {
     const payload = {
-      verifierDid: "0xv",
-      subjectDid: "0xs",
-      schemaHash: "0xsch",
+      verifierDid: { uri: "did:aethelred:verifier" },
+      subjectDid: { uri: "did:aethelred:subject" },
+      credentialHash: "0xcred",
+      requestedAttributes: ["age"],
+      circuitId: "0xcircuit",
+      expiresAt: 1760086400,
+      purpose: "Regulated onboarding",
     };
-    await expect(
-      apiClient.createVerificationRequest(payload as any, "auth"),
-    ).rejects.toMatchObject({
-      code: "VERIFICATION_REQUEST_CREATE_UNAVAILABLE",
-      statusCode: 501,
+    mockFetch.mockResolvedValue(
+      jsonResponse({
+        id: "req-1",
+        ...payload,
+        verifierDid: "did:aethelred:verifier",
+        subjectDid: "did:aethelred:subject",
+        status: "pending",
+        createdAt: 1760000000,
+        userConsent: false,
+      }),
+    );
+
+    const result = await apiClient.createVerificationRequest(
+      payload as any,
+      "auth",
+    );
+
+    expect(result.id).toBe("req-1");
+    expect(mockFetch.mock.calls[0][0]).toContain(
+      "/api/v1/verification/requests",
+    );
+    expect(JSON.parse(mockFetch.mock.calls[0][1].body)).toMatchObject({
+      verifierDid: "did:aethelred:verifier",
+      subjectDid: "did:aethelred:subject",
+      credentialHash: "0xcred",
     });
-    expect(mockFetch).not.toHaveBeenCalled();
   });
 });
 
@@ -837,9 +1633,20 @@ describe("apiClient.respondToVerification()", () => {
     const [url, init] = mockFetch.mock.calls[0];
     expect(url).toContain("/api/v1/verification/zk-verify");
     expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body)).toMatchObject({ requestId: "req-1" });
   });
 
-  it("returns a local rejection result when consent is denied", async () => {
+  it("records a rejection through the durable request response endpoint", async () => {
+    mockFetch.mockResolvedValue(
+      jsonResponse({
+        requestId: "req-1",
+        verified: false,
+        attributeResults: [],
+        verifiedAt: 1760000000,
+        reason: "User declined verification",
+      }),
+    );
+
     const result = await apiClient.respondToVerification(
       "req-1",
       { consent: false },
@@ -850,34 +1657,10 @@ describe("apiClient.respondToVerification()", () => {
       verified: false,
       reason: "User declined verification",
     });
-    expect(mockFetch).not.toHaveBeenCalled();
-  });
-});
-
-describe("apiClient.listProposals()", () => {
-  it("fails closed because proposal metadata is not exposed", async () => {
-    await expect(apiClient.listProposals(1, 10)).rejects.toMatchObject({
-      code: "GOVERNANCE_PROPOSALS_UNAVAILABLE",
-      statusCode: 501,
-    });
-    expect(mockFetch).not.toHaveBeenCalled();
-  });
-
-  it("does not call a stale proposal list route when defaults are used", async () => {
-    await expect(apiClient.listProposals()).rejects.toMatchObject({
-      code: "GOVERNANCE_PROPOSALS_UNAVAILABLE",
-    });
-    expect(mockFetch).not.toHaveBeenCalled();
-  });
-});
-
-describe("apiClient.getProposal()", () => {
-  it("fails closed because proposal detail metadata is not exposed", async () => {
-    await expect(apiClient.getProposal(42)).rejects.toMatchObject({
-      code: "GOVERNANCE_PROPOSAL_DETAIL_UNAVAILABLE",
-      statusCode: 501,
-    });
-    expect(mockFetch).not.toHaveBeenCalled();
+    const [url, init] = mockFetch.mock.calls[0];
+    expect(url).toContain("/api/v1/verification/requests/req-1/respond");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body)).toEqual({ consent: false });
   });
 });
 

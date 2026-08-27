@@ -1,22 +1,40 @@
-/**
- * useAgentIdentity — Unit Tests
- *
- * Tests for agent lifecycle hooks: listing, detail, registration,
- * capability updates, delegation, verification, suspension, and approval queue.
- */
-
-import { renderHook, waitFor, act } from "@testing-library/react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import React from "react";
-
-// ---------------------------------------------------------------------------
-// Mocks
-// ---------------------------------------------------------------------------
-
-const mockAddress = "0x1234567890abcdef1234567890abcdef12345678";
+import { act, renderHook, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { useAccount } from "wagmi";
+import { getIdentityAuthToken } from "@/lib/identity/registration";
+import {
+  createAIAgent,
+  getAIAgent,
+  getAIAgents,
+  getAgentApprovals,
+  respondToAgentApproval,
+  suspendAIAgent,
+} from "@/lib/api/agent-passport-client";
+import {
+  useAgent,
+  useAgents,
+  useApprovalQueue,
+  useApproveAction,
+  useRegisterAgent,
+  useSuspendAgent,
+} from "@/hooks/useAgentIdentity";
 
 jest.mock("wagmi", () => ({
-  useAccount: jest.fn(() => ({ address: mockAddress, isConnected: true })),
+  useAccount: jest.fn(),
+}));
+
+jest.mock("@/lib/identity/registration", () => ({
+  getIdentityAuthToken: jest.fn(),
+}));
+
+jest.mock("@/lib/api/agent-passport-client", () => ({
+  createAIAgent: jest.fn(),
+  getAIAgent: jest.fn(),
+  getAIAgents: jest.fn(),
+  getAgentApprovals: jest.fn(),
+  respondToAgentApproval: jest.fn(),
+  suspendAIAgent: jest.fn(),
 }));
 
 jest.mock("sonner", () => ({
@@ -26,558 +44,227 @@ jest.mock("sonner", () => ({
     warning: jest.fn(),
   },
 }));
-const mockToast = jest.requireMock("sonner").toast;
 
-jest.mock("@/lib/api/client", () => ({
-  apiClient: {
-    get: jest.fn(),
-    post: jest.fn(),
-    put: jest.fn(),
-    del: jest.fn(),
-  },
-}));
-const mockApiClient = jest.requireMock("@/lib/api/client").apiClient;
+const mockedUseAccount = useAccount as jest.Mock;
+const mockedToken = getIdentityAuthToken as jest.Mock;
+const mockedGetAgents = getAIAgents as jest.Mock;
+const mockedGetAgent = getAIAgent as jest.Mock;
+const mockedCreateAgent = createAIAgent as jest.Mock;
+const mockedSuspendAgent = suspendAIAgent as jest.Mock;
+const mockedGetApprovals = getAgentApprovals as jest.Mock;
+const mockedRespondApproval = respondToAgentApproval as jest.Mock;
 
-import { useAccount } from "wagmi";
-import {
-  useAgents,
-  useAgent,
-  useRegisterAgent,
-  useUpdateCapabilities,
-  useCreateDelegation,
-  useVerifyAgent,
-  useSuspendAgent,
-  useApprovalQueue,
-  useApproveAction,
-} from "@/hooks/useAgentIdentity";
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+const address = "0x1234567890abcdef1234567890abcdef12345678";
 
 function createWrapper() {
   const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
   });
-  return ({ children }: { children: React.ReactNode }) =>
-    React.createElement(QueryClientProvider, { client: queryClient }, children);
+  return function Wrapper({ children }: { children: React.ReactNode }) {
+    return React.createElement(
+      QueryClientProvider,
+      { client: queryClient },
+      children,
+    );
+  };
 }
+
+const agent = {
+  agentId: "agent-001",
+  did: "did:aethelred:agent:0123456789abcdef0123456789abcdef",
+  operatorId: "identity-001",
+  agentName: "Credential Verifier",
+  agentDescription: "Verifies credentials for relying applications.",
+  agentProtocol: "aethelred_native",
+  status: "active",
+  capabilities: [],
+  publicKeyHash:
+    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  maxDelegationDepth: 2,
+  teeAttested: false,
+  createdAt: "2026-07-18T08:00:00.000Z",
+  updatedAt: "2026-07-18T08:01:00.000Z",
+  stats: {
+    totalActions: 12,
+    successRate: 0.75,
+    averageLatencyMs: 18.5,
+  },
+  metadata: {},
+};
 
 beforeEach(() => {
   jest.clearAllMocks();
-  (useAccount as jest.Mock).mockReturnValue({
-    address: mockAddress,
-    isConnected: true,
-  });
+  mockedUseAccount.mockReturnValue({ address, isConnected: true });
+  mockedToken.mockReturnValue("identity-token");
 });
-
-// ---------------------------------------------------------------------------
-// Test data
-// ---------------------------------------------------------------------------
-
-const mockAgent = {
-  id: "agent-001",
-  name: "TestBot",
-  description: "A test agent",
-  ownerAddress: mockAddress,
-  status: "active" as const,
-  capabilities: [],
-  delegationPolicy: {
-    allowSubDelegation: false,
-    maxDepth: 1,
-    requireHumanApproval: true,
-    approvalThreshold: 1,
-    expirySeconds: 3600,
-  },
-  autonomyLevel: "supervised" as const,
-  createdAt: "2026-01-01T00:00:00Z",
-  updatedAt: "2026-01-01T00:00:00Z",
-  verificationCount: 5,
-};
-
-// ===========================================================================
-// useAgents
-// ===========================================================================
 
 describe("useAgents", () => {
-  it("fetches agents for the connected address", async () => {
-    mockApiClient.get.mockResolvedValue([mockAgent]);
+  it("loads only after wallet and identity session are both available", async () => {
+    mockedGetAgents.mockResolvedValue([agent]);
     const { result } = renderHook(() => useAgents(), {
       wrapper: createWrapper(),
     });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(mockApiClient.get).toHaveBeenCalledWith("/api/v1/ai/agents");
-    expect(result.current.data?.[0]).toMatchObject(mockAgent);
+    expect(result.current.accessState).toBe("ready");
+    expect(mockedGetAgents).toHaveBeenCalledWith("identity-token");
+    expect(result.current.data).toEqual([agent]);
   });
 
-  it("is disabled when no address", () => {
-    (useAccount as jest.Mock).mockReturnValue({
+  it("fails closed when the operator wallet is disconnected", () => {
+    mockedUseAccount.mockReturnValue({
       address: undefined,
       isConnected: false,
     });
     const { result } = renderHook(() => useAgents(), {
       wrapper: createWrapper(),
     });
+
+    expect(result.current.accessState).toBe("wallet-required");
     expect(result.current.fetchStatus).toBe("idle");
+    expect(mockedGetAgents).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the wallet has no authenticated identity session", () => {
+    mockedToken.mockReturnValue(undefined);
+    const { result } = renderHook(() => useAgents(), {
+      wrapper: createWrapper(),
+    });
+
+    expect(result.current.accessState).toBe("sign-in-required");
+    expect(result.current.fetchStatus).toBe("idle");
+    expect(mockedGetAgents).not.toHaveBeenCalled();
   });
 });
 
-// ===========================================================================
-// useAgent
-// ===========================================================================
-
-describe("useAgent", () => {
-  it("fetches a single agent by id", async () => {
-    mockApiClient.get.mockResolvedValue(mockAgent);
-    const { result } = renderHook(() => useAgent("agent-001"), {
-      wrapper: createWrapper(),
-    });
-
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(mockApiClient.get).toHaveBeenCalledWith(
-      "/api/v1/ai/agents/agent-001",
-    );
-  });
-
-  it("is disabled when agentId is undefined", () => {
-    const { result } = renderHook(() => useAgent(undefined), {
-      wrapper: createWrapper(),
-    });
-    expect(result.current.fetchStatus).toBe("idle");
-  });
-});
-
-// ===========================================================================
-// useRegisterAgent
-// ===========================================================================
-
-describe("useRegisterAgent", () => {
-  it("registers agent and shows success toast", async () => {
-    mockApiClient.post.mockResolvedValue(mockAgent);
-    const { result } = renderHook(() => useRegisterAgent(), {
-      wrapper: createWrapper(),
-    });
-
-    const config = {
-      name: "TestBot",
-      description: "A test agent",
-      ownerAddress: mockAddress,
+describe("agent lifecycle mutations", () => {
+  it("registers the exact backend request with the current identity session", async () => {
+    mockedCreateAgent.mockResolvedValue({
+      agentId: agent.agentId,
+      did: agent.did,
+      agentName: agent.agentName,
+      status: "active",
+      protocol: "aethelred_native",
       capabilities: [],
-      delegationPolicy: {
-        allowSubDelegation: false,
-        maxDepth: 1,
-        requireHumanApproval: true,
-        approvalThreshold: 1,
-        expirySeconds: 3600,
-      },
-      maxAutonomyLevel: "supervised" as const,
-      publicKey: "test-public-key-that-is-long-enough-for-registration",
+      maxDelegationDepth: 2,
+      createdAt: agent.createdAt,
+    });
+    const { result } = renderHook(() => useRegisterAgent(), {
+      wrapper: createWrapper(),
+    });
+    const request = {
+      agentName: agent.agentName,
+      agentDescription: agent.agentDescription,
+      agentProtocol: "aethelred_native" as const,
+      capabilities: [
+        {
+          name: "credential.verify",
+          description: "Verify credential presentations.",
+          resourceTypes: ["credential"],
+          actions: ["verify"],
+          riskLevel: "medium" as const,
+          requiresApproval: false,
+        },
+      ],
+      publicKey:
+        "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n-----END PUBLIC KEY-----",
+      maxDelegationDepth: 2,
+      teeRequired: false as const,
     };
 
     await act(async () => {
-      await result.current.mutateAsync(config);
+      await result.current.mutateAsync(request);
     });
 
-    expect(mockApiClient.post).toHaveBeenCalledWith(
-      "/api/v1/ai/agents",
-      expect.objectContaining({
-        agentName: "TestBot",
-        agentDescription: "A test agent",
-        publicKey: "test-public-key-that-is-long-enough-for-registration",
-      }),
-    );
-    expect(mockToast.success).toHaveBeenCalledWith("Agent registered", {
-      description: expect.stringContaining("TestBot"),
-    });
+    expect(mockedCreateAgent).toHaveBeenCalledWith(request, "identity-token");
   });
 
-  it("shows error toast on failure", async () => {
-    mockApiClient.post.mockRejectedValue(new Error("Duplicate"));
+  it("blocks registration when the identity session disappears", async () => {
+    mockedToken.mockReturnValue(undefined);
     const { result } = renderHook(() => useRegisterAgent(), {
       wrapper: createWrapper(),
     });
 
-    await act(async () => {
-      try {
-        await result.current.mutateAsync({
-          name: "TestBot",
-          description: "A test agent",
-          ownerAddress: mockAddress,
-          capabilities: [],
-          delegationPolicy: {
-            allowSubDelegation: false,
-            maxDepth: 1,
-            requireHumanApproval: true,
-            approvalThreshold: 1,
-            expirySeconds: 3600,
-          },
-          maxAutonomyLevel: "supervised",
-          publicKey: "test-public-key-that-is-long-enough-for-registration",
-        } as any);
-      } catch {}
-    });
-
-    expect(mockToast.error).toHaveBeenCalledWith("Agent registration failed", {
-      description: "Duplicate",
-    });
-  });
-});
-
-// ===========================================================================
-// useUpdateCapabilities
-// ===========================================================================
-
-describe("useUpdateCapabilities", () => {
-  const updatedAgent = {
-    ...mockAgent,
-    capabilities: [
-      {
-        type: "credential_verify",
-        scope: "*",
-        grantedAt: "2026-01-01T00:00:00Z",
-      },
-    ],
-  };
-
-  it("updates capabilities and shows success toast", async () => {
-    mockApiClient.post.mockResolvedValue(updatedAgent);
-    const { result } = renderHook(() => useUpdateCapabilities(), {
-      wrapper: createWrapper(),
-    });
-
-    await act(async () => {
-      await result.current.mutateAsync({
-        agentId: "agent-001",
-        capabilities: updatedAgent.capabilities as any,
-      });
-    });
-
-    expect(mockApiClient.post).toHaveBeenCalledWith(
-      "/api/v1/ai/agents/agent-001/capabilities",
-      expect.objectContaining({
-        capabilities: [
-          expect.objectContaining({
-            name: "credential_verify",
-            resourceTypes: ["global"],
-          }),
-        ],
-      }),
+    await expect(result.current.mutateAsync({} as never)).rejects.toThrow(
+      "authenticated ZeroID identity session",
     );
-    expect(mockToast.success).toHaveBeenCalledWith("Capabilities updated", {
-      description: expect.stringContaining("1 capability"),
-    });
+    expect(mockedCreateAgent).not.toHaveBeenCalled();
   });
 
-  it("shows error toast on failure", async () => {
-    mockApiClient.post.mockRejectedValue(new Error("Forbidden"));
-    const { result } = renderHook(() => useUpdateCapabilities(), {
-      wrapper: createWrapper(),
-    });
-
-    await act(async () => {
-      try {
-        await result.current.mutateAsync({ agentId: "x", capabilities: [] });
-      } catch {}
-    });
-
-    expect(mockToast.error).toHaveBeenCalledWith("Capability update failed", {
-      description: "Forbidden",
-    });
-  });
-});
-
-// ===========================================================================
-// useCreateDelegation
-// ===========================================================================
-
-describe("useCreateDelegation", () => {
-  const mockDelegation = {
-    id: "del-1",
-    fromAgentId: "agent-001",
-    toAgentId: "agent-002",
-    capabilities: ["credential_verify"],
-    constraints: {},
-    depth: 1,
-    createdAt: "2026-01-01T00:00:00Z",
-    expiresAt: "2026-02-01T00:00:00Z",
-    status: "active",
-  };
-
-  it("creates delegation and shows success toast", async () => {
-    mockApiClient.post.mockResolvedValue(mockDelegation);
-    const { result } = renderHook(() => useCreateDelegation(), {
-      wrapper: createWrapper(),
-    });
-
-    await act(async () => {
-      await result.current.mutateAsync({
-        fromAgentId: "agent-001",
-        toAgentId: "agent-002",
-        capabilities: ["credential_verify"] as any,
-        constraints: {},
-      });
-    });
-
-    expect(mockApiClient.post).toHaveBeenCalledWith(
-      "/api/v1/ai/agents/agent-001/delegate",
-      expect.objectContaining({
-        toAgentId: "agent-002",
-        capabilities: ["credential_verify"],
-        constraints: [],
-        durationHours: 1,
-      }),
-    );
-    expect(mockToast.success).toHaveBeenCalledWith("Delegation created", {
-      description: expect.stringContaining("Chain depth: 1"),
-    });
-  });
-
-  it("shows error toast on failure", async () => {
-    mockApiClient.post.mockRejectedValue(new Error("Depth exceeded"));
-    const { result } = renderHook(() => useCreateDelegation(), {
-      wrapper: createWrapper(),
-    });
-
-    await act(async () => {
-      try {
-        await result.current.mutateAsync({
-          fromAgentId: "a",
-          toAgentId: "b",
-          capabilities: [],
-          constraints: {},
-        });
-      } catch {}
-    });
-
-    expect(mockToast.error).toHaveBeenCalledWith("Delegation creation failed", {
-      description: "Depth exceeded",
-    });
-  });
-});
-
-// ===========================================================================
-// useVerifyAgent
-// ===========================================================================
-
-describe("useVerifyAgent", () => {
-  it("shows success toast when agent verified", async () => {
-    mockApiClient.post.mockResolvedValue({
-      agentId: "a-1",
-      challenge: "c",
-      response: "r",
-      verified: true,
-      verifiedAt: "2026-01-01T00:00:00Z",
-    });
-    const { result } = renderHook(() => useVerifyAgent(), {
-      wrapper: createWrapper(),
-    });
-
-    await act(async () => {
-      await result.current.mutateAsync({
-        agentId: "a-1",
-        challenge: "c",
-        signature: "sig",
-        requestedCapabilities: ["credential_verify"] as any,
-        purpose: "test verification",
-      });
-    });
-
-    expect(mockApiClient.post).toHaveBeenCalledWith(
-      "/api/v1/ai/agents/a-1/verify",
-      expect.objectContaining({
-        challenge: "c",
-        signature: "sig",
-        requestedCapabilities: ["credential_verify"],
-      }),
-    );
-
-    expect(mockToast.success).toHaveBeenCalledWith(
-      "Agent verified successfully",
-    );
-  });
-
-  it("shows error toast when verification fails", async () => {
-    mockApiClient.post.mockResolvedValue({ verified: false });
-    const { result } = renderHook(() => useVerifyAgent(), {
-      wrapper: createWrapper(),
-    });
-
-    await act(async () => {
-      await result.current.mutateAsync({
-        agentId: "a-1",
-        challenge: "c",
-        signature: "sig",
-        requestedCapabilities: ["credential_verify"] as any,
-        purpose: "test verification",
-      });
-    });
-
-    expect(mockToast.error).toHaveBeenCalledWith("Agent verification failed");
-  });
-
-  it("shows error toast on network failure", async () => {
-    mockApiClient.post.mockRejectedValue(new Error("Network"));
-    const { result } = renderHook(() => useVerifyAgent(), {
-      wrapper: createWrapper(),
-    });
-
-    await act(async () => {
-      try {
-        await result.current.mutateAsync({
-          agentId: "a-1",
-          challenge: "c",
-          signature: "sig",
-          requestedCapabilities: ["credential_verify"] as any,
-          purpose: "test verification",
-        });
-      } catch {}
-    });
-
-    expect(mockToast.error).toHaveBeenCalledWith(
-      "Verification request failed",
-      { description: "Network" },
-    );
-  });
-});
-
-// ===========================================================================
-// useSuspendAgent
-// ===========================================================================
-
-describe("useSuspendAgent", () => {
-  it("suspends agent and shows warning toast", async () => {
-    const suspended = {
-      ...mockAgent,
+  it("loads detail and performs owner suspension through real client calls", async () => {
+    mockedGetAgent.mockResolvedValue(agent);
+    mockedSuspendAgent.mockResolvedValue({
+      agentId: agent.agentId,
       status: "suspended",
-      suspensionReason: "Policy violation",
-    };
-    mockApiClient.post.mockResolvedValue(suspended);
-    const { result } = renderHook(() => useSuspendAgent(), {
+      suspendedAt: "2026-07-18T09:00:00.000Z",
+      suspendedBy: agent.operatorId,
+      reason: "Operator security review",
+    });
+    const detail = renderHook(() => useAgent(agent.agentId), {
       wrapper: createWrapper(),
     });
+    await waitFor(() => expect(detail.result.current.isSuccess).toBe(true));
+    expect(mockedGetAgent).toHaveBeenCalledWith(
+      agent.agentId,
+      "identity-token",
+    );
 
+    const suspension = renderHook(() => useSuspendAgent(), {
+      wrapper: createWrapper(),
+    });
     await act(async () => {
-      await result.current.mutateAsync({
-        agentId: "agent-001",
-        reason: "Policy violation",
+      await suspension.result.current.mutateAsync({
+        agentId: agent.agentId,
+        reason: "Operator security review",
       });
     });
-
-    expect(mockToast.warning).toHaveBeenCalledWith("Agent suspended", {
-      description: expect.stringContaining("Policy violation"),
-    });
-  });
-
-  it("shows error toast on failure", async () => {
-    mockApiClient.post.mockRejectedValue(new Error("Unauthorized"));
-    const { result } = renderHook(() => useSuspendAgent(), {
-      wrapper: createWrapper(),
-    });
-
-    await act(async () => {
-      try {
-        await result.current.mutateAsync({ agentId: "a", reason: "r" });
-      } catch {}
-    });
-
-    expect(mockToast.error).toHaveBeenCalledWith("Suspension failed", {
-      description: "Unauthorized",
-    });
-  });
-});
-
-// ===========================================================================
-// useApprovalQueue
-// ===========================================================================
-
-describe("useApprovalQueue", () => {
-  const mockItems = [
-    {
-      id: "q-1",
-      agentId: "a-1",
-      agentName: "Bot",
-      actionType: "payment",
-      actionDescription: "Send $100",
-      riskScore: 70,
-      requestedAt: "2026-01-01T00:00:00Z",
-      expiresAt: "2026-01-02T00:00:00Z",
-    },
-  ];
-
-  it("fetches approval queue for connected address", async () => {
-    mockApiClient.get.mockResolvedValue(mockItems);
-    const { result } = renderHook(() => useApprovalQueue(), {
-      wrapper: createWrapper(),
-    });
-
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(mockApiClient.get).toHaveBeenCalledWith(
-      "/api/v1/ai/agents/approvals",
+    expect(mockedSuspendAgent).toHaveBeenCalledWith(
+      agent.agentId,
+      "Operator security review",
+      "identity-token",
     );
   });
-
-  it("is disabled when no address", () => {
-    (useAccount as jest.Mock).mockReturnValue({
-      address: undefined,
-      isConnected: false,
-    });
-    const { result } = renderHook(() => useApprovalQueue(), {
-      wrapper: createWrapper(),
-    });
-    expect(result.current.fetchStatus).toBe("idle");
-  });
 });
 
-// ===========================================================================
-// useApproveAction
-// ===========================================================================
+describe("approval queue", () => {
+  it("loads and resolves a backend approval request", async () => {
+    const approval = {
+      requestId: "approval-001",
+      agentId: agent.agentId,
+    };
+    mockedGetApprovals.mockResolvedValue([approval]);
+    mockedRespondApproval.mockResolvedValue({
+      ...approval,
+      action: "credential.verify",
+      status: "approved",
+      respondedAt: "2026-07-18T09:00:00.000Z",
+      respondedBy: agent.operatorId,
+    });
 
-describe("useApproveAction", () => {
-  it("approves action and shows success toast", async () => {
-    mockApiClient.post.mockResolvedValue(undefined);
-    const { result } = renderHook(() => useApproveAction(), {
+    const queue = renderHook(() => useApprovalQueue(), {
       wrapper: createWrapper(),
     });
+    await waitFor(() => expect(queue.result.current.isSuccess).toBe(true));
+    expect(mockedGetApprovals).toHaveBeenCalledWith("identity-token");
 
-    await act(async () => {
-      await result.current.mutateAsync({ actionId: "q-1", approved: true });
-    });
-
-    expect(mockToast.success).toHaveBeenCalledWith("Action approved");
-  });
-
-  it("rejects action and shows rejection toast", async () => {
-    mockApiClient.post.mockResolvedValue(undefined);
-    const { result } = renderHook(() => useApproveAction(), {
+    const action = renderHook(() => useApproveAction(), {
       wrapper: createWrapper(),
     });
-
     await act(async () => {
-      await result.current.mutateAsync({
-        actionId: "q-1",
-        approved: false,
-        reason: "Too risky",
+      await action.result.current.mutateAsync({
+        requestId: approval.requestId,
+        approved: true,
+        note: "Approved by the owning operator.",
       });
     });
-
-    expect(mockToast.success).toHaveBeenCalledWith("Action rejected");
-  });
-
-  it("shows error toast on failure", async () => {
-    mockApiClient.post.mockRejectedValue(new Error("Expired"));
-    const { result } = renderHook(() => useApproveAction(), {
-      wrapper: createWrapper(),
-    });
-
-    await act(async () => {
-      try {
-        await result.current.mutateAsync({ actionId: "q-1", approved: true });
-      } catch {}
-    });
-
-    expect(mockToast.error).toHaveBeenCalledWith("Approval action failed", {
-      description: "Expired",
-    });
+    expect(mockedRespondApproval).toHaveBeenCalledWith(
+      approval.requestId,
+      true,
+      "Approved by the owning operator.",
+      "identity-token",
+    );
   });
 });

@@ -149,6 +149,7 @@
   <![endif]-->
 </head>
 <body>
+<div style="border:2px solid #b45309;background:#fef3c7;color:#78350f;padding:12px 16px;margin:16px 0;border-radius:8px"><strong>Correction (2026-07-12):</strong> chain IDs 8821 / 88210 referenced in this report were never-deployed placeholders (8821 is the SLIP-44 coin type, not an EVM chain id). Canonical EVM chain ids are <strong>7331 (mainnet, reserved) / 7332 (testnet &amp; devnet, confirmed live)</strong> per the aethelred <code>ecosystem/manifest.json</code> v2.0.0; ZeroID&rsquo;s <code>src/config/chains.ts</code> is conformant. All 8821/88210 references below are historical.</div>
 <header id="title-block-header">
 <h1 class="title">ZeroID — Engineering Status Report (2026-06-29)</h1>
 </header>
@@ -352,7 +353,7 @@
 <p><code>ZeroID</code>, <code>CredentialRegistry</code>, <code>ZKCredentialVerifier</code>, <code>SelectiveDisclosure</code>, <code>AccumulatorRevocation</code>, <code>BBSPlusCredential</code>, <code>ThresholdCredential</code>, <code>TEEAttestationRegistry</code>, <code>AIAgentRegistry</code>, <code>CrossChainIdentityBridge</code>, <code>GovernanceModule</code>, <code>RegulatoryCompliance</code>, <code>ConditionalDisclosure</code>, <code>FeeRouter</code> (+ <code>BN254</code> library + interfaces/verifiers).</p>
 <p>Production hardening on the economic + disclosure contracts: OpenZeppelin AccessControl / Pausable / ReentrancyGuard, CEI ordering, custom errors. <strong>Fuzz + invariant</strong> suites for <code>FeeRouter</code>, <code>ConditionalDisclosure</code>, and <code>AccumulatorRevocation</code> (e.g. value-conservation invariant on the fee router; quorum-authorization invariant on disclosure).</p>
 <h3 id="economic-flywheel-feerouter.sol">5.5 Economic flywheel — <code>FeeRouter.sol</code></h3>
-<p>Per-operation fee → configurable <strong>burn</strong> + <strong>Cruzible</strong> staking-sink split (CEI, pausable, role-gated, with <code>totalBurned/totalToCruzible/totalRouted</code> accounting). Deployed via <code>script/Deploy.s.sol</code> (env-driven; testnet + mainnet from one script).</p>
+<p>Per-operation fee → configurable <strong>burn</strong> + <strong>Cruzible</strong> staking-sink split (CEI, pausable, role-gated, with <code>totalBurned/totalToCruzible/totalRouted</code> accounting). Optional supplemental deployment via <code>script/DeploySupplemental.s.sol</code> (env-driven; testnet + mainnet from one script).</p>
 <h3 id="partner-integration-surface-apiv1partners">5.6 Partner integration surface — <code>/api/v1/partners/*</code></h3>
 <p>DI orchestrators (<code>partner-service.ts</code>) that <strong>reuse</strong> existing ZeroID logic: - <code>POST /partners/wallet/eligibility</code> · <code>POST /partners/wallet/disclosure</code> · <code>GET /partners/wallet/evidence/:id</code> - <code>POST /partners/cruzible/pools/:id/eligibility</code> · <code>POST /partners/cruzible/pools/:id/agent-scan</code></p>
 <p>All POSTs are <strong>idempotent</strong> (<code>Idempotency-Key</code> header) and use the unified error taxonomy.</p>
@@ -471,7 +472,7 @@
 </tr>
 <tr class="even">
 <td><strong>Deployed addresses</strong></td>
-<td><code>Deploy.s.sol</code> compiles; not broadcast to testnet → no <code>FeeRouter</code>/<code>ConditionalDisclosure</code> addresses in env yet.</td>
+<td><code>DeploySupplemental.s.sol</code> compiles; not broadcast to testnet → no <code>FeeRouter</code>/<code>ConditionalDisclosure</code> addresses in env yet.</td>
 </tr>
 </tbody>
 </table>

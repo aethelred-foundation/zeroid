@@ -57,7 +57,10 @@ describe("verifyZeroIdProofCanonical", () => {
     const result = await verifyZeroIdProofCanonical(makeZkProof(), "VKHASH");
 
     expect(verifyZKProof).toHaveBeenCalledWith(
-      expect.objectContaining({ proofSystem: ProofSystem.GROTH16, verifyingKeyHash: "VKHASH" }),
+      expect.objectContaining({
+        proofSystem: ProofSystem.GROTH16,
+        verifyingKeyHash: "VKHASH",
+      }),
     );
     expect(result.valid).toBe(true);
     expect(result.circuitId).toBe("0xcircuit");
@@ -65,9 +68,11 @@ describe("verifyZeroIdProofCanonical", () => {
   });
 
   it("propagates an invalid result and its error", async () => {
-    const verifyZKProof = jest
-      .fn()
-      .mockResolvedValue({ valid: false, verificationTimeMs: 1, error: "nope" });
+    const verifyZKProof = jest.fn().mockResolvedValue({
+      valid: false,
+      verificationTimeMs: 1,
+      error: "nope",
+    });
     mockedGetVerificationModule.mockReturnValue({ verifyZKProof } as never);
 
     const result = await verifyZeroIdProofCanonical(makeZkProof(), "VKHASH");

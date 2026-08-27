@@ -11,7 +11,7 @@ const mockIssuerKeyHistoryFindFirst = jest.fn();
 const mockIssuerKeyHistoryFindMany = jest.fn();
 const mockAuditLogCreate = jest.fn();
 
-jest.mock('../src/index', () => ({
+jest.mock('../src/runtime', () => ({
   prisma: {
     identity: {
       findFirst: mockIdentityFindFirst,

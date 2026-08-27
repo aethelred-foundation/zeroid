@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { z, ZodSchema, ZodError } from 'zod';
-import { logger } from '../index';
+import { logger } from '../runtime';
 import { AETHELRED_DID_PATTERN } from '../utils/did';
 
 // ---------------------------------------------------------------------------
@@ -85,6 +85,21 @@ export const didSchema = z
     'Invalid DID format. Expected: did:aethelred:<segment>[:<segment>...]',
   );
 
+/**
+ * Wallet-identity DIDs must be address-bound: did:aethelred:<network>:<0x…40>.
+ * The looser didSchema once let a frontend placeholder ("did:aethelred:pending")
+ * register as a real identity, squatting that DID for every wallet (409 on any
+ * retry) while the address lookup 404'd. Normalized to lowercase so the address
+ * lookup's lowercase candidate DIDs always match what was stored.
+ */
+export const walletDidSchema = z
+  .string()
+  .regex(
+    /^did:aethelred:(mainnet|testnet|devnet):0x[0-9a-fA-F]{40}$/,
+    'Invalid identity DID. Expected: did:aethelred:<network>:<0x-address>',
+  )
+  .transform((value) => value.toLowerCase());
+
 export const uuidSchema = z.string().uuid('Invalid UUID format');
 
 export const paginationSchema = z.object({
@@ -103,6 +118,22 @@ export const publicKeySchema = z
 export const recoveryHashSchema = z
   .string()
   .regex(/^[0-9a-f]{64}$/i, 'Recovery hash must be a SHA-256 hex digest');
+
+export const walletControllerSchema = z
+  .string()
+  .regex(/^0x[0-9a-fA-F]{40}$/, 'Controller must be an EVM wallet address')
+  .transform((value) => value.toLowerCase());
+
+// Registration deliberately accepts only the canonical 65-byte Ethereum
+// signature form with v=27/28. Compact or recovery-id-0/1 variants would give
+// the same proof multiple wire encodings and make request auditing ambiguous.
+export const walletRegistrationSignatureSchema = z
+  .string()
+  .regex(
+    /^0x[0-9a-fA-F]{128}(1b|1c)$/i,
+    'Signature must be a canonical 65-byte Ethereum wallet signature',
+  )
+  .transform((value) => value.toLowerCase());
 
 export const credentialTypeSchema = z.enum([
   'NATIONAL_ID',
@@ -162,13 +193,41 @@ export function parseOrThrow<T>(
 // ---------------------------------------------------------------------------
 // Schema for common request patterns
 // ---------------------------------------------------------------------------
-export const registerIdentitySchema = z.object({
-  did: didSchema,
-  publicKey: publicKeySchema,
-  recoveryHash: recoveryHashSchema,
-  displayName: z.string().min(1).max(100).optional(),
-  metadata: z.record(z.unknown()).optional(),
-});
+export const clientIdentityMetadataSchema = z
+  .object({
+    avatarUri: z
+      .string()
+      .url()
+      .max(2048)
+      .refine(
+        (value) => {
+          try {
+            const url = new URL(value);
+            return url.protocol === 'https:' && !url.username && !url.password;
+          } catch {
+            return false;
+          }
+        },
+        { message: 'Avatar URI must be credential-free HTTPS' },
+      )
+      .optional(),
+    didDocument: z.record(z.unknown()).optional(),
+    didHash: z.string().regex(/^0x[a-fA-F0-9]{64}$/).optional(),
+    txHash: z.string().regex(/^0x[a-fA-F0-9]{64}$/).optional(),
+  })
+  .strict();
+
+export const registerIdentitySchema = z
+  .object({
+    did: walletDidSchema,
+    controller: walletControllerSchema,
+    publicKey: publicKeySchema,
+    recoveryHash: recoveryHashSchema.transform((value) => value.toLowerCase()),
+    signature: walletRegistrationSignatureSchema,
+    displayName: z.string().min(1).max(100).optional(),
+    metadata: clientIdentityMetadataSchema.optional(),
+  })
+  .strict();
 
 export const issueCredentialSchema = z.object({
   credentialType: credentialTypeSchema,

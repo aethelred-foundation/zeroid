@@ -1,50 +1,25 @@
 import React from "react";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import MarketplacePage from "../page";
 
-jest.mock("next/navigation", () => ({
-  useRouter: () => ({ push: jest.fn(), back: jest.fn() }),
-  usePathname: () => "/marketplace",
-  useSearchParams: () => new URLSearchParams(),
-}));
+const mockListSchemas = jest.fn();
+const mockSignIn = jest.fn();
+const mockUseAccount = jest.fn();
+const mockUseIdentityContext = jest.fn();
 
 jest.mock("wagmi", () => ({
-  useAccount: jest.fn(() => ({
-    address: "0x1234567890abcdef1234567890abcdef12345678",
-    isConnected: true,
-  })),
-  useReadContract: jest.fn(() => ({ data: undefined, isLoading: false })),
-  useWriteContract: jest.fn(() => ({
-    writeContractAsync: jest.fn(),
-    isPending: false,
-  })),
-  useWaitForTransactionReceipt: jest.fn(() => ({ isLoading: false })),
+  useAccount: () => mockUseAccount(),
 }));
 
-jest.mock("framer-motion", () => ({
-  motion: new Proxy(
-    {},
-    {
-      get: (_target: unknown, prop: string) => {
-        return React.forwardRef((props: any, ref: any) => {
-          const {
-            initial,
-            animate,
-            exit,
-            transition,
-            whileHover,
-            whileTap,
-            variants,
-            ...rest
-          } = props;
-          const Tag = prop as any;
-          return <Tag ref={ref} {...rest} />;
-        });
-      },
-    },
-  ),
-  AnimatePresence: ({ children }: any) => <>{children}</>,
-  useAnimation: () => ({ start: jest.fn() }),
-  useInView: () => true,
+jest.mock("@/contexts/IdentityContext", () => ({
+  useIdentity: () => mockUseIdentityContext(),
+}));
+
+jest.mock("@/lib/api/client", () => ({
+  apiClient: {
+    listSchemas: (...args: unknown[]) => mockListSchemas(...args),
+  },
 }));
 
 jest.mock("@/components/layout/AppLayout", () => ({
@@ -54,220 +29,228 @@ jest.mock("@/components/layout/AppLayout", () => ({
   ),
 }));
 
-import MarketplacePage from "../page";
+const approvedSchema = {
+  id: "12345678-1234-4234-8234-123456789abc",
+  name: "Verified Organization",
+  version: "1.2.0",
+  description: "An approved organization credential schema.",
+  schemaDefinition: {
+    type: "object",
+    properties: {
+      legalName: { type: "string" },
+      registrationNumber: { type: "string" },
+    },
+  },
+  proposedBy: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  status: "APPROVED" as const,
+  approvalVotes: 4,
+  rejectionVotes: 1,
+  voters: ["bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"],
+  createdAt: "2026-06-23T00:00:00.000Z",
+  updatedAt: "2026-06-24T00:00:00.000Z",
+};
 
-describe("MarketplacePage", () => {
-  it("renders without crashing", () => {
-    render(<MarketplacePage />);
+const populatedPage = {
+  items: [approvedSchema],
+  total: 1,
+  page: 1,
+  pageSize: 12,
+  hasMore: false,
+};
+
+function renderMarketplace() {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false, gcTime: 0 },
+    },
+  });
+
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <MarketplacePage />
+    </QueryClientProvider>,
+  );
+}
+
+beforeEach(() => {
+  jest.clearAllMocks();
+  mockUseAccount.mockReturnValue({
+    address: "0x1234567890abcdef1234567890abcdef12345678",
+    isConnected: true,
+  });
+  mockUseIdentityContext.mockReturnValue({
+    identity: { isLoading: false, isRegistered: true },
+    sessionStatus: "authenticated",
+    sessionError: null,
+    signIn: mockSignIn,
+  });
+  mockListSchemas.mockResolvedValue(populatedPage);
+});
+
+describe("MarketplacePage approved schema registry", () => {
+  it("renders the production-facing registry boundary", async () => {
+    renderMarketplace();
+
     expect(screen.getByTestId("app-layout")).toBeInTheDocument();
+    expect(screen.getByText("Approved Schema Registry")).toBeInTheDocument();
+    expect(screen.getByText("Registry discovery only")).toBeInTheDocument();
+    expect(screen.queryByText("Issuer Leaderboard")).not.toBeInTheDocument();
+    expect(screen.queryByText("Request Credential")).not.toBeInTheDocument();
+
+    await screen.findByText("Verified Organization");
   });
 
-  it("displays the page heading", () => {
-    render(<MarketplacePage />);
-    expect(screen.getByText("Credential Marketplace")).toBeInTheDocument();
-  });
+  it("does not query protected registry data without a wallet", () => {
+    mockUseAccount.mockReturnValue({ address: undefined, isConnected: false });
 
-  it("shows metric cards", () => {
-    render(<MarketplacePage />);
+    renderMarketplace();
+
     expect(
-      screen.getAllByText("Credential Schemas").length,
-    ).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText("Verified Issuers")).toBeInTheDocument();
-    expect(screen.getByText("1.3M")).toBeInTheDocument();
-    expect(screen.getByText("93")).toBeInTheDocument();
+      screen.getByText("Connect a wallet to view approved schemas"),
+    ).toBeInTheDocument();
+    expect(mockListSchemas).not.toHaveBeenCalled();
   });
 
-  it("renders featured credentials section", () => {
-    render(<MarketplacePage />);
-    expect(screen.getByText("Featured Credentials")).toBeInTheDocument();
-  });
-
-  it("switches to Issuer Leaderboard section", () => {
-    render(<MarketplacePage />);
-    const tabButtons = screen.getAllByRole("button");
-    const issuerTab = tabButtons.find(
-      (btn) => btn.textContent === "Issuer Leaderboard",
-    );
-    fireEvent.click(issuerTab!);
-    expect(
-      screen.getAllByText("Aethelred Trust Services").length,
-    ).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText("SecureVault Compliance")).toBeInTheDocument();
-  });
-
-  it("filters schemas by category", () => {
-    render(<MarketplacePage />);
-    // Click the 'Financial' category filter button (not the schema category badge)
-    const financialButtons = screen.getAllByText("Financial");
-    const filterButton = financialButtons.find((el) => el.tagName === "BUTTON");
-    fireEvent.click(filterButton!);
-    // Financial schemas should be shown (may appear in both featured and list)
-    expect(
-      screen.getAllByText("Accredited Investor Attestation").length,
-    ).toBeGreaterThanOrEqual(1);
-  });
-
-  it("shows issuer detail when issuer is clicked in leaderboard", () => {
-    render(<MarketplacePage />);
-    // Switch to issuers tab
-    const tabButtons = screen.getAllByRole("button");
-    const issuerTab = tabButtons.find(
-      (btn) => btn.textContent === "Issuer Leaderboard",
-    );
-    fireEvent.click(issuerTab!);
-    // Click on an issuer to expand detail
-    const issuerName = screen.getAllByText("Aethelred Trust Services");
-    // Click the issuer row
-    fireEvent.click(issuerName[0].closest('[class*="cursor-pointer"]')!);
-    // Should show expanded detail
-    expect(screen.getByText("Schemas Published")).toBeInTheDocument();
-    expect(screen.getByText("Avg Response Time")).toBeInTheDocument();
-  });
-
-  it("searches credentials by name", () => {
-    render(<MarketplacePage />);
-    const searchInput = screen.getByPlaceholderText(
-      "Search credentials or issuers...",
-    );
-    fireEvent.change(searchInput, { target: { value: "Credit Score" } });
-    // Only Credit Score Attestation should match the search
-    expect(screen.getByText("Credit Score Attestation")).toBeInTheDocument();
-  });
-
-  it("filters by jurisdiction", () => {
-    render(<MarketplacePage />);
-    const jurisdictionSelect = screen.getByRole("combobox");
-    fireEvent.change(jurisdictionSelect, { target: { value: "UAE" } });
-    // Schemas available in UAE should be shown
-    expect(
-      screen.getAllByText("Business Entity Verification").length,
-    ).toBeGreaterThanOrEqual(1);
-  });
-
-  it("switches to list view mode and shows list layout", () => {
-    render(<MarketplacePage />);
-    // Find the list view toggle button - it's the one with p-2.5 class that is NOT active
-    const allButtons = screen.getAllByRole("button");
-    const listBtn = allButtons.find((btn) => {
-      const classes = btn.getAttribute("class") || "";
-      return (
-        classes.includes("p-2.5") &&
-        !classes.includes("bg-brand-600") &&
-        btn.querySelector("svg")
-      );
+  it("directs an unregistered wallet to real identity setup", () => {
+    mockUseIdentityContext.mockReturnValue({
+      identity: { isLoading: false, isRegistered: false },
+      sessionStatus: "anonymous",
+      sessionError: null,
+      signIn: mockSignIn,
     });
-    if (listBtn) {
-      fireEvent.click(listBtn);
-      // In list view, Request buttons should be visible
-      expect(screen.getAllByText("Request").length).toBeGreaterThanOrEqual(1);
-    }
-  });
 
-  it("searches credentials by issuer name", () => {
-    render(<MarketplacePage />);
-    const searchInput = screen.getByPlaceholderText(
-      "Search credentials or issuers...",
-    );
-    fireEvent.change(searchInput, { target: { value: "FinScore" } });
-    // Only the Credit Score Attestation from FinScore Labs should match
-    expect(screen.getByText("Credit Score Attestation")).toBeInTheDocument();
-  });
+    renderMarketplace();
 
-  it("switches back to schemas section from issuers", () => {
-    render(<MarketplacePage />);
-    // Switch to issuers tab first
-    const issuerTab = screen
-      .getAllByRole("button")
-      .find((btn) => btn.textContent === "Issuer Leaderboard");
-    fireEvent.click(issuerTab!);
-    expect(screen.getByText("SecureVault Compliance")).toBeInTheDocument();
-
-    // Switch back to schemas
-    const schemasTab = screen
-      .getAllByRole("button")
-      .find((btn) => btn.textContent === "Credential Schemas");
-    fireEvent.click(schemasTab!);
     expect(
-      screen.getByPlaceholderText("Search credentials or issuers..."),
+      screen.getByText("Register this wallet with ZeroID first"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: "Open identity setup" }),
+    ).toHaveAttribute("href", "/identity");
+    expect(mockListSchemas).not.toHaveBeenCalled();
+  });
+
+  it("uses the real wallet sign-in action before querying", async () => {
+    mockUseIdentityContext.mockReturnValue({
+      identity: { isLoading: false, isRegistered: true },
+      sessionStatus: "sign-in-required",
+      sessionError: "Session expired",
+      signIn: mockSignIn,
+    });
+    mockSignIn.mockResolvedValue(undefined);
+
+    renderMarketplace();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Sign in with wallet" }),
+    );
+
+    await waitFor(() => expect(mockSignIn).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole("alert")).toHaveTextContent("Session expired");
+    expect(mockListSchemas).not.toHaveBeenCalled();
+  });
+
+  it("shows an authenticated loading state", () => {
+    mockListSchemas.mockReturnValue(new Promise(() => undefined));
+
+    renderMarketplace();
+
+    expect(
+      screen.getByText("Loading approved governance schemas..."),
     ).toBeInTheDocument();
   });
 
-  it("switches back to grid view from list view", () => {
-    render(<MarketplacePage />);
-    // Find view toggle buttons — they are inside a container with specific classes
-    const allButtons = screen.getAllByRole("button");
-    const viewButtons = allButtons.filter((btn) => {
-      const cls = btn.getAttribute("class") || "";
-      return cls.includes("p-2.5");
-    });
-    // viewButtons[0] = grid (active), viewButtons[1] = list (inactive)
-    expect(viewButtons.length).toBe(2);
+  it("renders only fields returned by the approved governance registry", async () => {
+    renderMarketplace();
 
-    // Switch to list view
-    fireEvent.click(viewButtons[1]);
-
-    // Now find the view buttons again (they re-rendered with different classes)
-    const allButtons2 = screen.getAllByRole("button");
-    const viewButtons2 = allButtons2.filter((btn) => {
-      const cls = btn.getAttribute("class") || "";
-      return cls.includes("p-2.5");
-    });
-
-    // Switch back to grid view — this covers setViewMode('grid') on line 210
-    fireEvent.click(viewButtons2[0]);
-
-    // Verify schemas are still rendered
     expect(
-      screen.getAllByText("KYC Identity Verification").length,
-    ).toBeGreaterThanOrEqual(1);
+      await screen.findByText("Verified Organization"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("v1.2.0")).toBeInTheDocument();
+    expect(screen.getByText("4 approve / 1 reject")).toBeInTheDocument();
+    expect(screen.getByText("legalName")).toBeInTheDocument();
+    expect(screen.getByText("registrationNumber")).toBeInTheDocument();
+    expect(screen.getByText(approvedSchema.proposedBy)).toBeInTheDocument();
+    expect(mockListSchemas).toHaveBeenCalledWith(1, 12, {
+      status: "APPROVED",
+      name: undefined,
+    });
+    expect(screen.queryByText(/trust score/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/stake:/i)).not.toBeInTheDocument();
   });
 
-  it("collapses issuer detail when clicking same issuer again", () => {
-    render(<MarketplacePage />);
-    // Switch to issuers tab
-    const issuerTab = screen
-      .getAllByRole("button")
-      .find((btn) => btn.textContent === "Issuer Leaderboard");
-    fireEvent.click(issuerTab!);
+  it("applies the backend-supported name filter and resets to page one", async () => {
+    renderMarketplace();
+    await screen.findByText("Verified Organization");
 
-    // Click on first issuer to expand (null -> 'i1')
-    fireEvent.click(
-      screen
-        .getByText("Aethelred Trust Services")
-        .closest('[class*="cursor-pointer"]')!,
+    fireEvent.change(
+      screen.getByRole("searchbox", {
+        name: "Filter approved schemas by name",
+      }),
+      { target: { value: "  Organization  " } },
     );
-    expect(screen.getByText("Schemas Published")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Apply filter" }));
 
-    // Click same issuer again to collapse ('i1' -> null) — covers the `null` branch of the ternary
-    fireEvent.click(
-      screen
-        .getByText("Aethelred Trust Services")
-        .closest('[class*="cursor-pointer"]')!,
+    await waitFor(() =>
+      expect(mockListSchemas).toHaveBeenLastCalledWith(1, 12, {
+        status: "APPROVED",
+        name: "Organization",
+      }),
     );
-    // Verify component didn't crash — re-query the element since DOM updates
-    expect(screen.getByText("Aethelred Trust Services")).toBeInTheDocument();
+    expect(
+      await screen.findByText("1 approved schema matching “Organization”"),
+    ).toBeInTheDocument();
   });
 
-  it("switches issuer detail to a different issuer", () => {
-    render(<MarketplacePage />);
-    const issuerTab = screen
-      .getAllByRole("button")
-      .find((btn) => btn.textContent === "Issuer Leaderboard");
-    fireEvent.click(issuerTab!);
+  it("shows the honest empty approved-registry state", async () => {
+    mockListSchemas.mockResolvedValue({
+      items: [],
+      total: 0,
+      page: 1,
+      pageSize: 12,
+      hasMore: false,
+    });
 
-    // Click first issuer to expand
-    fireEvent.click(
-      screen
-        .getByText("Aethelred Trust Services")
-        .closest('[class*="cursor-pointer"]')!,
-    );
+    renderMarketplace();
 
-    // Click second issuer (different id) — showIssuerDetail !== issuer.id, so sets to new id
-    fireEvent.click(
-      screen
-        .getByText("SecureVault Compliance")
-        .closest('[class*="cursor-pointer"]')!,
+    expect(
+      await screen.findByText("No approved schemas are published"),
+    ).toBeInTheDocument();
+  });
+
+  it("shows registry errors and supports an explicit retry", async () => {
+    mockListSchemas
+      .mockRejectedValueOnce(new Error("Registry response contract failed"))
+      .mockResolvedValueOnce(populatedPage);
+
+    renderMarketplace();
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Registry response contract failed",
     );
-    expect(screen.getByText("SecureVault Compliance")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /retry/i }));
+
+    expect(
+      await screen.findByText("Verified Organization"),
+    ).toBeInTheDocument();
+    expect(mockListSchemas).toHaveBeenCalledTimes(2);
+  });
+
+  it("requests the next real registry page", async () => {
+    mockListSchemas.mockResolvedValue({
+      ...populatedPage,
+      total: 13,
+      hasMore: true,
+    });
+
+    renderMarketplace();
+    await screen.findByText("Verified Organization");
+    fireEvent.click(screen.getByRole("button", { name: /next/i }));
+
+    await waitFor(() =>
+      expect(mockListSchemas).toHaveBeenLastCalledWith(2, 12, {
+        status: "APPROVED",
+        name: undefined,
+      }),
+    );
   });
 });

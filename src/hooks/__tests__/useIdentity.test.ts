@@ -10,6 +10,11 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { apiClient } from "@/lib/api/client";
 import {
+  clearIdentityAuthToken,
+  getIdentityAuthToken,
+  storeIdentityAuthToken,
+} from "@/lib/identity/registration";
+import {
   IDENTITY_REGISTRY_ADDRESS,
   IDENTITY_REGISTRY_ABI,
 } from "@/config/constants";
@@ -27,12 +32,15 @@ const mockUseReadContract = jest.fn();
 const mockWriteContractAsync = jest.fn();
 const mockUseWriteContract = jest.fn();
 const mockSignMessageAsync = jest.fn();
+const mockWaitForTransactionReceipt = jest.fn();
+const mockUsePublicClient = jest.fn();
 const validRecoveryHash =
   "0x1111111111111111111111111111111111111111111111111111111111111111";
 const validPublicKey = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
 
 jest.mock("wagmi", () => ({
   useAccount: () => mockUseAccount(),
+  usePublicClient: () => mockUsePublicClient(),
   useReadContract: (args: unknown) => mockUseReadContract(args),
   useWriteContract: () => mockUseWriteContract(),
   useSignMessage: () => ({ signMessageAsync: mockSignMessageAsync }),
@@ -55,9 +63,16 @@ jest.mock("@/lib/api/client", () => ({
   },
 }));
 
+jest.mock("@/lib/identity/registration", () => ({
+  ...jest.requireActual("@/lib/identity/registration"),
+  recoverRegistrationPublicKey: jest.fn(() =>
+    Promise.resolve("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="),
+  ),
+}));
+
 jest.mock("@/config/constants", () => ({
   IDENTITY_REGISTRY_ADDRESS: "0xRegistryAddress",
-  IDENTITY_REGISTRY_ABI: [{ type: "function", name: "identityOf" }],
+  IDENTITY_REGISTRY_ABI: [{ type: "function", name: "resolveByController" }],
 }));
 
 // ---------------------------------------------------------------------------
@@ -98,6 +113,11 @@ beforeEach(() => {
   });
   mockWriteContractAsync.mockResolvedValue(mockTxHash);
   mockSignMessageAsync.mockResolvedValue("0xsignature");
+  mockWaitForTransactionReceipt.mockResolvedValue({ status: "success" });
+  mockUsePublicClient.mockReturnValue({
+    waitForTransactionReceipt: mockWaitForTransactionReceipt,
+  });
+  clearIdentityAuthToken();
   window.sessionStorage.clear();
 });
 
@@ -111,30 +131,27 @@ describe("useIdentity hooks", () => {
   // =========================================================================
 
   describe("useOnChainIdentity", () => {
-    it("reads identityOf and getDelegates from the registry", async () => {
-      const didHashValue = "0xdid_hash_001";
-      const delegatesList = [
-        { delegate: "0xdelegate1", expiry: BigInt(1800000000) },
-      ];
+    it("reads the controller→DID hash from the registry (resolveByController)", async () => {
+      const didHashValue = `0x${"1".repeat(64)}`;
 
-      // First call is for identityOf, second for getDelegates
-      mockUseReadContract
-        .mockReturnValueOnce({
-          data: didHashValue,
-          isLoading: false,
-        })
-        .mockReturnValueOnce({
-          data: delegatesList,
-          isLoading: false,
-        });
+      // Single read: resolveByController. Must use the deployed getter name.
+      mockUseReadContract.mockReturnValue({
+        data: didHashValue,
+        isLoading: false,
+      });
 
       const { useOnChainIdentity } = await import("@/hooks/useIdentity");
       const { result } = renderHook(() => useOnChainIdentity(), {
         wrapper: createQueryWrapper(),
       });
 
+      expect(mockUseReadContract).toHaveBeenCalledWith(
+        expect.objectContaining({ functionName: "resolveByController" }),
+      );
       expect(result.current.didHash).toBe(didHashValue);
-      expect(result.current.delegates).toEqual(delegatesList);
+      // No enumerable delegate getter exists, so no authoritative list is
+      // returned from this hook.
+      expect(result.current).not.toHaveProperty("delegates");
       expect(result.current.isLoading).toBe(false);
       expect(result.current.hasIdentity).toBe(true);
     });
@@ -154,9 +171,37 @@ describe("useIdentity hooks", () => {
     });
 
     it("returns hasIdentity false when didHash is 0x", async () => {
-      mockUseReadContract
-        .mockReturnValueOnce({ data: "0x", isLoading: false })
-        .mockReturnValueOnce({ data: [], isLoading: false });
+      mockUseReadContract.mockReturnValue({ data: "0x", isLoading: false });
+
+      const { useOnChainIdentity } = await import("@/hooks/useIdentity");
+      const { result } = renderHook(() => useOnChainIdentity(), {
+        wrapper: createQueryWrapper(),
+      });
+
+      expect(result.current.hasIdentity).toBe(false);
+    });
+
+    it("does not accept a malformed registry response as an identity", async () => {
+      mockUseReadContract.mockReturnValue({
+        data: "0xnot-a-bytes32",
+        isLoading: false,
+      });
+
+      const { useOnChainIdentity } = await import("@/hooks/useIdentity");
+      const { result } = renderHook(() => useOnChainIdentity(), {
+        wrapper: createQueryWrapper(),
+      });
+
+      expect(result.current.hasIdentity).toBe(false);
+    });
+
+    it("returns hasIdentity false for the zero hash (unregistered wallet)", async () => {
+      // resolveByController returns bytes32(0) for a wallet with no identity —
+      // truthy and !== "0x", so it must not count as having an identity.
+      mockUseReadContract.mockReturnValue({
+        data: `0x${"0".repeat(64)}`,
+        isLoading: false,
+      });
 
       const { useOnChainIdentity } = await import("@/hooks/useIdentity");
       const { result } = renderHook(() => useOnChainIdentity(), {
@@ -195,17 +240,18 @@ describe("useIdentity hooks", () => {
       }
     });
 
-    it("returns empty delegates array when data is null", async () => {
-      mockUseReadContract
-        .mockReturnValueOnce({ data: "0xdid", isLoading: false })
-        .mockReturnValueOnce({ data: null, isLoading: false });
+    it("does not fabricate an empty delegate list", async () => {
+      mockUseReadContract.mockReturnValue({
+        data: `0x${"3".repeat(64)}`,
+        isLoading: false,
+      });
 
       const { useOnChainIdentity } = await import("@/hooks/useIdentity");
       const { result } = renderHook(() => useOnChainIdentity(), {
         wrapper: createQueryWrapper(),
       });
 
-      expect(result.current.delegates).toEqual([]);
+      expect(result.current).not.toHaveProperty("delegates");
     });
   });
 
@@ -247,6 +293,48 @@ describe("useIdentity hooks", () => {
       expect(result.current.isFetching).toBe(false);
       expect(apiClient.get).not.toHaveBeenCalled();
     });
+
+    it("resolves to null (not an error) when the wallet is not registered (404)", async () => {
+      // The backend answers 404 IDENTITY_ADDRESS_NOT_FOUND for a wallet with
+      // no ZeroID — the normal first-run state. It must surface as a null
+      // profile so the UI shows onboarding, not the error card.
+      const notFound = Object.assign(
+        new Error("Identity not found for address"),
+        {
+          statusCode: 404,
+          code: "IDENTITY_ADDRESS_NOT_FOUND",
+        },
+      );
+      (apiClient.get as jest.Mock).mockRejectedValue(notFound);
+
+      const { useIdentityProfile } = await import("@/hooks/useIdentity");
+      const { result } = renderHook(() => useIdentityProfile(), {
+        wrapper: createQueryWrapper(),
+      });
+
+      await waitFor(() => {
+        expect(result.current.isSuccess).toBe(true);
+      });
+      expect(result.current.data).toBeNull();
+      expect(result.current.error).toBeNull();
+    });
+
+    it("still surfaces genuine (non-404) errors", async () => {
+      const boom = Object.assign(new Error("Network failure"), {
+        statusCode: 500,
+      });
+      (apiClient.get as jest.Mock).mockRejectedValue(boom);
+
+      const { useIdentityProfile } = await import("@/hooks/useIdentity");
+      const { result } = renderHook(() => useIdentityProfile(), {
+        wrapper: createQueryWrapper(),
+      });
+
+      await waitFor(() => {
+        expect(result.current.isError).toBe(true);
+      });
+      expect((result.current.error as Error).message).toBe("Network failure");
+    });
   });
 
   // =========================================================================
@@ -254,76 +342,60 @@ describe("useIdentity hooks", () => {
   // =========================================================================
 
   describe("useCreateIdentity", () => {
-    it("registers identity on-chain and via API, then shows toast", async () => {
-      (apiClient.registerIdentity as jest.Mock).mockResolvedValue({
-        token: "identity-token",
-        sessionId: "session-1",
-        identity: {},
-      });
-
+    it("fails before any wallet signature, transaction, API call, or token write", async () => {
       const { useCreateIdentity } = await import("@/hooks/useIdentity");
       const { result } = renderHook(() => useCreateIdentity(), {
         wrapper: createQueryWrapper(),
       });
 
       await act(async () => {
-        await result.current.mutateAsync({
-          didDocumentHash: validRecoveryHash,
-          recoveryAddress: "0xrecovery",
-          didDocument: { id: "did:aethelred:testnet:0xabc" },
-          publicKeys: [validPublicKey],
-        } as any);
-      });
-
-      expect(mockWriteContractAsync).toHaveBeenCalledWith(
-        expect.objectContaining({
-          functionName: "registerIdentity",
-          args: [validRecoveryHash, "0xrecovery"],
-        }),
-      );
-
-      expect(apiClient.registerIdentity).toHaveBeenCalledWith(
-        expect.objectContaining({
-          did: "did:aethelred:testnet:0xabc",
-          publicKey: validPublicKey,
-          recoveryHash: validRecoveryHash.slice(2),
-        }),
-      );
-      expect(window.sessionStorage.getItem("zeroid.identity.authToken")).toBe(
-        "identity-token",
-      );
-
-      expect(toast.success).toHaveBeenCalledWith(
-        "Identity created successfully",
-      );
-    });
-
-    it("shows error toast on failure", async () => {
-      mockWriteContractAsync.mockRejectedValue(
-        new Error("User rejected transaction"),
-      );
-
-      const { useCreateIdentity } = await import("@/hooks/useIdentity");
-      const { result } = renderHook(() => useCreateIdentity(), {
-        wrapper: createQueryWrapper(),
-      });
-
-      await act(async () => {
-        try {
-          await result.current.mutateAsync({
+        await expect(
+          result.current.mutateAsync({
             didDocumentHash: validRecoveryHash,
             recoveryAddress: "0xrecovery",
-            didDocument: {},
+            didDocument: { id: `did:aethelred:testnet:${mockAddress}` },
             publicKeys: [validPublicKey],
-          } as any);
-        } catch {
-          // Expected
-        }
+          } as any),
+        ).rejects.toMatchObject({
+          code: "IDENTITY_REGISTRY_VERIFICATION_UNAVAILABLE",
+          statusCode: 503,
+        });
       });
 
-      expect(toast.error).toHaveBeenCalledWith("Failed to create identity", {
-        description: "User rejected transaction",
+      expect(mockSignMessageAsync).not.toHaveBeenCalled();
+      expect(mockWriteContractAsync).not.toHaveBeenCalled();
+      expect(mockWaitForTransactionReceipt).not.toHaveBeenCalled();
+      expect(apiClient.registerIdentity).not.toHaveBeenCalled();
+      expect(getIdentityAuthToken()).toBeUndefined();
+      expect(toast.success).not.toHaveBeenCalled();
+      expect(toast.error).toHaveBeenCalledWith(
+        "Identity registration unavailable",
+        {
+          description: expect.stringContaining(
+            "server-side verification of the on-chain registry transaction",
+          ),
+        },
+      );
+    });
+  });
+
+  describe("useIdentity registration wrapper", () => {
+    it("preserves the fail-closed registration gate", async () => {
+      const { useIdentity } = await import("@/hooks/useIdentity");
+      const { result } = renderHook(() => useIdentity(), {
+        wrapper: createQueryWrapper(),
       });
+
+      await act(async () => {
+        await expect(result.current.createIdentity()).rejects.toMatchObject({
+          code: "IDENTITY_REGISTRY_VERIFICATION_UNAVAILABLE",
+          statusCode: 503,
+        });
+      });
+
+      expect(mockSignMessageAsync).not.toHaveBeenCalled();
+      expect(mockWriteContractAsync).not.toHaveBeenCalled();
+      expect(apiClient.registerIdentity).not.toHaveBeenCalled();
     });
   });
 
@@ -333,10 +405,7 @@ describe("useIdentity hooks", () => {
 
   describe("useUpdateProfile", () => {
     it("updates profile via API PATCH and shows success toast", async () => {
-      window.sessionStorage.setItem(
-        "zeroid.identity.authToken",
-        "identity-token",
-      );
+      storeIdentityAuthToken("identity-token");
       (apiClient.patch as jest.Mock).mockResolvedValue({ success: true });
 
       const { useUpdateProfile } = await import("@/hooks/useIdentity");
@@ -397,10 +466,12 @@ describe("useIdentity hooks", () => {
       const { result } = renderHook(() => useDelegateControl(), {
         wrapper: createQueryWrapper(),
       });
+      const didHash = `0x${"1".repeat(64)}` as `0x${string}`;
 
       let hash: string | undefined;
       await act(async () => {
         hash = await result.current.delegateControl(
+          didHash,
           "0xdelegate1" as `0x${string}`,
           BigInt(86400),
         );
@@ -410,7 +481,7 @@ describe("useIdentity hooks", () => {
       expect(mockWriteContractAsync).toHaveBeenCalledWith(
         expect.objectContaining({
           functionName: "addDelegate",
-          args: ["0xdelegate1", BigInt(86400)],
+          args: [didHash, "0xdelegate1", BigInt(86400)],
         }),
       );
       expect(toast.success).toHaveBeenCalledWith("Delegate added");
@@ -421,10 +492,12 @@ describe("useIdentity hooks", () => {
       const { result } = renderHook(() => useDelegateControl(), {
         wrapper: createQueryWrapper(),
       });
+      const didHash = `0x${"2".repeat(64)}` as `0x${string}`;
 
       let hash: string | undefined;
       await act(async () => {
         hash = await result.current.revokeDelegate(
+          didHash,
           "0xdelegate1" as `0x${string}`,
         );
       });
@@ -433,10 +506,43 @@ describe("useIdentity hooks", () => {
       expect(mockWriteContractAsync).toHaveBeenCalledWith(
         expect.objectContaining({
           functionName: "revokeDelegate",
-          args: ["0xdelegate1"],
+          args: [didHash, "0xdelegate1"],
         }),
       );
       expect(toast.success).toHaveBeenCalledWith("Delegate revoked");
+    });
+
+    it("rejects delegation without a non-zero DID hash", async () => {
+      const { useDelegateControl } = await import("@/hooks/useIdentity");
+      const { result } = renderHook(() => useDelegateControl(), {
+        wrapper: createQueryWrapper(),
+      });
+
+      await expect(
+        result.current.delegateControl(
+          `0x${"0".repeat(64)}` as `0x${string}`,
+          "0xdelegate1" as `0x${string}`,
+          60n,
+        ),
+      ).rejects.toThrow("non-zero DID hash");
+      expect(mockWriteContractAsync).not.toHaveBeenCalled();
+    });
+
+    it("enforces the contract delegation-duration bounds client-side", async () => {
+      const { useDelegateControl } = await import("@/hooks/useIdentity");
+      const { result } = renderHook(() => useDelegateControl(), {
+        wrapper: createQueryWrapper(),
+      });
+      const didHash = `0x${"5".repeat(64)}` as `0x${string}`;
+
+      await expect(
+        result.current.delegateControl(
+          didHash,
+          "0xdelegate1" as `0x${string}`,
+          365n * 24n * 60n * 60n + 1n,
+        ),
+      ).rejects.toThrow("between 1 second and 365 days");
+      expect(mockWriteContractAsync).not.toHaveBeenCalled();
     });
   });
 
@@ -446,18 +552,16 @@ describe("useIdentity hooks", () => {
 
   describe("useIdentity (wrapper)", () => {
     it("combines on-chain and profile data", async () => {
-      const didHashValue = "0xdid_hash_combined";
-      const delegates = [{ delegate: "0xd1", expiry: BigInt(1800000000) }];
+      const didHashValue = `0x${"4".repeat(64)}`;
       const profile = {
         did: "did:aethelred:testnet:0xabc",
         displayName: "Combined",
       };
 
-      mockUseReadContract
-        .mockReturnValueOnce({ data: didHashValue, isLoading: false }) // identityOf
-        .mockReturnValueOnce({ data: delegates, isLoading: false }) // getDelegates
-        .mockReturnValueOnce({ data: didHashValue, isLoading: false }) // identityOf (useCreateIdentity)
-        .mockReturnValueOnce({ data: delegates, isLoading: false }); // getDelegates (useCreateIdentity)
+      mockUseReadContract.mockReturnValue({
+        data: didHashValue,
+        isLoading: false,
+      }); // resolveByController
 
       (apiClient.get as jest.Mock).mockResolvedValue(profile);
 
@@ -473,7 +577,9 @@ describe("useIdentity hooks", () => {
       expect(result.current.identity.didHash).toBe(didHashValue);
       expect(result.current.identity.hasIdentity).toBe(true);
       expect(result.current.identity.isRegistered).toBe(true);
-      expect(result.current.delegates).toEqual(delegates);
+      // The contract has no enumerable getter, so the wrapper must not expose
+      // an invented empty delegate list as authoritative state.
+      expect(result.current).not.toHaveProperty("delegates");
       expect(typeof result.current.createIdentity).toBe("function");
       expect(typeof result.current.revokeDelegate).toBe("function");
     });

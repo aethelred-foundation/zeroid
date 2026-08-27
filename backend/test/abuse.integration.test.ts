@@ -20,7 +20,10 @@ import crypto from 'crypto';
 
 // Mock Redis: in-memory key-value store with sorted-set simulation
 const redisStore: Record<string, string> = {};
-const redisSortedSets: Record<string, Array<{ score: number; member: string }>> = {};
+const redisSortedSets: Record<
+  string,
+  Array<{ score: number; member: string }>
+> = {};
 const issuedTokenHashes: Record<string, string> = {};
 
 async function rateLimitEval(
@@ -99,10 +102,10 @@ const mockRedis = {
         const key = (pipe.zremrangebyscore as jest.Mock).mock.calls[0]?.[0];
         const count = redisSortedSets[key]?.length ?? 0;
         return [
-          [null, 'OK'],   // zremrangebyscore
-          [null, 1],      // zadd
-          [null, count],  // zcard
-          [null, 1],      // expire
+          [null, 'OK'], // zremrangebyscore
+          [null, 1], // zadd
+          [null, count], // zcard
+          [null, 1], // expire
         ];
       }),
     };
@@ -166,7 +169,13 @@ jest.mock('../src/services/zkproof', () => ({
   zkProofService: {
     generateProof: jest.fn(async () => ({
       proofId: 'proof-mock-id',
-      proof: { pi_a: ['1'], pi_b: [['1']], pi_c: ['1'], protocol: 'groth16', curve: 'bn128' },
+      proof: {
+        pi_a: ['1'],
+        pi_b: [['1']],
+        pi_c: ['1'],
+        protocol: 'groth16',
+        curve: 'bn128',
+      },
       publicSignals: ['1', '2'],
       circuitName: 'ageCheck',
       generatedAt: new Date().toISOString(),
@@ -205,10 +214,19 @@ jest.mock('../src/services/tee', () => ({
 jest.mock('../src/services/credential', () => ({
   credentialService: {
     getCredential: jest.fn(async () => null),
+    validateCredentialForUse: jest.fn(async () => ({
+      valid: false,
+      checks: {},
+      credential: {},
+    })),
     issueCredential: jest.fn(async () => ({ id: 'cred-1' })),
     queryCredentials: jest.fn(async () => ({ credentials: [], total: 0 })),
     revokeCredential: jest.fn(async () => ({})),
-    verifyCredential: jest.fn(async () => ({ valid: true, checks: [], credential: {} })),
+    verifyCredential: jest.fn(async () => ({
+      valid: true,
+      checks: [],
+      credential: {},
+    })),
     exportCredentialEvidence: jest.fn(async () => ({
       formatVersion: 'zeroid.credential_evidence_export.v1',
       exportedAt: new Date().toISOString(),
@@ -288,13 +306,15 @@ jest.mock('winston', () => {
 // ---------------------------------------------------------------------------
 // Import app AFTER all mocks are wired
 // ---------------------------------------------------------------------------
-import app from '../src/index';
+import app, { buildHelmetOptions } from '../src/index';
 import * as jose from 'jose';
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-const JWT_SECRET = new TextEncoder().encode(process.env.JWT_SECRET ?? 'test-secret-that-is-at-least-32-chars!!');
+const JWT_SECRET = new TextEncoder().encode(
+  process.env.JWT_SECRET ?? 'test-secret-that-is-at-least-32-chars!!',
+);
 const JWT_ISSUER = 'zeroid-api';
 const JWT_AUDIENCE = 'zeroid-client';
 
@@ -329,7 +349,10 @@ async function makeToken(
   }
 
   const token = await builder.sign(JWT_SECRET);
-  issuedTokenHashes[jti] = crypto.createHash('sha256').update(token).digest('hex');
+  issuedTokenHashes[jti] = crypto
+    .createHash('sha256')
+    .update(token)
+    .digest('hex');
   return token;
 }
 
@@ -338,10 +361,18 @@ function proofNonceScopedKey(prefix: string, nonce: string): string {
 }
 
 /** Stub the prisma + redis lookups so the auth middleware considers the token valid. */
-function stubAuthFor(identityId = 'identity-1', did = 'did:aethelred:alice', sessionId = 'session-1') {
+function stubAuthFor(
+  identityId = 'identity-1',
+  did = 'did:aethelred:alice',
+  sessionId = 'session-1',
+) {
   mockRedis.get.mockImplementation(async (key: string) => {
     if (key === `session:${sessionId}`) {
-      return JSON.stringify({ identityId, did, tokenHash: issuedTokenHashes[sessionId] });
+      return JSON.stringify({
+        identityId,
+        did,
+        tokenHash: issuedTokenHashes[sessionId],
+      });
     }
     if (key.startsWith('revoked:')) return null;
     return redisStore[key] ?? null;
@@ -407,7 +438,9 @@ describe('1 - Rate-limit enforcement', () => {
       return pipe;
     });
 
-    const res = await request(app as Express).get('/api/v1/identity/resolve/did:aethelred:someone');
+    const res = await request(app as Express).get(
+      '/api/v1/identity/resolve/did:aethelred:someone',
+    );
 
     expect(res.headers['x-ratelimit-limit']).toBeDefined();
     expect(res.headers['x-ratelimit-remaining']).toBeDefined();
@@ -536,8 +569,12 @@ describe('2 - Auth bypass attempts', () => {
   });
 
   it('should reject a token signed with a different secret', async () => {
-    const wrongSecret = new TextEncoder().encode('wrong-secret-wrong-secret-wrong!');
-    const wrongToken = await new jose.SignJWT({ did: 'did:aethelred:eve' } as unknown as jose.JWTPayload)
+    const wrongSecret = new TextEncoder().encode(
+      'wrong-secret-wrong-secret-wrong!',
+    );
+    const wrongToken = await new jose.SignJWT({
+      did: 'did:aethelred:eve',
+    } as unknown as jose.JWTPayload)
       .setProtectedHeader({ alg: 'HS256', typ: 'JWT' })
       .setSubject('identity-evil')
       .setIssuedAt()
@@ -557,7 +594,9 @@ describe('2 - Auth bypass attempts', () => {
   });
 
   it('should reject a token signed with an unapproved JWT algorithm', async () => {
-    const token = await new jose.SignJWT({ did: 'did:aethelred:alice' } as unknown as jose.JWTPayload)
+    const token = await new jose.SignJWT({
+      did: 'did:aethelred:alice',
+    } as unknown as jose.JWTPayload)
       .setProtectedHeader({ alg: 'HS512', typ: 'JWT' })
       .setSubject('identity-1')
       .setIssuedAt()
@@ -577,7 +616,9 @@ describe('2 - Auth bypass attempts', () => {
   });
 
   it('should reject a token missing the expected JWT typ header', async () => {
-    const token = await new jose.SignJWT({ did: 'did:aethelred:alice' } as unknown as jose.JWTPayload)
+    const token = await new jose.SignJWT({
+      did: 'did:aethelred:alice',
+    } as unknown as jose.JWTPayload)
       .setProtectedHeader({ alg: 'HS256' })
       .setSubject('identity-1')
       .setIssuedAt()
@@ -702,8 +743,8 @@ describe('3 - Input validation abuse', () => {
     const sqliPayloads = [
       "'; DROP TABLE identities; --",
       "1' OR '1'='1",
-      "UNION SELECT * FROM sessions--",
-      "1; DELETE FROM credentials WHERE 1=1",
+      'UNION SELECT * FROM sessions--',
+      '1; DELETE FROM credentials WHERE 1=1',
       "' UNION SELECT password FROM users --",
     ];
 
@@ -763,8 +804,8 @@ describe('3 - Input validation abuse', () => {
           credentialType: 'NATIONAL_ID',
           subjectDid: 'did:aethelred:alice',
           claims: { __proto__: { isAdmin: true } },
-          '__proto__': { isAdmin: true },
-          'constructor': { prototype: { isAdmin: true } },
+          __proto__: { isAdmin: true },
+          constructor: { prototype: { isAdmin: true } },
         });
 
       // The critical security assertion: Object.prototype must not be tainted
@@ -858,7 +899,11 @@ describe('4 - Replay attack protection (ZK proof nonce reuse)', () => {
   const validProofPayload = {
     proof: {
       pi_a: ['1', '2', '3'],
-      pi_b: [['1', '2'], ['3', '4'], ['5', '6']],
+      pi_b: [
+        ['1', '2'],
+        ['3', '4'],
+        ['5', '6'],
+      ],
       pi_c: ['1', '2', '3'],
       protocol: 'groth16',
       curve: 'bn128',
@@ -904,7 +949,10 @@ describe('4 - Replay attack protection (ZK proof nonce reuse)', () => {
         });
       }
       if (key === proofNonceScopedKey('proof:used', validProofPayload.nonce)) {
-        return JSON.stringify({ verifier: 'identity-1', verifiedAt: Date.now() - 5000 });
+        return JSON.stringify({
+          verifier: 'identity-1',
+          verifiedAt: Date.now() - 5000,
+        });
       }
       if (key === proofNonceScopedKey('proof:nonce', validProofPayload.nonce)) {
         return JSON.stringify({
@@ -1008,7 +1056,7 @@ describe('5 - Privilege escalation', () => {
     });
   });
 
-  it('should hide another user\'s credential from unauthorized callers', async () => {
+  it("should hide another user's credential from unauthorized callers", async () => {
     stubAuthFor('identity-alice', 'did:aethelred:alice', 'session-alice');
     const token = await makeToken({
       sub: 'identity-alice',
@@ -1035,7 +1083,7 @@ describe('5 - Privilege escalation', () => {
     expect(res.body.code).toBe('CREDENTIAL_NOT_FOUND');
   });
 
-  it('should deny ZK proof generation for another user\'s credential', async () => {
+  it("should deny ZK proof generation for another user's credential", async () => {
     stubAuthFor('identity-alice', 'did:aethelred:alice', 'session-alice');
     const token = await makeToken({
       sub: 'identity-alice',
@@ -1044,13 +1092,34 @@ describe('5 - Privilege escalation', () => {
     });
 
     const { credentialService } = require('../src/services/credential');
-    credentialService.getCredential.mockResolvedValueOnce({
+    const otherUsersCredential = {
       id: 'cred-bob-2',
+      credentialType: 'NATIONAL_ID',
       subjectId: 'identity-bob', // NOT alice
       issuerId: 'identity-issuer',
       claims: { name: 'Bob' },
       claimsHash: 'abc123',
+      proof: {},
       status: 'ACTIVE',
+      issuedAt: new Date(),
+      expiresAt: null,
+    };
+    credentialService.getCredential.mockResolvedValueOnce(
+      otherUsersCredential,
+    );
+    credentialService.validateCredentialForUse.mockResolvedValueOnce({
+      valid: true,
+      checks: {
+        statusActive: true,
+        notExpired: true,
+        integrityValid: true,
+        issuerActive: true,
+        subjectActive: true,
+        signatureValid: true,
+        issuerTrustValid: true,
+        notRevoked: true,
+      },
+      credential: otherUsersCredential,
     });
 
     const res = await request(app as Express)
@@ -1103,7 +1172,11 @@ describe('5 - Privilege escalation', () => {
       .send({
         proof: {
           pi_a: ['1', '2', '3'],
-          pi_b: [['1', '2'], ['3', '4'], ['5', '6']],
+          pi_b: [
+            ['1', '2'],
+            ['3', '4'],
+            ['5', '6'],
+          ],
           pi_c: ['1', '2', '3'],
           protocol: 'groth16',
           curve: 'bn128',
@@ -1172,7 +1245,9 @@ describe('6 - Enumeration protection', () => {
     expect(res1.body.code).toBe('CREDENTIAL_NOT_FOUND');
     expect(res2.body.code).toBe('CREDENTIAL_NOT_FOUND');
     // Error structure should be identical (no timing / content differences)
-    expect(Object.keys(res1.body).sort()).toEqual(Object.keys(res2.body).sort());
+    expect(Object.keys(res1.body).sort()).toEqual(
+      Object.keys(res2.body).sort(),
+    );
   });
 
   it('should return 404 not 403 when credential exists but belongs to another user', async () => {
@@ -1231,8 +1306,9 @@ describe('6 - Enumeration protection', () => {
     const { identityService } = require('../src/services/identity');
     identityService.getIdentity.mockResolvedValue(null);
 
-    const res = await request(app as Express)
-      .get('/api/v1/identity/resolve/did:aethelred:nonexistent');
+    const res = await request(app as Express).get(
+      '/api/v1/identity/resolve/did:aethelred:nonexistent',
+    );
 
     expect(res.status).toBe(404);
     expect(res.body.code).toBe('DID_NOT_FOUND');
@@ -1292,8 +1368,17 @@ describe('Security headers', () => {
     // Helmet sets these headers
     expect(res.headers['x-content-type-options']).toBe('nosniff');
     expect(res.headers['x-frame-options']).toBeDefined();
-    expect(res.headers['strict-transport-security']).toBeDefined();
+    expect(res.headers['strict-transport-security']).toBeUndefined();
     expect(res.headers['referrer-policy']).toBeDefined();
+  });
+
+  it('should only enable HSTS for production deployments', () => {
+    expect(buildHelmetOptions(false)?.hsts).toBe(false);
+    expect(buildHelmetOptions(true)?.hsts).toMatchObject({
+      maxAge: 31536000,
+      includeSubDomains: true,
+      preload: true,
+    });
   });
 
   it('should not expose server technology in headers', async () => {
@@ -1301,5 +1386,18 @@ describe('Security headers', () => {
 
     // Helmet disables X-Powered-By by default
     expect(res.headers['x-powered-by']).toBeUndefined();
+  });
+
+  it('should mark API JSON responses private and no-store', async () => {
+    const res = await request(app as Express).get(
+      '/api/v1/identity/resolve/did:aethelred:someone',
+    );
+
+    expect(res.headers['cache-control']).toBe(
+      'private, no-store, no-cache, must-revalidate, proxy-revalidate',
+    );
+    expect(res.headers.pragma).toBe('no-cache');
+    expect(res.headers.expires).toBe('0');
+    expect(res.headers.vary).toContain('Authorization');
   });
 });

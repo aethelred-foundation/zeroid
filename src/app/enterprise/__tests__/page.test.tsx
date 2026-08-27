@@ -1,50 +1,142 @@
 import React from "react";
-import { render, screen, fireEvent, act } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 
-jest.mock("next/navigation", () => ({
-  useRouter: () => ({ push: jest.fn(), back: jest.fn() }),
-  usePathname: () => "/enterprise",
-  useSearchParams: () => new URLSearchParams(),
-}));
+const mockApiKeysRefetch = jest.fn();
+const mockCreateAPIKeyMutateAsync = jest.fn();
+const mockRevokeAPIKeyMutate = jest.fn();
 
-jest.mock("wagmi", () => ({
-  useAccount: jest.fn(() => ({
-    address: "0x1234567890abcdef1234567890abcdef12345678",
-    isConnected: true,
-  })),
-  useReadContract: jest.fn(() => ({ data: undefined, isLoading: false })),
-  useWriteContract: jest.fn(() => ({
-    writeContractAsync: jest.fn(),
+const mockApiKeys = [
+  {
+    id: "k1",
+    name: "Production - Main",
+    keyPrefix: "zid_live_",
+    scopes: ["credentials:read", "verification:write", "identity:read"],
+    environment: "production",
+    ipAllowlist: [],
+    dailyQuota: 100_000,
+    monthlyQuota: 3_000_000,
+    rateLimit: { requestsPerSecond: 200, burstSize: 500 },
+    createdAt: "2026-01-15T00:00:00.000Z",
+    lastUsedAt: "2026-06-26T10:00:00.000Z",
+    active: true,
+    revokedAt: null,
+    revokedReason: null,
+    metadata: {},
+  },
+  {
+    id: "k2",
+    name: "Sandbox - Testing",
+    keyPrefix: "zid_test_",
+    scopes: ["credentials:read"],
+    environment: "sandbox",
+    ipAllowlist: [],
+    dailyQuota: 10_000,
+    monthlyQuota: 100_000,
+    rateLimit: { requestsPerSecond: 50, burstSize: 100 },
+    createdAt: "2026-02-01T00:00:00.000Z",
+    lastUsedAt: null,
+    active: true,
+    revokedAt: null,
+    revokedReason: null,
+    metadata: {},
+  },
+];
+
+const mockSlaReport = {
+  period: "month",
+  startDate: "2026-05-26T00:00:00.000Z",
+  endDate: "2026-06-26T00:00:00.000Z",
+  uptimePercent: 99.97,
+  uptimeTarget: 99.95,
+  avgResponseTimeMs: 42,
+  p99ResponseTimeMs: 412,
+  totalRequests: 4_100_000,
+  failedRequests: 1_230,
+  errorRate: 0.03,
+  incidentCount: 0,
+  incidents: [],
+  complianceMet: true,
+};
+
+const mockUsageMetrics = {
+  period: "week",
+  startDate: "2026-06-19T00:00:00.000Z",
+  endDate: "2026-06-26T00:00:00.000Z",
+  totalAPIRequests: 93_500,
+  uniqueIdentities: 0,
+  credentialsIssued: 0,
+  credentialsVerified: 0,
+  proofsGenerated: 0,
+  agentActions: 0,
+  bandwidthMB: 0,
+  costEstimateUSD: 0,
+  breakdownByEndpoint: [
+    {
+      endpoint: "/api/v1/credentials/{id}/verify",
+      method: "POST",
+      requestCount: 48_293,
+      avgResponseTimeMs: 38,
+      errorCount: 5,
+    },
+  ],
+  breakdownByDay: [
+    {
+      date: "2026-06-22T00:00:00.000Z",
+      requests: 12_400,
+      uniqueUsers: 0,
+      errors: 2,
+    },
+    {
+      date: "2026-06-23T00:00:00.000Z",
+      requests: 15_200,
+      uniqueUsers: 0,
+      errors: 4,
+    },
+  ],
+};
+
+jest.mock("@/hooks/useEnterprise", () => ({
+  useAPIKeys: () => ({
+    data: mockApiKeys,
+    isLoading: false,
+    error: null,
+    refetch: mockApiKeysRefetch,
+  }),
+  useCreateAPIKey: () => ({
+    mutateAsync: mockCreateAPIKeyMutateAsync,
     isPending: false,
-  })),
-  useWaitForTransactionReceipt: jest.fn(() => ({ isLoading: false })),
+  }),
+  useRevokeAPIKey: () => ({
+    mutate: mockRevokeAPIKeyMutate,
+    isPending: false,
+  }),
+  useSLAReport: () => ({
+    data: mockSlaReport,
+    isLoading: false,
+    error: null,
+  }),
+  useUsageMetrics: () => ({
+    data: mockUsageMetrics,
+    isLoading: false,
+    error: null,
+  }),
 }));
 
 jest.mock("framer-motion", () => ({
   motion: new Proxy(
     {},
     {
-      get: (_target: unknown, prop: string) => {
-        return React.forwardRef((props: any, ref: any) => {
-          const {
-            initial,
-            animate,
-            exit,
-            transition,
-            whileHover,
-            whileTap,
-            variants,
-            ...rest
-          } = props;
+      get: (_target: unknown, prop: string) =>
+        React.forwardRef((props: any, ref: any) => {
+          const { initial, animate, exit, transition, ...rest } = props;
           const Tag = prop as any;
           return <Tag ref={ref} {...rest} />;
-        });
-      },
+        }),
     },
   ),
-  AnimatePresence: ({ children }: any) => <>{children}</>,
-  useAnimation: () => ({ start: jest.fn() }),
-  useInView: () => true,
+  AnimatePresence: ({ children }: { children: React.ReactNode }) => (
+    <>{children}</>
+  ),
 }));
 
 jest.mock("@/components/layout/AppLayout", () => ({
@@ -56,180 +148,106 @@ jest.mock("@/components/layout/AppLayout", () => ({
 
 import EnterprisePage from "../page";
 
+function selectTab(name: string) {
+  fireEvent.click(screen.getByRole("button", { name }));
+}
+
 describe("EnterprisePage", () => {
-  it("renders without crashing", () => {
-    render(<EnterprisePage />);
-    expect(screen.getByTestId("app-layout")).toBeInTheDocument();
-  });
-
-  it("displays the page heading", () => {
-    render(<EnterprisePage />);
-    expect(screen.getByText("Enterprise Admin Console")).toBeInTheDocument();
-  });
-
-  it("shows metric cards", () => {
-    render(<EnterprisePage />);
-    expect(screen.getByText("Uptime")).toBeInTheDocument();
-    expect(screen.getByText("P95 Latency")).toBeInTheDocument();
-    expect(screen.getByText("Error Rate")).toBeInTheDocument();
-    expect(screen.getByText("API Calls/min")).toBeInTheDocument();
-    expect(screen.getByText("Team Members")).toBeInTheDocument();
-  });
-
-  it("shows API Keys tab content by default", () => {
-    render(<EnterprisePage />);
-    expect(screen.getAllByText("API Keys").length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText("Production - Main")).toBeInTheDocument();
-  });
-
-  it("switches to Webhooks tab", () => {
-    render(<EnterprisePage />);
-    const tabButtons = screen.getAllByRole("button");
-    const webhooksTab = tabButtons.find(
-      (btn) => btn.textContent === "Webhooks",
-    );
-    fireEvent.click(webhooksTab!);
-    expect(screen.getByText("Webhook Endpoints")).toBeInTheDocument();
-  });
-
-  it("switches to Team (RBAC) tab", () => {
-    render(<EnterprisePage />);
-    const tabButtons = screen.getAllByRole("button");
-    const teamTab = tabButtons.find((btn) => btn.textContent === "Team (RBAC)");
-    fireEvent.click(teamTab!);
-    expect(screen.getAllByText("Team Members").length).toBeGreaterThanOrEqual(
-      1,
-    );
-    expect(screen.getByText("Sarah Chen")).toBeInTheDocument();
-  });
-
-  it("toggles environment between production and sandbox and back", () => {
-    render(<EnterprisePage />);
-    const envButton = screen.getByText("Production");
-    fireEvent.click(envButton);
-    expect(screen.getByText("Sandbox")).toBeInTheDocument();
-    // Click again to toggle back to production
-    fireEvent.click(screen.getByText("Sandbox"));
-    expect(screen.getByText("Production")).toBeInTheDocument();
-  });
-
-  it("switches to SLA Monitor tab and shows uptime gauge", () => {
-    render(<EnterprisePage />);
-    const tabButtons = screen.getAllByRole("button");
-    const slaTab = tabButtons.find((btn) => btn.textContent === "SLA Monitor");
-    fireEvent.click(slaTab!);
-    expect(screen.getByText("Uptime (30d)")).toBeInTheDocument();
-    expect(screen.getAllByText("99.97%").length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText("Latency Percentiles")).toBeInTheDocument();
-    expect(screen.getAllByText("Error Rate").length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText("Within SLA")).toBeInTheDocument();
-  });
-
-  it("switches to Usage Analytics tab and shows chart and endpoints", () => {
-    render(<EnterprisePage />);
-    const tabButtons = screen.getAllByRole("button");
-    const usageTab = tabButtons.find(
-      (btn) => btn.textContent === "Usage Analytics",
-    );
-    fireEvent.click(usageTab!);
-    expect(screen.getByText("API Calls This Week")).toBeInTheDocument();
-    expect(screen.getByText("Top Endpoints")).toBeInTheDocument();
-    expect(
-      screen.getByText("/api/v1/credentials/{id}/verify"),
-    ).toBeInTheDocument();
-  });
-
-  it("switches to SDK & Docs tab and shows SDK downloads", () => {
-    render(<EnterprisePage />);
-    const tabButtons = screen.getAllByRole("button");
-    const sdkTab = tabButtons.find((btn) => btn.textContent === "SDK & Docs");
-    fireEvent.click(sdkTab!);
-    expect(screen.getByText("SDK Downloads")).toBeInTheDocument();
-    expect(screen.getByText("TypeScript")).toBeInTheDocument();
-    expect(screen.getByText("Python")).toBeInTheDocument();
-    expect(screen.getByText("Rust")).toBeInTheDocument();
-    expect(screen.getByText("Go")).toBeInTheDocument();
-    // Check OIDC section
-    expect(screen.getByText("OIDC Integration")).toBeInTheDocument();
-    // Check billing section
-    expect(screen.getByText("Enterprise Billing")).toBeInTheDocument();
-  });
-
-  it("toggles API key visibility", () => {
-    render(<EnterprisePage />);
-    // API keys are shown by default with masked values containing asterisks
-    const maskedKeys = screen.getAllByText(/\*{12}/);
-    expect(maskedKeys.length).toBeGreaterThanOrEqual(1);
-    expect(
-      screen.getAllByText("shown once at creation").length,
-    ).toBeGreaterThan(0);
-    expect(screen.queryByText(/zid_live_sk_/i)).not.toBeInTheDocument();
-  });
-
-  it("does not expose stored API key secrets for copying", () => {
-    const writeTextMock = jest.fn().mockResolvedValue(undefined);
-    Object.assign(navigator, { clipboard: { writeText: writeTextMock } });
-    render(<EnterprisePage />);
-    expect(
-      screen.getAllByText("shown once at creation").length,
-    ).toBeGreaterThan(0);
-    expect(writeTextMock).not.toHaveBeenCalled();
-  });
-
-  it("shows team RBAC permissions table", () => {
-    render(<EnterprisePage />);
-    const tabButtons = screen.getAllByRole("button");
-    const teamTab = tabButtons.find((btn) => btn.textContent === "Team (RBAC)");
-    fireEvent.click(teamTab!);
-    expect(screen.getByText("Role Permissions")).toBeInTheDocument();
-    expect(screen.getByText("Manage API Keys")).toBeInTheDocument();
-    expect(screen.getByText("View Credentials")).toBeInTheDocument();
-    expect(screen.getByText("Invite Member")).toBeInTheDocument();
-  });
-
-  it("switches SDK language when clicking SDK buttons", () => {
-    render(<EnterprisePage />);
-    const tabButtons = screen.getAllByRole("button");
-    const sdkTab = tabButtons.find((btn) => btn.textContent === "SDK & Docs");
-    fireEvent.click(sdkTab!);
-    // Click Python SDK
-    fireEvent.click(screen.getByText("Python"));
-    expect(screen.getByText(/Quick Start — Python/)).toBeInTheDocument();
-  });
-
-  it("opens create key modal when clicking Create Key button", () => {
-    render(<EnterprisePage />);
-    // The "Create Key" button is on the default API Keys tab
-    fireEvent.click(screen.getByText("Create Key"));
-    // Modal state is set, but since there's no modal rendered, just verify the click worked
-    expect(screen.getByTestId("app-layout")).toBeInTheDocument();
-  });
-
-  it("toggles API key visibility off again (reveal then hide)", () => {
-    render(<EnterprisePage />);
-    expect(screen.getAllByText(/\*{12}/).length).toBeGreaterThanOrEqual(1);
-    expect(
-      screen.getAllByText("shown once at creation").length,
-    ).toBeGreaterThan(0);
-    expect(screen.queryByText(/zid_live_sk_/i)).not.toBeInTheDocument();
-  });
-
-  it("copies SDK snippet to clipboard and clears copied state after timeout", () => {
-    jest.useFakeTimers();
-    const writeTextMock = jest.fn().mockResolvedValue(undefined);
-    Object.assign(navigator, { clipboard: { writeText: writeTextMock } });
-    render(<EnterprisePage />);
-    const tabButtons = screen.getAllByRole("button");
-    const sdkTab = tabButtons.find((btn) => btn.textContent === "SDK & Docs");
-    fireEvent.click(sdkTab!);
-    // Click the Copy button next to Quick Start
-    const copyButtons = screen.getAllByText("Copy");
-    fireEvent.click(copyButtons[copyButtons.length - 1]);
-    expect(writeTextMock).toHaveBeenCalled();
-    // Advance timer to trigger setCopiedKey(null) callback
-    act(() => {
-      jest.advanceTimersByTime(2000);
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockCreateAPIKeyMutateAsync.mockResolvedValue({
+      ...mockApiKeys[0],
+      id: "created-key",
+      name: "Created production key",
+      secret: "zid_live_secret_created",
     });
-    jest.useRealTimers();
+  });
+
+  it("renders only backend-backed enterprise capabilities", () => {
+    render(<EnterprisePage />);
+
+    expect(screen.getByTestId("app-layout")).toBeInTheDocument();
+    expect(screen.getByText("Enterprise Console")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "API Access" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Webhooks" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Team (RBAC)")).not.toBeInTheDocument();
+    expect(screen.queryByText("SDK & Docs")).not.toBeInTheDocument();
+    expect(screen.queryByText("OIDC Integration")).not.toBeInTheDocument();
+    expect(screen.queryByText("Enterprise Billing")).not.toBeInTheDocument();
+  });
+
+  it("shows exact SLA values without estimating missing percentiles", () => {
+    render(<EnterprisePage />);
+
+    expect(screen.getByText("P99 latency")).toBeInTheDocument();
+    expect(screen.getByText("412ms")).toBeInTheDocument();
+    expect(screen.queryByText("P50")).not.toBeInTheDocument();
+    expect(screen.queryByText("P95")).not.toBeInTheDocument();
+
+    selectTab("SLA Report");
+    expect(screen.getAllByText("99.97%").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText("4,100,000").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("1,230")).toBeInTheDocument();
+    expect(screen.getByText("SLA met")).toBeInTheDocument();
+  });
+
+  it("keeps API credentials visibly unavailable without live controls", () => {
+    render(<EnterprisePage />);
+
+    expect(screen.getByText("Configuration required")).toBeInTheDocument();
+    expect(screen.getByText("Runtime credential auth")).toBeInTheDocument();
+    expect(screen.getByText("Durable request metering")).toBeInTheDocument();
+    expect(screen.getByText("Production SDK contract")).toBeInTheDocument();
+    expect(screen.queryByText("Production - Main")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Create Key" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByTitle("Revoke API key")).not.toBeInTheDocument();
+  });
+
+  it("keeps webhooks unavailable without live registration or delivery controls", () => {
+    render(<EnterprisePage />);
+    selectTab("Webhooks");
+
+    expect(
+      screen.getByText("Webhook delivery unavailable"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Awaiting durable event outbox"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Authoritative event source")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Add Endpoint" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Test delivery" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("https://api.example.com/webhooks/zeroid"),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText(/% success/)).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("dialog", { name: "Add webhook endpoint" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows usage as unavailable without durable runtime metering", () => {
+    render(<EnterprisePage />);
+    selectTab("Usage");
+
+    expect(screen.getByText("Usage reporting unavailable")).toBeInTheDocument();
+    expect(
+      screen.getByText("Awaiting telemetry integration"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("93,500 requests reported"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("POST /api/v1/credentials/{id}/verify"),
+    ).not.toBeInTheDocument();
   });
 });

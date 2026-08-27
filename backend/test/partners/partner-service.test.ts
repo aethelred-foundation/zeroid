@@ -4,115 +4,199 @@ import {
   poolAgentScan,
   initiateWalletDisclosure,
   getPartnerEvidence,
+  PARTNER_ELIGIBILITY_CHALLENGE_UNAVAILABLE_CODE,
+  PARTNER_ELIGIBILITY_EVIDENCE_UNAVAILABLE_CODE,
   PartnerError,
   type PartnerDeps,
 } from '@/services/partners/partner-service';
+import { AGENT_ELIGIBILITY_UNAVAILABLE_CODE } from '@/services/ai/agent-eligibility';
 
-const ALLOWED = { status: 'ALLOWED', decisionId: 'dec1' } as never;
-const DENIED = { status: 'DENIED', decisionId: 'dec2' } as never;
+function backendUnavailable() {
+  return Object.assign(new Error('Signed witness prover is not integrated'), {
+    code: 'ZK_ELIGIBILITY_PROVER_NOT_INTEGRATED',
+    statusCode: 503,
+  });
+}
 
 function makeDeps(over: Partial<PartnerDeps> = {}): PartnerDeps {
   return {
-    resolveIdentity: jest.fn().mockResolvedValue({ id: 'i1', did: 'did:owner' }),
-    runEligibility: jest.fn().mockResolvedValue(ALLOWED),
-    runAgentScan: jest.fn().mockResolvedValue({ status: 'ALLOWED', decisionId: 'd', actor: {} } as never),
-    recordDisclosureRequest: jest.fn().mockResolvedValue('escrow-1'),
-    getEvidence: jest.fn().mockResolvedValue({ auditLogId: 'a1' }),
+    principal: { id: 'i1', did: 'did:owner' },
+    resolveIdentity: jest
+      .fn()
+      .mockResolvedValue({ id: 'i1', did: 'did:owner' }),
+    runEligibility: jest.fn().mockRejectedValue(backendUnavailable()),
     ...over,
   };
 }
 
 describe('walletEligibility', () => {
-  it('resolves the owner identity and runs eligibility (eligible)', async () => {
+  it('propagates the authoritative backend 503 unchanged', async () => {
     const deps = makeDeps();
-    const res = await walletEligibility(deps, {
-      ownerDid: 'did:owner', credentialId: 'c1', policyId: 'P', relyingAppId: 'wallet',
-    });
-    expect(deps.runEligibility).toHaveBeenCalledWith(
-      { id: 'i1', did: 'did:owner' },
-      expect.objectContaining({ subjectDid: 'did:owner', policyId: 'P' }),
-    );
-    expect(res.eligible).toBe(true);
-  });
 
-  it('returns eligible=false on a DENIED decision', async () => {
-    const deps = makeDeps({ runEligibility: jest.fn().mockResolvedValue(DENIED) });
-    const res = await walletEligibility(deps, {
-      ownerDid: 'did:owner', credentialId: 'c1', policyId: 'P', relyingAppId: 'wallet',
-    });
-    expect(res.eligible).toBe(false);
-  });
-
-  it('throws OWNER_NOT_FOUND when the identity is unknown', async () => {
-    const deps = makeDeps({ resolveIdentity: jest.fn().mockResolvedValue(null) });
     await expect(
-      walletEligibility(deps, { ownerDid: 'did:x', credentialId: 'c', policyId: 'P', relyingAppId: 'w' }),
+      walletEligibility(deps, {
+        ownerDid: 'did:owner',
+        credentialId: 'credential-1',
+        policyId: 'POLICY_REGULATED_SERVICE_18PLUS_V1',
+        relyingAppId: 'wallet',
+      }),
+    ).rejects.toMatchObject({
+      code: 'ZK_ELIGIBILITY_PROVER_NOT_INTEGRATED',
+      statusCode: 503,
+    });
+  });
+
+  it('rejects an accidental decision until the durable RP challenge is integrated', async () => {
+    const deps = makeDeps({
+      runEligibility: jest.fn().mockResolvedValue({
+        status: 'ALLOWED',
+        decisionId: 'untrusted-decision',
+      } as never),
+    });
+
+    await expect(
+      walletEligibility(deps, {
+        ownerDid: 'did:owner',
+        credentialId: 'credential-1',
+        policyId: 'POLICY_REGULATED_SERVICE_18PLUS_V1',
+        relyingAppId: 'wallet',
+      }),
+    ).rejects.toMatchObject({
+      code: PARTNER_ELIGIBILITY_CHALLENGE_UNAVAILABLE_CODE,
+      statusCode: 503,
+    });
+  });
+
+  it('rejects an owner DID that does not belong to the caller', async () => {
+    const deps = makeDeps();
+    await expect(
+      walletEligibility(deps, {
+        ownerDid: 'did:someone-else',
+        credentialId: 'credential-1',
+        policyId: 'policy-1',
+        relyingAppId: 'wallet',
+      }),
+    ).rejects.toMatchObject({
+      code: 'PARTNER_PRINCIPAL_MISMATCH',
+      statusCode: 403,
+    });
+    expect(deps.resolveIdentity).not.toHaveBeenCalled();
+    expect(deps.runEligibility).not.toHaveBeenCalled();
+  });
+
+  it('throws OWNER_NOT_FOUND before invoking eligibility for an unknown identity', async () => {
+    const deps = makeDeps({
+      resolveIdentity: jest.fn().mockResolvedValue(null),
+    });
+    await expect(
+      walletEligibility(deps, {
+        ownerDid: 'did:owner',
+        credentialId: 'credential-1',
+        policyId: 'policy-1',
+        relyingAppId: 'wallet',
+      }),
     ).rejects.toMatchObject({ code: 'OWNER_NOT_FOUND', statusCode: 404 });
+    expect(deps.runEligibility).not.toHaveBeenCalled();
   });
 });
 
 describe('poolEligibility', () => {
-  it('checks the staker under the pool policy and echoes poolId', async () => {
-    const deps = makeDeps({ resolveIdentity: jest.fn().mockResolvedValue({ id: 'i2', did: 'did:staker' }) });
-    const res = await poolEligibility(deps, {
-      poolId: 'pool-7', stakerDid: 'did:staker', credentialId: 'c1', policyId: 'POOL_P', relyingAppId: 'cruzible',
+  it('propagates the authoritative backend 503 unchanged', async () => {
+    const deps = makeDeps({
+      principal: { id: 'i2', did: 'did:staker' },
+      resolveIdentity: jest.fn().mockResolvedValue({
+        id: 'i2',
+        did: 'did:staker',
+      }),
     });
-    expect(res.poolId).toBe('pool-7');
-    expect(res.eligible).toBe(true);
-    expect(deps.runEligibility).toHaveBeenCalledWith(
-      { id: 'i2', did: 'did:staker' },
-      expect.objectContaining({ subjectDid: 'did:staker', policyId: 'POOL_P' }),
-    );
+
+    await expect(
+      poolEligibility(deps, {
+        poolId: 'pool-7',
+        stakerDid: 'did:staker',
+        credentialId: 'credential-1',
+        policyId: 'POOL_POLICY_V1',
+        relyingAppId: 'cruzible',
+      }),
+    ).rejects.toMatchObject({
+      code: 'ZK_ELIGIBILITY_PROVER_NOT_INTEGRATED',
+      statusCode: 503,
+    });
   });
 
-  it('throws STAKER_NOT_FOUND when unknown', async () => {
-    const deps = makeDeps({ resolveIdentity: jest.fn().mockResolvedValue(null) });
+  it('rejects an accidental pool decision until the durable RP challenge exists', async () => {
+    const deps = makeDeps({
+      principal: { id: 'i2', did: 'did:staker' },
+      resolveIdentity: jest.fn().mockResolvedValue({
+        id: 'i2',
+        did: 'did:staker',
+      }),
+      runEligibility: jest
+        .fn()
+        .mockResolvedValue({ status: 'DENIED' } as never),
+    });
+
     await expect(
-      poolEligibility(deps, { poolId: 'p', stakerDid: 'x', credentialId: 'c', policyId: 'P', relyingAppId: 'c' }),
-    ).rejects.toMatchObject({ code: 'STAKER_NOT_FOUND', statusCode: 404 });
+      poolEligibility(deps, {
+        poolId: 'pool-7',
+        stakerDid: 'did:staker',
+        credentialId: 'credential-1',
+        policyId: 'POOL_POLICY_V1',
+        relyingAppId: 'cruzible',
+      }),
+    ).rejects.toMatchObject({
+      code: PARTNER_ELIGIBILITY_CHALLENGE_UNAVAILABLE_CODE,
+      statusCode: 503,
+    });
   });
 });
 
 describe('poolAgentScan', () => {
-  it('delegates to the AI Agent Passport scan and echoes poolId', async () => {
-    const runAgentScan = jest.fn().mockResolvedValue({ status: 'ALLOWED', decisionId: 'd', actor: {} } as never);
-    const deps = makeDeps({ runAgentScan });
-    const res = await poolAgentScan(deps, {
-      poolId: 'pool-7', agentDid: 'did:agent', controllerDid: 'did:ctrl', subjectDid: 'did:ctrl',
-      credentialId: 'c1', policyId: 'P', relyingAppId: 'cruzible',
+  it('is explicitly unavailable without agent challenge authentication and durable evidence', async () => {
+    await expect(
+      poolAgentScan(makeDeps(), {
+        poolId: 'pool-7',
+        agentDid: 'did:agent',
+        controllerDid: 'did:owner',
+        subjectDid: 'did:owner',
+        credentialId: 'credential-1',
+        policyId: 'POOL_POLICY_V1',
+        relyingAppId: 'cruzible',
+      }),
+    ).rejects.toMatchObject({
+      code: AGENT_ELIGIBILITY_UNAVAILABLE_CODE,
+      statusCode: 503,
     });
-    expect(runAgentScan).toHaveBeenCalledWith(
-      expect.objectContaining({ agentDid: 'did:agent', controllerDid: 'did:ctrl' }),
-    );
-    expect(res.poolId).toBe('pool-7');
-    expect(res.status).toBe('ALLOWED');
   });
 });
 
 describe('initiateWalletDisclosure', () => {
-  it('records a warrant-bound request and returns the envelope', async () => {
-    const deps = makeDeps();
-    const res = await initiateWalletDisclosure(deps, { decisionId: 'dec1', warrantHash: '0xwarrant' });
-    expect(deps.recordDisclosureRequest).toHaveBeenCalledWith({ decisionId: 'dec1', warrantHash: '0xwarrant' });
-    expect(res).toEqual({ escrowId: 'escrow-1', warrantHash: '0xwarrant', status: 'REQUESTED' });
+  it('fails honestly until a persisted quorum escrow is configured', async () => {
+    await expect(
+      initiateWalletDisclosure(makeDeps(), {
+        decisionId: 'decision-1',
+        warrantHash: '0xwarrant',
+      }),
+    ).rejects.toMatchObject({
+      code: 'DISCLOSURE_UNAVAILABLE',
+      statusCode: 501,
+    });
   });
 });
 
 describe('getPartnerEvidence', () => {
-  it('returns the evidence bundle', async () => {
-    const deps = makeDeps();
-    await expect(getPartnerEvidence(deps, 'dec1')).resolves.toEqual({ auditLogId: 'a1' });
-  });
-  it('throws EVIDENCE_NOT_FOUND when absent', async () => {
-    const deps = makeDeps({ getEvidence: jest.fn().mockResolvedValue(null) });
-    await expect(getPartnerEvidence(deps, 'missing')).rejects.toMatchObject({
-      code: 'EVIDENCE_NOT_FOUND', statusCode: 404,
+  it('does not expose raw audit details as verified eligibility evidence', async () => {
+    await expect(
+      getPartnerEvidence(makeDeps(), 'decision-1'),
+    ).rejects.toMatchObject({
+      code: PARTNER_ELIGIBILITY_EVIDENCE_UNAVAILABLE_CODE,
+      statusCode: 503,
     });
   });
 
-  it('exposes PartnerError as a typed error', () => {
-    const e = new PartnerError('x', 'OWNER_NOT_FOUND', 404);
-    expect(e.code).toBe('OWNER_NOT_FOUND');
-    expect(e.statusCode).toBe(404);
+  it('keeps the typed partner error contract', () => {
+    const error = new PartnerError('unavailable', 'TEST_CODE', 503);
+    expect(error.code).toBe('TEST_CODE');
+    expect(error.statusCode).toBe(503);
   });
 });

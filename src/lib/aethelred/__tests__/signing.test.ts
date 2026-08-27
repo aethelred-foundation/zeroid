@@ -50,7 +50,11 @@ describe("signHybrid", () => {
   it("returns classical-only when the flag is off", async () => {
     delete process.env.NEXT_PUBLIC_PQC_SIGNING;
     expect(isPqcSigningEnabled()).toBe(false);
-    const result = await signHybrid(new Uint8Array([1]), "0xecdsa", new Uint8Array(32));
+    const result = await signHybrid(
+      new Uint8Array([1]),
+      "0xecdsa",
+      new Uint8Array(32),
+    );
     expect(result.scheme).toBe("ecdsa");
     expect(result.pqc).toBeUndefined();
   });
@@ -58,7 +62,11 @@ describe("signHybrid", () => {
   it("falls back to classical when enabled but no provider is configured", async () => {
     process.env.NEXT_PUBLIC_PQC_SIGNING = "true";
     configurePQCProvider(null);
-    const result = await signHybrid(new Uint8Array([1]), "0xecdsa", new Uint8Array(32));
+    const result = await signHybrid(
+      new Uint8Array([1]),
+      "0xecdsa",
+      new Uint8Array(32),
+    );
     expect(result.scheme).toBe("ecdsa");
   });
 

@@ -1,876 +1,936 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { type FormEvent, useMemo, useState } from "react";
+import Link from "next/link";
+import { AnimatePresence, motion } from "framer-motion";
+import { useAccount } from "wagmi";
 import {
-  Shield,
+  AlertTriangle,
+  CheckCircle2,
+  ClipboardCheck,
+  FileKey2,
+  Fingerprint,
+  Loader2,
+  RefreshCw,
+  Search,
   ShieldAlert,
   ShieldCheck,
-  Brain,
-  Search,
-  AlertTriangle,
-  AlertCircle,
-  CheckCircle2,
-  Clock,
-  Send,
-  Bot,
-  User,
-  TrendingUp,
-  TrendingDown,
-  Activity,
-  Globe,
-  FileText,
-  Play,
-  Download,
-  RefreshCw,
-  ChevronDown,
-  ChevronRight,
-  Zap,
-  Calendar,
-  MapPin,
-  Filter,
-  Eye,
-  XCircle,
-  BarChart3,
 } from "lucide-react";
+
 import AppLayout from "@/components/layout/AppLayout";
+import { useIdentity } from "@/contexts/IdentityContext";
+import {
+  type ComplianceAlert,
+  type ScreeningResult,
+  useAcknowledgeAlert,
+  useComplianceAlerts,
+  useRiskAssessment,
+  useScreenIdentity,
+} from "@/hooks/useAICompliance";
 
-// ============================================================
-// Mock Data
-// ============================================================
+type WorkspaceTab = "alerts" | "screening" | "risk";
 
-const riskFeed = [
-  {
-    id: "1",
-    type: "sanctions",
-    severity: "critical" as const,
-    message: "OFAC SDN list updated — 47 new entries detected",
-    timestamp: "2 min ago",
-    region: "Global",
-  },
-  {
-    id: "2",
-    type: "pep",
-    severity: "high" as const,
-    message: "PEP match: Subject linked to sanctioned entity in Russia",
-    timestamp: "8 min ago",
-    region: "EU",
-  },
-  {
-    id: "3",
-    type: "regulatory",
-    severity: "medium" as const,
-    message: "MiCA compliance deadline approaching for EU operations",
-    timestamp: "15 min ago",
-    region: "EU",
-  },
-  {
-    id: "4",
-    type: "transaction",
-    severity: "low" as const,
-    message: "Unusual volume detected on cross-border corridor UAE-SG",
-    timestamp: "23 min ago",
-    region: "MENA",
-  },
-  {
-    id: "5",
-    type: "aml",
-    severity: "high" as const,
-    message: "AML pattern: Structuring behavior flagged on 3 accounts",
-    timestamp: "31 min ago",
-    region: "APAC",
-  },
-  {
-    id: "6",
-    type: "sanctions",
-    severity: "medium" as const,
-    message: "EU sanctions list revision — 12 entities de-listed",
-    timestamp: "45 min ago",
-    region: "EU",
-  },
-];
-
-const sanctionsResults = [
-  {
-    id: "s1",
-    name: "Viktor Petrov",
-    matchScore: 98,
-    list: "OFAC SDN",
-    country: "RU",
-    status: "confirmed" as const,
-    riskLevel: "critical" as const,
-  },
-  {
-    id: "s2",
-    name: "Al-Rashid Trading Co.",
-    matchScore: 87,
-    list: "EU Consolidated",
-    country: "SY",
-    status: "review" as const,
-    riskLevel: "high" as const,
-  },
-  {
-    id: "s3",
-    name: "Chen Wei Holdings",
-    matchScore: 72,
-    list: "UN Security Council",
-    country: "CN",
-    status: "review" as const,
-    riskLevel: "medium" as const,
-  },
-  {
-    id: "s4",
-    name: "Novak Industries Ltd",
-    matchScore: 45,
-    list: "OFAC SDN",
-    country: "RS",
-    status: "cleared" as const,
-    riskLevel: "low" as const,
-  },
-];
-
-const jurisdictionHeatmap = [
-  { region: "USA", score: 94, status: "compliant" as const },
-  { region: "EU", score: 91, status: "compliant" as const },
-  { region: "UAE", score: 97, status: "compliant" as const },
-  { region: "UK", score: 89, status: "compliant" as const },
-  { region: "SG", score: 92, status: "compliant" as const },
-  { region: "JP", score: 88, status: "warning" as const },
-  { region: "KR", score: 85, status: "warning" as const },
-  { region: "CH", score: 93, status: "compliant" as const },
-  { region: "HK", score: 78, status: "warning" as const },
-  { region: "AU", score: 90, status: "compliant" as const },
-  { region: "CA", score: 86, status: "warning" as const },
-  { region: "BR", score: 72, status: "at-risk" as const },
-  { region: "IN", score: 68, status: "at-risk" as const },
-  { region: "SA", score: 81, status: "warning" as const },
-  { region: "DE", score: 95, status: "compliant" as const },
-];
-
-const complianceScoreTrend = [
-  { month: "Sep", score: 82 },
-  { month: "Oct", score: 85 },
-  { month: "Nov", score: 84 },
-  { month: "Dec", score: 88 },
-  { month: "Jan", score: 91 },
-  { month: "Feb", score: 93 },
-  { month: "Mar", score: 94 },
-];
-
-const pepMatches = [
-  {
-    id: "p1",
-    name: "Ahmed Al-Fahim",
-    position: "Former Minister of Finance, UAE",
-    riskTier: "Tier 1",
-    lastScreened: "2h ago",
-    details:
-      "Direct PEP. Held government position 2018-2023. No adverse media found. Enhanced due diligence recommended.",
-  },
-  {
-    id: "p2",
-    name: "Maria Santos",
-    position: "Senator, Philippines",
-    riskTier: "Tier 1",
-    lastScreened: "4h ago",
-    details:
-      "Current PEP. Active political figure. 2 adverse media mentions related to campaign finance. Ongoing monitoring required.",
-  },
-  {
-    id: "p3",
-    name: "James Richardson",
-    position: "Family member of UK MP",
-    riskTier: "Tier 2",
-    lastScreened: "1d ago",
-    details:
-      "RCA (Relative/Close Associate). Brother of sitting MP. No direct political exposure. Standard monitoring.",
-  },
-];
-
-const regulatoryCalendar = [
-  {
-    id: "r1",
-    date: "Mar 31, 2026",
-    title: "MiCA Full Enforcement",
-    jurisdiction: "EU",
-    impact: "high" as const,
-    daysLeft: 16,
-  },
-  {
-    id: "r2",
-    date: "Apr 15, 2026",
-    title: "VARA Q1 Compliance Report",
-    jurisdiction: "UAE",
-    impact: "medium" as const,
-    daysLeft: 31,
-  },
-  {
-    id: "r3",
-    date: "May 1, 2026",
-    title: "Travel Rule Threshold Update",
-    jurisdiction: "Global",
-    impact: "high" as const,
-    daysLeft: 47,
-  },
-  {
-    id: "r4",
-    date: "Jun 30, 2026",
-    title: "FATF Mutual Evaluation",
-    jurisdiction: "MENA",
-    impact: "critical" as const,
-    daysLeft: 107,
-  },
-];
-
-const chatMessages = [
-  {
-    id: "c1",
-    role: "assistant" as const,
-    content:
-      "Good morning. I've completed the overnight compliance scan. 3 new alerts require attention: 1 sanctions match (high confidence), 1 PEP update, and 1 regulatory deadline within 30 days.",
-  },
-  {
-    id: "c2",
-    role: "user" as const,
-    content: "Show me the sanctions match details.",
-  },
-  {
-    id: "c3",
-    role: "assistant" as const,
-    content:
-      "The high-confidence match is Al-Rashid Trading Co. (87% match) against the EU Consolidated sanctions list. The entity is flagged for potential connections to sanctioned individuals in Syria. I recommend: 1) Freeze pending transactions, 2) Escalate to compliance officer, 3) File SAR if confirmed.",
-  },
-];
-
-// ============================================================
-// Helpers
-// ============================================================
-
-const severityColors: Record<string, string> = {
-  critical: "bg-red-500/10 text-red-400 border-red-500/20",
-  high: "bg-orange-500/10 text-orange-400 border-orange-500/20",
-  medium: "bg-amber-500/10 text-amber-400 border-amber-500/20",
-  low: "bg-blue-500/10 text-blue-400 border-blue-500/20",
+type ScreeningFormState = {
+  identityId: string;
+  fullName: string;
+  jurisdiction: string;
+  nationality: string;
+  dateOfBirth: string;
+  aliases: string;
+  documentNumbers: string;
 };
 
-const severityDots: Record<string, string> = {
-  critical: "bg-red-400",
-  high: "bg-orange-400",
-  medium: "bg-amber-400",
-  low: "bg-blue-400",
+const INITIAL_SCREENING_FORM: ScreeningFormState = {
+  identityId: "",
+  fullName: "",
+  jurisdiction: "AE",
+  nationality: "",
+  dateOfBirth: "",
+  aliases: "",
+  documentNumbers: "",
 };
 
-const statusColors: Record<string, string> = {
-  compliant: "bg-emerald-500/20 text-emerald-400 border-emerald-500/30",
-  warning: "bg-amber-500/20 text-amber-400 border-amber-500/30",
-  "at-risk": "bg-red-500/20 text-red-400 border-red-500/30",
-};
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-const heatmapBg: Record<string, string> = {
-  compliant: "bg-emerald-500/20 hover:bg-emerald-500/30",
-  warning: "bg-amber-500/20 hover:bg-amber-500/30",
-  "at-risk": "bg-red-500/20 hover:bg-red-500/30",
-};
+const tabs = [
+  { id: "alerts" as const, label: "Organization alerts", icon: ShieldAlert },
+  { id: "screening" as const, label: "Identity screening", icon: Search },
+  { id: "risk" as const, label: "Risk assessment", icon: ClipboardCheck },
+];
 
-const matchStatusColors: Record<string, string> = {
-  confirmed: "bg-red-500/10 text-red-400",
-  review: "bg-amber-500/10 text-amber-400",
-  cleared: "bg-emerald-500/10 text-emerald-400",
-};
+function formatTimestamp(value?: string): string {
+  if (!value) return "Unavailable";
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return "Unavailable";
+  return new Intl.DateTimeFormat("en-US", {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZone: "UTC",
+  }).format(new Date(timestamp));
+}
 
-// ============================================================
-// Component
-// ============================================================
+function splitOptionalList(value: string): string[] | undefined {
+  const items = value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  return items.length > 0 ? items : undefined;
+}
+
+function errorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message.trim()
+    ? error.message
+    : fallback;
+}
+
+function alertTone(level: ComplianceAlert["level"]): string {
+  switch (level) {
+    case "critical":
+    case "violation":
+    case "high":
+      return "border-red-500/25 bg-red-500/5 text-red-200";
+    case "warning":
+    case "medium":
+      return "border-amber-500/25 bg-amber-500/5 text-amber-100";
+    default:
+      return "border-cyan-500/20 bg-cyan-500/5 text-cyan-100";
+  }
+}
+
+function ScreeningEvidence({ result }: { result: ScreeningResult }) {
+  const matchCount = result.matchedLists.length + result.pepMatches.length;
+  const clear = result.result === "clear";
+
+  return (
+    <section
+      className="mt-6 border-t border-[var(--border-primary)] pt-6"
+      aria-label="Screening result"
+    >
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <div className="flex items-center gap-2">
+            {clear ? (
+              <CheckCircle2 className="h-5 w-5 text-emerald-300" />
+            ) : (
+              <AlertTriangle className="h-5 w-5 text-amber-300" />
+            )}
+            <h3 className="font-semibold text-[var(--text-primary)]">
+              {result.result.replaceAll("_", " ")}
+            </h3>
+          </div>
+          <p className="mt-1 text-xs text-[var(--text-secondary)]">
+            Screening {result.screeningId} · completed{" "}
+            {formatTimestamp(result.screenedAt)}
+          </p>
+        </div>
+        <dl className="grid grid-cols-2 gap-x-8 gap-y-1 text-right text-xs">
+          <div>
+            <dt className="text-[var(--text-tertiary)]">Match score</dt>
+            <dd className="mt-1 font-semibold text-[var(--text-primary)]">
+              {result.matchScore}/100
+            </dd>
+          </div>
+          <div>
+            <dt className="text-[var(--text-tertiary)]">Review items</dt>
+            <dd className="mt-1 font-semibold text-[var(--text-primary)]">
+              {matchCount}
+            </dd>
+          </div>
+        </dl>
+      </div>
+
+      <div className="mt-5 grid gap-5 lg:grid-cols-2">
+        <div>
+          <h4 className="text-xs font-semibold uppercase tracking-wide text-[var(--text-tertiary)]">
+            Sources checked ({result.listsChecked.length})
+          </h4>
+          {result.listsChecked.length > 0 ? (
+            <ul className="mt-2 space-y-1 text-sm text-[var(--text-secondary)]">
+              {result.listsChecked.map((source) => (
+                <li key={source} className="flex items-center gap-2">
+                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-300" />
+                  {source}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mt-2 text-sm text-amber-200">
+              The service did not report any completed list checks.
+            </p>
+          )}
+        </div>
+
+        <div>
+          <h4 className="text-xs font-semibold uppercase tracking-wide text-[var(--text-tertiary)]">
+            Unavailable checks
+          </h4>
+          {result.unavailableChecks.length > 0 ? (
+            <ul className="mt-2 space-y-1 text-sm text-amber-200">
+              {result.unavailableChecks.map((check) => (
+                <li key={check}>{check.replaceAll("_", " ")}</li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mt-2 text-sm text-[var(--text-secondary)]">
+              None reported by the screening service.
+            </p>
+          )}
+        </div>
+      </div>
+
+      {result.matchedLists.length > 0 && (
+        <div className="mt-6">
+          <h4 className="text-xs font-semibold uppercase tracking-wide text-[var(--text-tertiary)]">
+            Sanctions matches
+          </h4>
+          <div className="mt-2 divide-y divide-[var(--border-primary)] border-y border-[var(--border-primary)]">
+            {result.matchedLists.map((match, index) => (
+              <div
+                key={`${match.listSource}-${match.sdnId ?? match.matchedName}-${index}`}
+                className="grid gap-2 py-3 text-sm sm:grid-cols-[1fr_auto]"
+              >
+                <div>
+                  <div className="font-medium text-[var(--text-primary)]">
+                    {match.matchedName}
+                  </div>
+                  <div className="mt-1 text-xs text-[var(--text-secondary)]">
+                    {match.listName} · {match.entityType}
+                  </div>
+                </div>
+                <div className="text-left sm:text-right">
+                  <div className="font-mono text-sm text-amber-200">
+                    {(match.matchConfidence * 100).toFixed(1)}%
+                  </div>
+                  <div className="mt-1 text-xs text-[var(--text-tertiary)]">
+                    source confidence
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {result.pepMatches.length > 0 && (
+        <div className="mt-6">
+          <h4 className="text-xs font-semibold uppercase tracking-wide text-[var(--text-tertiary)]">
+            PEP matches
+          </h4>
+          <div className="mt-2 divide-y divide-[var(--border-primary)] border-y border-[var(--border-primary)]">
+            {result.pepMatches.map((match, index) => (
+              <div
+                key={`${match.source}-${match.name}-${index}`}
+                className="py-3 text-sm"
+              >
+                <div className="font-medium text-[var(--text-primary)]">
+                  {match.name}
+                </div>
+                <div className="mt-1 text-xs text-[var(--text-secondary)]">
+                  {match.position} · {match.country} · {match.source}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
 
 export default function AICompliancePage() {
-  const [searchQuery, setSearchQuery] = useState("");
-  const [chatInput, setChatInput] = useState("");
-  const [messages, setMessages] = useState(chatMessages);
-  const [expandedPep, setExpandedPep] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<"feed" | "screening" | "heatmap">(
-    "feed",
+  const { address, isConnected } = useAccount();
+  const { identity, sessionStatus, sessionError, signIn } = useIdentity();
+  const [activeTab, setActiveTab] = useState<WorkspaceTab>("alerts");
+  const [screeningForm, setScreeningForm] = useState(INITIAL_SCREENING_FORM);
+  const [screeningValidationError, setScreeningValidationError] = useState<
+    string | null
+  >(null);
+  const [riskIdentityInput, setRiskIdentityInput] = useState("");
+  const [riskJurisdictionInput, setRiskJurisdictionInput] = useState("AE");
+  const [riskTarget, setRiskTarget] = useState<{
+    identityId: string;
+    jurisdiction: string;
+  } | null>(null);
+  const [riskValidationError, setRiskValidationError] = useState<string | null>(
+    null,
   );
-  const chatEndRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+  const authenticated =
+    Boolean(isConnected && address && identity.isRegistered) &&
+    sessionStatus === "authenticated";
+  const alertsQuery = useComplianceAlerts(authenticated);
+  const acknowledgeAlert = useAcknowledgeAlert();
+  const screenIdentity = useScreenIdentity();
+  const riskQuery = useRiskAssessment(riskTarget?.identityId, {
+    enabled: authenticated && Boolean(riskTarget),
+    jurisdiction: riskTarget?.jurisdiction,
+    entityType: "identity",
+  });
 
-  const handleSendMessage = () => {
-    if (!chatInput.trim()) return;
-    const newMsg = {
-      id: `u${Date.now()}`,
-      role: "user" as const,
-      content: chatInput,
+  const alertCounts = useMemo(() => {
+    const alerts = alertsQuery.data?.alerts ?? [];
+    return {
+      total: alerts.length,
+      urgent: alerts.filter((alert) =>
+        ["critical", "violation", "high"].includes(alert.level),
+      ).length,
+      acknowledged: alerts.filter((alert) => Boolean(alert.acknowledgedAt))
+        .length,
     };
-    setMessages((prev) => [...prev, newMsg]);
-    setChatInput("");
-    setTimeout(() => {
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: `a${Date.now()}`,
-          role: "assistant" as const,
-          content:
-            "I've analyzed the request. Based on current compliance data, all sanctions screenings are up to date. The next scheduled full screening is in 4 hours. Would you like me to run an ad-hoc screening now?",
-        },
-      ]);
-    }, 1500);
+  }, [alertsQuery.data]);
+
+  const submitScreening = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const identityId = screeningForm.identityId.trim();
+    const fullName = screeningForm.fullName.trim();
+    const jurisdiction = screeningForm.jurisdiction.trim().toUpperCase();
+    const nationality = screeningForm.nationality.trim().toUpperCase();
+
+    if (!UUID_PATTERN.test(identityId)) {
+      setScreeningValidationError("Identity ID must be a valid UUID.");
+      return;
+    }
+    if (fullName.length < 2) {
+      setScreeningValidationError("Enter the subject name used for screening.");
+      return;
+    }
+    if (jurisdiction.length < 2 || jurisdiction.length > 10) {
+      setScreeningValidationError("Enter a valid jurisdiction code.");
+      return;
+    }
+
+    setScreeningValidationError(null);
+    await screenIdentity.mutateAsync({
+      identityId,
+      fullName,
+      jurisdiction,
+      ...(nationality ? { nationality } : {}),
+      ...(screeningForm.dateOfBirth
+        ? { dateOfBirth: screeningForm.dateOfBirth }
+        : {}),
+      ...(splitOptionalList(screeningForm.aliases)
+        ? { aliases: splitOptionalList(screeningForm.aliases) }
+        : {}),
+      ...(splitOptionalList(screeningForm.documentNumbers)
+        ? { documentNumbers: splitOptionalList(screeningForm.documentNumbers) }
+        : {}),
+    });
   };
 
-  const filteredSanctions = sanctionsResults.filter(
-    (s) =>
-      s.name.toLowerCase().includes(searchQuery.toLowerCase()) || !searchQuery,
-  );
+  const submitRiskAssessment = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const identityId = riskIdentityInput.trim();
+    const jurisdiction = riskJurisdictionInput.trim().toUpperCase();
+    if (!UUID_PATTERN.test(identityId)) {
+      setRiskValidationError("Identity ID must be a valid UUID.");
+      return;
+    }
+    if (jurisdiction.length < 2 || jurisdiction.length > 10) {
+      setRiskValidationError("Enter a valid jurisdiction code.");
+      return;
+    }
+    setRiskValidationError(null);
+    setRiskTarget({ identityId, jurisdiction });
+  };
 
   return (
     <AppLayout>
       <div className="space-y-6">
-        {/* Header */}
-        <div className="flex items-center justify-between">
+        <motion.header
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.25 }}
+          className="flex flex-col gap-4 border-b border-[var(--border-primary)] pb-6 sm:flex-row sm:items-end sm:justify-between"
+        >
           <div>
-            <h1 className="text-2xl font-bold flex items-center gap-3">
-              <Brain className="w-7 h-7 text-brand-400" />
-              AI Compliance Command Center
-            </h1>
-            <p className="text-[var(--text-secondary)] mt-1">
-              Real-time threat intelligence, AI-powered screening, and
-              regulatory monitoring
+            <div className="flex items-center gap-3">
+              <ShieldCheck className="h-7 w-7 text-brand-400" />
+              <h1 className="text-2xl font-bold">Compliance operations</h1>
+            </div>
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--text-secondary)]">
+              Organization-scoped screening, stored alerts, and risk evidence
+              returned by the ZeroID backend.
             </p>
           </div>
-          <div className="flex items-center gap-2">
-            <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-500/10 text-emerald-400 text-xs font-medium border border-emerald-500/20">
-              <span className="relative flex h-1.5 w-1.5">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-                <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500" />
-              </span>
-              AI Engine Active
-            </span>
-          </div>
-        </div>
-
-        {/* Metrics Row */}
-        <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
-          {[
-            {
-              label: "Compliance Score",
-              value: "94/100",
-              icon: ShieldCheck,
-              color: "text-emerald-400",
-              trend: "+3 this month",
-            },
-            {
-              label: "Active Alerts",
-              value: "7",
-              icon: AlertTriangle,
-              color: "text-amber-400",
-              trend: "2 critical",
-            },
-            {
-              label: "Screenings Today",
-              value: "1,247",
-              icon: Search,
-              color: "text-brand-400",
-              trend: "+18% vs avg",
-            },
-            {
-              label: "PEP Matches",
-              value: "3",
-              icon: Eye,
-              color: "text-orange-400",
-              trend: "1 new today",
-            },
-            {
-              label: "Jurisdictions",
-              value: "15",
-              icon: Globe,
-              color: "text-identity-chrome",
-              trend: "All monitored",
-            },
-          ].map((m, i) => (
-            <motion.div
-              key={m.label}
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: i * 0.05 }}
-              className="bg-zero-900 border border-zero-800 rounded-2xl p-4"
-            >
-              <div className="flex items-center gap-2 mb-2">
-                <m.icon className={`w-4 h-4 ${m.color}`} />
-                <span className="text-xs text-zero-500">{m.label}</span>
+          {authenticated && alertsQuery.data && (
+            <div className="flex gap-6 text-right text-xs">
+              <div>
+                <div className="text-[var(--text-tertiary)]">Open alerts</div>
+                <div className="mt-1 text-lg font-semibold text-[var(--text-primary)]">
+                  {alertCounts.total}
+                </div>
               </div>
-              <div className="text-xl font-bold">{m.value}</div>
-              <div className="text-xs text-zero-500 mt-1">{m.trend}</div>
-            </motion.div>
-          ))}
-        </div>
+              <div>
+                <div className="text-[var(--text-tertiary)]">Urgent</div>
+                <div className="mt-1 text-lg font-semibold text-red-300">
+                  {alertCounts.urgent}
+                </div>
+              </div>
+              <div>
+                <div className="text-[var(--text-tertiary)]">Acknowledged</div>
+                <div className="mt-1 text-lg font-semibold text-[var(--text-primary)]">
+                  {alertCounts.acknowledged}
+                </div>
+              </div>
+            </div>
+          )}
+        </motion.header>
 
-        {/* Main Grid */}
-        <div className="grid grid-cols-12 gap-6">
-          {/* Left Column: Tabs (Feed / Screening / Heatmap) */}
-          <div className="col-span-12 lg:col-span-8 space-y-4">
-            {/* Tab Switcher */}
-            <div className="flex items-center gap-2">
-              {[
-                { id: "feed" as const, label: "Risk Feed", icon: Activity },
-                {
-                  id: "screening" as const,
-                  label: "Sanctions Screening",
-                  icon: Search,
-                },
-                { id: "heatmap" as const, label: "Risk Heatmap", icon: MapPin },
-              ].map((tab) => (
+        <section className="rounded-2xl border border-amber-500/20 bg-amber-500/5 p-4">
+          <h2 className="text-sm font-semibold text-amber-100">
+            Evidence console, not legal advice
+          </h2>
+          <p className="mt-1 text-xs leading-5 text-[var(--text-secondary)]">
+            Regulatory guidance, generated legal reports, adverse-media checks,
+            and impact modelling are not shown unless an authoritative provider
+            and approved policy mapping are configured. A clear sanctions result
+            applies only to the sources listed in that result.
+          </p>
+        </section>
+
+        {!isConnected || !address ? (
+          <section className="card p-10 text-center" role="status">
+            <Fingerprint className="mx-auto h-9 w-9 text-amber-300" />
+            <h2 className="mt-3 font-semibold">Connect an operator wallet</h2>
+            <p className="mx-auto mt-2 max-w-xl text-sm text-[var(--text-secondary)]">
+              Compliance records are tenant-scoped and are not requested before
+              a wallet is connected.
+            </p>
+          </section>
+        ) : identity.isLoading ? (
+          <section
+            className="card flex items-center justify-center gap-3 p-10 text-sm text-[var(--text-secondary)]"
+            role="status"
+          >
+            <Loader2 className="h-5 w-5 animate-spin text-brand-400" />
+            Checking the connected ZeroID identity...
+          </section>
+        ) : !identity.isRegistered ? (
+          <section className="card p-10 text-center" role="status">
+            <ShieldAlert className="mx-auto h-9 w-9 text-amber-300" />
+            <h2 className="mt-3 font-semibold">Register this wallet first</h2>
+            <p className="mx-auto mt-2 max-w-xl text-sm text-[var(--text-secondary)]">
+              The compliance API requires an active ZeroID identity and an
+              enterprise organization role.
+            </p>
+            <Link href="/identity" className="btn-primary mt-5 inline-flex">
+              Open identity setup
+            </Link>
+          </section>
+        ) : sessionStatus !== "authenticated" ? (
+          <section className="card p-10 text-center" role="status">
+            <FileKey2 className="mx-auto h-9 w-9 text-cyan-300" />
+            <h2 className="mt-3 font-semibold">Sign in to continue</h2>
+            <p className="mx-auto mt-2 max-w-xl text-sm text-[var(--text-secondary)]">
+              Sign the one-time ZeroID challenge with this wallet before any
+              compliance request is sent.
+            </p>
+            {sessionError && (
+              <p
+                className="mx-auto mt-3 max-w-xl text-xs text-red-300"
+                role="alert"
+              >
+                {sessionError}
+              </p>
+            )}
+            <button
+              type="button"
+              disabled={sessionStatus === "signing"}
+              onClick={() => {
+                void signIn().catch(() => {
+                  // IdentityContext exposes the actionable authentication error.
+                });
+              }}
+              className="btn-primary mt-5 disabled:cursor-wait disabled:opacity-60"
+            >
+              {sessionStatus === "signing"
+                ? "Signing..."
+                : "Sign in with wallet"}
+            </button>
+          </section>
+        ) : (
+          <>
+            <nav
+              className="flex flex-wrap gap-2 border-b border-[var(--border-primary)] pb-3"
+              aria-label="Compliance workspace"
+            >
+              {tabs.map((tab) => (
                 <button
                   key={tab.id}
+                  type="button"
                   onClick={() => setActiveTab(tab.id)}
-                  className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-all ${
+                  aria-current={activeTab === tab.id ? "page" : undefined}
+                  className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition-colors ${
                     activeTab === tab.id
                       ? "bg-brand-600 text-white"
-                      : "bg-zero-900 border border-zero-800 text-zero-400 hover:text-white hover:border-zero-700"
+                      : "text-[var(--text-secondary)] hover:bg-[var(--surface-secondary)] hover:text-[var(--text-primary)]"
                   }`}
                 >
-                  <tab.icon className="w-4 h-4" />
+                  <tab.icon className="h-4 w-4" />
                   {tab.label}
                 </button>
               ))}
-            </div>
+            </nav>
 
-            {/* Feed Panel */}
             <AnimatePresence mode="wait">
-              {activeTab === "feed" && (
-                <motion.div
-                  key="feed"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  className="card"
+              {activeTab === "alerts" && (
+                <motion.section
+                  key="alerts"
+                  initial={{ opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -4 }}
+                  className="card p-5"
+                  aria-labelledby="alerts-heading"
                 >
-                  <div className="p-4 border-b border-zero-800 flex items-center justify-between">
-                    <h2 className="font-semibold flex items-center gap-2">
-                      <Activity className="w-4 h-4 text-brand-400" />
-                      Live Risk Intelligence Feed
-                    </h2>
-                    <button className="text-xs text-zero-500 hover:text-white flex items-center gap-1">
-                      <RefreshCw className="w-3 h-3" /> Refresh
+                  <div className="flex items-center justify-between gap-4">
+                    <div>
+                      <h2 id="alerts-heading" className="font-semibold">
+                        Active organization alerts
+                      </h2>
+                      <p className="mt-1 text-xs text-[var(--text-secondary)]">
+                        Compliance and fraud alerts restricted to identities in
+                        the resolved organization.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => void alertsQuery.refetch()}
+                      disabled={alertsQuery.isFetching}
+                      className="btn-secondary disabled:opacity-60"
+                    >
+                      <RefreshCw
+                        className={`h-4 w-4 ${alertsQuery.isFetching ? "animate-spin" : ""}`}
+                      />
+                      Refresh
                     </button>
                   </div>
-                  <div className="divide-y divide-zero-800/50">
-                    {riskFeed.map((item, i) => (
-                      <motion.div
-                        key={item.id}
-                        initial={{ opacity: 0, x: -10 }}
-                        animate={{ opacity: 1, x: 0 }}
-                        transition={{ delay: i * 0.05 }}
-                        className="p-4 flex items-start gap-3 hover:bg-zero-800/30 transition-colors cursor-pointer"
-                      >
-                        <div
-                          className={`mt-0.5 w-2 h-2 rounded-full ${severityDots[item.severity]} shrink-0`}
-                        />
-                        <div className="flex-1 min-w-0">
-                          <div className="text-sm">{item.message}</div>
-                          <div className="flex items-center gap-3 mt-1.5">
-                            <span
-                              className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border ${severityColors[item.severity]}`}
-                            >
-                              {item.severity.toUpperCase()}
-                            </span>
-                            <span className="text-xs text-zero-500">
-                              {item.region}
-                            </span>
-                            <span className="text-xs text-zero-600">
-                              {item.timestamp}
-                            </span>
-                          </div>
-                        </div>
-                      </motion.div>
-                    ))}
-                  </div>
-                </motion.div>
-              )}
 
-              {/* Screening Panel */}
-              {activeTab === "screening" && (
-                <motion.div
-                  key="screening"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  className="card"
-                >
-                  <div className="p-4 border-b border-zero-800">
-                    <div className="flex items-center gap-3">
-                      <div className="flex-1 relative">
-                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zero-500" />
-                        <input
-                          value={searchQuery}
-                          onChange={(e) => setSearchQuery(e.target.value)}
-                          placeholder="Search names, entities, addresses..."
-                          className="w-full pl-10 pr-4 py-2.5 bg-zero-800 border border-zero-700 rounded-xl text-sm focus:outline-none focus:border-brand-500"
-                        />
-                      </div>
-                      <button className="btn-primary text-sm px-4 py-2.5">
-                        <Search className="w-4 h-4" /> Screen
-                      </button>
+                  {alertsQuery.isPending ? (
+                    <div
+                      className="flex items-center justify-center gap-3 py-14 text-sm text-[var(--text-secondary)]"
+                      role="status"
+                    >
+                      <Loader2 className="h-5 w-5 animate-spin text-brand-400" />
+                      Loading organization alerts...
                     </div>
-                  </div>
-                  <div className="divide-y divide-zero-800/50">
-                    {filteredSanctions.map((result) => (
-                      <div
-                        key={result.id}
-                        className="p-4 flex items-center gap-4 hover:bg-zero-800/30 transition-colors"
-                      >
-                        <div className="flex-1 min-w-0">
-                          <div className="font-medium text-sm">
-                            {result.name}
-                          </div>
-                          <div className="flex items-center gap-2 mt-1">
-                            <span className="text-xs text-zero-500">
-                              {result.list}
-                            </span>
-                            <span className="text-xs text-zero-600">|</span>
-                            <span className="text-xs text-zero-500">
-                              {result.country}
-                            </span>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-3">
-                          <div className="text-right">
-                            <div
-                              className={`text-sm font-bold ${result.matchScore >= 90 ? "text-red-400" : result.matchScore >= 70 ? "text-amber-400" : "text-zero-400"}`}
-                            >
-                              {result.matchScore}%
+                  ) : alertsQuery.error ? (
+                    <div
+                      className="mt-6 rounded-xl border border-red-500/20 bg-red-500/5 p-4 text-sm text-red-200"
+                      role="alert"
+                    >
+                      {errorMessage(
+                        alertsQuery.error,
+                        "The alert request failed.",
+                      )}
+                    </div>
+                  ) : alertsQuery.data?.alerts.length ? (
+                    <div className="mt-5 divide-y divide-[var(--border-primary)] border-y border-[var(--border-primary)]">
+                      {alertsQuery.data.alerts.map((alert) => (
+                        <motion.article
+                          key={alert.alertId}
+                          whileHover={{ x: 2 }}
+                          className="grid gap-4 py-4 lg:grid-cols-[minmax(0,1fr)_auto]"
+                        >
+                          <div>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span
+                                className={`rounded-md border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${alertTone(alert.level)}`}
+                              >
+                                {alert.level}
+                              </span>
+                              {alert.source && (
+                                <span className="text-[10px] uppercase tracking-wide text-[var(--text-tertiary)]">
+                                  {alert.source}
+                                </span>
+                              )}
                             </div>
-                            <div className="text-[10px] text-zero-500">
-                              confidence
-                            </div>
+                            <h3 className="mt-2 text-sm font-semibold text-[var(--text-primary)]">
+                              {alert.title}
+                            </h3>
+                            <p className="mt-1 text-sm leading-6 text-[var(--text-secondary)]">
+                              {alert.description}
+                            </p>
+                            <dl className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
+                              <div>
+                                <dt className="text-[var(--text-tertiary)]">
+                                  Required action
+                                </dt>
+                                <dd className="mt-1 text-[var(--text-secondary)]">
+                                  {alert.actionRequired}
+                                </dd>
+                              </div>
+                              <div>
+                                <dt className="text-[var(--text-tertiary)]">
+                                  Recorded
+                                </dt>
+                                <dd className="mt-1 text-[var(--text-secondary)]">
+                                  {formatTimestamp(alert.createdAt)}
+                                </dd>
+                              </div>
+                            </dl>
                           </div>
-                          <span
-                            className={`inline-flex items-center px-2 py-1 rounded-lg text-xs font-medium ${matchStatusColors[result.status]}`}
-                          >
-                            {result.status}
-                          </span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </motion.div>
+                          <div className="flex items-start lg:justify-end">
+                            {alert.acknowledgedAt ? (
+                              <span className="inline-flex items-center gap-1.5 text-xs text-emerald-300">
+                                <CheckCircle2 className="h-4 w-4" />
+                                Acknowledged
+                              </span>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  void acknowledgeAlert.mutateAsync(
+                                    alert.alertId,
+                                  )
+                                }
+                                disabled={acknowledgeAlert.isPending}
+                                className="btn-secondary disabled:opacity-60"
+                              >
+                                Acknowledge
+                              </button>
+                            )}
+                          </div>
+                        </motion.article>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="py-14 text-center" role="status">
+                      <CheckCircle2 className="mx-auto h-8 w-8 text-emerald-300" />
+                      <h3 className="mt-3 text-sm font-semibold">
+                        No active alerts returned
+                      </h3>
+                      <p className="mt-1 text-xs text-[var(--text-secondary)]">
+                        This is an empty result from the current organization
+                        scope, not a platform-wide assurance statement.
+                      </p>
+                    </div>
+                  )}
+                </motion.section>
               )}
 
-              {/* Heatmap Panel */}
-              {activeTab === "heatmap" && (
-                <motion.div
-                  key="heatmap"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  className="card p-6"
+              {activeTab === "screening" && (
+                <motion.section
+                  key="screening"
+                  initial={{ opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -4 }}
+                  className="card p-5"
+                  aria-labelledby="screening-heading"
                 >
-                  <h2 className="font-semibold mb-4 flex items-center gap-2">
-                    <MapPin className="w-4 h-4 text-brand-400" />
-                    Compliance Risk by Jurisdiction
+                  <h2 id="screening-heading" className="font-semibold">
+                    Screen an organization identity
                   </h2>
-                  <div className="grid grid-cols-3 sm:grid-cols-5 gap-3">
-                    {jurisdictionHeatmap.map((j) => (
-                      <div
-                        key={j.region}
-                        className={`${heatmapBg[j.status]} border border-zero-700/50 rounded-xl p-3 text-center transition-colors cursor-pointer`}
+                  <p className="mt-1 text-xs text-[var(--text-secondary)]">
+                    The backend verifies that the target identity belongs to the
+                    current organization before contacting configured list
+                    providers.
+                  </p>
+
+                  <form
+                    onSubmit={submitScreening}
+                    className="mt-6 grid gap-4 md:grid-cols-2"
+                  >
+                    <label className="md:col-span-2">
+                      <span className="label">Identity UUID</span>
+                      <input
+                        required
+                        value={screeningForm.identityId}
+                        onChange={(event) =>
+                          setScreeningForm((current) => ({
+                            ...current,
+                            identityId: event.target.value,
+                          }))
+                        }
+                        className="input mt-1 w-full font-mono"
+                        placeholder="550e8400-e29b-41d4-a716-446655440000"
+                      />
+                    </label>
+                    <label>
+                      <span className="label">Full legal name</span>
+                      <input
+                        required
+                        minLength={2}
+                        maxLength={200}
+                        value={screeningForm.fullName}
+                        onChange={(event) =>
+                          setScreeningForm((current) => ({
+                            ...current,
+                            fullName: event.target.value,
+                          }))
+                        }
+                        className="input mt-1 w-full"
+                      />
+                    </label>
+                    <label>
+                      <span className="label">Date of birth (optional)</span>
+                      <input
+                        type="date"
+                        value={screeningForm.dateOfBirth}
+                        onChange={(event) =>
+                          setScreeningForm((current) => ({
+                            ...current,
+                            dateOfBirth: event.target.value,
+                          }))
+                        }
+                        className="input mt-1 w-full"
+                      />
+                    </label>
+                    <label>
+                      <span className="label">Jurisdiction</span>
+                      <input
+                        required
+                        minLength={2}
+                        maxLength={10}
+                        value={screeningForm.jurisdiction}
+                        onChange={(event) =>
+                          setScreeningForm((current) => ({
+                            ...current,
+                            jurisdiction: event.target.value,
+                          }))
+                        }
+                        className="input mt-1 w-full uppercase"
+                      />
+                    </label>
+                    <label>
+                      <span className="label">Nationality (optional)</span>
+                      <input
+                        minLength={2}
+                        maxLength={3}
+                        value={screeningForm.nationality}
+                        onChange={(event) =>
+                          setScreeningForm((current) => ({
+                            ...current,
+                            nationality: event.target.value,
+                          }))
+                        }
+                        className="input mt-1 w-full uppercase"
+                      />
+                    </label>
+                    <label>
+                      <span className="label">
+                        Aliases (optional, comma separated)
+                      </span>
+                      <input
+                        value={screeningForm.aliases}
+                        onChange={(event) =>
+                          setScreeningForm((current) => ({
+                            ...current,
+                            aliases: event.target.value,
+                          }))
+                        }
+                        className="input mt-1 w-full"
+                      />
+                    </label>
+                    <label>
+                      <span className="label">
+                        Document numbers (optional, comma separated)
+                      </span>
+                      <input
+                        value={screeningForm.documentNumbers}
+                        onChange={(event) =>
+                          setScreeningForm((current) => ({
+                            ...current,
+                            documentNumbers: event.target.value,
+                          }))
+                        }
+                        className="input mt-1 w-full"
+                      />
+                    </label>
+                    <div className="md:col-span-2 flex flex-wrap items-center gap-3">
+                      <button
+                        type="submit"
+                        disabled={screenIdentity.isPending}
+                        className="btn-primary disabled:opacity-60"
                       >
-                        <div className="text-lg font-bold">{j.region}</div>
-                        <div
-                          className={`text-2xl font-black mt-1 ${j.score >= 90 ? "text-emerald-400" : j.score >= 80 ? "text-amber-400" : "text-red-400"}`}
-                        >
-                          {j.score}
+                        {screenIdentity.isPending ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Search className="h-4 w-4" />
+                        )}
+                        Run configured screening
+                      </button>
+                      {screeningValidationError && (
+                        <span className="text-xs text-red-300" role="alert">
+                          {screeningValidationError}
+                        </span>
+                      )}
+                    </div>
+                  </form>
+
+                  {screenIdentity.error && (
+                    <div
+                      className="mt-5 rounded-xl border border-red-500/20 bg-red-500/5 p-4 text-sm text-red-200"
+                      role="alert"
+                    >
+                      {errorMessage(screenIdentity.error, "Screening failed.")}
+                    </div>
+                  )}
+                  {screenIdentity.data && (
+                    <ScreeningEvidence result={screenIdentity.data} />
+                  )}
+                </motion.section>
+              )}
+
+              {activeTab === "risk" && (
+                <motion.section
+                  key="risk"
+                  initial={{ opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -4 }}
+                  className="card p-5"
+                  aria-labelledby="risk-heading"
+                >
+                  <h2 id="risk-heading" className="font-semibold">
+                    Assess recorded risk evidence
+                  </h2>
+                  <p className="mt-1 text-xs text-[var(--text-secondary)]">
+                    This is a model output over available ZeroID records.
+                    Missing evidence raises review factors and the result is not
+                    a legal compliance certification.
+                  </p>
+
+                  <form
+                    onSubmit={submitRiskAssessment}
+                    className="mt-6 grid gap-4 sm:grid-cols-[minmax(0,1fr)_10rem_auto] sm:items-end"
+                  >
+                    <label>
+                      <span className="label">Identity UUID</span>
+                      <input
+                        required
+                        value={riskIdentityInput}
+                        onChange={(event) =>
+                          setRiskIdentityInput(event.target.value)
+                        }
+                        className="input mt-1 w-full font-mono"
+                        placeholder="550e8400-e29b-41d4-a716-446655440000"
+                      />
+                    </label>
+                    <label>
+                      <span className="label">Jurisdiction</span>
+                      <input
+                        required
+                        minLength={2}
+                        maxLength={10}
+                        value={riskJurisdictionInput}
+                        onChange={(event) =>
+                          setRiskJurisdictionInput(event.target.value)
+                        }
+                        className="input mt-1 w-full uppercase"
+                      />
+                    </label>
+                    <button
+                      type="submit"
+                      className="btn-primary justify-center"
+                    >
+                      <ClipboardCheck className="h-4 w-4" />
+                      Assess
+                    </button>
+                  </form>
+                  {riskValidationError && (
+                    <p className="mt-3 text-xs text-red-300" role="alert">
+                      {riskValidationError}
+                    </p>
+                  )}
+
+                  {riskQuery.isFetching && (
+                    <div
+                      className="mt-6 flex items-center gap-3 border-t border-[var(--border-primary)] pt-6 text-sm text-[var(--text-secondary)]"
+                      role="status"
+                    >
+                      <Loader2 className="h-5 w-5 animate-spin text-brand-400" />
+                      Calculating from available identity evidence...
+                    </div>
+                  )}
+                  {riskQuery.error && (
+                    <div
+                      className="mt-6 rounded-xl border border-red-500/20 bg-red-500/5 p-4 text-sm text-red-200"
+                      role="alert"
+                    >
+                      {errorMessage(riskQuery.error, "Risk assessment failed.")}
+                    </div>
+                  )}
+                  {riskQuery.data && !riskQuery.isFetching && (
+                    <div className="mt-6 border-t border-[var(--border-primary)] pt-6">
+                      <div className="grid gap-5 md:grid-cols-4">
+                        <div>
+                          <div className="text-xs text-[var(--text-tertiary)]">
+                            Risk score
+                          </div>
+                          <div className="mt-1 text-2xl font-semibold">
+                            {riskQuery.data.riskAssessment.compositeScore}/100
+                          </div>
                         </div>
-                        <div
-                          className={`text-[10px] font-medium mt-1 ${j.status === "compliant" ? "text-emerald-400" : j.status === "warning" ? "text-amber-400" : "text-red-400"}`}
-                        >
-                          {j.status.toUpperCase()}
+                        <div>
+                          <div className="text-xs text-[var(--text-tertiary)]">
+                            Decision
+                          </div>
+                          <div className="mt-1 text-sm font-semibold uppercase text-amber-200">
+                            {riskQuery.data.riskAssessment.decision}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-xs text-[var(--text-tertiary)]">
+                            Confidence
+                          </div>
+                          <div className="mt-1 text-sm font-semibold">
+                            {Math.round(
+                              riskQuery.data.riskAssessment.confidence * 100,
+                            )}
+                            %
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-xs text-[var(--text-tertiary)]">
+                            Calculated
+                          </div>
+                          <div className="mt-1 text-sm">
+                            {formatTimestamp(
+                              riskQuery.data.riskAssessment.timestamp,
+                            )}
+                          </div>
                         </div>
                       </div>
-                    ))}
-                  </div>
-                  <div className="flex items-center gap-6 mt-4 text-xs text-zero-500">
-                    <span className="flex items-center gap-1.5">
-                      <span className="w-3 h-3 rounded bg-emerald-500/30" />{" "}
-                      Compliant (90+)
-                    </span>
-                    <span className="flex items-center gap-1.5">
-                      <span className="w-3 h-3 rounded bg-amber-500/30" />{" "}
-                      Warning (80-89)
-                    </span>
-                    <span className="flex items-center gap-1.5">
-                      <span className="w-3 h-3 rounded bg-red-500/30" /> At Risk
-                      (&lt;80)
-                    </span>
-                  </div>
-                </motion.div>
+
+                      <h3 className="mt-7 text-xs font-semibold uppercase tracking-wide text-[var(--text-tertiary)]">
+                        Evidence factors (
+                        {riskQuery.data.riskAssessment.factors.length})
+                      </h3>
+                      {riskQuery.data.riskAssessment.factors.length > 0 ? (
+                        <div className="mt-2 divide-y divide-[var(--border-primary)] border-y border-[var(--border-primary)]">
+                          {riskQuery.data.riskAssessment.factors.map(
+                            (factor, index) => (
+                              <div
+                                key={`${factor.category}-${factor.name}-${index}`}
+                                className="grid gap-2 py-3 text-sm sm:grid-cols-[minmax(0,1fr)_auto]"
+                              >
+                                <div>
+                                  <div className="font-medium text-[var(--text-primary)]">
+                                    {factor.name.replaceAll("_", " ")}
+                                  </div>
+                                  <div className="mt-1 text-xs leading-5 text-[var(--text-secondary)]">
+                                    {factor.explanation}
+                                  </div>
+                                </div>
+                                <div className="font-mono text-xs text-[var(--text-secondary)] sm:text-right">
+                                  {factor.normalizedScore}/100 · {factor.impact}
+                                </div>
+                              </div>
+                            ),
+                          )}
+                        </div>
+                      ) : (
+                        <p className="mt-2 text-sm text-[var(--text-secondary)]">
+                          No factors were returned by the risk service.
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </motion.section>
               )}
             </AnimatePresence>
-
-            {/* Compliance Score Trend */}
-            <div className="card p-6">
-              <h2 className="font-semibold mb-4 flex items-center gap-2">
-                <TrendingUp className="w-4 h-4 text-emerald-400" />
-                Compliance Score Trend
-              </h2>
-              <div className="flex items-end gap-2 h-40">
-                {complianceScoreTrend.map((point, i) => (
-                  <div
-                    key={point.month}
-                    className="flex-1 flex flex-col items-center gap-1"
-                  >
-                    <span className="text-xs font-medium text-zero-400">
-                      {point.score}
-                    </span>
-                    <motion.div
-                      initial={{ height: 0 }}
-                      animate={{ height: `${(point.score / 100) * 120}px` }}
-                      transition={{ delay: i * 0.1, duration: 0.5 }}
-                      className={`w-full rounded-t-lg ${point.score >= 90 ? "bg-gradient-to-t from-emerald-600 to-emerald-400" : point.score >= 85 ? "bg-gradient-to-t from-amber-600 to-amber-400" : "bg-gradient-to-t from-orange-600 to-orange-400"}`}
-                    />
-                    <span className="text-[10px] text-zero-500">
-                      {point.month}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* PEP Matches */}
-            <div className="card">
-              <div className="p-4 border-b border-zero-800">
-                <h2 className="font-semibold flex items-center gap-2">
-                  <Eye className="w-4 h-4 text-orange-400" />
-                  PEP Matches
-                  <span className="ml-2 px-2 py-0.5 rounded-full bg-orange-500/10 text-orange-400 text-xs font-medium">
-                    {pepMatches.length}
-                  </span>
-                </h2>
-              </div>
-              <div className="divide-y divide-zero-800/50">
-                {pepMatches.map((pep) => (
-                  <div key={pep.id} className="p-4">
-                    <button
-                      onClick={() =>
-                        setExpandedPep(expandedPep === pep.id ? null : pep.id)
-                      }
-                      className="w-full flex items-center gap-3 text-left"
-                    >
-                      {expandedPep === pep.id ? (
-                        <ChevronDown className="w-4 h-4 text-zero-500 shrink-0" />
-                      ) : (
-                        <ChevronRight className="w-4 h-4 text-zero-500 shrink-0" />
-                      )}
-                      <div className="flex-1 min-w-0">
-                        <div className="font-medium text-sm">{pep.name}</div>
-                        <div className="text-xs text-zero-500">
-                          {pep.position}
-                        </div>
-                      </div>
-                      <span className="px-2 py-0.5 rounded-full bg-orange-500/10 text-orange-400 text-[10px] font-medium">
-                        {pep.riskTier}
-                      </span>
-                      <span className="text-xs text-zero-600">
-                        {pep.lastScreened}
-                      </span>
-                    </button>
-                    <AnimatePresence>
-                      {expandedPep === pep.id && (
-                        <motion.div
-                          initial={{ height: 0, opacity: 0 }}
-                          animate={{ height: "auto", opacity: 1 }}
-                          exit={{ height: 0, opacity: 0 }}
-                          className="overflow-hidden"
-                        >
-                          <div className="mt-3 ml-7 p-3 bg-zero-800/50 rounded-lg text-sm text-zero-400">
-                            {pep.details}
-                          </div>
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          {/* Right Column */}
-          <div className="col-span-12 lg:col-span-4 space-y-4">
-            {/* AI Copilot Chat */}
-            <div className="card flex flex-col" style={{ height: "420px" }}>
-              <div className="p-4 border-b border-zero-800 flex items-center gap-2">
-                <Bot className="w-4 h-4 text-brand-400" />
-                <h3 className="font-semibold text-sm">AI Compliance Copilot</h3>
-                <span className="ml-auto px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 text-[10px]">
-                  Online
-                </span>
-              </div>
-              <div className="flex-1 overflow-y-auto p-4 space-y-3">
-                {messages.map((msg) => (
-                  <div
-                    key={msg.id}
-                    className={`flex gap-2 ${msg.role === "user" ? "justify-end" : ""}`}
-                  >
-                    {msg.role === "assistant" && (
-                      <div className="w-6 h-6 rounded-full bg-brand-600 flex items-center justify-center shrink-0 mt-1">
-                        <Bot className="w-3.5 h-3.5 text-white" />
-                      </div>
-                    )}
-                    <div
-                      className={`max-w-[85%] p-3 rounded-xl text-sm ${
-                        msg.role === "user"
-                          ? "bg-brand-600 text-white"
-                          : "bg-zero-800 text-zero-300"
-                      }`}
-                    >
-                      {msg.content}
-                    </div>
-                  </div>
-                ))}
-                <div ref={chatEndRef} />
-              </div>
-              <div className="p-3 border-t border-zero-800">
-                <div className="flex items-center gap-2">
-                  <input
-                    value={chatInput}
-                    onChange={(e) => setChatInput(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && handleSendMessage()}
-                    placeholder="Ask the AI copilot..."
-                    className="flex-1 px-3 py-2 bg-zero-800 border border-zero-700 rounded-lg text-sm focus:outline-none focus:border-brand-500"
-                  />
-                  <button
-                    onClick={handleSendMessage}
-                    className="p-2 bg-brand-600 rounded-lg hover:bg-brand-500 transition-colors"
-                  >
-                    <Send className="w-4 h-4 text-white" />
-                  </button>
-                </div>
-                <div className="flex gap-2 mt-2">
-                  {["Run screening", "Risk summary", "Alerts"].map((action) => (
-                    <button
-                      key={action}
-                      className="px-2 py-1 rounded-md bg-zero-800 text-[10px] text-zero-400 hover:text-white hover:bg-zero-700 transition-colors"
-                    >
-                      {action}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-
-            {/* Quick Actions */}
-            <div className="card p-5">
-              <h3 className="font-semibold text-sm mb-3">Quick Actions</h3>
-              <div className="space-y-2">
-                {[
-                  {
-                    icon: Play,
-                    label: "Run Full Screening",
-                    desc: "Screen all entities against all lists",
-                    color: "bg-brand-600",
-                  },
-                  {
-                    icon: FileText,
-                    label: "Generate Report",
-                    desc: "Export compliance status report",
-                    color: "bg-identity-chrome",
-                  },
-                  {
-                    icon: RefreshCw,
-                    label: "Simulate Regulation",
-                    desc: "Test impact of regulatory changes",
-                    color: "bg-identity-steel",
-                  },
-                ].map((action) => (
-                  <button
-                    key={action.label}
-                    className="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-zero-800/50 transition-colors text-left"
-                  >
-                    <div
-                      className={`w-9 h-9 rounded-lg ${action.color} flex items-center justify-center`}
-                    >
-                      <action.icon className="w-4 h-4 text-white" />
-                    </div>
-                    <div>
-                      <div className="text-sm font-medium">{action.label}</div>
-                      <div className="text-[10px] text-zero-500">
-                        {action.desc}
-                      </div>
-                    </div>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Active Alerts */}
-            <div className="card p-5">
-              <h3 className="font-semibold text-sm mb-3 flex items-center gap-2">
-                <AlertCircle className="w-4 h-4 text-amber-400" />
-                Active Alerts
-                <span className="ml-auto px-2 py-0.5 rounded-full bg-red-500/10 text-red-400 text-[10px] font-medium">
-                  2 Critical
-                </span>
-              </h3>
-              <div className="space-y-2">
-                {riskFeed.slice(0, 4).map((alert) => (
-                  <div
-                    key={alert.id}
-                    className="flex items-start gap-2 p-2 rounded-lg hover:bg-zero-800/30 transition-colors cursor-pointer"
-                  >
-                    <div
-                      className={`mt-1 w-1.5 h-1.5 rounded-full ${severityDots[alert.severity]} shrink-0`}
-                    />
-                    <div className="min-w-0">
-                      <div className="text-xs truncate">{alert.message}</div>
-                      <div className="text-[10px] text-zero-600 mt-0.5">
-                        {alert.timestamp}
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Regulatory Calendar */}
-            <div className="card p-5">
-              <h3 className="font-semibold text-sm mb-3 flex items-center gap-2">
-                <Calendar className="w-4 h-4 text-identity-chrome" />
-                Regulatory Calendar
-              </h3>
-              <div className="space-y-3">
-                {regulatoryCalendar.map((item) => (
-                  <div key={item.id} className="flex items-start gap-3">
-                    <div className="text-center shrink-0 w-12">
-                      <div
-                        className={`text-lg font-bold ${item.daysLeft <= 30 ? "text-red-400" : item.daysLeft <= 60 ? "text-amber-400" : "text-zero-300"}`}
-                      >
-                        {item.daysLeft}
-                      </div>
-                      <div className="text-[10px] text-zero-500">days</div>
-                    </div>
-                    <div className="min-w-0">
-                      <div className="text-sm font-medium">{item.title}</div>
-                      <div className="flex items-center gap-2 mt-0.5">
-                        <span className="text-[10px] text-zero-500">
-                          {item.date}
-                        </span>
-                        <span className="text-[10px] text-zero-600">|</span>
-                        <span className="text-[10px] text-zero-500">
-                          {item.jurisdiction}
-                        </span>
-                      </div>
-                    </div>
-                    <span
-                      className={`shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium border ${severityColors[item.impact]}`}
-                    >
-                      {item.impact}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
+          </>
+        )}
       </div>
     </AppLayout>
   );

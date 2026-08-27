@@ -1,8 +1,10 @@
-const isProduction = process.env.NODE_ENV === 'production';
+const isProduction = process.env.NODE_ENV === "production";
+const privateNoStoreCacheControl =
+  "private, no-store, no-cache, must-revalidate, proxy-revalidate";
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  output: 'standalone',
+  output: "standalone",
   typescript: {
     ignoreBuildErrors: false,
   },
@@ -13,56 +15,68 @@ const nextConfig = {
   images: {
     remotePatterns: [
       {
-        protocol: 'https',
-        hostname: '*.aethelred.io',
+        protocol: "https",
+        hostname: "*.aethelred.io",
       },
       {
-        protocol: 'https',
-        hostname: 'avatars.githubusercontent.com',
+        protocol: "https",
+        hostname: "avatars.githubusercontent.com",
       },
     ],
-    formats: ['image/avif', 'image/webp'],
+    formats: ["image/avif", "image/webp"],
   },
 
   async headers() {
     return [
       {
-        source: '/(.*)',
+        source: "/(.*)",
         headers: [
-          { key: 'Strict-Transport-Security', value: 'max-age=63072000; includeSubDomains; preload' },
-          { key: 'X-Content-Type-Options', value: 'nosniff' },
-          { key: 'X-Frame-Options', value: 'DENY' },
-          { key: 'X-XSS-Protection', value: '1; mode=block' },
-          { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
-          { key: 'Permissions-Policy', value: 'camera=(self), microphone=(), geolocation=(), interest-cohort=()' },
+          ...(isProduction
+            ? [
+                {
+                  key: "Strict-Transport-Security",
+                  value: "max-age=63072000; includeSubDomains; preload",
+                },
+              ]
+            : []),
+          { key: "X-Content-Type-Options", value: "nosniff" },
+          { key: "X-Frame-Options", value: "DENY" },
+          { key: "X-XSS-Protection", value: "0" },
+          { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
           {
-            key: 'Content-Security-Policy',
-            value: [
-              "default-src 'self'",
-              isProduction
-                ? "script-src 'self' 'unsafe-inline'"
-                : "script-src 'self' 'unsafe-eval' 'unsafe-inline'",
-              "style-src 'self' 'unsafe-inline'",
-              "img-src 'self' data: blob: https:",
-              "font-src 'self' data:",
-              "connect-src 'self' wss: https:",
-              "base-uri 'self'",
-              "object-src 'none'",
-              "form-action 'self'",
-              "frame-ancestors 'none'",
-            ].join('; '),
+            key: "Permissions-Policy",
+            value:
+              "camera=(self), microphone=(), geolocation=(), interest-cohort=()",
           },
+        ],
+      },
+      {
+        source: "/api/:path*",
+        headers: [
+          { key: "Cache-Control", value: privateNoStoreCacheControl },
+          { key: "Pragma", value: "no-cache" },
+          { key: "Expires", value: "0" },
+          { key: "Vary", value: "Authorization" },
         ],
       },
     ];
   },
 
   webpack: (config, { isServer }) => {
+    if (isServer) {
+      // Proof generation and verification only run from client components.
+      // Keeping snarkjs external in the server graph prevents webpack from
+      // traversing ffjavascript's Node-only `web-worker` adapter (which uses a
+      // dynamic require) while preserving snarkjs's browser bundle in the
+      // client graph.
+      config.externals = [...(config.externals || []), "snarkjs"];
+    }
+
     if (!isServer) {
       config.resolve.alias = {
         ...config.resolve.alias,
-        '@react-native-async-storage/async-storage': false,
-        'pino-pretty': false,
+        "@react-native-async-storage/async-storage": false,
+        "pino-pretty": false,
       };
 
       config.resolve.fallback = {
@@ -76,10 +90,10 @@ const nextConfig = {
         os: false,
       };
 
-      const webpack = require('webpack');
+      const webpack = require("webpack");
       config.plugins.push(
         new webpack.NormalModuleReplacementPlugin(/^node:/, (resource) => {
-          resource.request = resource.request.replace(/^node:/, '');
+          resource.request = resource.request.replace(/^node:/, "");
         }),
       );
     }
@@ -93,14 +107,14 @@ const nextConfig = {
 
     config.module.rules.push({
       test: /\.wasm$/,
-      type: 'webassembly/async',
+      type: "webassembly/async",
     });
 
     return config;
   },
 
   experimental: {
-    optimizePackageImports: ['lucide-react', 'recharts', 'framer-motion'],
+    optimizePackageImports: ["lucide-react", "recharts", "framer-motion"],
   },
 };
 

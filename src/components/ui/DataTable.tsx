@@ -197,21 +197,17 @@ export function DataTable<T>({
   const [currentPage, setCurrentPage] = useState(1);
 
   // Handle column sort
-  const handleSort = useCallback(
-    (columnKey: string) => {
-      setSortState((prev) => {
-        if (prev.column === columnKey) {
-          if (prev.direction === "asc")
-            return { column: columnKey, direction: "desc" };
-          if (prev.direction === "desc")
-            return { column: null, direction: null };
-        }
-        return { column: columnKey, direction: "asc" };
-      });
-      setCurrentPage(1);
-    },
-    [sortable],
-  );
+  const handleSort = useCallback((columnKey: string) => {
+    setSortState((prev) => {
+      if (prev.column === columnKey) {
+        if (prev.direction === "asc")
+          return { column: columnKey, direction: "desc" };
+        if (prev.direction === "desc") return { column: null, direction: null };
+      }
+      return { column: columnKey, direction: "asc" };
+    });
+    setCurrentPage(1);
+  }, []);
 
   // Sort data
   const sortedData = useMemo(() => {

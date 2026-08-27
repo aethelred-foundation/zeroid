@@ -1,28 +1,18 @@
 import React from "react";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 
-// Mock next/navigation
-jest.mock("next/navigation", () => ({
-  useRouter: () => ({ push: jest.fn(), back: jest.fn() }),
-  usePathname: () => "/",
-  useSearchParams: () => new URLSearchParams(),
-}));
-
-// Mock wagmi
 jest.mock("wagmi", () => ({
-  useAccount: jest.fn(() => ({
-    address: "0x1234567890abcdef1234567890abcdef12345678",
-    isConnected: true,
-  })),
+  useAccount: jest.fn(),
 }));
 
-// Mock next/image
 jest.mock("next/image", () => ({
   __esModule: true,
-  default: (props: any) => <img {...props} />,
+  default: ({ alt = "", priority: _priority, ...props }: any) => {
+    // eslint-disable-next-line @next/next/no-img-element
+    return <img alt={alt} {...props} />;
+  },
 }));
 
-// Mock next/link
 jest.mock("next/link", () => ({
   __esModule: true,
   default: ({ children, href, ...props }: any) => (
@@ -32,262 +22,411 @@ jest.mock("next/link", () => ({
   ),
 }));
 
-// Mock framer-motion
 jest.mock("framer-motion", () => ({
   motion: new Proxy(
     {},
     {
-      get: (_target: any, prop: string) => {
-        return React.forwardRef((props: any, ref: any) => {
-          const {
-            initial,
-            animate,
-            exit,
-            transition,
-            whileHover,
-            whileTap,
-            variants,
-            layout,
-            layoutId,
-            ...rest
-          } = props;
-          const Tag = prop as any;
-          return <Tag ref={ref} {...rest} />;
-        });
-      },
+      get: (_target: unknown, tag: string) =>
+        React.forwardRef(function MockMotion(
+          { children, initial, animate, transition, variants, ...props }: any,
+          ref: React.ForwardedRef<HTMLElement>,
+        ) {
+          return React.createElement(tag, { ...props, ref }, children);
+        }),
     },
   ),
-  AnimatePresence: ({ children }: any) => <>{children}</>,
-  useAnimation: () => ({ start: jest.fn() }),
-  useInView: () => true,
 }));
 
-// Mock hooks
 jest.mock("@/hooks/useIdentity", () => ({
-  useIdentity: jest.fn(() => ({
-    identity: { did: "did:aethelred:0x1234", displayName: "Test User" },
-    isLoading: false,
-    error: null,
-  })),
+  useIdentity: jest.fn(),
 }));
 
 jest.mock("@/hooks/useCredentials", () => ({
-  useCredentials: jest.fn(() => ({
-    data: {
-      credentials: [
-        { id: "1", status: "active" },
-        { id: "2", status: "active" },
-      ],
-    },
-    isLoading: false,
-  })),
+  useCredentials: jest.fn(),
 }));
 
 jest.mock("@/hooks/useVerification", () => ({
-  useVerification: jest.fn(() => ({
-    verificationHistory: [{ id: "1", timestamp: new Date().toISOString() }],
-    isLoading: false,
-  })),
+  useVerificationHistory: jest.fn(),
 }));
 
-// Mock components
 jest.mock("@/components/layout/AppLayout", () => ({
   __esModule: true,
-  default: ({ children }: any) => (
+  default: ({ children }: { children: React.ReactNode }) => (
     <div data-testid="app-layout">{children}</div>
   ),
 }));
 
 jest.mock("@/components/ui/MetricCard", () => ({
-  MetricCard: ({ label, value }: any) => (
-    <div data-testid="metric-card">
-      {label}: {value}
+  MetricCard: ({
+    label,
+    value,
+    subtitle,
+  }: {
+    label: string;
+    value: string | number;
+    subtitle?: string;
+  }) => (
+    <div data-testid="metric-card" data-value={String(value)}>
+      <span>{label}</span>
+      <span>{value}</span>
+      {subtitle && <small>{subtitle}</small>}
     </div>
   ),
 }));
 
-jest.mock("@/components/ui/StatusBadge", () => ({
-  StatusBadge: ({ status }: any) => (
-    <span data-testid="status-badge">{status}</span>
-  ),
-}));
-
-jest.mock("@/components/identity/IdentityCard", () => ({
-  __esModule: true,
-  default: () => <div data-testid="identity-card">IdentityCard</div>,
-}));
-
-import DashboardPage from "../page";
 import { useAccount } from "wagmi";
+import { useCredentials } from "@/hooks/useCredentials";
+import { useIdentity } from "@/hooks/useIdentity";
+import { useVerificationHistory } from "@/hooks/useVerification";
+import DashboardPage from "../page";
+
+const mockUseAccount = useAccount as jest.Mock;
+const mockUseCredentials = useCredentials as jest.Mock;
+const mockUseIdentity = useIdentity as jest.Mock;
+const mockUseVerificationHistory = useVerificationHistory as jest.Mock;
+
+const credentialRecords = [
+  {
+    id: "credential-1",
+    typeLabel: "KYC Level 2",
+    issuerId: "issuer-record-1",
+    status: "active",
+    issuedAt: "2026-07-18T08:00:00.000Z",
+  },
+  {
+    id: "credential-2",
+    typeLabel: "Employment",
+    issuerId: "issuer-record-2",
+    status: "revoked",
+    issuedAt: "2026-07-17T08:00:00.000Z",
+  },
+];
+
+const verificationRecords = [
+  {
+    id: "verification-1",
+    verificationType: "CREDENTIAL_CHECK",
+    result: "VERIFIED",
+    requestedAt: "2026-07-18T09:00:00.000Z",
+    completedAt: "2026-07-18T09:01:00.000Z",
+    verifierId: "verifier-record-1",
+  },
+];
+
+function setReadyMocks() {
+  mockUseAccount.mockReturnValue({
+    address: "0x1234567890abcdef1234567890abcdef12345678",
+    isConnected: true,
+    status: "connected",
+    isReconnecting: false,
+  });
+  mockUseIdentity.mockReturnValue({
+    identity: {
+      did: "did:aethelred:testnet:0x1234",
+      hasIdentity: true,
+      profile: {
+        did: "did:aethelred:testnet:0x1234",
+        status: "ACTIVE",
+        teeAttested: true,
+        governmentVerified: false,
+        createdAt: "2026-07-01T10:00:00.000Z",
+      },
+    },
+    isLoading: false,
+    error: null,
+  });
+  mockUseCredentials.mockReturnValue({
+    data: { credentials: credentialRecords, total: credentialRecords.length },
+    accessState: "ready",
+    isLoading: false,
+    isSuccess: true,
+    error: null,
+  });
+  mockUseVerificationHistory.mockReturnValue({
+    data: { items: verificationRecords, total: verificationRecords.length },
+    isLoading: false,
+    isSuccess: true,
+    error: null,
+  });
+}
+
+beforeEach(() => {
+  jest.clearAllMocks();
+  setReadyMocks();
+});
 
 describe("DashboardPage", () => {
-  beforeEach(() => {
-    jest.clearAllMocks();
-  });
-
-  it("renders without crashing when connected", () => {
+  it("renders returned-record evidence without total or today claims", () => {
     render(<DashboardPage />);
-    expect(screen.getByTestId("app-layout")).toBeInTheDocument();
-  });
 
-  it("displays Dashboard heading when connected", () => {
-    render(<DashboardPage />);
     expect(screen.getByText("Dashboard")).toBeInTheDocument();
-    expect(screen.getByText("Your identity at a glance")).toBeInTheDocument();
+    expect(screen.getByText("Credential records returned")).toBeInTheDocument();
+    expect(
+      screen.getByText("Verification records returned"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Total Credentials")).not.toBeInTheDocument();
+    expect(screen.queryByText("Total Verifications")).not.toBeInTheDocument();
+    expect(screen.queryByText("Verifications Today")).not.toBeInTheDocument();
+    expect(screen.getAllByTestId("metric-card")).toHaveLength(4);
   });
 
-  it("shows welcome page when not connected", () => {
-    (useAccount as jest.Mock).mockReturnValue({
-      address: undefined,
-      isConnected: false,
-    });
+  it("derives metrics only from the returned pages", () => {
     render(<DashboardPage />);
-    expect(screen.getByText("Welcome to ZeroID")).toBeInTheDocument();
-    expect(screen.getByText(/Connect your wallet/)).toBeInTheDocument();
+    const metrics = screen.getAllByTestId("metric-card");
+
+    expect(metrics.map((metric) => metric.getAttribute("data-value"))).toEqual([
+      "2",
+      "1",
+      "1",
+      "1",
+    ]);
+    expect(screen.getAllByText("Current 100-record page")).toHaveLength(2);
   });
 
-  it("renders metric cards when connected", () => {
-    (useAccount as jest.Mock).mockReturnValue({
-      address: "0x1234",
-      isConnected: true,
-    });
+  it("uses the actual verification-history response fields", () => {
     render(<DashboardPage />);
-    const metricCards = screen.getAllByTestId("metric-card");
-    expect(metricCards.length).toBe(4);
+
+    expect(screen.getByText("Credential Check record")).toBeInTheDocument();
+    expect(
+      screen.getByText("Verifier record: verifier-record-1"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("VERIFIED")).toBeInTheDocument();
+    expect(mockUseVerificationHistory).toHaveBeenCalledWith(undefined, 1, 100);
+    expect(screen.queryByText("Pending")).not.toBeInTheDocument();
   });
 
-  it("allows switching time range", () => {
-    (useAccount as jest.Mock).mockReturnValue({
-      address: "0x1234",
-      isConnected: true,
-    });
-    render(<DashboardPage />);
-    const button24h = screen.getByRole("button", { name: "24h" });
-    fireEvent.click(button24h);
-    // Verify button is present and clickable (state is internal)
-    expect(button24h).toBeInTheDocument();
-  });
-
-  it("handles empty credentials data", () => {
-    (useAccount as jest.Mock).mockReturnValue({
-      address: "0x1234",
-      isConnected: true,
-    });
-    const { useCredentials } = require("@/hooks/useCredentials");
-    useCredentials.mockReturnValue({ data: null, isLoading: false });
-    render(<DashboardPage />);
-    // stats.totalCredentials should be 0 when data is null
-    expect(screen.getByTestId("app-layout")).toBeInTheDocument();
-  });
-
-  it("handles null credentials array", () => {
-    (useAccount as jest.Mock).mockReturnValue({
-      address: "0x1234",
-      isConnected: true,
-    });
-    const { useCredentials } = require("@/hooks/useCredentials");
-    useCredentials.mockReturnValue({
-      data: { credentials: null },
-      isLoading: false,
-    });
-    render(<DashboardPage />);
-    expect(screen.getByTestId("app-layout")).toBeInTheDocument();
-  });
-
-  it("handles mixed credential statuses", () => {
-    (useAccount as jest.Mock).mockReturnValue({
-      address: "0x1234",
-      isConnected: true,
-    });
-    const { useCredentials } = require("@/hooks/useCredentials");
-    useCredentials.mockReturnValue({
+  it("marks an invalid verification timestamp unavailable", () => {
+    mockUseVerificationHistory.mockReturnValue({
       data: {
-        credentials: [
-          { id: "1", status: "active" },
-          { id: "2", status: "expired" },
-          { id: "3", status: "revoked" },
+        items: [
+          {
+            ...verificationRecords[0],
+            requestedAt: "not-a-date",
+            completedAt: null,
+          },
         ],
+        total: 1,
       },
       isLoading: false,
+      isSuccess: true,
+      error: null,
     });
+
     render(<DashboardPage />);
-    // Active credentials should be 1 out of 3
-    expect(screen.getByTestId("app-layout")).toBeInTheDocument();
+
+    expect(screen.getByText("Timestamp unavailable")).toBeInTheDocument();
+    expect(
+      screen.getByText("Dated verification records").parentElement,
+    ).toHaveAttribute("data-value", "0");
   });
 
-  it("handles null verificationHistory", () => {
-    (useAccount as jest.Mock).mockReturnValue({
-      address: "0x1234",
-      isConnected: true,
-    });
-    const { useVerification } = require("@/hooks/useVerification");
-    useVerification.mockReturnValue({
-      verificationHistory: null,
+  it("does not substitute zero metrics when identity sign-in is unavailable", () => {
+    mockUseCredentials.mockReturnValue({
+      data: undefined,
+      accessState: "sign-in-required",
       isLoading: false,
+      isSuccess: false,
+      error: null,
     });
+    mockUseVerificationHistory.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isSuccess: false,
+      error: null,
+    });
+
     render(<DashboardPage />);
-    expect(screen.getByTestId("app-layout")).toBeInTheDocument();
+
+    expect(
+      screen.getByText("Authenticated identity session required"),
+    ).toBeInTheDocument();
+    expect(screen.queryAllByTestId("metric-card")).toHaveLength(0);
+    expect(screen.queryByText("No activity yet")).not.toBeInTheDocument();
   });
 
-  it("formats time ago correctly for hours and days", () => {
-    (useAccount as jest.Mock).mockReturnValue({
-      address: "0x1234",
-      isConnected: true,
+  it("distinguishes protected-source loading from an empty response", () => {
+    mockUseCredentials.mockReturnValue({
+      data: undefined,
+      accessState: "ready",
+      isLoading: true,
+      isSuccess: false,
+      error: null,
     });
+    mockUseVerificationHistory.mockReturnValue({
+      data: undefined,
+      isLoading: true,
+      isSuccess: false,
+      error: null,
+    });
+
     render(<DashboardPage />);
-    expect(screen.getByText("1h ago")).toBeInTheDocument();
-    expect(screen.getByText("1d ago")).toBeInTheDocument();
+
+    expect(
+      screen.getByText("Loading protected records..."),
+    ).toBeInTheDocument();
+    expect(screen.queryAllByTestId("metric-card")).toHaveLength(0);
   });
 
-  it("formats time ago as Just now for very recent timestamps", () => {
-    (useAccount as jest.Mock).mockReturnValue({
-      address: "0x1234",
-      isConnected: true,
+  it("renders endpoint errors instead of empty-state claims", () => {
+    mockUseCredentials.mockReturnValue({
+      data: undefined,
+      accessState: "ready",
+      isLoading: false,
+      isSuccess: false,
+      error: new Error("Credential API offline"),
     });
-    // Mock Date.now to advance slightly between activity creation and formatTimeAgo call.
-    // Activity items use Date.now() - offset. The smallest offset is 3600000 (1h).
-    // We need a timestamp that yields < 60 seconds difference.
-    // Strategy: freeze Date.now during render, then the 3600000ms offset always yields 1h.
-    // Instead, we can manipulate Date.now so the 2nd set of calls (in formatTimeAgo)
-    // sees a time much closer to the timestamp.
-    const realNow = Date.now();
-    let callCount = 0;
-    const spy = jest.spyOn(Date, "now").mockImplementation(() => {
-      callCount++;
-      // First 4 calls create timestamps in recentActivity (Date.now() - offset)
-      // Subsequent calls in formatTimeAgo should see time very close to the first activity
-      if (callCount <= 4) return realNow;
-      // For the first formatTimeAgo call, return realNow - 3600000 + 10 (10s after the 1st activity)
-      if (callCount === 5) return realNow - 3600000 + 10000;
-      // For the second call, return realNow - 7200000 + 120000 (2min after 2nd activity)
-      if (callCount === 6) return realNow - 7200000 + 120000;
-      return realNow;
+    mockUseVerificationHistory.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isSuccess: false,
+      error: new Error("Verification API offline"),
     });
+
     render(<DashboardPage />);
-    expect(screen.getByText("Just now")).toBeInTheDocument();
-    expect(screen.getByText("2m ago")).toBeInTheDocument();
-    spy.mockRestore();
+
+    expect(
+      screen.getByText("Protected record evidence unavailable"),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Credential API offline/)).toBeInTheDocument();
+    expect(screen.getByText(/Verification API offline/)).toBeInTheDocument();
+    expect(screen.queryAllByTestId("metric-card")).toHaveLength(0);
   });
 
-  it("switches to 30d time range", () => {
-    (useAccount as jest.Mock).mockReturnValue({
-      address: "0x1234",
-      isConnected: true,
+  it("shows zero only after both endpoints successfully return empty pages", () => {
+    mockUseCredentials.mockReturnValue({
+      data: { credentials: [], total: 0 },
+      accessState: "ready",
+      isLoading: false,
+      isSuccess: true,
+      error: null,
     });
+    mockUseVerificationHistory.mockReturnValue({
+      data: { items: [], total: 0 },
+      isLoading: false,
+      isSuccess: true,
+      error: null,
+    });
+
     render(<DashboardPage />);
-    const button30d = screen.getByRole("button", { name: "30d" });
-    fireEvent.click(button30d);
-    expect(button30d).toBeInTheDocument();
+
+    expect(screen.getAllByTestId("metric-card")).toHaveLength(4);
+    expect(
+      screen.getByText("Both protected endpoints returned empty record pages."),
+    ).toBeInTheDocument();
   });
 
-  it("renders welcome features when not connected", () => {
-    (useAccount as jest.Mock).mockReturnValue({
+  it("shows backend and registry identity evidence without invented counts", () => {
+    render(<DashboardPage />);
+
+    expect(screen.getByText("Identity evidence")).toBeInTheDocument();
+    expect(screen.getByText("ACTIVE")).toBeInTheDocument();
+    expect(screen.getByText("Verified evidence returned")).toBeInTheDocument();
+    expect(
+      screen.getByText("No verified evidence returned"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Credentials")).not.toBeInTheDocument();
+    expect(screen.queryByText("Verifications")).not.toBeInTheDocument();
+    expect(screen.queryByText("Unverified")).not.toBeInTheDocument();
+  });
+
+  it("shows identity loading, failure, and unregistered states honestly", () => {
+    mockUseIdentity.mockReturnValue({
+      identity: { did: undefined, hasIdentity: false, profile: null },
+      isLoading: true,
+      error: null,
+    });
+    const { rerender } = render(<DashboardPage />);
+    expect(
+      screen.getByText("Loading identity evidence..."),
+    ).toBeInTheDocument();
+
+    mockUseIdentity.mockReturnValue({
+      identity: { did: undefined, hasIdentity: false, profile: null },
+      isLoading: false,
+      error: new Error("Identity API offline"),
+    });
+    rerender(<DashboardPage />);
+    expect(
+      screen.getByText("Identity evidence unavailable"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Identity API offline")).toBeInTheDocument();
+
+    mockUseIdentity.mockReturnValue({
+      identity: { did: undefined, hasIdentity: false, profile: null },
+      isLoading: false,
+      error: null,
+    });
+    rerender(<DashboardPage />);
+    expect(
+      screen.getByText(/No backend identity profile or registry DID/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: /Create ZeroID/i }),
+    ).toHaveAttribute("href", "/identity");
+  });
+
+  it("uses working core links and removes the unsupported holder request CTA", () => {
+    render(<DashboardPage />);
+    const quickActions = screen.getByRole("region", { name: "Quick actions" });
+
+    expect(
+      within(quickActions).getByRole("link", { name: /Manage Identity/i }),
+    ).toHaveAttribute("href", "/identity");
+    expect(
+      within(quickActions).getByRole("link", { name: /View Credentials/i }),
+    ).toHaveAttribute("href", "/credentials");
+    expect(
+      within(quickActions).getByRole("link", {
+        name: /Run Eligibility Proof/i,
+      }),
+    ).toHaveAttribute("href", "/eligibility");
+    expect(
+      within(quickActions).getByRole("link", { name: /View Audit Records/i }),
+    ).toHaveAttribute("href", "/audit");
+    expect(screen.queryByText("Request Credential")).not.toBeInTheDocument();
+    expect(screen.queryByText("Register AI Agent")).not.toBeInTheDocument();
+  });
+
+  it("shows a precise disconnected welcome state", () => {
+    mockUseAccount.mockReturnValue({
       address: undefined,
       isConnected: false,
+      status: "disconnected",
+      isReconnecting: false,
     });
+
     render(<DashboardPage />);
-    expect(screen.getByText("Private by Default")).toBeInTheDocument();
-    expect(screen.getByText("TEE Secured")).toBeInTheDocument();
-    expect(screen.getByText("Self-Sovereign")).toBeInTheDocument();
+
+    expect(screen.getByText("Welcome to ZeroID")).toBeInTheDocument();
+    expect(screen.getByText("Returned evidence")).toBeInTheDocument();
+    expect(
+      screen.queryByText("Credentials anchored on the Aethelred network"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows wallet reconnecting before choosing a connected or disconnected state", () => {
+    mockUseAccount.mockReturnValue({
+      address: undefined,
+      isConnected: false,
+      status: "reconnecting",
+      isReconnecting: true,
+    });
+
+    render(<DashboardPage />);
+
+    expect(
+      screen.getByText("Checking wallet connection..."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Welcome to ZeroID")).not.toBeInTheDocument();
+  });
+
+  it("shows readiness evidence without demo telemetry", () => {
+    render(<DashboardPage />);
+
+    expect(screen.getByText("Dashboard readiness")).toBeInTheDocument();
+    expect(
+      screen.getByText(/bounded credential and verification records/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/demo telemetry/i)).not.toBeInTheDocument();
   });
 });

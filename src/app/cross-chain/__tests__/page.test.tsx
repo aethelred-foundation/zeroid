@@ -1,31 +1,12 @@
 import React from "react";
-import { render, screen, fireEvent } from "@testing-library/react";
-
-jest.mock("next/navigation", () => ({
-  useRouter: () => ({ push: jest.fn(), back: jest.fn() }),
-  usePathname: () => "/cross-chain",
-  useSearchParams: () => new URLSearchParams(),
-}));
-
-jest.mock("wagmi", () => ({
-  useAccount: jest.fn(() => ({
-    address: "0x1234567890abcdef1234567890abcdef12345678",
-    isConnected: true,
-  })),
-  useReadContract: jest.fn(() => ({ data: undefined, isLoading: false })),
-  useWriteContract: jest.fn(() => ({
-    writeContractAsync: jest.fn(),
-    isPending: false,
-  })),
-  useWaitForTransactionReceipt: jest.fn(() => ({ isLoading: false })),
-}));
+import { render, screen } from "@testing-library/react";
 
 jest.mock("framer-motion", () => ({
   motion: new Proxy(
     {},
     {
-      get: (_target: unknown, prop: string) => {
-        return React.forwardRef((props: any, ref: any) => {
+      get: (_target: unknown, prop: string) =>
+        React.forwardRef((props: any, ref: any) => {
           const {
             initial,
             animate,
@@ -38,13 +19,9 @@ jest.mock("framer-motion", () => ({
           } = props;
           const Tag = prop as any;
           return <Tag ref={ref} {...rest} />;
-        });
-      },
+        }),
     },
   ),
-  AnimatePresence: ({ children }: any) => <>{children}</>,
-  useAnimation: () => ({ start: jest.fn() }),
-  useInView: () => true,
 }));
 
 jest.mock("@/components/layout/AppLayout", () => ({
@@ -54,160 +31,214 @@ jest.mock("@/components/layout/AppLayout", () => ({
   ),
 }));
 
+jest.mock("@/hooks/useCrossChain", () => ({
+  useCrossChainCapabilities: jest.fn(),
+  useSupportedChains: jest.fn(),
+}));
+
+jest.mock("@/hooks/useCredentials", () => ({
+  useCredentials: jest.fn(),
+}));
+
+import {
+  useCrossChainCapabilities,
+  useSupportedChains,
+} from "@/hooks/useCrossChain";
+import { useCredentials } from "@/hooks/useCredentials";
 import CrossChainPage from "../page";
 
-describe("CrossChainPage", () => {
-  it("renders without crashing", () => {
-    render(<CrossChainPage />);
-    expect(screen.getByTestId("app-layout")).toBeInTheDocument();
-  });
+const mockUseCrossChainCapabilities = useCrossChainCapabilities as jest.Mock;
+const mockUseSupportedChains = useSupportedChains as jest.Mock;
+const mockUseCredentials = useCredentials as jest.Mock;
 
-  it("displays the page heading", () => {
-    render(<CrossChainPage />);
-    expect(screen.getByText("Cross-Chain Identity Bridge")).toBeInTheDocument();
-  });
+const realCredentials = [
+  {
+    id: "d74ed26c-47ac-4b62-94a8-38704c53b876",
+    credentialType: "KYC_LEVEL_2",
+    typeLabel: "Live KYC Credential",
+    category: "kyc",
+    issuerId: "issuer-record-17",
+    subjectId: "subject-record-8",
+    claimsHash: "claims-hash-1",
+    proofAvailable: true,
+    issuedAt: "2026-07-18T08:00:00.000Z",
+    expiresAt: "2027-07-18T08:00:00.000Z",
+    status: "active",
+  },
+  {
+    id: "9b4bde84-439b-452b-a0eb-d0671988ad44",
+    credentialType: "PROOF_OF_ADDRESS",
+    typeLabel: "Live Residency Credential",
+    category: "identity",
+    issuerId: "verified-uae-issuer-record",
+    subjectId: "subject-record-8",
+    claimsHash: "claims-hash-2",
+    proofAvailable: true,
+    issuedAt: "2026-07-18T08:00:00.000Z",
+    expiresAt: "2027-07-18T08:00:00.000Z",
+    status: "active",
+  },
+];
 
-  it("shows metric cards", () => {
+const destinationDefinitions = [
+  {
+    chainId: 1,
+    name: "Ethereum",
+    shortName: "eth",
+    network: "mainnet",
+    explorerUrl: "https://etherscan.io",
+    isActive: false,
+  },
+  {
+    chainId: 137,
+    name: "Polygon",
+    shortName: "pol",
+    network: "mainnet",
+    explorerUrl: "https://polygonscan.com",
+    isActive: false,
+  },
+];
+
+beforeEach(() => {
+  jest.clearAllMocks();
+  mockUseCrossChainCapabilities.mockReturnValue({
+    bridgeContractConfigured: true,
+    relayerConfigured: false,
+    destinationVerificationConfigured: false,
+    infrastructureReady: false,
+    missingCapabilities: ["Relayer service", "Destination-chain verification"],
+  });
+  mockUseSupportedChains.mockReturnValue({
+    data: destinationDefinitions,
+    isLoading: false,
+    isError: false,
+  });
+  mockUseCredentials.mockReturnValue({
+    credentials: realCredentials,
+    total: realCredentials.length,
+    isLoading: false,
+    isError: false,
+  });
+});
+
+describe("CrossChainPage truth-in-product gating", () => {
+  it("renders an explicit unavailable state until all capabilities exist", () => {
     render(<CrossChainPage />);
+
+    expect(screen.getByTestId("cross-chain-unavailable")).toBeInTheDocument();
     expect(
-      screen.getAllByText("Supported Chains").length,
-    ).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText("Avg Bridge Time")).toBeInTheDocument();
-    expect(screen.getByText("Bridge TVL")).toBeInTheDocument();
-    expect(screen.getByText("$29.1M")).toBeInTheDocument();
-  });
-
-  it("displays supported chains in the sidebar", () => {
-    render(<CrossChainPage />);
-    expect(screen.getAllByText("Aethelred").length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText("Ethereum").length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText("Polygon").length).toBeGreaterThanOrEqual(1);
-  });
-
-  it("switches tabs when clicking on tab buttons", () => {
-    render(<CrossChainPage />);
-    // Default tab is 'bridge'
-    expect(screen.getByText("Bridge Credentials")).toBeInTheDocument();
-
-    // Click on 'Bridged Credentials' tab button (the button element)
-    const tabButtons = screen.getAllByRole("button");
-    const bridgedCredTab = tabButtons.find((btn) =>
-      btn.textContent?.includes("Bridged Credentials"),
-    );
-    fireEvent.click(bridgedCredTab!);
-    expect(screen.getByText("KYC Identity Verification")).toBeInTheDocument();
-
-    // Click on 'History' tab
-    fireEvent.click(screen.getByText("History"));
+      screen.getByText("Cross-chain transfers are unavailable"),
+    ).toBeInTheDocument();
     expect(
-      screen.getByText("Cross-Chain Verification History"),
+      screen.getByText(
+        "Missing: Relayer service, Destination-chain verification.",
+      ),
     ).toBeInTheDocument();
   });
 
-  it("changes source chain via dropdown", () => {
+  it("shows only credentials returned by the real inventory hook", () => {
     render(<CrossChainPage />);
-    const selects = screen.getAllByRole("combobox");
-    // Source chain select is the first one
-    fireEvent.change(selects[0], { target: { value: "polygon" } });
-    expect((selects[0] as HTMLSelectElement).value).toBe("polygon");
+
+    expect(screen.getByText("Live KYC Credential")).toBeInTheDocument();
+    expect(screen.getByText("Live Residency Credential")).toBeInTheDocument();
+    expect(screen.getByText(/verified-uae-issuer-record/)).toBeInTheDocument();
+    expect(
+      screen.queryByText("Age Verification (18+)"),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("AML Certificate")).not.toBeInTheDocument();
   });
 
-  it("changes destination chain via dropdown", () => {
-    render(<CrossChainPage />);
-    const selects = screen.getAllByRole("combobox");
-    // Destination chain select is the second one
-    fireEvent.change(selects[1], { target: { value: "arbitrum" } });
-    expect((selects[1] as HTMLSelectElement).value).toBe("arbitrum");
-  });
-
-  it("has a swap button that can be clicked without error", () => {
-    render(<CrossChainPage />);
-    const allButtons = screen.getAllByRole("button");
-    // Find the swap button (it has no text content, just an icon)
-    const swapButton = allButtons.find(
-      (btn) => !btn.textContent || btn.textContent.trim() === "",
-    );
-    expect(swapButton).toBeTruthy();
-    fireEvent.click(swapButton!);
-    // After click, page should still be rendered
-    expect(screen.getByText("Cross-Chain Identity Bridge")).toBeInTheDocument();
-  });
-
-  it("toggles credential selection and enables/disables bridge button", () => {
-    render(<CrossChainPage />);
-    const checkbox = screen.getByLabelText("KYC Identity Verification");
-    expect(checkbox).not.toBeChecked();
-    fireEvent.click(checkbox);
-    expect(checkbox).toBeChecked();
-    // Bridge button should now mention "1 Credential"
-    expect(screen.getByText(/Bridge 1 Credential$/)).toBeInTheDocument();
-    // Toggle off
-    fireEvent.click(checkbox);
-    expect(checkbox).not.toBeChecked();
-  });
-
-  it("starts bridge process when bridge button is clicked with credentials selected", () => {
-    jest.useFakeTimers();
-    render(<CrossChainPage />);
-    // Select a credential
-    const checkbox = screen.getByLabelText("KYC Identity Verification");
-    fireEvent.click(checkbox);
-    // Click bridge button
-    const bridgeButton = screen.getByText(/Bridge 1 Credential/);
-    fireEvent.click(bridgeButton);
-    // Should show bridge progress
-    expect(screen.getByText("Bridge Progress")).toBeInTheDocument();
-    expect(screen.getByText("Bridging...")).toBeInTheDocument();
-    jest.useRealTimers();
-  });
-
-  it("shows history tab with bridge status indicators", () => {
-    render(<CrossChainPage />);
-    fireEvent.click(screen.getByText("History"));
-    // Check for in-progress status
-    expect(screen.getByText("in-progress")).toBeInTheDocument();
-    // Check for completed status
-    expect(screen.getAllByText("completed").length).toBe(4);
-  });
-
-  it("completes bridge process through all steps and finishes", async () => {
-    jest.useFakeTimers();
-    const { act } = require("@testing-library/react");
-    render(<CrossChainPage />);
-    // Select a credential
-    const checkbox = screen.getByLabelText("KYC Identity Verification");
-    fireEvent.click(checkbox);
-    // Start bridge
-    fireEvent.click(screen.getByText(/Bridge 1 Credential/));
-    expect(screen.getByText("Bridge Progress")).toBeInTheDocument();
-
-    // Advance through all steps (each interval tick is 2000ms, 5 ticks to reach step 5)
-    for (let i = 0; i < 6; i++) {
-      await act(async () => {
-        jest.advanceTimersByTime(2000);
-      });
-    }
-    // After step reaches 5, a setTimeout of 2000ms is scheduled to set bridgeInProgress=false
-    await act(async () => {
-      jest.advanceTimersByTime(2000);
+  it("does not substitute demo credentials for an empty inventory", () => {
+    mockUseCredentials.mockReturnValue({
+      credentials: [],
+      total: 0,
+      isLoading: false,
+      isError: false,
     });
-    // Bridge progress should be gone now
-    expect(screen.queryByText("Bridge Progress")).not.toBeInTheDocument();
-    jest.useRealTimers();
+
+    render(<CrossChainPage />);
+
+    expect(
+      screen.getByText(/No credentials were returned for this subject/),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("KYC Identity Verification"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText("Accredited Investor Attestation"),
+    ).not.toBeInTheDocument();
   });
 
-  it('bridge button shows plural "Credentials" for multiple selections', () => {
+  it("shows an honest inventory error without fallback records", () => {
+    mockUseCredentials.mockReturnValue({
+      credentials: [],
+      total: 0,
+      isLoading: false,
+      isError: true,
+    });
+
     render(<CrossChainPage />);
-    fireEvent.click(screen.getByLabelText("KYC Identity Verification"));
-    fireEvent.click(screen.getByLabelText("Age Verification (18+)"));
-    expect(screen.getByText(/Bridge 2 Credentials/)).toBeInTheDocument();
+
+    expect(
+      screen.getByText(/Credential inventory is unavailable/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/has not inserted fallback credentials/),
+    ).toBeInTheDocument();
   });
 
-  it("bridge button is disabled when no credentials are selected", () => {
+  it("does not render bridge, verification, selection, or fee controls", () => {
     render(<CrossChainPage />);
-    const bridgeButton = screen
-      .getByText(/Bridge 0 Credential/)
-      .closest("button");
-    expect(bridgeButton).toBeDisabled();
+
+    expect(screen.queryAllByRole("checkbox")).toHaveLength(0);
+    expect(screen.queryAllByRole("combobox")).toHaveLength(0);
+    expect(
+      screen.queryByRole("button", { name: /bridge|verify/i }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("Standard Fee")).not.toBeInTheDocument();
+    expect(screen.queryByText("Bridge Fee")).not.toBeInTheDocument();
+    expect(screen.queryByText(/\$\d/)).not.toBeInTheDocument();
+  });
+
+  it("labels destination definitions unavailable rather than operational", () => {
+    render(<CrossChainPage />);
+
+    expect(screen.getByText("Ethereum")).toBeInTheDocument();
+    expect(screen.getByText("Polygon")).toBeInTheDocument();
+    expect(screen.getAllByText("Unavailable").length).toBeGreaterThanOrEqual(2);
+    expect(
+      screen.getByText(
+        /listed network is not proof that bridge service is operational/i,
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("remains read-only even when infrastructure configuration is detected", () => {
+    mockUseCrossChainCapabilities.mockReturnValue({
+      bridgeContractConfigured: true,
+      relayerConfigured: true,
+      destinationVerificationConfigured: true,
+      infrastructureReady: true,
+      missingCapabilities: [],
+    });
+    mockUseSupportedChains.mockReturnValue({
+      data: destinationDefinitions.map((chain) => ({
+        ...chain,
+        isActive: true,
+      })),
+      isLoading: false,
+      isError: false,
+    });
+
+    render(<CrossChainPage />);
+
+    expect(screen.getByTestId("cross-chain-configured")).toBeInTheDocument();
+    expect(
+      screen.getByText("Cross-chain infrastructure configured"),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/client remains read-only/i)).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /bridge|verify/i }),
+    ).not.toBeInTheDocument();
   });
 });

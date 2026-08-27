@@ -1,4 +1,4 @@
-import { logger, redis, prisma, metricsRegistry } from '../index';
+import { logger, redis, prisma, metricsRegistry } from '../runtime';
 import * as crypto from 'crypto';
 import * as https from 'https';
 import * as net from 'net';
@@ -1687,9 +1687,13 @@ export class TEEAttestationService {
     let totalBytes = 0;
 
     try {
-      while (true) {
+      let reading = true;
+      while (reading) {
         const { done, value } = await reader.read();
-        if (done) break;
+        if (done) {
+          reading = false;
+          continue;
+        }
         if (!value) continue;
 
         const chunk = Buffer.from(value);

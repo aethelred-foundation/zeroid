@@ -13,26 +13,50 @@ import type {
   PaginatedResponse,
   HealthResponse,
   IdentityProfile,
-  Credential,
-  CredentialSchema,
   ZKProof,
   ProofVerification,
   ProofRequest,
   TEEAttestation,
   TEENode,
-  Proposal,
   VerificationRequest,
   VerificationResult,
   Bytes32,
   Address,
 } from "@/types";
+import { VerificationStatus } from "@/types";
 import { API_BASE_URL } from "@/config/constants";
-import { withRetry, withTimeout } from "@/lib/utils";
+import { generateUUID, withRetry, withTimeout } from "@/lib/utils";
 import {
   getIdentityAuthToken,
   type BackendIdentityRegistrationPayload,
   type BackendIdentityRegistrationResult,
 } from "@/lib/identity/registration";
+import { expireIdentitySession } from "@/lib/identity/session";
+import {
+  normalizeCredentialSummaries,
+  normalizeCredentialSummary,
+  type CredentialSummary,
+} from "@/lib/credentials/summary";
+import {
+  normalizeCreateSchemaProposalInput,
+  normalizeSchemaRegistryPage,
+  normalizeSchemaRegistryRecord,
+  requireSchemaRegistryId,
+  type CreateSchemaProposalInput,
+  type SchemaGovernanceStatus,
+  type SchemaRegistryRecord,
+} from "@/lib/schemas/registry";
+import type {
+  EligibilityDisclosurePolicy,
+  EligibilityProofRequest,
+  EligibilityProofResponse,
+} from "@/lib/eligibility/kycCredential";
+import {
+  fetchTEENodes,
+  requestBiometricEnrollment as requestTEEClientBiometricEnrollment,
+  requestBiometricVerification as requestTEEClientBiometricVerification,
+  verifyAttestation as verifyTEEAttestation,
+} from "@/lib/tee/attestation";
 
 // ============================================================================
 // Configuration
@@ -48,7 +72,11 @@ const DEFAULT_AUTH_PATH_PREFIXES = [
   "/api/v1/enterprise",
   "/api/v1/ai",
   "/api/v1/identity/me",
+  "/api/v1/identity/government",
 ];
+const ELIGIBILITY_RECEIPT_ID_PATTERN = /^[A-Za-z0-9._:-]{3,128}$/;
+const CREDENTIAL_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 type BackendPagination = {
   page?: number;
@@ -87,10 +115,14 @@ type BackendVerificationHistoryEntry = {
 type BackendZkVerificationResult = {
   valid?: boolean;
   proofId?: string;
+  requestId?: string;
+  status?: "completed" | "failed";
   circuitName?: string;
   verifiedAt?: string | number | Date;
   error?: string;
 };
+
+type BackendVerificationRequestRecord = VerificationRequest;
 
 // ============================================================================
 // Error Class
@@ -122,13 +154,95 @@ export class ZeroIDApiError extends Error {
   }
 }
 
+export interface UAEPassAuthorizationStart {
+  authUrl: string;
+  state: string;
+  expiresInSeconds: number;
+}
+
+export interface GovernmentVerificationResult {
+  verified: boolean;
+  provider: string;
+  referenceId: string;
+  verifiedFields: string[];
+  verifiedAt: string;
+  expiresAt: string;
+}
+
+export interface IdentityAuthChallenge {
+  challengeId: string;
+  message: string;
+  expiresAt: string;
+}
+
+export interface IdentitySessionPrincipal {
+  id: string;
+  did: string;
+  status: string;
+}
+
+export interface IdentityAuthSession {
+  identity: IdentitySessionPrincipal;
+  token: string;
+  sessionId: string;
+}
+
+export interface EligibilityProofReceipt {
+  verificationId: string;
+  status: "ALLOWED" | "DENIED" | string;
+  decisionId: string;
+  policyId: string;
+  policyVersion: string;
+  credentialId?: string;
+  verifierId: string;
+  subjectId: string;
+  relyingAppId: string;
+  proof: {
+    proofId: string;
+    circuitId: string;
+    circuitName: string;
+    verificationKeyId: string;
+    manifestDigest: `0x${string}` | string;
+    sourceDigest?: `0x${string}` | string;
+    policyBindingDigest: `0x${string}` | string;
+    contextHash: `0x${string}` | string;
+    publicSignals: Record<string, unknown>;
+    privateInputsRedacted: string[];
+    disclosurePolicy: Partial<EligibilityDisclosurePolicy>;
+  };
+  evidence: {
+    receiptHash: `0x${string}` | string;
+    receiptHashAlgorithm: "sha256-canonical-json-v1" | string;
+    auditLogId?: string;
+    auditHash?: `0x${string}` | string;
+    auditTimestamp?: string;
+    auditDetails?: Record<string, unknown>;
+    manifestPath?: string;
+    manifestDigest: `0x${string}` | string;
+    sourceDigest?: `0x${string}` | string;
+    policyBindingDigest: `0x${string}` | string;
+    artifactStatus:
+      | "SOURCE_VALIDATED_ARTIFACTS_PENDING"
+      | "PINNED_PRODUCTION_ARTIFACTS"
+      | string;
+    teeAttestation?: Record<string, unknown>;
+    disclosureBudget?: Record<string, unknown>;
+  };
+  evaluation: Record<string, unknown>;
+  deniedReasons: string[];
+  requestedAt: string;
+  completedAt?: string;
+}
+
 // ============================================================================
 // Internal Helpers
 // ============================================================================
 
 /** Generate a short random request ID for tracing */
 function generateRequestId(): string {
-  return `zid-${crypto.randomUUID()}`;
+  // generateUUID (not crypto.randomUUID): the latter is missing on plain-HTTP
+  // origins, which would crash every API request from a testnet box.
+  return `zid-${generateUUID()}`;
 }
 
 /** Build a backend URL without allowing absolute/protocol-relative path escape. */
@@ -246,13 +360,27 @@ async function request<T>(
                 : (payload.message ?? response.statusText),
             details: payload.details,
           };
-    throw new ZeroIDApiError(
+    const normalizedError = new ZeroIDApiError(
       error.message,
       error.code,
       response.status,
       error.details,
       payload.requestId || requestId,
     );
+
+    if (
+      response.status === 401 &&
+      resolvedAuthToken &&
+      getIdentityAuthToken() === resolvedAuthToken &&
+      shouldAttachStoredAuthToken(path)
+    ) {
+      // A protected endpoint rejected the session. Clear it before React (or
+      // any other caller) handles the error so no subsequent request can reuse
+      // the rejected bearer token.
+      expireIdentitySession();
+    }
+
+    throw normalizedError;
   }
 
   const hasDataEnvelope =
@@ -277,7 +405,7 @@ async function get<T>(
 ): Promise<T> {
   const result = await withRetry(
     () => request<T>("GET", path, { params, authToken }),
-    DEFAULT_RETRIES,
+    shouldAttachStoredAuthToken(path) ? 0 : DEFAULT_RETRIES,
   );
   return result.data as T;
 }
@@ -322,19 +450,20 @@ async function del<T>(
   return result.data as T;
 }
 
-function unsupportedFeature(message: string, code: string): never {
-  throw new ZeroIDApiError(message, code, 501);
-}
-
 function toUnixTimestamp(value: unknown): number {
   if (typeof value === "number") {
-    return value > 10_000_000_000 ? Math.floor(value / 1000) : value;
+    const seconds = value > 10_000_000_000 ? Math.floor(value / 1000) : value;
+    if (Number.isSafeInteger(seconds) && seconds > 0) return seconds;
   }
   if (typeof value === "string" || value instanceof Date) {
     const time = new Date(value).getTime();
     if (!Number.isNaN(time)) return Math.floor(time / 1000);
   }
-  return Math.floor(Date.now() / 1000);
+  throw new ZeroIDApiError(
+    "ZeroID returned an invalid verification timestamp.",
+    "VERIFICATION_RESPONSE_INVALID",
+    502,
+  );
 }
 
 function asStringArray(value: unknown): string[] | undefined {
@@ -387,7 +516,7 @@ function getProofContextField(
   return undefined;
 }
 
-function buildZkVerifyPayload(proof: ZKProof) {
+function buildZkVerifyPayload(proof: ZKProof, requestId?: string) {
   const nonce = getProofContextField(proof, "nonce");
   const audience = getProofContextField(proof, "audience");
   const contextCommitment = getProofContextField(proof, "contextCommitment");
@@ -411,6 +540,7 @@ function buildZkVerifyPayload(proof: ZKProof) {
   }
 
   return {
+    ...(requestId ? { requestId } : {}),
     proof: toBackendGroth16Proof(proof),
     publicSignals,
     circuitName: proof.circuitName,
@@ -424,10 +554,11 @@ function buildZkVerifyPayload(proof: ZKProof) {
 async function submitZkProof(
   proof: ZKProof,
   authToken: string,
+  requestId?: string,
 ): Promise<ProofVerification> {
   const result = await post<BackendZkVerificationResult>(
     "/api/v1/verification/zk-verify",
-    buildZkVerifyPayload(proof),
+    buildZkVerifyPayload(proof, requestId),
     authToken,
   );
 
@@ -452,6 +583,49 @@ function historyEntryToVerificationResult(
     attributeResults: [],
     verifiedAt: toUnixTimestamp(entry.completedAt ?? entry.requestedAt),
     error: verified ? undefined : entry.result,
+  };
+}
+
+function didToString(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (value && typeof value === "object" && "uri" in value) {
+    const uri = (value as { uri?: unknown }).uri;
+    if (typeof uri === "string") return uri;
+  }
+  return "";
+}
+
+function normalizeVerificationRequestPayload(
+  payload: Omit<
+    VerificationRequest,
+    "id" | "status" | "createdAt" | "userConsent"
+  >,
+) {
+  return {
+    ...payload,
+    verifierDid: didToString(payload.verifierDid),
+    subjectDid: didToString(payload.subjectDid),
+  };
+}
+
+function verificationRequestToProofRequest(
+  requestRecord: VerificationRequest,
+): ProofRequest {
+  return {
+    id: requestRecord.id,
+    circuitId: requestRecord.circuitId,
+    circuitName: requestRecord.circuitId,
+    publicInputs: {
+      credentialHash: requestRecord.credentialHash,
+      requestedAttributes: requestRecord.requestedAttributes.join(","),
+    },
+    verifierDid: didToString(
+      requestRecord.verifierDid,
+    ) as unknown as ProofRequest["verifierDid"],
+    purpose: requestRecord.purpose,
+    expiresAt: requestRecord.expiresAt,
+    fulfilled: requestRecord.status !== VerificationStatus.Pending,
+    createdAt: requestRecord.createdAt,
   };
 }
 
@@ -507,74 +681,93 @@ export const apiClient = {
     return post("/api/v1/identity/register", payload, authToken);
   },
 
-  // --------------------------------------------------------------------------
-  // Credentials
-  // --------------------------------------------------------------------------
-
-  /** List credentials for a subject */
-  async listCredentials(
-    _subjectDidHash: Bytes32,
-    page = 1,
-    pageSize = 12,
-    authToken?: string,
-  ): Promise<PaginatedResponse<Credential>> {
-    const result = await withRetry(
-      () =>
-        request<Credential[]>("GET", "/api/v1/credentials", {
-          params: { page, limit: pageSize, role: "subject" },
-          authToken,
-        }),
-      DEFAULT_RETRIES,
-    );
-    const pagination = (
-      result as ApiResponse<Credential[]> & {
-        pagination?: BackendPagination;
-      }
-    ).pagination;
-    const items = result.data ?? [];
-    const resolvedPage = pagination?.page ?? page;
-    const resolvedPageSize = pagination?.limit ?? pageSize;
-    const total = pagination?.total ?? items.length;
-
-    return {
-      items,
-      total,
-      page: resolvedPage,
-      pageSize: resolvedPageSize,
-      hasMore: resolvedPage * resolvedPageSize < total,
-    };
+  /** Create a short-lived, one-time wallet sign-in challenge. */
+  async createIdentityAuthChallenge(
+    address: Address,
+  ): Promise<IdentityAuthChallenge> {
+    return post<IdentityAuthChallenge>("/api/v1/identity/auth/challenge", {
+      address,
+    });
   },
 
-  /** Get a single credential by hash */
-  async getCredential(
-    credentialHash: Bytes32,
+  /** Exchange a signed one-time challenge for an identity session. */
+  async loginWithWallet(payload: {
+    challengeId: string;
+    signature: `0x${string}`;
+  }): Promise<IdentityAuthSession> {
+    return post<IdentityAuthSession>("/api/v1/identity/auth/login", payload);
+  },
+
+  /** Resolve and validate the principal represented by a bearer session. */
+  async getCurrentIdentity(
     authToken?: string,
-  ): Promise<Credential> {
-    return get<Credential>(
-      `/api/v1/credentials/${credentialHash}`,
+  ): Promise<IdentitySessionPrincipal> {
+    return get<IdentitySessionPrincipal>(
+      "/api/v1/identity/me",
       undefined,
       authToken,
     );
   },
 
-  /** List available credential schemas */
-  async listSchemas(
+  /** Start a UAE Pass OAuth verification session for the current identity */
+  async startUAEPassVerification(
+    redirectUri: string,
+    authToken?: string,
+  ): Promise<UAEPassAuthorizationStart> {
+    return post<UAEPassAuthorizationStart>(
+      "/api/v1/identity/government/uae-pass/start",
+      { redirectUri },
+      authToken,
+    );
+  },
+
+  /** Complete a UAE Pass OAuth verification session for the current identity */
+  async completeUAEPassVerification(
+    payload: { authorizationCode?: string; code?: string; state: string },
+    authToken?: string,
+  ): Promise<GovernmentVerificationResult> {
+    return post<GovernmentVerificationResult>(
+      "/api/v1/identity/government/uae-pass/callback",
+      payload,
+      authToken,
+    );
+  },
+
+  /** Fetch current government verification status for the authenticated identity */
+  async getGovernmentVerificationStatus(
+    authToken?: string,
+  ): Promise<GovernmentVerificationResult | null> {
+    return get<GovernmentVerificationResult | null>(
+      "/api/v1/identity/government/status",
+      undefined,
+      authToken,
+    );
+  },
+
+  // --------------------------------------------------------------------------
+  // Credentials
+  // --------------------------------------------------------------------------
+
+  /** List credentials held by the authenticated subject. */
+  async listCredentials(
     page = 1,
-    pageSize = 20,
-  ): Promise<PaginatedResponse<CredentialSchema>> {
+    pageSize = 12,
+    authToken?: string,
+  ): Promise<PaginatedResponse<CredentialSummary>> {
     const result = await withRetry(
       () =>
-        request<CredentialSchema[]>("GET", "/api/v1/governance/schemas", {
-          params: { page, limit: pageSize },
+        request<unknown>("GET", "/api/v1/credentials", {
+          params: { page, limit: pageSize, role: "subject" },
+          authToken,
         }),
-      DEFAULT_RETRIES,
+      0,
     );
     const pagination = (
-      result as ApiResponse<CredentialSchema[]> & {
+      result as ApiResponse<unknown> & {
         pagination?: BackendPagination;
       }
     ).pagination;
-    const items = result.data ?? [];
+    const items = normalizeCredentialSummaries(result.data);
     const resolvedPage = pagination?.page ?? page;
     const resolvedPageSize = pagination?.limit ?? pageSize;
     const total = pagination?.total ?? items.length;
@@ -588,9 +781,105 @@ export const apiClient = {
     };
   },
 
-  /** Get a single schema by ID */
-  async getSchema(schemaId: string): Promise<CredentialSchema> {
-    return get<CredentialSchema>(`/api/v1/governance/schemas/${schemaId}`);
+  /** Get a single credential by its backend UUID. */
+  async getCredential(
+    credentialId: string,
+    authToken?: string,
+  ): Promise<CredentialSummary> {
+    const normalizedCredentialId = credentialId.trim();
+    if (!CREDENTIAL_ID_PATTERN.test(normalizedCredentialId)) {
+      throw new ZeroIDApiError(
+        "Credential id must be a UUID.",
+        "CREDENTIAL_ID_INVALID",
+        400,
+      );
+    }
+
+    return normalizeCredentialSummary(
+      await get<unknown>(
+        `/api/v1/credentials/${encodeURIComponent(normalizedCredentialId)}`,
+        undefined,
+        authToken,
+      ),
+    );
+  },
+
+  /** List credential schemas exactly as returned by schema governance. */
+  async listSchemas(
+    page = 1,
+    pageSize = 20,
+    filters: { status?: SchemaGovernanceStatus; name?: string } = {},
+  ): Promise<PaginatedResponse<SchemaRegistryRecord>> {
+    const params: Record<string, string | number> = {
+      page,
+      limit: pageSize,
+    };
+    if (filters.status) params.status = filters.status;
+    const nameFilter = filters.name?.trim();
+    if (nameFilter && nameFilter.length > 100) {
+      throw new ZeroIDApiError(
+        "Schema name filter cannot exceed 100 characters.",
+        "SCHEMA_NAME_FILTER_INVALID",
+        400,
+      );
+    }
+    if (nameFilter) params.name = nameFilter;
+
+    // Governance routes are authenticated. Do not retry with a bearer token:
+    // a rejected session must fail once and transition the wallet back to the
+    // explicit sign-in state.
+    const result = await request<unknown[]>(
+      "GET",
+      "/api/v1/governance/schemas",
+      { params },
+    );
+    const pagination = (
+      result as ApiResponse<unknown[]> & { pagination?: unknown }
+    ).pagination;
+
+    return normalizeSchemaRegistryPage(result.data, pagination, filters.status);
+  },
+
+  /** Get a single schema-governance record by backend UUID. */
+  async getSchema(schemaId: string): Promise<SchemaRegistryRecord> {
+    const normalizedSchemaId = requireSchemaRegistryId(schemaId);
+    return normalizeSchemaRegistryRecord(
+      await get<unknown>(
+        `/api/v1/governance/schemas/${encodeURIComponent(normalizedSchemaId)}`,
+      ),
+    );
+  },
+
+  /** Create a backend schema-governance proposal. This is not an on-chain transaction. */
+  async createSchemaProposal(
+    input: CreateSchemaProposalInput,
+  ): Promise<SchemaRegistryRecord> {
+    const payload = normalizeCreateSchemaProposalInput(input);
+    return normalizeSchemaRegistryRecord(
+      await post<unknown>("/api/v1/governance/schemas", payload),
+      "PROPOSED",
+    );
+  },
+
+  /** Cast one approve/reject identity vote against a proposed backend schema. */
+  async voteOnSchema(
+    schemaId: string,
+    approve: boolean,
+  ): Promise<SchemaRegistryRecord> {
+    const normalizedSchemaId = requireSchemaRegistryId(schemaId);
+    if (typeof approve !== "boolean") {
+      throw new ZeroIDApiError(
+        "Schema vote must be approve or reject.",
+        "SCHEMA_VOTE_INVALID",
+        400,
+      );
+    }
+    return normalizeSchemaRegistryRecord(
+      await post<unknown>(
+        `/api/v1/governance/schemas/${encodeURIComponent(normalizedSchemaId)}/vote`,
+        { approve },
+      ),
+    );
   },
 
   // --------------------------------------------------------------------------
@@ -608,12 +897,16 @@ export const apiClient = {
   /** Fetch pending proof requests for the current user */
   async listProofRequests(
     _subjectDidHash: Bytes32,
-    _authToken: string,
+    authToken: string,
   ): Promise<ProofRequest[]> {
-    unsupportedFeature(
-      "Proof request inbox is not exposed by the backend API; use verification history for completed records.",
-      "PROOF_REQUEST_INBOX_UNAVAILABLE",
+    const requests = await get<BackendVerificationRequestRecord[]>(
+      "/api/v1/verification/requests",
+      { role: "subject", result: "PENDING", limit: 100 },
+      authToken,
     );
+    return requests
+      .filter((request) => request.status === VerificationStatus.Pending)
+      .map(verificationRequestToProofRequest);
   },
 
   /** Get a verification result by request ID */
@@ -637,25 +930,53 @@ export const apiClient = {
     return historyEntryToVerificationResult(entry);
   },
 
+  /** Generate the v1 age + jurisdiction eligibility proof decision receipt */
+  async generateEligibilityProof(
+    payload: EligibilityProofRequest,
+    authToken?: string,
+  ): Promise<EligibilityProofResponse> {
+    return post<EligibilityProofResponse>(
+      "/api/v1/verification/eligibility-proof",
+      payload,
+      authToken,
+    );
+  },
+
+  /** Retrieve a durable v1 eligibility proof evidence receipt by decision/proof id */
+  async getEligibilityProofReceipt(
+    receiptId: string,
+    authToken?: string,
+  ): Promise<EligibilityProofReceipt> {
+    const normalizedReceiptId = receiptId.trim();
+    if (!ELIGIBILITY_RECEIPT_ID_PATTERN.test(normalizedReceiptId)) {
+      throw new ZeroIDApiError(
+        "Eligibility receipt id is invalid.",
+        "ELIGIBILITY_RECEIPT_ID_INVALID",
+        400,
+      );
+    }
+
+    return get<EligibilityProofReceipt>(
+      `/api/v1/verification/eligibility-proof/${encodeURIComponent(
+        normalizedReceiptId,
+      )}`,
+      undefined,
+      authToken,
+    );
+  },
+
   // --------------------------------------------------------------------------
   // TEE
   // --------------------------------------------------------------------------
 
   /** List available TEE nodes */
   async listTEENodes(): Promise<TEENode[]> {
-    unsupportedFeature(
-      "TEE node discovery is not exposed by the backend API.",
-      "TEE_NODE_DISCOVERY_UNAVAILABLE",
-    );
+    return fetchTEENodes();
   },
 
   /** Get attestation details for a specific enclave */
   async getAttestation(enclaveHash: Bytes32): Promise<TEEAttestation> {
-    void enclaveHash;
-    unsupportedFeature(
-      "TEE attestation lookup by enclave hash is not exposed by the backend API.",
-      "TEE_ATTESTATION_LOOKUP_UNAVAILABLE",
-    );
+    return verifyTEEAttestation(enclaveHash);
   },
 
   /** Request biometric verification via a TEE node */
@@ -664,15 +985,70 @@ export const apiClient = {
       subjectDidHash: Bytes32;
       enclaveHash: Bytes32;
       biometricData: string; // base64-encoded, encrypted for the enclave
+      biometricType?: string;
     },
     authToken: string,
-  ): Promise<{ verificationId: string; status: string }> {
-    void payload;
-    void authToken;
-    unsupportedFeature(
-      "Biometric verification is not exposed by the backend API.",
-      "BIOMETRIC_VERIFICATION_UNAVAILABLE",
+  ): Promise<{
+    success: boolean;
+    verificationId: string;
+    status: "verified" | "failed";
+    biometricHash?: Bytes32;
+    enclaveHash: Bytes32;
+    error?: string;
+  }> {
+    const result = await requestTEEClientBiometricVerification(
+      {
+        subjectDidHash: payload.subjectDidHash,
+        enclaveHash: payload.enclaveHash,
+        encryptedBiometricData: payload.biometricData,
+        biometricType: payload.biometricType ?? "face",
+      },
+      authToken,
     );
+    return {
+      success: result.success,
+      verificationId: result.verificationId,
+      status: result.success ? "verified" : "failed",
+      biometricHash: result.biometricHash,
+      enclaveHash: result.enclaveHash,
+      error: result.error,
+    };
+  },
+
+  /** Enroll a biometric template via a TEE node */
+  async enrollBiometric(
+    payload: {
+      subjectDidHash: Bytes32;
+      enclaveHash: Bytes32;
+      biometricData: string; // base64-encoded, encrypted for the enclave
+      biometricType?: string;
+    },
+    authToken: string,
+  ): Promise<{
+    success: boolean;
+    verificationId: string;
+    status: "verified" | "failed";
+    biometricHash?: Bytes32;
+    enclaveHash: Bytes32;
+    error?: string;
+  }> {
+    const result = await requestTEEClientBiometricEnrollment(
+      {
+        subjectDidHash: payload.subjectDidHash,
+        enclaveHash: payload.enclaveHash,
+        encryptedBiometricData: payload.biometricData,
+        biometricType: payload.biometricType ?? "face",
+      },
+      authToken,
+    );
+    return {
+      success: result.success,
+      verificationId: result.verificationId,
+      status: result.success ? "verified" : "failed",
+      biometricHash: result.biometricHash,
+      enclaveHash: result.enclaveHash,
+      error: result.error,
+    };
   },
 
   // --------------------------------------------------------------------------
@@ -687,11 +1063,10 @@ export const apiClient = {
     >,
     authToken: string,
   ): Promise<VerificationRequest> {
-    void payload;
-    void authToken;
-    unsupportedFeature(
-      "Verifier-created proof requests are not exposed by the backend API.",
-      "VERIFICATION_REQUEST_CREATE_UNAVAILABLE",
+    return post<VerificationRequest>(
+      "/api/v1/verification/requests",
+      normalizeVerificationRequestPayload(payload),
+      authToken,
     );
   },
 
@@ -702,13 +1077,11 @@ export const apiClient = {
     authToken: string,
   ): Promise<VerificationResult> {
     if (!payload.consent) {
-      return {
-        requestId,
-        verified: false,
-        attributeResults: [],
-        verifiedAt: Math.floor(Date.now() / 1000),
-        reason: "User declined verification",
-      };
+      return post<VerificationResult>(
+        `/api/v1/verification/requests/${encodeURIComponent(requestId)}/respond`,
+        { consent: false },
+        authToken,
+      );
     }
     if (!payload.proof) {
       throw new ZeroIDApiError(
@@ -718,7 +1091,11 @@ export const apiClient = {
       );
     }
 
-    const proofResult = await submitZkProof(payload.proof, authToken);
+    const proofResult = await submitZkProof(
+      payload.proof,
+      authToken,
+      requestId,
+    );
     return {
       requestId,
       verified: proofResult.valid,
@@ -728,31 +1105,5 @@ export const apiClient = {
       txHash: proofResult.txHash,
       error: proofResult.error,
     };
-  },
-
-  // --------------------------------------------------------------------------
-  // Governance
-  // --------------------------------------------------------------------------
-
-  /** List governance proposals */
-  async listProposals(
-    page = 1,
-    pageSize = 10,
-  ): Promise<PaginatedResponse<Proposal>> {
-    void page;
-    void pageSize;
-    unsupportedFeature(
-      "Governance proposal metadata is not exposed by the backend API.",
-      "GOVERNANCE_PROPOSALS_UNAVAILABLE",
-    );
-  },
-
-  /** Get a single proposal by ID */
-  async getProposal(proposalId: number): Promise<Proposal> {
-    void proposalId;
-    unsupportedFeature(
-      "Governance proposal metadata is not exposed by the backend API.",
-      "GOVERNANCE_PROPOSAL_DETAIL_UNAVAILABLE",
-    );
   },
 } as const;

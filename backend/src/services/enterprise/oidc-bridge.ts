@@ -4,7 +4,7 @@ import crypto from 'crypto';
 import * as https from 'https';
 import * as net from 'net';
 import { promises as dns } from 'dns';
-import { prisma, redis } from '../../index';
+import { prisma, redis } from '../../runtime';
 import { isProductionRuntime } from '../production-safety';
 
 const PRIVATE_OIDC_HOSTNAME_SUFFIXES = [
@@ -404,6 +404,7 @@ interface AuthorizationCode {
   codeChallenge?: string;
   codeChallengeMethod?: string;
   claims: Record<string, unknown>;
+  claimsTrustVersion: string;
   issuedAt: number;
   expiresAt: number;
   used: boolean;
@@ -429,6 +430,7 @@ interface IssuedToken {
   issuedAt: number;
   expiresAt: number;
   revoked: boolean;
+  claimsTrustVersion: string;
 }
 
 interface RefreshTokenRecord {
@@ -436,7 +438,6 @@ interface RefreshTokenRecord {
   clientId: string;
   subjectId: string;
   scope: string;
-  claims?: Record<string, unknown>;
   sessionId?: string;
 }
 
@@ -543,6 +544,7 @@ const OIDC_AUTH_CODE_TTL = 600; // Authorization codes: 10 minutes
 const OIDC_SESSION_TTL = 24 * 3600; // Sessions: 24 hours
 const OIDC_TOKEN_TTL = 3600; // Access/ID tokens: 1 hour
 const OIDC_REFRESH_TOKEN_TTL = 30 * 24 * 3600; // Refresh tokens: 30 days
+const OIDC_CLAIMS_TRUST_VERSION = 'zeroid.oidc.claims.v2';
 const OIDC_CLIENT_SECRET_TTL = 365 * 24 * 3600; // Client secrets: 1 year
 
 // Redis set key for tracking tokens per session (for bulk revocation on logout).
@@ -893,6 +895,7 @@ export class OIDCBridge {
         codeChallenge: parsed.codeChallenge,
         codeChallengeMethod: parsed.codeChallengeMethod,
         claims,
+        claimsTrustVersion: OIDC_CLAIMS_TRUST_VERSION,
         issuedAt: now,
         expiresAt: now + 600, // 10 minutes
         used: false,
@@ -985,6 +988,14 @@ export class OIDCBridge {
       );
     }
 
+    if (authCode.claimsTrustVersion !== OIDC_CLAIMS_TRUST_VERSION) {
+      await this.authorizationCodes.delete(request.code!);
+      throw new OIDCError(
+        'invalid_grant',
+        'Authorization code was issued under a retired claims trust policy',
+      );
+    }
+
     const now = Math.floor(Date.now() / 1000);
     if (authCode.expiresAt < now) {
       throw new OIDCError('invalid_grant', 'Authorization code expired');
@@ -1045,6 +1056,7 @@ export class OIDCBridge {
         clientId: request.clientId,
         redirectUri: request.redirectUri!,
         sessionId: authCode.sessionId,
+        claimsTrustVersion: OIDC_CLAIMS_TRUST_VERSION,
       },
     );
     if (!claimedAuthCode) {
@@ -1079,7 +1091,6 @@ export class OIDCBridge {
           authCode.clientId,
           authCode.subjectId,
           authCode.scope,
-          authCode.claims,
           authCode.sessionId,
         )
       : undefined;
@@ -1224,11 +1235,6 @@ export class OIDCBridge {
       request.scope,
     );
     const refreshScope = consumedRefreshScopes.join(' ');
-    const refreshClaims = this.buildClaims(
-      consumedRefreshScopes,
-      consumedRefreshData.subjectId,
-      consumedRefreshData.claims ?? {},
-    );
 
     if (requestedRefreshScopes.join(' ') !== refreshScope) {
       throw new OIDCError('invalid_scope', 'Refresh token scope changed');
@@ -1246,6 +1252,18 @@ export class OIDCBridge {
       refreshStorageKey,
     );
 
+    // Refresh records never carry forward a claim snapshot. Rebuild claims
+    // from current server-owned evidence so pre-patch metadata claims and
+    // expired/revoked assurance cannot survive a 30-day refresh lifecycle.
+    const currentSubjectClaims = await this.resolveCurrentSubjectClaims(
+      consumedRefreshData.subjectId,
+    );
+    const refreshClaims = this.buildClaims(
+      consumedRefreshScopes,
+      consumedRefreshData.subjectId,
+      currentSubjectClaims,
+    );
+
     const newAccessToken = await this.generateToken(
       consumedRefreshData.clientId,
       consumedRefreshData.subjectId,
@@ -1259,7 +1277,6 @@ export class OIDCBridge {
       consumedRefreshData.clientId,
       consumedRefreshData.subjectId,
       refreshScope,
-      refreshClaims,
       consumedRefreshData.sessionId,
     );
 
@@ -1781,6 +1798,7 @@ export class OIDCBridge {
       scope,
       ...(sessionId ? { sid: sessionId } : {}),
       ...claims,
+      zeroid_claims_version: OIDC_CLAIMS_TRUST_VERSION,
     };
 
     const token = this.signJwtPayload(payload);
@@ -1795,6 +1813,7 @@ export class OIDCBridge {
       issuedAt: now,
       expiresAt: now + ttl,
       revoked: false,
+      claimsTrustVersion: OIDC_CLAIMS_TRUST_VERSION,
     });
 
     // Track token in session-scoped index for targeted revocation on logout.
@@ -1833,7 +1852,6 @@ export class OIDCBridge {
     clientId: string,
     subjectId: string,
     scope: string,
-    claims: Record<string, unknown>,
     sessionId?: string,
   ): Promise<string> {
     const refreshToken = crypto.randomBytes(48).toString('base64url');
@@ -1843,7 +1861,6 @@ export class OIDCBridge {
       clientId,
       subjectId,
       scope,
-      claims,
       sessionId,
     });
     if (sessionId) {
@@ -2248,6 +2265,17 @@ export class OIDCBridge {
       throw new OIDCError('invalid_token', 'Token not found or revoked', 401);
     }
 
+    if (
+      tokenRecord.claimsTrustVersion !== OIDC_CLAIMS_TRUST_VERSION ||
+      payload.zeroid_claims_version !== OIDC_CLAIMS_TRUST_VERSION
+    ) {
+      throw new OIDCError(
+        'invalid_token',
+        'Token was issued under a retired claims trust policy',
+        401,
+      );
+    }
+
     if (tokenRecord.tokenType !== expectedTokenType) {
       throw new OIDCError('invalid_token', 'Unexpected token type', 401);
     }
@@ -2610,6 +2638,74 @@ export class OIDCBridge {
         'access_denied',
         'Subject not found or inactive',
         403,
+      );
+    }
+  }
+
+  private async resolveCurrentSubjectClaims(
+    subjectId: string,
+  ): Promise<Record<string, unknown>> {
+    const identity = (prisma as any).identity;
+    if (!identity?.findUnique) {
+      if (isProductionRuntime()) {
+        throw new OIDCError(
+          'server_error',
+          'Current subject claims cannot be resolved',
+          500,
+        );
+      }
+      return {};
+    }
+
+    const subject = await identity.findUnique({
+      where: { id: subjectId },
+      select: {
+        status: true,
+        teeAttestationId: true,
+        updatedAt: true,
+      },
+    });
+
+    if (!subject || subject.status !== 'ACTIVE') {
+      throw new OIDCError(
+        'invalid_grant',
+        'Refresh-token subject is no longer active',
+      );
+    }
+
+    const updatedAt =
+      subject.updatedAt instanceof Date
+        ? subject.updatedAt
+        : new Date(subject.updatedAt);
+    if (Number.isNaN(updatedAt.getTime())) {
+      if (!isProductionRuntime()) return {};
+      throw new OIDCError(
+        'server_error',
+        'Current subject evidence is malformed',
+        500,
+      );
+    }
+
+    try {
+      const { buildTrustedOIDCClaims } = await import('./oidc-claims');
+      return await buildTrustedOIDCClaims(subjectId, {
+        teeAttestationId:
+          typeof subject.teeAttestationId === 'string'
+            ? subject.teeAttestationId
+            : null,
+        updatedAt,
+      });
+    } catch (error) {
+      if (error instanceof OIDCError) throw error;
+      logger.warn('oidc_refresh_claim_resolution_failed', {
+        subjectId,
+        error: error instanceof Error ? error.message : 'unknown_error',
+      });
+      if (!isProductionRuntime()) throw error;
+      throw new OIDCError(
+        'server_error',
+        'Current subject claims could not be verified',
+        503,
       );
     }
   }

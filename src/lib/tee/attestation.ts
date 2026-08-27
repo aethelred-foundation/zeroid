@@ -51,6 +51,11 @@ export interface BiometricVerificationResult {
   error?: string;
 }
 
+type BiometricServiceResult = Partial<BiometricVerificationResult> & {
+  enrollmentId?: string;
+  templateHash?: Bytes32;
+};
+
 /** Payload for a biometric enrollment request */
 export interface BiometricEnrollPayload {
   /** DID hash of the subject */
@@ -299,10 +304,57 @@ export async function requestBiometricVerification(
     };
   }
 
-  const result = (await response.json()) as BiometricVerificationResult;
+  const result = (await response.json()) as BiometricServiceResult;
   return {
-    ...result,
+    success: Boolean(result.success),
+    verificationId: result.verificationId ?? "",
+    biometricHash: result.biometricHash ?? result.templateHash,
     enclaveHash: payload.enclaveHash,
+    error: result.error,
+  };
+}
+
+/**
+ * Enroll a biometric template through a TEE node.
+ * The service owns template extraction and persistence; the frontend only
+ * receives an enrollment receipt/hash.
+ */
+export async function requestBiometricEnrollment(
+  payload: BiometricEnrollPayload,
+  authToken: string,
+): Promise<BiometricVerificationResult> {
+  const response = await withTimeout(
+    fetch(`${TEE_SERVICE_URL}${TEE_ENDPOINTS.BIOMETRIC_ENROLL}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${authToken}`,
+      },
+      body: JSON.stringify(payload),
+    }),
+    30_000,
+    "Biometric enrollment request timed out",
+  );
+
+  if (!response.ok) {
+    const errorBody = await response.json().catch(() => ({}));
+    return {
+      success: false,
+      verificationId: "",
+      enclaveHash: payload.enclaveHash,
+      error:
+        (errorBody as Record<string, string>).message ||
+        `Biometric enrollment failed: HTTP ${response.status}`,
+    };
+  }
+
+  const result = (await response.json()) as BiometricServiceResult;
+  return {
+    success: Boolean(result.success),
+    verificationId: result.verificationId ?? result.enrollmentId ?? "",
+    biometricHash: result.biometricHash ?? result.templateHash,
+    enclaveHash: payload.enclaveHash,
+    error: result.error,
   };
 }
 

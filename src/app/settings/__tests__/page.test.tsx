@@ -1,51 +1,5 @@
 import React from "react";
-import { render, screen, fireEvent } from "@testing-library/react";
-
-jest.mock("next/navigation", () => ({
-  useRouter: () => ({ push: jest.fn(), back: jest.fn() }),
-  usePathname: () => "/settings",
-  useSearchParams: () => new URLSearchParams(),
-}));
-
-jest.mock("wagmi", () => ({
-  useAccount: jest.fn(() => ({
-    address: "0x1234567890abcdef1234567890abcdef12345678",
-    isConnected: true,
-  })),
-  useReadContract: jest.fn(() => ({ data: undefined, isLoading: false })),
-  useWriteContract: jest.fn(() => ({
-    writeContractAsync: jest.fn(),
-    isPending: false,
-  })),
-  useWaitForTransactionReceipt: jest.fn(() => ({ isLoading: false })),
-}));
-
-jest.mock("framer-motion", () => ({
-  motion: new Proxy(
-    {},
-    {
-      get: (_target: unknown, prop: string) => {
-        return React.forwardRef((props: any, ref: any) => {
-          const {
-            initial,
-            animate,
-            exit,
-            transition,
-            whileHover,
-            whileTap,
-            variants,
-            ...rest
-          } = props;
-          const Tag = prop as any;
-          return <Tag ref={ref} {...rest} />;
-        });
-      },
-    },
-  ),
-  AnimatePresence: ({ children }: any) => <>{children}</>,
-  useAnimation: () => ({ start: jest.fn() }),
-  useInView: () => true,
-}));
+import { fireEvent, render, screen } from "@testing-library/react";
 
 jest.mock("@/components/layout/AppLayout", () => ({
   __esModule: true,
@@ -59,98 +13,118 @@ jest.mock("next-themes", () => ({
   useTheme: () => ({ theme: "dark", setTheme: mockSetTheme }),
 }));
 
+const registeredIdentityState = {
+  identity: {
+    did: "did:aethelred:zeroid:0x1234",
+    isRegistered: true,
+    verificationStatus: "verified",
+    credentialCount: 2,
+    verificationCount: 5,
+    createdAt: "2026-07-01T00:00:00.000Z",
+  },
+  isLoading: false,
+  error: null,
+};
+
+const mockUseIdentity = jest.fn();
 jest.mock("@/hooks/useIdentity", () => ({
-  useIdentity: () => ({
-    identity: { did: "did:aethelred:zeroid:0x1234" },
-  }),
+  useIdentity: () => mockUseIdentity(),
 }));
 
 import SettingsPage from "../page";
 
 describe("SettingsPage", () => {
-  it("renders without crashing", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockUseIdentity.mockReturnValue(registeredIdentityState);
+  });
+
+  it("shows only implemented settings and authoritative identity context", () => {
     render(<SettingsPage />);
+
     expect(screen.getByTestId("app-layout")).toBeInTheDocument();
-  });
-
-  it("displays the page heading", () => {
-    render(<SettingsPage />);
-    expect(screen.getByText("Settings")).toBeInTheDocument();
-  });
-
-  it("shows General tab content by default", () => {
-    render(<SettingsPage />);
     expect(
-      screen.getByText("Manage your account preferences"),
+      screen.getByRole("heading", { name: "Settings" }),
     ).toBeInTheDocument();
-    expect(screen.getByText("Theme")).toBeInTheDocument();
-    expect(screen.getByText("Network")).toBeInTheDocument();
-    expect(screen.getByText("Language")).toBeInTheDocument();
+    expect(screen.getByText("Appearance")).toBeInTheDocument();
+    expect(screen.getByText("did:aethelred:zeroid:0x1234")).toBeInTheDocument();
+    expect(screen.getByText("verified")).toBeInTheDocument();
+    expect(screen.getByText("Jul 1, 2026")).toBeInTheDocument();
+
+    expect(screen.queryByText("Delete Identity")).not.toBeInTheDocument();
+    expect(screen.queryByText("Recovery Guardians")).not.toBeInTheDocument();
+    expect(screen.queryByText("Aethelred Mainnet")).not.toBeInTheDocument();
   });
 
-  it("switches to Privacy tab", () => {
+  it("persists a selected theme through next-themes", () => {
     render(<SettingsPage />);
-    fireEvent.click(screen.getByText("Privacy"));
-    expect(
-      screen.getByText("Control what data is shared and how"),
-    ).toBeInTheDocument();
-    expect(screen.getByText("Default Disclosure Mode")).toBeInTheDocument();
-  });
 
-  it("switches to Notifications tab", () => {
-    render(<SettingsPage />);
-    fireEvent.click(screen.getByText("Notifications"));
-    expect(
-      screen.getByText("Choose what you want to be notified about"),
-    ).toBeInTheDocument();
-    expect(screen.getByText("Verification Requests")).toBeInTheDocument();
-  });
-
-  it("switches to Security tab", () => {
-    render(<SettingsPage />);
-    fireEvent.click(screen.getByText("Security"));
-    expect(
-      screen.getByText("Manage security settings for your identity"),
-    ).toBeInTheDocument();
-    expect(screen.getByText("Recovery Guardians")).toBeInTheDocument();
-  });
-
-  it("switches to Advanced tab and shows danger zone", () => {
-    render(<SettingsPage />);
-    fireEvent.click(screen.getByText("Advanced"));
-    expect(
-      screen.getByText("Advanced settings and data management"),
-    ).toBeInTheDocument();
-    expect(screen.getByText("Danger Zone")).toBeInTheDocument();
-    expect(screen.getByText("Delete Identity")).toBeInTheDocument();
-  });
-
-  it("calls setTheme when clicking theme buttons", () => {
-    render(<SettingsPage />);
-    // The theme section has text "Choose your preferred appearance"
-    // The theme buttons are siblings inside the same flex container
-    // They are inside a div that contains the p1 bg-surface-secondary container
-    const allButtons = screen.getAllByRole("button");
-    // Tab buttons are: General, Privacy, Notifications, Security, Advanced
-    // The remaining buttons in General are the 3 theme toggle buttons
-    // Tab buttons have text, theme buttons are icon-only (empty text or whitespace)
-    const nonTabButtons = allButtons.filter((btn) => {
-      const text = btn.textContent?.trim() || "";
-      return ![
-        "General",
-        "Privacy",
-        "Notifications",
-        "Security",
-        "Advanced",
-      ].includes(text);
-    });
-    // The first 3 non-tab buttons should be theme buttons (light, dark, system)
-    expect(nonTabButtons.length).toBeGreaterThanOrEqual(3);
-    fireEvent.click(nonTabButtons[0]);
+    expect(screen.getByRole("button", { name: "Dark" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Light" }));
     expect(mockSetTheme).toHaveBeenCalledWith("light");
-    fireEvent.click(nonTabButtons[1]);
-    expect(mockSetTheme).toHaveBeenCalledWith("dark");
-    fireEvent.click(nonTabButtons[2]);
-    expect(mockSetTheme).toHaveBeenCalledWith("system");
+  });
+
+  it("renders the identity loading state", () => {
+    mockUseIdentity.mockReturnValue({
+      ...registeredIdentityState,
+      isLoading: true,
+    });
+
+    render(<SettingsPage />);
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Loading registered identity context",
+    );
+  });
+
+  it("renders backend identity errors without substituting profile data", () => {
+    mockUseIdentity.mockReturnValue({
+      ...registeredIdentityState,
+      error: new Error("API unavailable"),
+    });
+
+    render(<SettingsPage />);
+    expect(screen.getByRole("alert")).toHaveTextContent("API unavailable");
+    expect(
+      screen.queryByText("did:aethelred:zeroid:0x1234"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("directs an unregistered wallet to the real identity setup", () => {
+    mockUseIdentity.mockReturnValue({
+      ...registeredIdentityState,
+      identity: {
+        ...registeredIdentityState.identity,
+        did: "",
+        isRegistered: false,
+      },
+    });
+
+    render(<SettingsPage />);
+    expect(
+      screen.getByText(/has no registered ZeroID identity/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: "Open identity setup" }),
+    ).toHaveAttribute("href", "/identity");
+  });
+
+  it("does not invent missing identity counts or verification status", () => {
+    mockUseIdentity.mockReturnValue({
+      ...registeredIdentityState,
+      identity: {
+        ...registeredIdentityState.identity,
+        verificationStatus: undefined,
+        credentialCount: undefined,
+        verificationCount: undefined,
+      },
+    });
+
+    render(<SettingsPage />);
+    expect(screen.getAllByText("Not reported")).toHaveLength(3);
+    expect(screen.queryByText("Active delegates")).not.toBeInTheDocument();
+    expect(screen.queryByText("0")).not.toBeInTheDocument();
   });
 });

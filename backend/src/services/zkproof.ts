@@ -1,4 +1,4 @@
-import { logger, redis } from '../index';
+import { logger, redis } from '../runtime';
 import * as path from 'path';
 import * as fs from 'fs';
 
@@ -64,7 +64,8 @@ export interface PublicSignalSchemaValidation {
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
-const CIRCUITS_DIR = process.env.CIRCUITS_DIR ?? path.join(process.cwd(), 'circuits');
+const CIRCUITS_DIR =
+  process.env.CIRCUITS_DIR ?? path.join(process.cwd(), 'circuits');
 const PROOF_CACHE_TTL = parseInt(process.env.PROOF_CACHE_TTL ?? '3600', 10);
 const MAX_PROOF_GENERATION_TIME_MS = 30_000;
 const CLAIMS_HASH_PUBLIC_SIGNAL = 'claimsHash';
@@ -73,12 +74,29 @@ const CONTEXT_COMMITMENT_PUBLIC_SIGNAL = 'contextCommitment';
 // Supported circuits
 const CIRCUIT_REGISTRY: Record<string, CircuitConfig> = {
   age_verification: {
-    wasmPath: path.join(CIRCUITS_DIR, 'age_verification', 'age_verification.wasm'),
-    zkeyPath: path.join(CIRCUITS_DIR, 'age_verification', 'age_verification_final.zkey'),
-    vkeyPath: path.join(CIRCUITS_DIR, 'age_verification', 'verification_key.json'),
+    wasmPath: path.join(
+      CIRCUITS_DIR,
+      'age_verification',
+      'age_verification.wasm',
+    ),
+    zkeyPath: path.join(
+      CIRCUITS_DIR,
+      'age_verification',
+      'age_verification_final.zkey',
+    ),
+    vkeyPath: path.join(
+      CIRCUITS_DIR,
+      'age_verification',
+      'verification_key.json',
+    ),
     maxInputs: 5,
-    description: 'Prove age is above a threshold without revealing exact date of birth',
-    publicSignals: ['ageThresholdYears', 'currentTimestamp', 'credentialHashPublic'],
+    description:
+      'Prove age is above a threshold without revealing exact date of birth',
+    publicSignals: [
+      'ageThresholdYears',
+      'currentTimestamp',
+      'credentialHashPublic',
+    ],
     contextBound: false,
   },
   age_verification_context_v2: {
@@ -88,10 +106,19 @@ const CIRCUIT_REGISTRY: Record<string, CircuitConfig> = {
       'age_context_proof_js',
       'age_context_proof.wasm',
     ),
-    zkeyPath: path.join(CIRCUITS_DIR, 'age_context_v2', 'age_context_proof_final.zkey'),
-    vkeyPath: path.join(CIRCUITS_DIR, 'age_context_v2', 'verification_key.json'),
+    zkeyPath: path.join(
+      CIRCUITS_DIR,
+      'age_context_v2',
+      'age_context_proof_final.zkey',
+    ),
+    vkeyPath: path.join(
+      CIRCUITS_DIR,
+      'age_context_v2',
+      'verification_key.json',
+    ),
     maxInputs: 14,
-    description: 'Context-bound age proof with claimsHash and verifier context as fixed public signals',
+    description:
+      'Context-bound age proof with claimsHash and verifier context as fixed public signals',
     publicSignals: [
       'claimsHash',
       'ageThresholdYears',
@@ -100,18 +127,71 @@ const CIRCUIT_REGISTRY: Record<string, CircuitConfig> = {
     ],
     contextBound: true,
   },
+  eligibility_policy_context_v1: {
+    wasmPath: path.join(
+      CIRCUITS_DIR,
+      'eligibility_context_v1',
+      'eligibility_context_proof_js',
+      'eligibility_context_proof.wasm',
+    ),
+    zkeyPath: path.join(
+      CIRCUITS_DIR,
+      'eligibility_context_v1',
+      'eligibility_context_proof_final.zkey',
+    ),
+    vkeyPath: path.join(
+      CIRCUITS_DIR,
+      'eligibility_context_v1',
+      'verification_key.json',
+    ),
+    maxInputs: 18,
+    description:
+      'Context-bound eligibility proof with age, residence, policy version, and verifier context signals',
+    publicSignals: [
+      'claimsHash',
+      'ageThresholdYears',
+      'residencyCountryCode',
+      'currentTimestamp',
+      'policyVersionHash',
+      'contextCommitment',
+    ],
+    contextBound: true,
+  },
   nationality_check: {
-    wasmPath: path.join(CIRCUITS_DIR, 'nationality_check', 'nationality_check.wasm'),
-    zkeyPath: path.join(CIRCUITS_DIR, 'nationality_check', 'nationality_check_final.zkey'),
-    vkeyPath: path.join(CIRCUITS_DIR, 'nationality_check', 'verification_key.json'),
+    wasmPath: path.join(
+      CIRCUITS_DIR,
+      'nationality_check',
+      'nationality_check.wasm',
+    ),
+    zkeyPath: path.join(
+      CIRCUITS_DIR,
+      'nationality_check',
+      'nationality_check_final.zkey',
+    ),
+    vkeyPath: path.join(
+      CIRCUITS_DIR,
+      'nationality_check',
+      'verification_key.json',
+    ),
     maxInputs: 3,
-    description: 'Prove nationality membership in a set without revealing exact nationality',
-    publicSignals: ['currentTimestamp', 'credentialHashPublic', 'allowedNationalities', 'merkleRoot', 'useMerkleMode'],
+    description:
+      'Prove nationality membership in a set without revealing exact nationality',
+    publicSignals: [
+      'currentTimestamp',
+      'credentialHashPublic',
+      'allowedNationalities',
+      'merkleRoot',
+      'useMerkleMode',
+    ],
     contextBound: false,
   },
   income_range: {
     wasmPath: path.join(CIRCUITS_DIR, 'income_range', 'income_range.wasm'),
-    zkeyPath: path.join(CIRCUITS_DIR, 'income_range', 'income_range_final.zkey'),
+    zkeyPath: path.join(
+      CIRCUITS_DIR,
+      'income_range',
+      'income_range_final.zkey',
+    ),
     vkeyPath: path.join(CIRCUITS_DIR, 'income_range', 'verification_key.json'),
     maxInputs: 4,
     description: 'Prove income falls within a specified range',
@@ -119,20 +199,46 @@ const CIRCUIT_REGISTRY: Record<string, CircuitConfig> = {
     contextBound: false,
   },
   credential_ownership: {
-    wasmPath: path.join(CIRCUITS_DIR, 'credential_ownership', 'credential_ownership.wasm'),
-    zkeyPath: path.join(CIRCUITS_DIR, 'credential_ownership', 'credential_ownership_final.zkey'),
-    vkeyPath: path.join(CIRCUITS_DIR, 'credential_ownership', 'verification_key.json'),
+    wasmPath: path.join(
+      CIRCUITS_DIR,
+      'credential_ownership',
+      'credential_ownership.wasm',
+    ),
+    zkeyPath: path.join(
+      CIRCUITS_DIR,
+      'credential_ownership',
+      'credential_ownership_final.zkey',
+    ),
+    vkeyPath: path.join(
+      CIRCUITS_DIR,
+      'credential_ownership',
+      'verification_key.json',
+    ),
     maxInputs: 8,
-    description: 'Prove ownership of a credential without revealing its contents',
+    description:
+      'Prove ownership of a credential without revealing its contents',
     publicSignals: [],
     contextBound: false,
   },
   selective_disclosure: {
-    wasmPath: path.join(CIRCUITS_DIR, 'selective_disclosure', 'selective_disclosure.wasm'),
-    zkeyPath: path.join(CIRCUITS_DIR, 'selective_disclosure', 'selective_disclosure_final.zkey'),
-    vkeyPath: path.join(CIRCUITS_DIR, 'selective_disclosure', 'verification_key.json'),
+    wasmPath: path.join(
+      CIRCUITS_DIR,
+      'selective_disclosure',
+      'selective_disclosure.wasm',
+    ),
+    zkeyPath: path.join(
+      CIRCUITS_DIR,
+      'selective_disclosure',
+      'selective_disclosure_final.zkey',
+    ),
+    vkeyPath: path.join(
+      CIRCUITS_DIR,
+      'selective_disclosure',
+      'verification_key.json',
+    ),
     maxInputs: 16,
-    description: 'Selectively reveal specific fields of a credential while hiding others',
+    description:
+      'Selectively reveal specific fields of a credential while hiding others',
     publicSignals: [],
     contextBound: false,
   },
@@ -203,12 +309,18 @@ export class ZKProofService {
 
       const timeoutPromise = new Promise<never>((_, reject) => {
         setTimeout(
-          () => reject(new ZKProofError('Proof generation timed out', 'ZK_TIMEOUT')),
+          () =>
+            reject(
+              new ZKProofError('Proof generation timed out', 'ZK_TIMEOUT'),
+            ),
           MAX_PROOF_GENERATION_TIME_MS,
         );
       });
 
-      const { proof, publicSignals } = await Promise.race([proofPromise, timeoutPromise]);
+      const { proof, publicSignals } = await Promise.race([
+        proofPromise,
+        timeoutPromise,
+      ]);
 
       const generationTimeMs = Date.now() - startTime;
 
@@ -217,9 +329,16 @@ export class ZKProofService {
       const vkey = JSON.parse(vkeyContent);
 
       // Self-verify before returning
-      const selfVerified = await snarkjs.groth16.verify(vkey, publicSignals, proof);
+      const selfVerified = await snarkjs.groth16.verify(
+        vkey,
+        publicSignals,
+        proof,
+      );
       if (!selfVerified) {
-        throw new ZKProofError('Self-verification of generated proof failed', 'ZK_SELF_VERIFY_FAILED');
+        throw new ZKProofError(
+          'Self-verification of generated proof failed',
+          'ZK_SELF_VERIFY_FAILED',
+        );
       }
 
       const result: ZKProofResult = {
@@ -278,7 +397,10 @@ export class ZKProofService {
 
     const circuit = CIRCUIT_REGISTRY[circuitName];
     if (!circuit) {
-      throw new ZKProofError(`Unknown circuit: ${circuitName}`, 'ZK_UNKNOWN_CIRCUIT');
+      throw new ZKProofError(
+        `Unknown circuit: ${circuitName}`,
+        'ZK_UNKNOWN_CIRCUIT',
+      );
     }
 
     try {
@@ -299,7 +421,11 @@ export class ZKProofService {
         verifiedAt: new Date(),
       };
 
-      logger.info('zk_proof_verification_complete', { proofId, circuitName, valid });
+      logger.info('zk_proof_verification_complete', {
+        proofId,
+        circuitName,
+        valid,
+      });
       return result;
     } catch (err) {
       logger.error('zk_proof_verification_failed', {
@@ -378,7 +504,8 @@ export class ZKProofService {
       return {
         valid: false,
         code: 'ZK_CIRCUIT_CONTEXT_BINDING_UNSUPPORTED',
-        error: 'ZK circuit is not approved for context-bound production verification',
+        error:
+          'ZK circuit is not approved for context-bound production verification',
         statusCode: 503,
       };
     }
@@ -431,7 +558,10 @@ export class ZKProofService {
       };
     }
 
-    if (publicSignals[publicSignals.length - 1] !== expectedBySignalName.contextCommitment) {
+    if (
+      publicSignals[publicSignals.length - 1] !==
+      expectedBySignalName.contextCommitment
+    ) {
       return {
         valid: false,
         code: 'PROOF_CONTEXT_NOT_COMMITTED',
@@ -477,8 +607,8 @@ export class ZKProofService {
   }
 
   private areCircuitArtifactsAvailable(circuit: CircuitConfig): boolean {
-    return [circuit.wasmPath, circuit.zkeyPath, circuit.vkeyPath].every((filePath) =>
-      fs.existsSync(filePath),
+    return [circuit.wasmPath, circuit.zkeyPath, circuit.vkeyPath].every(
+      (filePath) => fs.existsSync(filePath),
     );
   }
 
@@ -516,7 +646,11 @@ export class ZKProofService {
   // Internal helpers
   // -------------------------------------------------------------------------
   private verifyCircuitFiles(circuit: CircuitConfig): void {
-    const requiredFiles = [circuit.wasmPath, circuit.zkeyPath, circuit.vkeyPath];
+    const requiredFiles = [
+      circuit.wasmPath,
+      circuit.zkeyPath,
+      circuit.vkeyPath,
+    ];
     for (const filePath of requiredFiles) {
       if (!fs.existsSync(filePath)) {
         throw new ZKProofError(
@@ -536,13 +670,19 @@ export class ZKProofService {
         sanitized[key] = value.toString();
       } else if (typeof value === 'number') {
         if (!Number.isFinite(value) || !Number.isSafeInteger(value)) {
-          throw new ZKProofError(`Invalid input value for ${key}`, 'ZK_INVALID_INPUT');
+          throw new ZKProofError(
+            `Invalid input value for ${key}`,
+            'ZK_INVALID_INPUT',
+          );
         }
         sanitized[key] = String(value);
       } else {
         // Validate it looks like a numeric string or hex
         if (!/^(0x)?[0-9a-fA-F]+$/.test(value) && !/^\d+$/.test(value)) {
-          throw new ZKProofError(`Invalid input format for ${key}`, 'ZK_INVALID_INPUT');
+          throw new ZKProofError(
+            `Invalid input format for ${key}`,
+            'ZK_INVALID_INPUT',
+          );
         }
         sanitized[key] = value;
       }
@@ -555,7 +695,12 @@ export class ZKProofService {
     if (typeof value === 'bigint') return value;
     if (typeof value === 'string') {
       const hash = crypto.createHash('sha256').update(value).digest('hex');
-      return BigInt('0x' + hash) % BigInt('21888242871839275222246405745257275088548364400416034343698204186575808495617');
+      return (
+        BigInt('0x' + hash) %
+        BigInt(
+          '21888242871839275222246405745257275088548364400416034343698204186575808495617',
+        )
+      );
     }
     if (typeof value === 'boolean') return value ? BigInt(1) : BigInt(0);
     return BigInt(0);

@@ -2,7 +2,7 @@
  * useAICompliance — Unit Tests
  *
  * Tests for all AI compliance hooks: screening, risk assessment, advisor,
- * alerts, report generation, and regulatory change simulation.
+ * alerts, report generation, and regulatory change impact assessment.
  */
 
 import { renderHook, waitFor, act } from "@testing-library/react";
@@ -47,6 +47,7 @@ import {
   useComplianceAlerts,
   useAcknowledgeAlert,
   useGenerateReport,
+  useAssessRegChangeImpact,
   useSimulateRegChange,
 } from "@/hooks/useAICompliance";
 
@@ -77,7 +78,7 @@ beforeEach(() => {
 describe("useScreenIdentity", () => {
   const cleanResult = {
     screeningId: "scr-1",
-    identityId: "id-1",
+    identityId: "550e8400-e29b-41d4-a716-446655440000",
     result: "clear",
     matchScore: 0,
     matchedLists: [],
@@ -87,6 +88,7 @@ describe("useScreenIdentity", () => {
     screenedAt: "2026-01-01T00:00:00Z",
     expiresAt: "2026-02-01T00:00:00Z",
     listsChecked: ["ofac_sdn"],
+    unavailableChecks: ["adverse_media"],
   };
 
   const flaggedResult = {
@@ -247,14 +249,6 @@ describe("useRiskAssessment", () => {
       confidence: 0.9,
       timestamp: "2026-01-01T00:00:00Z",
     },
-    complianceScore: {
-      entityId: "id-1",
-      jurisdiction: "US",
-      overallScore: 92,
-      rating: "excellent",
-      components: {},
-      computedAt: "2026-01-01T00:00:00Z",
-    },
   };
 
   it("fetches risk assessment for given identityId", async () => {
@@ -266,6 +260,7 @@ describe("useRiskAssessment", () => {
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(mockApiClient.get).toHaveBeenCalledWith(
       "/api/v1/ai/compliance/risk/id-1",
+      { entityType: "identity" },
     );
     expect(result.current.data).toEqual(mockRiskResponse);
   });
@@ -295,14 +290,6 @@ describe("useRefreshRiskAssessment", () => {
       confidence: 0.88,
       timestamp: "2026-01-01T00:00:00Z",
     },
-    complianceScore: {
-      entityId: "id-1",
-      jurisdiction: "US",
-      overallScore: 80,
-      rating: "good",
-      components: {},
-      computedAt: "2026-01-01T00:00:00Z",
-    },
   };
 
   it("fetches latest risk and shows success toast with score", async () => {
@@ -317,6 +304,7 @@ describe("useRefreshRiskAssessment", () => {
 
     expect(mockApiClient.get).toHaveBeenCalledWith(
       "/api/v1/ai/compliance/risk/id-1",
+      { entityType: "identity" },
     );
     expect(mockToast.success).toHaveBeenCalledWith("Risk assessment updated", {
       description: "Score: 42 (review)",
@@ -413,7 +401,7 @@ describe("useComplianceAlerts", () => {
     alerts: [
       {
         alertId: "a-1",
-        entityId: "id-1",
+        entityId: "550e8400-e29b-41d4-a716-446655440000",
         level: "warning",
         category: "sanctions",
         title: "Alert 1",
@@ -460,7 +448,19 @@ describe("useComplianceAlerts", () => {
 
 describe("useAcknowledgeAlert", () => {
   it("posts acknowledge and shows success toast", async () => {
-    mockApiClient.post.mockResolvedValue(undefined);
+    mockApiClient.post.mockResolvedValue({
+      alertId: "alert-123",
+      entityId: "550e8400-e29b-41d4-a716-446655440000",
+      level: "warning",
+      category: "sanctions",
+      title: "Review required",
+      description: "Potential match",
+      regulation: "FATF",
+      actionRequired: "Review",
+      createdAt: "2026-01-01T00:00:00Z",
+      acknowledgedAt: "2026-01-01T00:05:00Z",
+      source: "compliance",
+    });
     const { result } = renderHook(() => useAcknowledgeAlert(), {
       wrapper: createWrapper(),
     });
@@ -566,10 +566,10 @@ describe("useGenerateReport", () => {
 });
 
 // ===========================================================================
-// useSimulateRegChange
+// useAssessRegChangeImpact
 // ===========================================================================
 
-describe("useSimulateRegChange", () => {
+describe("useAssessRegChangeImpact", () => {
   const simHighEffort = {
     changeId: "change-1",
     regulation: "MiCA",
@@ -591,7 +591,7 @@ describe("useSimulateRegChange", () => {
 
   it("shows warning toast when high remediation effort is detected", async () => {
     mockApiClient.post.mockResolvedValue(simHighEffort);
-    const { result } = renderHook(() => useSimulateRegChange(), {
+    const { result } = renderHook(() => useAssessRegChangeImpact(), {
       wrapper: createWrapper(),
     });
 
@@ -604,21 +604,24 @@ describe("useSimulateRegChange", () => {
     });
 
     expect(mockApiClient.post).toHaveBeenCalledWith(
-      "/api/v1/ai/compliance/simulate",
+      "/api/v1/ai/compliance/impact-assessment",
       {
         regulation: "MiCA",
         changes: "Raise transfer screening requirements",
         jurisdiction: "EU",
       },
     );
-    expect(mockToast.warning).toHaveBeenCalledWith("Simulation complete", {
-      description: "100 impacted entity(ies); 1 action(s) required",
-    });
+    expect(mockToast.warning).toHaveBeenCalledWith(
+      "Impact assessment complete",
+      {
+        description: "100 impacted entity(ies); 1 action(s) required",
+      },
+    );
   });
 
   it("shows success toast when effort is low", async () => {
     mockApiClient.post.mockResolvedValue(simLowEffort);
-    const { result } = renderHook(() => useSimulateRegChange(), {
+    const { result } = renderHook(() => useAssessRegChangeImpact(), {
       wrapper: createWrapper(),
     });
 
@@ -631,13 +634,13 @@ describe("useSimulateRegChange", () => {
     });
 
     expect(mockToast.success).toHaveBeenCalledWith(
-      "Simulation complete — no new gaps detected",
+      "Impact assessment complete — no new gaps detected",
     );
   });
 
   it("shows error toast on failure", async () => {
     mockApiClient.post.mockRejectedValue(new Error("Sim failed"));
-    const { result } = renderHook(() => useSimulateRegChange(), {
+    const { result } = renderHook(() => useAssessRegChangeImpact(), {
       wrapper: createWrapper(),
     });
 
@@ -651,8 +654,32 @@ describe("useSimulateRegChange", () => {
       } catch {}
     });
 
-    expect(mockToast.error).toHaveBeenCalledWith("Simulation failed", {
+    expect(mockToast.error).toHaveBeenCalledWith("Impact assessment failed", {
       description: "Sim failed",
     });
+  });
+
+  it("keeps the legacy simulation hook as a compatibility alias", async () => {
+    mockApiClient.post.mockResolvedValue(simLowEffort);
+    const { result } = renderHook(() => useSimulateRegChange(), {
+      wrapper: createWrapper(),
+    });
+
+    await act(async () => {
+      await result.current.mutateAsync({
+        regulation: "MiCA",
+        changes: "Lower manual review thresholds",
+        jurisdiction: "EU",
+      });
+    });
+
+    expect(mockApiClient.post).toHaveBeenCalledWith(
+      "/api/v1/ai/compliance/impact-assessment",
+      {
+        regulation: "MiCA",
+        changes: "Lower manual review thresholds",
+        jurisdiction: "EU",
+      },
+    );
   });
 });

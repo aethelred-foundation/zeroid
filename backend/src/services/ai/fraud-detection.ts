@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import { prisma, logger, redis } from '../../index';
+import { prisma, logger, redis } from '../../runtime';
 
 
 // ---------------------------------------------------------------------------
@@ -153,7 +153,7 @@ class SimpleNeuralNetwork {
 }
 
 // ---------------------------------------------------------------------------
-// Pre-trained model weights (simulated production weights)
+// Baseline model weights for deterministic fraud scoring.
 // These would be loaded from a secure model registry in production.
 // Architecture: 18-input -> 32 hidden (ReLU) -> 16 hidden (ReLU) -> 4 output (softmax)
 // Outputs: [allow, challenge, block, review]

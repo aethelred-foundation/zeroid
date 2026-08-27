@@ -3,13 +3,14 @@
  *
  * Provides sanctions/PEP screening, risk assessment, advisor queries,
  * compliance alert management, report generation, and regulatory change
- * simulation. All mutations surface feedback via sonner toasts.
+ * impact assessment. All mutations surface feedback via sonner toasts.
  */
 
 import { useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAccount } from "wagmi";
 import { toast } from "sonner";
+import { z } from "zod";
 import { apiClient } from "@/lib/api/client";
 import type { ISODateString } from "@/types";
 
@@ -29,6 +30,7 @@ export interface ScreeningResult {
   screenedAt: ISODateString;
   expiresAt: ISODateString;
   listsChecked: string[];
+  unavailableChecks: string[];
 }
 
 export interface SanctionsListMatch {
@@ -100,18 +102,8 @@ export interface RiskFactorDetail {
   explanation: string;
 }
 
-export interface ComplianceScore {
-  entityId: string;
-  jurisdiction: string;
-  overallScore: number;
-  rating: "excellent" | "good" | "fair" | "poor" | "critical";
-  components: Record<string, number>;
-  computedAt: ISODateString;
-}
-
 export interface RiskAssessmentResponse {
   riskAssessment: RiskAssessment;
-  complianceScore: ComplianceScore;
 }
 
 export interface ComplianceAlert {
@@ -201,7 +193,7 @@ export interface ComplianceGap {
   deadline?: ISODateString;
 }
 
-export interface RegulationSimulation {
+export interface RegulationImpactAssessment {
   changeId: string;
   regulation: string;
   effectiveDate: ISODateString;
@@ -212,6 +204,8 @@ export interface RegulationSimulation {
   estimatedEffort: "low" | "medium" | "high" | "critical";
   automationPossible: boolean;
 }
+
+export type RegulationSimulation = RegulationImpactAssessment;
 
 // ---------------------------------------------------------------------------
 // Query Keys
@@ -227,6 +221,260 @@ const complianceKeys = {
 const AI_COMPLIANCE_BASE = "/api/v1/ai/compliance";
 
 // ---------------------------------------------------------------------------
+// Runtime response contracts
+// ---------------------------------------------------------------------------
+
+export class AIComplianceResponseContractError extends Error {
+  constructor(operation: string, cause: z.ZodError) {
+    super(
+      `ZeroID returned an invalid ${operation} response: ${cause.issues
+        .map(
+          (issue) => `${issue.path.join(".") || "response"}: ${issue.message}`,
+        )
+        .join("; ")}`,
+    );
+    this.name = "AIComplianceResponseContractError";
+  }
+}
+
+const isoDateSchema = z.string().datetime({ offset: true });
+const nonEmptyStringSchema = z.string().trim().min(1);
+const percentageSchema = z.number().finite().min(0).max(100);
+const probabilitySchema = z.number().finite().min(0).max(1);
+
+const sanctionsListMatchSchema = z
+  .object({
+    listName: nonEmptyStringSchema,
+    listSource: nonEmptyStringSchema,
+    matchedName: nonEmptyStringSchema,
+    matchConfidence: probabilitySchema,
+    entityType: z.enum(["individual", "entity", "vessel", "aircraft"]),
+    sanctions: z.array(nonEmptyStringSchema),
+    listedSince: isoDateSchema,
+    lastUpdated: isoDateSchema,
+    sdnId: nonEmptyStringSchema.optional(),
+  })
+  .strict();
+
+const pepMatchSchema = z
+  .object({
+    name: nonEmptyStringSchema,
+    position: nonEmptyStringSchema,
+    country: nonEmptyStringSchema,
+    level: z.enum([
+      "head_of_state",
+      "senior_official",
+      "family_member",
+      "close_associate",
+    ]),
+    active: z.boolean(),
+    matchConfidence: probabilitySchema,
+    source: nonEmptyStringSchema,
+  })
+  .strict();
+
+const adverseMediaHitSchema = z
+  .object({
+    headline: nonEmptyStringSchema,
+    source: nonEmptyStringSchema,
+    publishedAt: isoDateSchema,
+    relevanceScore: probabilitySchema,
+    categories: z.array(nonEmptyStringSchema),
+    url: z.string().url(),
+  })
+  .strict();
+
+const screeningResultSchema = z
+  .object({
+    screeningId: nonEmptyStringSchema,
+    identityId: z.string().uuid(),
+    result: z.enum([
+      "clear",
+      "potential_match",
+      "confirmed_match",
+      "inconclusive",
+    ]),
+    matchScore: percentageSchema,
+    matchedLists: z.array(sanctionsListMatchSchema),
+    pepMatches: z.array(pepMatchSchema),
+    adverseMedia: z.array(adverseMediaHitSchema),
+    riskIndicators: z.array(nonEmptyStringSchema),
+    screenedAt: isoDateSchema,
+    expiresAt: isoDateSchema,
+    listsChecked: z.array(nonEmptyStringSchema),
+    unavailableChecks: z.array(nonEmptyStringSchema),
+  })
+  .strict();
+
+const riskFactorSchema = z
+  .object({
+    name: nonEmptyStringSchema,
+    category: nonEmptyStringSchema,
+    rawValue: z.number().finite(),
+    normalizedScore: percentageSchema,
+    weight: z.number().finite().min(0),
+    impact: z.enum(["increasing", "decreasing", "neutral"]),
+    explanation: nonEmptyStringSchema,
+  })
+  .strict();
+
+const riskAssessmentSchema = z
+  .object({
+    assessmentId: nonEmptyStringSchema,
+    entityId: nonEmptyStringSchema,
+    entityType: z.enum(["identity", "credential", "transaction"]),
+    compositeScore: percentageSchema,
+    decision: z.enum(["approve", "review", "reject", "escalate"]),
+    factors: z.array(riskFactorSchema),
+    trend: z.enum(["improving", "stable", "degrading", "volatile"]),
+    jurisdiction: nonEmptyStringSchema.optional(),
+    regulatoryRegime: nonEmptyStringSchema.optional(),
+    confidence: probabilitySchema,
+    timestamp: isoDateSchema,
+  })
+  .passthrough();
+
+const riskAssessmentResponseSchema = z
+  .object({ riskAssessment: riskAssessmentSchema })
+  .strict();
+
+const complianceAlertSchema = z
+  .object({
+    alertId: nonEmptyStringSchema,
+    entityId: z.string().uuid(),
+    level: z.enum([
+      "info",
+      "warning",
+      "violation",
+      "critical",
+      "low",
+      "medium",
+      "high",
+    ]),
+    category: nonEmptyStringSchema,
+    title: nonEmptyStringSchema,
+    description: nonEmptyStringSchema,
+    regulation: nonEmptyStringSchema,
+    actionRequired: nonEmptyStringSchema,
+    createdAt: isoDateSchema,
+    acknowledgedAt: isoDateSchema.optional(),
+    resolvedAt: isoDateSchema.optional(),
+    source: z.enum(["compliance", "fraud"]).optional(),
+  })
+  .strict();
+
+const complianceAlertsResponseSchema = z
+  .object({
+    alerts: z.array(complianceAlertSchema),
+    total: z.number().int().nonnegative(),
+    complianceAlertCount: z.number().int().nonnegative(),
+    fraudAlertCount: z.number().int().nonnegative(),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.total !== value.alerts.length) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["total"],
+        message: "must equal the returned alert count",
+      });
+    }
+  });
+
+const advisorResponseSchema = z
+  .object({
+    queryId: nonEmptyStringSchema,
+    question: nonEmptyStringSchema,
+    answer: nonEmptyStringSchema,
+    confidence: probabilitySchema,
+    citations: z.array(
+      z
+        .object({
+          regulation: nonEmptyStringSchema,
+          section: nonEmptyStringSchema,
+          text: nonEmptyStringSchema,
+        })
+        .strict(),
+    ),
+    relatedTopics: z.array(nonEmptyStringSchema),
+    disclaimer: nonEmptyStringSchema,
+    timestamp: isoDateSchema,
+  })
+  .strict();
+
+const complianceReportSchema = z
+  .object({
+    reportId: nonEmptyStringSchema,
+    entityId: z.string().uuid(),
+    reportType: z.enum([
+      "kyc",
+      "aml",
+      "sanctions",
+      "pep",
+      "travel_rule",
+      "comprehensive",
+    ]),
+    status: z.enum(["generating", "complete", "failed"]),
+    summary: nonEmptyStringSchema,
+    sections: z.array(
+      z
+        .object({
+          title: nonEmptyStringSchema,
+          status: z.enum(["pass", "warning", "fail", "not_applicable"]),
+          findings: z.array(nonEmptyStringSchema),
+          evidence: z.record(z.unknown()),
+        })
+        .strict(),
+    ),
+    complianceScore: percentageSchema,
+    gaps: z.array(
+      z
+        .object({
+          gapId: nonEmptyStringSchema,
+          category: nonEmptyStringSchema,
+          severity: z.enum(["info", "warning", "violation", "critical"]),
+          description: nonEmptyStringSchema,
+          regulation: nonEmptyStringSchema,
+          remediation: nonEmptyStringSchema,
+          deadline: isoDateSchema.optional(),
+        })
+        .strict(),
+    ),
+    recommendations: z.array(nonEmptyStringSchema),
+    generatedAt: isoDateSchema,
+    validUntil: isoDateSchema,
+    jurisdiction: nonEmptyStringSchema,
+    regulatoryFramework: nonEmptyStringSchema,
+  })
+  .strict();
+
+const regulationImpactAssessmentSchema = z
+  .object({
+    changeId: nonEmptyStringSchema,
+    regulation: nonEmptyStringSchema,
+    effectiveDate: isoDateSchema,
+    description: nonEmptyStringSchema,
+    impactedEntities: z.number().int().nonnegative(),
+    impactedCredentialTypes: z.array(nonEmptyStringSchema),
+    requiredActions: z.array(nonEmptyStringSchema),
+    estimatedEffort: z.enum(["low", "medium", "high", "critical"]),
+    automationPossible: z.boolean(),
+  })
+  .strict();
+
+function parseComplianceResponse<T>(
+  operation: string,
+  schema: z.ZodType<T>,
+  value: unknown,
+): T {
+  const parsed = schema.safeParse(value);
+  if (!parsed.success) {
+    throw new AIComplianceResponseContractError(operation, parsed.error);
+  }
+  return parsed.data;
+}
+
+// ---------------------------------------------------------------------------
 // Screening
 // ---------------------------------------------------------------------------
 
@@ -237,10 +485,15 @@ export function useScreenIdentity() {
     mutationFn: async (
       input: ScreenIdentityInput,
     ): Promise<ScreeningResult> => {
-      return apiClient.post<ScreeningResult>(
+      const response = await apiClient.post<unknown>(
         `${AI_COMPLIANCE_BASE}/screen`,
         input,
-      ) as unknown as ScreeningResult;
+      );
+      return parseComplianceResponse(
+        "screening",
+        screeningResultSchema,
+        response,
+      );
     },
     onSuccess: (data, input) => {
       const hits = data.result !== "clear";
@@ -269,14 +522,40 @@ export function useScreenIdentity() {
 // Risk Assessment
 // ---------------------------------------------------------------------------
 
-export function useRiskAssessment(identityId: string | undefined) {
+export interface RiskAssessmentQueryOptions {
+  enabled?: boolean;
+  jurisdiction?: string;
+  entityType?: "identity" | "credential";
+}
+
+export function useRiskAssessment(
+  identityId: string | undefined,
+  options: RiskAssessmentQueryOptions = {},
+) {
+  const entityType = options.entityType ?? "identity";
+  const jurisdiction = options.jurisdiction?.trim().toUpperCase();
+
   return useQuery({
-    queryKey: complianceKeys.risk(identityId ?? ""),
-    queryFn: () =>
-      apiClient.get<RiskAssessmentResponse>(
+    queryKey: [
+      ...complianceKeys.risk(identityId ?? ""),
+      entityType,
+      jurisdiction ?? "",
+    ],
+    queryFn: async () => {
+      const response = await apiClient.get<unknown>(
         `${AI_COMPLIANCE_BASE}/risk/${identityId}`,
-      ) as unknown as RiskAssessmentResponse,
-    enabled: !!identityId,
+        {
+          entityType,
+          ...(jurisdiction ? { jurisdiction } : {}),
+        },
+      );
+      return parseComplianceResponse(
+        "risk assessment",
+        riskAssessmentResponseSchema,
+        response,
+      );
+    },
+    enabled: (options.enabled ?? true) && !!identityId,
     staleTime: 60_000,
     refetchInterval: 120_000,
   });
@@ -287,15 +566,24 @@ export function useRefreshRiskAssessment() {
 
   return useMutation({
     mutationFn: async (identityId: string): Promise<RiskAssessmentResponse> => {
-      return apiClient.get<RiskAssessmentResponse>(
+      const response = await apiClient.get<unknown>(
         `${AI_COMPLIANCE_BASE}/risk/${identityId}`,
-      ) as unknown as RiskAssessmentResponse;
+        { entityType: "identity" },
+      );
+      return parseComplianceResponse(
+        "risk assessment",
+        riskAssessmentResponseSchema,
+        response,
+      );
     },
     onSuccess: (data, identityId) => {
       toast.success("Risk assessment updated", {
         description: `Score: ${data.riskAssessment.compositeScore} (${data.riskAssessment.decision})`,
       });
-      queryClient.setQueryData(complianceKeys.risk(identityId), data);
+      queryClient.setQueriesData(
+        { queryKey: complianceKeys.risk(identityId) },
+        data,
+      );
     },
     onError: (err: Error) => {
       toast.error("Risk refresh failed", { description: err.message });
@@ -310,13 +598,18 @@ export function useRefreshRiskAssessment() {
 export function useComplianceAdvisor() {
   const sendMessage = useMutation({
     mutationFn: async (message: string): Promise<AdvisorResponse> => {
-      return apiClient.post<AdvisorResponse>(
+      const response = await apiClient.post<unknown>(
         `${AI_COMPLIANCE_BASE}/advisor/query`,
         {
           question: message,
           context: {},
         },
-      ) as unknown as AdvisorResponse;
+      );
+      return parseComplianceResponse(
+        "advisor",
+        advisorResponseSchema,
+        response,
+      );
     },
     onError: (err: Error) => {
       toast.error("Advisor request failed", { description: err.message });
@@ -335,16 +628,22 @@ export function useComplianceAdvisor() {
 // Alerts
 // ---------------------------------------------------------------------------
 
-export function useComplianceAlerts() {
+export function useComplianceAlerts(enabled = true) {
   const { address } = useAccount();
 
   return useQuery({
     queryKey: complianceKeys.alerts(),
-    queryFn: () =>
-      apiClient.get<ComplianceAlertsResponse>(
+    queryFn: async () => {
+      const response = await apiClient.get<unknown>(
         `${AI_COMPLIANCE_BASE}/alerts`,
-      ) as unknown as ComplianceAlertsResponse,
-    enabled: !!address,
+      );
+      return parseComplianceResponse(
+        "alert list",
+        complianceAlertsResponseSchema,
+        response,
+      );
+    },
+    enabled: enabled && !!address,
     staleTime: 10_000,
     refetchInterval: 30_000,
   });
@@ -354,10 +653,15 @@ export function useAcknowledgeAlert() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async (alertId: string): Promise<void> => {
-      await apiClient.post(
+    mutationFn: async (alertId: string): Promise<ComplianceAlert> => {
+      const response = await apiClient.post<unknown>(
         `${AI_COMPLIANCE_BASE}/alerts/${alertId}/acknowledge`,
         {},
+      );
+      return parseComplianceResponse(
+        "alert acknowledgement",
+        complianceAlertSchema,
+        response,
       );
     },
     onSuccess: () => {
@@ -381,10 +685,15 @@ export function useGenerateReport() {
       reportType: ComplianceReportType;
       jurisdiction: string;
     }): Promise<ComplianceReport> => {
-      return apiClient.post<ComplianceReport>(
+      const response = await apiClient.post<unknown>(
         `${AI_COMPLIANCE_BASE}/report`,
         params,
-      ) as unknown as ComplianceReport;
+      );
+      return parseComplianceResponse(
+        "compliance report",
+        complianceReportSchema,
+        response,
+      );
     },
     onSuccess: (data) => {
       toast.success("Report generated", {
@@ -398,35 +707,46 @@ export function useGenerateReport() {
 }
 
 // ---------------------------------------------------------------------------
-// Regulatory Change Simulation
+// Regulatory Change Impact Assessment
 // ---------------------------------------------------------------------------
 
-export function useSimulateRegChange() {
+export function useAssessRegChangeImpact() {
   return useMutation({
     mutationFn: async (params: {
       regulation: string;
       changes: string;
       jurisdiction: string;
-    }): Promise<RegulationSimulation> => {
-      return apiClient.post<RegulationSimulation>(
-        `${AI_COMPLIANCE_BASE}/simulate`,
+    }): Promise<RegulationImpactAssessment> => {
+      const response = await apiClient.post<unknown>(
+        `${AI_COMPLIANCE_BASE}/impact-assessment`,
         params,
-      ) as unknown as RegulationSimulation;
+      );
+      return parseComplianceResponse(
+        "regulatory impact assessment",
+        regulationImpactAssessmentSchema,
+        response,
+      );
     },
     onSuccess: (data) => {
       if (
         data.estimatedEffort === "high" ||
         data.estimatedEffort === "critical"
       ) {
-        toast.warning("Simulation complete", {
+        toast.warning("Impact assessment complete", {
           description: `${data.impactedEntities} impacted entity(ies); ${data.requiredActions.length} action(s) required`,
         });
       } else {
-        toast.success("Simulation complete — no new gaps detected");
+        toast.success("Impact assessment complete — no new gaps detected");
       }
     },
     onError: (err: Error) => {
-      toast.error("Simulation failed", { description: err.message });
+      toast.error("Impact assessment failed", { description: err.message });
     },
   });
+}
+
+export function useSimulateRegChange() {
+  // Backward-compatible alias for older callers; new code should use
+  // useAssessRegChangeImpact.
+  return useAssessRegChangeImpact();
 }

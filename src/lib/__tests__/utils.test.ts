@@ -28,6 +28,7 @@ import {
   copyToClipboard,
   stringToBytes32,
   numberToHex,
+  generateUUID,
   sleep,
   withRetry,
   withTimeout,
@@ -793,5 +794,42 @@ describe("withTimeout", () => {
     await expect(wrapped).rejects.toThrow("boom");
     expect(clearTimeoutSpy).toHaveBeenCalled();
     clearTimeoutSpy.mockRestore();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// generateUUID
+// ---------------------------------------------------------------------------
+
+describe("generateUUID", () => {
+  const V4 =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+  it("returns an RFC 4122 v4 UUID via crypto.randomUUID when available", () => {
+    expect(generateUUID()).toMatch(V4);
+  });
+
+  it("falls back to getRandomValues on insecure contexts (no randomUUID)", () => {
+    // Plain-HTTP remote origins expose crypto WITHOUT randomUUID — emulate that.
+    const original = globalThis.crypto;
+    const insecureCrypto = {
+      getRandomValues: original.getRandomValues.bind(original),
+    } as Crypto;
+    Object.defineProperty(globalThis, "crypto", {
+      value: insecureCrypto,
+      configurable: true,
+    });
+    try {
+      const a = generateUUID();
+      const b = generateUUID();
+      expect(a).toMatch(V4);
+      expect(b).toMatch(V4);
+      expect(a).not.toBe(b);
+    } finally {
+      Object.defineProperty(globalThis, "crypto", {
+        value: original,
+        configurable: true,
+      });
+    }
   });
 });

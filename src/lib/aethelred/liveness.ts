@@ -81,7 +81,10 @@ export async function verifyLivenessWithAttestation(
   if (!attestation) {
     return { ...zk, teeVerified: false };
   }
-  const tee = await verifyTeeAttestationCanonical(attestation, expectedEnclaveHash);
+  const tee = await verifyTeeAttestationCanonical(
+    attestation,
+    expectedEnclaveHash,
+  );
   return {
     ...zk,
     teeVerified: tee.valid,

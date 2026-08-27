@@ -39,7 +39,7 @@ const mockIssuerTrustFindMany = jest.fn();
 const mockRedisDel = jest.fn();
 const mockPrismaTransaction = jest.fn();
 
-jest.mock('../src/index', () => ({
+jest.mock('../src/runtime', () => ({
   logger: {
     info: jest.fn(),
     warn: jest.fn(),

@@ -41,13 +41,22 @@ jest.mock("@/lib/api/client", () => ({
     }
   },
   apiClient: {
+    createVerificationRequest: jest.fn(),
     get: jest.fn(),
     post: jest.fn(),
     put: jest.fn(),
+    respondToVerification: jest.fn(),
     del: jest.fn(),
   },
 }));
 const mockApiClient = jest.requireMock("@/lib/api/client").apiClient;
+
+jest.mock("@/lib/identity/registration", () => ({
+  getIdentityAuthToken: jest.fn(() => "identity-token"),
+}));
+const mockGetIdentityAuthToken = jest.requireMock(
+  "@/lib/identity/registration",
+).getIdentityAuthToken;
 
 import { useAccount } from "wagmi";
 import {
@@ -70,8 +79,62 @@ function createWrapper() {
     React.createElement(QueryClientProvider, { client: queryClient }, children);
 }
 
+const attributeHash = `0x${"a".repeat(64)}` as `0x${string}`;
+
+function makeDisclosureAttribute(key = "name") {
+  return {
+    key,
+    value: "Ada",
+    hash: attributeHash,
+  };
+}
+
+function makeVerificationRequest(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "req-1",
+    status: "pending",
+    requestedAttributes: ["name"],
+    purpose: "KYC verification",
+    expiresAt: 1700003600,
+    ...overrides,
+  };
+}
+
+function makeProof() {
+  return {
+    id: "proof-1",
+    circuitId: "0xcircuit",
+    circuitName: "selective_disclosure",
+    proofSystem: "groth16",
+    proof: {
+      a: ["0x1", "0x2"],
+      b: [
+        ["0x3", "0x4"],
+        ["0x5", "0x6"],
+      ],
+      c: ["0x7", "0x8"],
+    },
+    publicInputs: ["0x1"],
+    publicOutputs: ["0x1"],
+    generatedAt: 1700000000,
+    validityDuration: 300,
+    proofHash: "0xproofhash",
+  };
+}
+
 beforeEach(() => {
   jest.clearAllMocks();
+  mockGetIdentityAuthToken.mockReturnValue("identity-token");
+  mockApiClient.createVerificationRequest.mockResolvedValue(
+    makeVerificationRequest(),
+  );
+  mockApiClient.respondToVerification.mockResolvedValue({
+    requestId: "req-1",
+    verified: true,
+    attributeResults: [],
+    verifiedAt: 1700000000,
+  });
+  mockApiClient.get.mockResolvedValue([makeVerificationRequest()]);
   (useAccount as jest.Mock).mockReturnValue({
     address: mockAddress,
     isConnected: true,
@@ -83,38 +146,44 @@ beforeEach(() => {
 // ===========================================================================
 
 describe("useCreateDisclosureRequest", () => {
-  it("fails closed instead of calling a stale disclosure request route", async () => {
+  it("creates disclosure requests as durable verification requests", async () => {
     const { result } = renderHook(() => useCreateDisclosureRequest(), {
       wrapper: createWrapper(),
     });
 
+    let created: any;
     await act(async () => {
-      await expect(
-        result.current.mutateAsync({
-          subjectDid: "did:aethelred:mainnet:0x1",
-          requestedAttributes: [{ key: "name", required: true }] as any,
-          policy: { minTrustLevel: 3 } as any,
-          purpose: "KYC verification",
-        }),
-      ).rejects.toMatchObject({
-        code: "DISCLOSURE_REQUEST_CREATE_UNAVAILABLE",
-        statusCode: 501,
+      created = await result.current.mutateAsync({
+        subjectDid: "did:aethelred:mainnet:0x1",
+        requestedAttributes: [makeDisclosureAttribute()],
+        policy: {
+          circuitId: "selective_disclosure",
+          credentialHash: attributeHash,
+        } as any,
+        purpose: "KYC verification",
       });
     });
 
-    expect(mockApiClient.post).not.toHaveBeenCalled();
-    expect(mockToast.error).toHaveBeenCalledWith(
-      "Failed to create disclosure request",
+    expect(created).toEqual({ requestId: "req-1", challenge: "req-1" });
+    expect(mockApiClient.createVerificationRequest).toHaveBeenCalledWith(
       {
-        description: expect.stringContaining(
-          "Selective disclosure request creation is not exposed",
-        ),
+        subjectDid: "did:aethelred:mainnet:0x1",
+        credentialHash: attributeHash,
+        requestedAttributes: ["name"],
+        circuitId: "selective_disclosure",
+        expiresAt: expect.any(Number),
+        purpose: "KYC verification",
+        requiredAttributes: [makeDisclosureAttribute()],
       },
+      "identity-token",
     );
-    expect(mockToast.success).not.toHaveBeenCalled();
+    expect(mockToast.success).toHaveBeenCalledWith(
+      "Disclosure request created",
+      { description: expect.stringContaining("req-1") },
+    );
   });
 
-  it("does not call the stale route when optional fields are present", async () => {
+  it("fails before backend submission when no credential commitment is available", async () => {
     const { result } = renderHook(() => useCreateDisclosureRequest(), {
       wrapper: createWrapper(),
     });
@@ -123,7 +192,7 @@ describe("useCreateDisclosureRequest", () => {
       try {
         await result.current.mutateAsync({
           subjectDid: "did:x",
-          requestedAttributes: [],
+          requestedAttributes: [{ key: "name" }] as any,
           policy: {} as any,
           purpose: "test",
           expiresIn: 7200,
@@ -131,7 +200,14 @@ describe("useCreateDisclosureRequest", () => {
       } catch {}
     });
 
-    expect(mockApiClient.post).not.toHaveBeenCalled();
+    expect(mockApiClient.createVerificationRequest).not.toHaveBeenCalled();
+    expect(mockToast.error).toHaveBeenCalledWith(
+      "Failed to create disclosure request",
+      {
+        description:
+          "Disclosure request requires the holder credential's 32-byte credentialHash commitment.",
+      },
+    );
   });
 });
 
@@ -140,35 +216,41 @@ describe("useCreateDisclosureRequest", () => {
 // ===========================================================================
 
 describe("useBuildDisclosureResponse", () => {
-  it("fails closed instead of calling a stale disclosure response route", async () => {
+  it("submits disclosure responses through verification proof responses", async () => {
     const { result } = renderHook(() => useBuildDisclosureResponse(), {
       wrapper: createWrapper(),
     });
 
+    let response: any;
     await act(async () => {
-      await expect(
-        result.current.mutateAsync({
-          requestId: "req-1",
-          selectedAttributes: [{ key: "name" }] as any,
-          credentialIds: ["cred-1"],
-          zkProof: "0xproof",
-        }),
-      ).rejects.toMatchObject({
-        code: "DISCLOSURE_RESPONSE_UNAVAILABLE",
-        statusCode: 501,
+      response = await result.current.mutateAsync({
+        requestId: "req-1",
+        selectedAttributes: [makeDisclosureAttribute()],
+        credentialIds: ["cred-1"],
+        zkProof: JSON.stringify(makeProof()),
       });
     });
 
-    expect(mockApiClient.post).not.toHaveBeenCalled();
-    expect(mockToast.error).toHaveBeenCalledWith("Disclosure response failed", {
-      description: expect.stringContaining(
-        "Selective disclosure responses are not exposed",
-      ),
+    expect(response).toMatchObject({
+      requestId: "req-1",
+      selectedAttributes: [makeDisclosureAttribute()],
+      credentialIds: ["cred-1"],
     });
-    expect(mockToast.success).not.toHaveBeenCalled();
+    expect(mockApiClient.respondToVerification).toHaveBeenCalledWith(
+      "req-1",
+      {
+        consent: true,
+        proof: expect.objectContaining({ id: "proof-1" }),
+      },
+      "identity-token",
+    );
+    expect(mockToast.success).toHaveBeenCalledWith(
+      "Disclosure response submitted",
+      { description: "Selected attributes shared with verifier" },
+    );
   });
 
-  it("rejects even when a proof payload is present", async () => {
+  it("rejects malformed proof payloads before calling the backend", async () => {
     const { result } = renderHook(() => useBuildDisclosureResponse(), {
       wrapper: createWrapper(),
     });
@@ -185,11 +267,10 @@ describe("useBuildDisclosureResponse", () => {
     });
 
     expect(mockToast.error).toHaveBeenCalledWith("Disclosure response failed", {
-      description: expect.stringContaining(
-        "Selective disclosure responses are not exposed",
-      ),
+      description:
+        "Disclosure response requires a generated ZK proof JSON payload.",
     });
-    expect(mockApiClient.post).not.toHaveBeenCalled();
+    expect(mockApiClient.respondToVerification).not.toHaveBeenCalled();
   });
 });
 
@@ -198,17 +279,22 @@ describe("useBuildDisclosureResponse", () => {
 // ===========================================================================
 
 describe("usePendingDisclosures", () => {
-  it("fails closed instead of calling a stale pending route", async () => {
+  it("loads pending disclosures from the durable verification inbox", async () => {
     const { result } = renderHook(() => usePendingDisclosures(), {
       wrapper: createWrapper(),
     });
 
-    await waitFor(() => expect(result.current.isError).toBe(true));
-    expect(result.current.error).toMatchObject({
-      code: "DISCLOSURE_PENDING_UNAVAILABLE",
-      statusCode: 501,
-    });
-    expect(mockApiClient.get).not.toHaveBeenCalled();
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toEqual([
+      expect.objectContaining({
+        id: "req-1",
+        requestedAttributes: [{ key: "name" }],
+        policy: { purpose: "KYC verification", expiresAt: 1700003600 },
+      }),
+    ]);
+    expect(mockApiClient.get).toHaveBeenCalledWith(
+      "/api/v1/verification/requests?role=subject&result=PENDING&limit=100",
+    );
   });
 
   it("is disabled when no address", () => {
@@ -228,17 +314,29 @@ describe("usePendingDisclosures", () => {
 // ===========================================================================
 
 describe("useDisclosureRequest", () => {
-  it("fails closed instead of calling a stale detail route", async () => {
+  it("loads disclosure detail from the pending verification inbox", async () => {
     const { result } = renderHook(() => useDisclosureRequest("req-1"), {
       wrapper: createWrapper(),
     });
 
-    await waitFor(() => expect(result.current.isError).toBe(true));
-    expect(result.current.error).toMatchObject({
-      code: "DISCLOSURE_DETAIL_UNAVAILABLE",
-      statusCode: 501,
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toMatchObject({
+      id: "req-1",
+      requestedAttributes: [{ key: "name" }],
+      policy: { purpose: "KYC verification", expiresAt: 1700003600 },
     });
-    expect(mockApiClient.get).not.toHaveBeenCalled();
+  });
+
+  it("fails when the disclosure request is not pending", async () => {
+    mockApiClient.get.mockResolvedValue([]);
+    const { result } = renderHook(() => useDisclosureRequest("missing"), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(String(result.current.error)).toContain(
+      "Disclosure request missing was not found",
+    );
   });
 
   it("is disabled when requestId is undefined", () => {
@@ -254,26 +352,32 @@ describe("useDisclosureRequest", () => {
 // ===========================================================================
 
 describe("useDisclosureHistory", () => {
-  it("fails closed instead of calling a stale history route", async () => {
+  it("loads disclosure history from verification history", async () => {
+    mockApiClient.get.mockResolvedValue([{ id: "hist-1", requestId: "req-1" }]);
     const { result } = renderHook(() => useDisclosureHistory(), {
       wrapper: createWrapper(),
     });
 
-    await waitFor(() => expect(result.current.isError).toBe(true));
-    expect(result.current.error).toMatchObject({
-      code: "DISCLOSURE_HISTORY_UNAVAILABLE",
-      statusCode: 501,
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toEqual({
+      items: [{ id: "hist-1", requestId: "req-1" }],
+      total: 1,
     });
-    expect(mockApiClient.get).not.toHaveBeenCalled();
+    expect(mockApiClient.get).toHaveBeenCalledWith(
+      "/api/v1/verification/history?page=1&pageSize=20&limit=20",
+    );
   });
 
-  it("does not call the stale route with custom pagination", async () => {
+  it("passes custom pagination to verification history", async () => {
+    mockApiClient.get.mockResolvedValue([]);
     const { result } = renderHook(() => useDisclosureHistory(3, 50), {
       wrapper: createWrapper(),
     });
 
-    await waitFor(() => expect(result.current.isError).toBe(true));
-    expect(mockApiClient.get).not.toHaveBeenCalled();
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(mockApiClient.get).toHaveBeenCalledWith(
+      "/api/v1/verification/history?page=3&pageSize=50&limit=50",
+    );
   });
 
   it("is disabled when no address", () => {

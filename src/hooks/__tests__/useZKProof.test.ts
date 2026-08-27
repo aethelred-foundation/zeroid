@@ -14,10 +14,12 @@ import React from "react";
 // ---------------------------------------------------------------------------
 
 const mockAddress = "0x1234567890abcdef1234567890abcdef12345678";
+const mockReadContract = jest.fn();
 const mockWriteContractAsync = jest.fn();
 
 jest.mock("wagmi", () => ({
   useAccount: jest.fn(() => ({ address: mockAddress, isConnected: true })),
+  usePublicClient: jest.fn(() => ({ readContract: mockReadContract })),
   useWriteContract: jest.fn(() => ({
     writeContractAsync: mockWriteContractAsync,
   })),
@@ -89,6 +91,31 @@ function createWrapper() {
     React.createElement(QueryClientProvider, { client: queryClient }, children);
 }
 
+const circuitId = `0x${"1".repeat(64)}` as const;
+
+function makeProof() {
+  return {
+    id: "proof-1",
+    circuitId,
+    circuitName: "age_check",
+    proofSystem: "groth16",
+    proof: {
+      a: ["1", "2"],
+      b: [
+        ["3", "4"],
+        ["5", "6"],
+      ],
+      c: ["7", "8"],
+    },
+    publicInputs: ["42"],
+    publicOutputs: [],
+    generatedAt: Math.floor(Date.now() / 1000),
+    validityDuration: 0,
+    proofHash: `0x${"2".repeat(64)}`,
+    circuitType: "age_check",
+  } as any;
+}
+
 beforeEach(() => {
   jest.clearAllMocks();
   (useAccount as jest.Mock).mockReturnValue({
@@ -96,6 +123,7 @@ beforeEach(() => {
     isConnected: true,
   });
   mockApiClient.get.mockResolvedValue([]);
+  mockReadContract.mockResolvedValue(true);
   mockFetch.mockResolvedValue({
     arrayBuffer: jest.fn().mockResolvedValue(new ArrayBuffer(8)),
   });
@@ -252,37 +280,62 @@ describe("useProofHistory", () => {
 // ===========================================================================
 
 describe("verifyProof (on-chain)", () => {
-  it("verifies proof on-chain and records via API", async () => {
-    mockWriteContractAsync.mockResolvedValue("0xverifytx");
-    mockApiClient.post.mockResolvedValue({});
-
+  it("maps the circuit, proof tuple, and public inputs into a read-only call", async () => {
     const { result } = renderHook(() => useZKProof(), {
       wrapper: createWrapper(),
     });
 
+    let isValid: boolean | undefined;
     await act(async () => {
-      await result.current.verifyProof({
-        circuitType: "age_check" as any,
-        proof: {
-          pi_a: [1, 2],
-          pi_b: [
-            [3, 4],
-            [5, 6],
-          ],
-          pi_c: [7, 8],
-        },
-        publicSignals: ["42"],
-        generatedAt: Date.now(),
-      });
+      isValid = await result.current.verifyProof(makeProof());
     });
 
-    expect(mockWriteContractAsync).toHaveBeenCalled();
-    expect(mockApiClient.post).not.toHaveBeenCalled();
+    expect(isValid).toBe(true);
+    expect(mockReadContract).toHaveBeenCalledWith({
+      address: "0xZKVerifier",
+      abi: [],
+      functionName: "verifyProof",
+      args: [
+        circuitId,
+        {
+          a: [1n, 2n],
+          b: [
+            [3n, 4n],
+            [5n, 6n],
+          ],
+          c: [7n, 8n],
+        },
+        [42n],
+      ],
+    });
+    expect(mockWriteContractAsync).not.toHaveBeenCalled();
     expect(mockToast.success).toHaveBeenCalledWith("Proof verified on-chain");
   });
 
+  it("returns false and never reports success when the verifier rejects a proof", async () => {
+    mockReadContract.mockResolvedValue(false);
+    const { result } = renderHook(() => useZKProof(), {
+      wrapper: createWrapper(),
+    });
+
+    let isValid: boolean | undefined;
+    await act(async () => {
+      isValid = await result.current.verifyProof(makeProof());
+    });
+
+    expect(isValid).toBe(false);
+    expect(mockWriteContractAsync).not.toHaveBeenCalled();
+    expect(mockToast.success).not.toHaveBeenCalledWith(
+      "Proof verified on-chain",
+    );
+    expect(mockToast.error).toHaveBeenCalledWith(
+      "On-chain verification failed",
+      { description: "The verifier contract returned false." },
+    );
+  });
+
   it("shows error toast on verification failure", async () => {
-    mockWriteContractAsync.mockRejectedValue(new Error("Invalid proof"));
+    mockReadContract.mockRejectedValue(new Error("RPC unavailable"));
 
     const { result } = renderHook(() => useZKProof(), {
       wrapper: createWrapper(),
@@ -290,18 +343,14 @@ describe("verifyProof (on-chain)", () => {
 
     await act(async () => {
       try {
-        await result.current.verifyProof({
-          circuitType: "age_check" as any,
-          proof: {},
-          publicSignals: [],
-          generatedAt: Date.now(),
-        });
+        await result.current.verifyProof(makeProof());
       } catch {}
     });
 
+    expect(mockWriteContractAsync).not.toHaveBeenCalled();
     expect(mockToast.error).toHaveBeenCalledWith(
       "On-chain verification failed",
-      { description: "Invalid proof" },
+      { description: "RPC unavailable" },
     );
   });
 });

@@ -1,12 +1,11 @@
 import crypto from 'crypto';
-import { prisma, logger, redis } from '../../index';
+import { prisma, logger, redis } from '../../runtime';
 import {
   SANCTIONS_LIST_NAMES,
   sanctionsScreeningService,
   ScreeningRequest,
   ScreeningResult as AuthoritativeScreeningResult,
 } from '../compliance/sanctions-screening';
-import { isProductionRuntime } from '../production-safety';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -39,6 +38,8 @@ export interface SanctionsScreeningResult {
   screenedAt: Date;
   expiresAt: Date;
   listsChecked: string[];
+  /** Screening categories for which no provider ran. */
+  unavailableChecks: string[];
 }
 
 interface SanctionsListMatch {
@@ -95,15 +96,6 @@ interface ReportSection {
   evidence: Record<string, unknown>;
 }
 
-interface LatestScreeningSummary {
-  screenedAt: string | Date;
-  result: ScreeningResult;
-  matchScore: number;
-  matchedLists?: SanctionsListMatch[];
-  pepMatches?: PEPMatch[];
-  listsChecked?: string[];
-}
-
 export interface ComplianceGap {
   gapId: string;
   category: string;
@@ -126,6 +118,21 @@ export interface ComplianceAlert {
   createdAt: Date;
   acknowledgedAt?: Date;
   resolvedAt?: Date;
+}
+
+interface StoredComplianceAlert {
+  id: string;
+  alertType: string;
+  severity: string;
+  title: string;
+  description: string;
+  entityId: string | null;
+  actionRequired: boolean;
+  acknowledged: boolean;
+  acknowledgedBy: string | null;
+  resolvedAt: Date | null;
+  metadata: unknown;
+  createdAt: Date;
 }
 
 export interface AdvisorQuery {
@@ -161,206 +168,43 @@ export interface RegulatoryChangeImpact {
 }
 
 // ---------------------------------------------------------------------------
-// Sanctions lists (simulated production data sources)
-// ---------------------------------------------------------------------------
-
-interface SanctionsEntry {
-  name: string;
-  aliases: string[];
-  listSource: string;
-  entityType: 'individual' | 'entity';
-  sanctions: string[];
-  listedSince: Date;
-  nationality?: string;
-  dateOfBirth?: string;
-  sdnId?: string;
-}
-
-const SANCTIONS_DATABASE: SanctionsEntry[] = [
-  // These entries are entirely fictional, used solely for demonstration
-  { name: 'Test Sanctioned Individual Alpha', aliases: ['T.S.I. Alpha', 'Alpha Test'], listSource: 'OFAC_SDN', entityType: 'individual', sanctions: ['asset_freeze', 'travel_ban'], listedSince: new Date('2023-01-15'), nationality: 'XX', sdnId: 'SDN-DEMO-001' },
-  { name: 'Demo Restricted Entity Beta', aliases: ['DRE Beta Corp'], listSource: 'EU_SANCTIONS', entityType: 'entity', sanctions: ['trade_restriction', 'financial_prohibition'], listedSince: new Date('2022-06-20') },
-  { name: 'Sample PEP Gamma', aliases: [], listSource: 'UN_CONSOLIDATED', entityType: 'individual', sanctions: ['asset_freeze'], listedSince: new Date('2024-03-10'), nationality: 'YY' },
-];
-
-const PEP_DATABASE: PEPMatch[] = [
-  { name: 'Demo PEP Official', position: 'Former Minister of Finance', country: 'XX', level: 'senior_official', active: false, matchConfidence: 0, source: 'PEP_GLOBAL_DB' },
-  { name: 'Test PEP Family Member', position: 'Spouse of Former Governor', country: 'YY', level: 'family_member', active: true, matchConfidence: 0, source: 'PEP_GLOBAL_DB' },
-];
-
-// ---------------------------------------------------------------------------
-// Regulatory knowledge base (for advisor queries)
-// ---------------------------------------------------------------------------
-
-interface RegulatoryKBEntry {
-  topic: string;
-  keywords: string[];
-  framework: RegulatoryFramework;
-  regulation: string;
-  section: string;
-  content: string;
-}
-
-const REGULATORY_KB: RegulatoryKBEntry[] = [
-  { topic: 'KYC requirements', keywords: ['kyc', 'know your customer', 'identity verification', 'customer due diligence', 'cdd'], framework: 'FATF', regulation: 'FATF Recommendation 10', section: 'CDD', content: 'Financial institutions should identify and verify the identity of customers using reliable, independent source documents, data or information. CDD should be undertaken when establishing business relationships, carrying out occasional transactions above USD 15,000, or when there is suspicion of money laundering or terrorist financing.' },
-  { topic: 'Enhanced due diligence', keywords: ['edd', 'enhanced due diligence', 'high risk', 'pep'], framework: 'FATF', regulation: 'FATF Recommendation 12', section: 'PEP', content: 'Financial institutions should be required to have appropriate risk management systems to determine whether a customer or beneficial owner is a PEP. Enhanced due diligence measures must be applied to PEPs, including obtaining senior management approval, taking reasonable measures to establish source of wealth and funds, and conducting enhanced ongoing monitoring.' },
-  { topic: 'Travel rule', keywords: ['travel rule', 'wire transfer', 'originator', 'beneficiary', 'vasp'], framework: 'FATF', regulation: 'FATF Recommendation 16', section: 'Wire Transfers', content: 'Ordering institutions should obtain and transmit originator and beneficiary information with wire transfers. For crypto-asset transfers, VASPs must obtain and hold required originator and beneficiary information, and make it available on request to appropriate authorities. The threshold for this requirement is USD 1,000.' },
-  { topic: 'Suspicious activity reporting', keywords: ['sar', 'str', 'suspicious', 'reporting', 'aml'], framework: 'BSA', regulation: 'BSA/AML - 31 CFR 1020.320', section: 'SAR Filing', content: 'Financial institutions must file SARs for transactions of $5,000 or more that the institution knows, suspects, or has reason to suspect involve funds derived from illegal activity, are designed to evade reporting requirements, or lack a lawful purpose. SARs must be filed within 30 calendar days.' },
-  { topic: 'Sanctions screening', keywords: ['sanctions', 'ofac', 'screening', 'sdn', 'blocked'], framework: 'BSA', regulation: 'OFAC Regulations - 31 CFR Part 501', section: 'Sanctions Compliance', content: 'All U.S. persons must comply with OFAC sanctions. This includes screening all customers, transactions, and counterparties against the SDN list, Sectoral Sanctions, and country-based programs. Blocked property must be reported within 10 business days.' },
-  { topic: 'AMLD6 requirements', keywords: ['amld', 'eu', 'aml directive', 'money laundering', 'predicate offences'], framework: 'AMLD6', regulation: 'EU Directive 2018/1673', section: 'ML Offences', content: 'AMLD6 extends the list of predicate offences for money laundering, introduces criminal liability for legal persons, harmonizes sanctions across EU member states, and requires minimum imprisonment of 4 years for money laundering offences.' },
-  { topic: 'MiCA digital identity', keywords: ['mica', 'crypto', 'digital identity', 'casp', 'token'], framework: 'MiCA', regulation: 'EU Regulation 2023/1114', section: 'Identity Requirements', content: 'Crypto-Asset Service Providers (CASPs) must implement robust identity verification procedures. All transfers exceeding EUR 1,000 must include verified originator and beneficiary information. Self-hosted wallet transfers require additional verification steps.' },
-  { topic: 'VARA virtual assets', keywords: ['vara', 'dubai', 'virtual asset', 'uae', 'regulation'], framework: 'VARA', regulation: 'VARA Rulebook 2023', section: 'VASP Requirements', content: 'Virtual Asset Service Providers operating in Dubai must obtain VARA licensing, implement comprehensive KYC/AML programs, maintain minimum capital requirements, and conduct regular risk assessments. Enhanced requirements apply to DeFi protocols and self-custodial services.' },
-];
-
-// ---------------------------------------------------------------------------
 // Compliance Advisor Service
 // ---------------------------------------------------------------------------
 
 export class ComplianceAdvisorService {
-  private alerts: Map<string, ComplianceAlert> = new Map();
   private readonly alertTtlSeconds = 180 * 86400;
-  private readonly activeAlertSetKey = 'compliance:alerts:active';
 
   // -------------------------------------------------------------------------
   // Sanctions & PEP screening
   // -------------------------------------------------------------------------
   async screenIdentity(request: SanctionsScreeningRequest): Promise<SanctionsScreeningResult> {
-    if (isProductionRuntime()) {
-      return this.screenIdentityWithSignedLists(request);
-    }
-
-    const screeningId = `scr-${crypto.randomUUID()}`;
-    const startTime = performance.now();
-
-    logger.info('sanctions_screening_start', {
-      screeningId,
-      identityId: request.identityId,
-      jurisdiction: request.jurisdiction,
-    });
-
-    const namesToCheck = [request.fullName, ...(request.aliases ?? [])];
-    const sanctionsMatches: SanctionsListMatch[] = [];
-    const pepMatches: PEPMatch[] = [];
-    const riskIndicators: string[] = [];
-
-    // Screen against sanctions lists using fuzzy name matching
-    for (const entry of SANCTIONS_DATABASE) {
-      for (const nameToCheck of namesToCheck) {
-        const similarity = this.computeNameSimilarity(nameToCheck, entry.name);
-        const aliasSimilarities = entry.aliases.map((a) => this.computeNameSimilarity(nameToCheck, a));
-        const maxSimilarity = Math.max(similarity, ...aliasSimilarities);
-
-        if (maxSimilarity > 0.75) {
-          sanctionsMatches.push({
-            listName: `${entry.listSource} Sanctions List`,
-            listSource: entry.listSource,
-            matchedName: entry.name,
-            matchConfidence: maxSimilarity,
-            entityType: entry.entityType,
-            sanctions: entry.sanctions,
-            listedSince: entry.listedSince,
-            lastUpdated: new Date(),
-            sdnId: entry.sdnId,
-          });
-        }
-      }
-
-      // Cross-check nationality if available
-      if (request.nationality && entry.nationality === request.nationality) {
-        riskIndicators.push(`nationality_match:${entry.listSource}`);
-      }
-    }
-
-    // PEP screening
-    for (const pep of PEP_DATABASE) {
-      for (const nameToCheck of namesToCheck) {
-        const similarity = this.computeNameSimilarity(nameToCheck, pep.name);
-        if (similarity > 0.70) {
-          pepMatches.push({
-            ...pep,
-            matchConfidence: similarity,
-          });
-        }
-      }
-    }
-
-    // Adverse media check (simulated)
-    const adverseMedia = await this.checkAdverseMedia(request.fullName);
-
-    // Determine overall result
-    let result: ScreeningResult = 'clear';
-    let matchScore = 0;
-
-    if (sanctionsMatches.length > 0) {
-      const maxConfidence = Math.max(...sanctionsMatches.map((m) => m.matchConfidence));
-      matchScore = Math.round(maxConfidence * 100);
-      result = maxConfidence > 0.95 ? 'confirmed_match' : 'potential_match';
-    } else if (pepMatches.length > 0) {
-      const maxConfidence = Math.max(...pepMatches.map((m) => m.matchConfidence));
-      matchScore = Math.round(maxConfidence * 80);
-      result = maxConfidence > 0.90 ? 'confirmed_match' : 'potential_match';
-    } else if (adverseMedia.length > 0) {
-      matchScore = Math.round(Math.max(...adverseMedia.map((a) => a.relevanceScore)) * 50);
-      result = matchScore > 40 ? 'inconclusive' : 'clear';
-    }
-
-    const listsChecked = [
-      'OFAC SDN', 'OFAC Consolidated', 'EU Consolidated Sanctions',
-      'UN Security Council', 'UK HM Treasury', 'FATF High-Risk Jurisdictions',
-      'PEP Global Database', 'Adverse Media Screening',
-    ];
-
-    const screeningResult: SanctionsScreeningResult = {
-      screeningId,
-      identityId: request.identityId,
-      result,
-      matchScore,
-      matchedLists: sanctionsMatches,
-      pepMatches,
-      adverseMedia,
-      riskIndicators,
-      screenedAt: new Date(),
-      expiresAt: new Date(Date.now() + 24 * 3600_000),
-      listsChecked,
-    };
-
-    // Persist screening result
-    await this.persistScreeningResult(screeningResult);
-
-    const processingMs = performance.now() - startTime;
-    logger.info('sanctions_screening_complete', {
-      screeningId,
-      identityId: request.identityId,
-      result,
-      matchScore,
-      sanctionsMatches: sanctionsMatches.length,
-      pepMatches: pepMatches.length,
-      processingMs: processingMs.toFixed(2),
-    });
-
-    return screeningResult;
+    return this.screenIdentityWithSignedLists(request);
   }
 
   private async screenIdentityWithSignedLists(
     request: SanctionsScreeningRequest,
   ): Promise<SanctionsScreeningResult> {
+    let authoritativeResult: AuthoritativeScreeningResult;
     try {
-      const result = await sanctionsScreeningService.screenEntity(
+      authoritativeResult = await sanctionsScreeningService.screenEntity(
         this.toAuthoritativeScreeningRequest(request),
       );
-      return this.fromAuthoritativeScreeningResult(result);
     } catch (err) {
-      logger.error('production_screening_unavailable', {
+      logger.error('authoritative_screening_unavailable', {
         identityId: request.identityId,
         error: (err as Error).message,
         code: (err as Error & { code?: string }).code,
       });
       throw new ComplianceAdvisorError(
-        'Production sanctions screening is unavailable until signed sanctions and PEP list data are configured.',
+        'Sanctions and PEP screening is unavailable until current signed list data is configured.',
         'PRODUCTION_SCREENING_UNAVAILABLE',
         503,
       );
     }
+
+    const result = this.fromAuthoritativeScreeningResult(authoritativeResult);
+    await this.persistScreeningResult(result, request);
+    return result;
   }
 
   private toAuthoritativeScreeningRequest(
@@ -393,8 +237,6 @@ export class ComplianceAdvisorService {
     result: AuthoritativeScreeningResult,
   ): SanctionsScreeningResult {
     const activeMatches = result.matches.filter((match) => match.status !== 'false_positive');
-    const nonPepMatches = result.matches.filter((match) => match.listSource !== 'pep_database');
-    const pepMatches = result.matches.filter((match) => match.listSource === 'pep_database');
     const matchScore = activeMatches.length > 0
       ? Math.round(Math.max(...activeMatches.map((match) => match.matchScore)) * 100)
       : 0;
@@ -404,7 +246,9 @@ export class ComplianceAdvisorService {
       identityId: result.entityId,
       result: result.overallRisk,
       matchScore,
-      matchedLists: nonPepMatches.map((match) => ({
+      // PEP hits remain signed-list matches because the authoritative source
+      // does not provide structured position, country, or relationship fields.
+      matchedLists: activeMatches.map((match) => ({
         listName: match.listSource,
         listSource: match.listSource,
         matchedName: match.matchedName,
@@ -415,20 +259,13 @@ export class ComplianceAdvisorService {
         lastUpdated: new Date(result.timestamp),
         sdnId: match.listEntryId,
       })),
-      pepMatches: pepMatches.map((match) => ({
-        name: match.matchedName,
-        position: match.listingDetails.remarks || 'Politically exposed person match',
-        country: 'UNKNOWN',
-        level: 'senior_official',
-        active: match.status !== 'false_positive',
-        matchConfidence: match.matchScore,
-        source: match.listSource,
-      })),
+      pepMatches: [],
       adverseMedia: [],
       riskIndicators: activeMatches.map((match) => `${match.listSource}:${match.status}`),
       screenedAt: new Date(result.timestamp),
       expiresAt: new Date(result.nextScreeningDate),
       listsChecked: result.listsScreened,
+      unavailableChecks: ['adverse_media', 'pep_profile_enrichment'],
     };
   }
 
@@ -436,483 +273,77 @@ export class ComplianceAdvisorService {
   // Compliance report generation
   // -------------------------------------------------------------------------
   async generateReport(
-    entityId: string,
-    reportType: ComplianceReportType,
-    jurisdiction: string,
+    _entityId: string,
+    _reportType: ComplianceReportType,
+    _jurisdiction: string,
   ): Promise<ComplianceReport> {
-    const reportId = `rpt-${crypto.randomUUID()}`;
-    const framework = this.getFrameworkForJurisdiction(jurisdiction);
-
-    logger.info('compliance_report_generation_start', {
-      reportId, entityId, reportType, jurisdiction,
-    });
-
-    const sections: ReportSection[] = [];
-    const gaps: ComplianceGap[] = [];
-    const recommendations: string[] = [];
-
-    // Fetch identity and credential data
-    const identity = await prisma.identity.findUnique({
-      where: { id: entityId },
-      include: {
-        credentials: { where: { status: 'ACTIVE' } },
-      },
-    });
-    const latestScreening = this.parseLatestScreening(
-      await redis.get(`screening:latest:${entityId}`),
+    throw new ComplianceAdvisorError(
+      'Compliance reports are unavailable until an approved, versioned policy and authority-reviewed report templates are configured.',
+      'COMPLIANCE_REPORT_POLICY_UNCONFIGURED',
+      503,
     );
-    const screeningCurrent = this.isScreeningCurrent(latestScreening);
-    const screeningStatus = this.screeningReportStatus(latestScreening);
-
-    // Section: Identity Verification
-    if (reportType === 'kyc' || reportType === 'comprehensive') {
-      const idVerified = identity?.status === 'ACTIVE';
-      const credCount = identity?.credentials.length ?? 0;
-
-      sections.push({
-        title: 'Identity Verification (KYC)',
-        status: idVerified && credCount >= 2 ? 'pass' : credCount >= 1 ? 'warning' : 'fail',
-        findings: [
-          `Identity status: ${identity?.status ?? 'NOT_FOUND'}`,
-          `Active credentials: ${credCount}`,
-          `TEE attestation: ${identity?.teeAttested ? 'verified' : 'not present'}`,
-          credCount < 2 ? 'Insufficient documentary evidence for full KYC compliance' : 'Documentary evidence meets minimum requirements',
-        ],
-        evidence: { identityStatus: identity?.status, credentialCount: credCount, teeAttested: identity?.teeAttested },
-      });
-
-      if (!identity?.teeAttested) {
-        gaps.push({
-          gapId: `gap-${crypto.randomUUID().slice(0, 8)}`,
-          category: 'identity_verification',
-          severity: 'warning',
-          description: 'Identity lacks hardware-bound TEE attestation',
-          regulation: `${framework} - Device Binding`,
-          remediation: 'Request TEE attestation from the identity holder to bind identity to a secure hardware enclave',
-        });
-        recommendations.push('Require TEE attestation for enhanced identity assurance');
-      }
-
-      if (credCount < 2) {
-        gaps.push({
-          gapId: `gap-${crypto.randomUUID().slice(0, 8)}`,
-          category: 'documentary_evidence',
-          severity: 'violation',
-          description: `Only ${credCount} credential(s) on file — minimum 2 required for standard CDD`,
-          regulation: `${framework} - CDD Requirements`,
-          remediation: 'Request additional identity documents (government ID, proof of address)',
-          deadline: new Date(Date.now() + 30 * 86_400_000),
-        });
-      }
-    }
-
-    // Section: AML Compliance
-    if (reportType === 'aml' || reportType === 'comprehensive') {
-      sections.push({
-        title: 'Anti-Money Laundering (AML)',
-        status: screeningStatus,
-        findings: [
-          `Sanctions screening: ${screeningCurrent ? 'current' : 'stale or missing'}`,
-          `Latest screening result: ${latestScreening?.result ?? 'missing'}`,
-          `Latest screening match score: ${latestScreening?.matchScore ?? 0}/100`,
-          'Transaction monitoring: active',
-          'Suspicious activity reports: none pending',
-        ],
-        evidence: {
-          screeningCurrent,
-          lastScreening: latestScreening?.screenedAt ?? null,
-          screeningResult: latestScreening?.result ?? null,
-          matchScore: latestScreening?.matchScore ?? null,
-        },
-      });
-
-      if (!screeningCurrent) {
-        gaps.push({
-          gapId: `gap-${crypto.randomUUID().slice(0, 8)}`,
-          category: 'aml_screening',
-          severity: 'warning',
-          description: 'Sanctions screening is not current (must be refreshed at least every 24 hours)',
-          regulation: `${framework} - Ongoing Monitoring`,
-          remediation: 'Run fresh sanctions screening for this identity',
-        });
-        recommendations.push('Implement automated daily sanctions screening');
-      }
-
-      if (screeningCurrent && latestScreening && latestScreening.result !== 'clear') {
-        gaps.push({
-          gapId: `gap-${crypto.randomUUID().slice(0, 8)}`,
-          category: 'sanctions_screening_result',
-          severity: latestScreening.result === 'confirmed_match' ? 'critical' : 'violation',
-          description: `Latest screening result is ${latestScreening.result} with score ${latestScreening.matchScore}/100`,
-          regulation: `${framework} - Sanctions/PEP Screening`,
-          remediation: latestScreening.result === 'confirmed_match'
-            ? 'Block the relationship and escalate immediately to compliance leadership'
-            : 'Place the relationship under manual review before approval',
-        });
-        recommendations.push('Resolve non-clear screening outcomes before relying on the compliance report');
-      }
-    }
-
-    // Section: Sanctions Screening
-    if (reportType === 'sanctions' || reportType === 'comprehensive') {
-      const sanctionsMatches = latestScreening?.matchedLists?.length;
-      sections.push({
-        title: 'Sanctions & Restrictive Measures',
-        status: this.sanctionsSectionStatus(latestScreening),
-        findings: [
-          `Checked against: ${(latestScreening?.listsChecked ?? ['OFAC SDN', 'EU Consolidated', 'UN Security Council', 'UK HMT']).join(', ')}`,
-          `Latest screening result: ${latestScreening?.result ?? 'missing'}`,
-          `Sanctions match count: ${sanctionsMatches ?? 'unavailable'}`,
-          `Last screening: ${screeningCurrent ? 'within compliance window' : 'stale or missing'}`,
-        ],
-        evidence: {
-          listsChecked: latestScreening?.listsChecked ?? null,
-          result: latestScreening?.result ?? null,
-          matchScore: latestScreening?.matchScore ?? null,
-          sanctionsMatchCount: sanctionsMatches ?? null,
-        },
-      });
-    }
-
-    // Section: PEP Screening
-    if (reportType === 'pep' || reportType === 'comprehensive') {
-      const pepMatches = latestScreening?.pepMatches?.length;
-      sections.push({
-        title: 'Politically Exposed Persons (PEP)',
-        status: this.pepSectionStatus(latestScreening),
-        findings: [
-          `Screened against global PEP databases: ${screeningCurrent ? 'current' : 'stale or missing'}`,
-          'Included family members and close associates',
-          `PEP match count: ${pepMatches ?? 'unavailable'}`,
-          `Latest screening result: ${latestScreening?.result ?? 'missing'}`,
-        ],
-        evidence: {
-          pepDatabasesChecked: latestScreening?.listsChecked?.includes('pep_database') ? 1 : null,
-          matchesFound: pepMatches ?? null,
-          result: latestScreening?.result ?? null,
-        },
-      });
-    }
-
-    // Section: Travel Rule
-    if (reportType === 'travel_rule' || reportType === 'comprehensive') {
-      const activeCredentialTypes = new Set(
-        (identity?.credentials ?? []).map((credential: { credentialType?: string }) =>
-          credential.credentialType,
-        ),
-      );
-      const hasTransferEvidence = activeCredentialTypes.has('travel_rule_compliance');
-      const hasOriginatorEvidence = activeCredentialTypes.has('kyc_enhanced');
-      const transferScreeningClear =
-        screeningCurrent && latestScreening?.result === 'clear';
-      const travelRuleReady =
-        Boolean(identity) &&
-        hasTransferEvidence &&
-        hasOriginatorEvidence &&
-        transferScreeningClear;
-
-      sections.push({
-        title: 'Travel Rule Compliance',
-        status: travelRuleReady ? 'pass' : 'fail',
-        findings: [
-          `Originator evidence: ${hasOriginatorEvidence ? 'present' : 'missing'}`,
-          `Beneficiary evidence: ${hasTransferEvidence ? 'present' : 'missing'}`,
-          `Transfer screening: ${transferScreeningClear ? 'clear and current' : 'missing, stale, or non-clear'}`,
-          `Threshold: ${jurisdiction === 'EU' ? 'EUR 1,000' : 'USD 3,000'}`,
-        ],
-        evidence: {
-          originatorComplete: hasOriginatorEvidence,
-          beneficiaryComplete: hasTransferEvidence,
-          screeningCurrent,
-          screeningResult: latestScreening?.result ?? null,
-        },
-      });
-
-      if (!travelRuleReady) {
-        gaps.push({
-          gapId: `gap-${crypto.randomUUID().slice(0, 8)}`,
-          category: 'travel_rule_evidence',
-          severity: 'violation',
-          description: 'Travel Rule report cannot pass without current transfer screening and originator/beneficiary evidence',
-          regulation: `${framework} - Travel Rule`,
-          remediation: 'Collect required transfer parties, run current screening, and issue travel_rule_compliance evidence before report approval',
-        });
-        recommendations.push('Block Travel Rule report approval until required transfer evidence is present');
-      }
-    }
-
-    // Compute compliance score
-    const sectionStatuses = sections.map((s) => s.status);
-    const passCount = sectionStatuses.filter((s) => s === 'pass').length;
-    const warningCount = sectionStatuses.filter((s) => s === 'warning').length;
-    const failCount = sectionStatuses.filter((s) => s === 'fail').length;
-    const totalSections = sectionStatuses.filter((s) => s !== 'not_applicable').length;
-
-    const complianceScore = totalSections > 0
-      ? Math.round(((passCount * 100 + warningCount * 60 + failCount * 0) / (totalSections * 100)) * 100)
-      : 0;
-
-    const report: ComplianceReport = {
-      reportId,
-      entityId,
-      reportType,
-      status: 'complete',
-      summary: `Compliance report for entity ${entityId.slice(0, 8)}... — Score: ${complianceScore}/100, ${gaps.length} gap(s) identified, ${recommendations.length} recommendation(s).`,
-      sections,
-      complianceScore,
-      gaps,
-      recommendations,
-      generatedAt: new Date(),
-      validUntil: new Date(Date.now() + 30 * 86_400_000),
-      jurisdiction,
-      regulatoryFramework: framework,
-    };
-
-    // Cache the report
-    await redis.set(`compliance:report:${reportId}`, JSON.stringify(report), 'EX', 30 * 86400);
-
-    logger.info('compliance_report_generated', {
-      reportId,
-      entityId,
-      complianceScore,
-      gapCount: gaps.length,
-      sectionCount: sections.length,
-    });
-
-    return report;
   }
 
   // -------------------------------------------------------------------------
   // Natural language compliance advisor
   // -------------------------------------------------------------------------
-  async queryComplianceAdvisor(query: AdvisorQuery): Promise<AdvisorResponse> {
-    const queryId = `cq-${crypto.randomUUID()}`;
-
-    logger.info('compliance_advisor_query', {
-      queryId,
-      question: query.question.slice(0, 100),
-      jurisdiction: query.context?.jurisdiction,
-    });
-
-    // Tokenize and normalize query
-    const queryTokens = this.tokenize(query.question.toLowerCase());
-
-    // Search knowledge base using TF-IDF-like scoring
-    const scoredEntries = REGULATORY_KB.map((entry) => {
-      let score = 0;
-
-      // Keyword overlap
-      for (const token of queryTokens) {
-        for (const keyword of entry.keywords) {
-          if (keyword.includes(token) || token.includes(keyword)) {
-            score += 10;
-          }
-        }
-
-        // Topic match
-        if (entry.topic.toLowerCase().includes(token)) {
-          score += 5;
-        }
-
-        // Content match
-        const contentLower = entry.content.toLowerCase();
-        if (contentLower.includes(token)) {
-          score += 2;
-        }
-      }
-
-      // Framework preference boost
-      if (query.context?.regulatoryFramework && entry.framework === query.context.regulatoryFramework) {
-        score *= 1.5;
-      }
-
-      return { entry, score };
-    });
-
-    // Sort by relevance score
-    scoredEntries.sort((a, b) => b.score - a.score);
-    const topEntries = scoredEntries.filter((e) => e.score > 5).slice(0, 3);
-
-    // Build response
-    let answer: string;
-    let confidence: number;
-    const citations: AdvisorResponse['citations'] = [];
-
-    if (topEntries.length === 0) {
-      answer = 'I could not find specific regulatory guidance matching your query in the current knowledge base. Please consult with your compliance team or legal counsel for authoritative guidance on this topic.';
-      confidence = 0.1;
-    } else {
-      // Synthesize answer from top entries
-      const primaryEntry = topEntries[0].entry;
-      answer = primaryEntry.content;
-
-      if (topEntries.length > 1) {
-        answer += `\n\nAdditionally, under ${topEntries[1].entry.framework} (${topEntries[1].entry.regulation}): ${topEntries[1].entry.content.slice(0, 200)}`;
-      }
-
-      confidence = Math.min(1.0, topEntries[0].score / 30);
-
-      for (const scored of topEntries) {
-        citations.push({
-          regulation: scored.entry.regulation,
-          section: scored.entry.section,
-          text: scored.entry.content.slice(0, 150) + '...',
-        });
-      }
-    }
-
-    const relatedTopics = topEntries
-      .map((e) => e.entry.topic)
-      .filter((topic, idx, arr) => arr.indexOf(topic) === idx)
-      .slice(0, 5);
-
-    const response: AdvisorResponse = {
-      queryId,
-      question: query.question,
-      answer,
-      confidence,
-      citations,
-      relatedTopics,
-      disclaimer: 'This response is generated by an AI compliance assistant and should not be considered legal advice. Always consult with qualified legal and compliance professionals for binding regulatory interpretation.',
-      timestamp: new Date(),
-    };
-
-    // Log for audit
-    await prisma.auditLog.create({
-      data: {
-        identityId: query.context?.identityId ?? 'system',
-        action: 'COMPLIANCE_ADVISOR_QUERY' as any,
-        resourceType: 'compliance_advisor_query',
-        resourceId: queryId,
-        details: {
-          question: query.question.slice(0, 200),
-          confidence,
-          citationCount: citations.length,
-          jurisdiction: query.context?.jurisdiction,
-        },
-      },
-    });
-
-    return response;
+  async queryComplianceAdvisor(
+    _query: AdvisorQuery,
+  ): Promise<AdvisorResponse> {
+    throw new ComplianceAdvisorError(
+      'The compliance advisor is unavailable until an authority-reviewed, versioned regulatory knowledge source is configured.',
+      'COMPLIANCE_ADVISOR_KB_UNCONFIGURED',
+      503,
+    );
   }
 
   // -------------------------------------------------------------------------
-  // Regulatory change impact simulation
+  // Regulatory change impact assessment
   // -------------------------------------------------------------------------
+  async assessRegulatoryChangeImpact(
+    _regulation: string,
+    _changes: string,
+    _jurisdiction: string,
+  ): Promise<RegulatoryChangeImpact> {
+    throw new ComplianceAdvisorError(
+      'Regulatory impact assessment is unavailable until an authoritative change feed and approved policy mapping define effective dates and affected records.',
+      'REGULATORY_IMPACT_POLICY_UNCONFIGURED',
+      503,
+    );
+  }
+
   async simulateRegulatoryChange(
     regulation: string,
     changes: string,
     jurisdiction: string,
   ): Promise<RegulatoryChangeImpact> {
-    const changeId = `rci-${crypto.randomUUID()}`;
-
-    logger.info('regulatory_change_simulation', {
-      changeId,
-      regulation,
-      jurisdiction,
-    });
-
-    // Count potentially impacted entities
-    const totalIdentities = await prisma.identity.count({
-      where: { status: 'ACTIVE' },
-    });
-
-    await prisma.credential.count({
-      where: { status: 'ACTIVE' },
-    });
-
-    // Analyze what credential types would be affected
-    const credentialTypes = await prisma.credential.groupBy({
-      by: ['credentialType'],
-      where: { status: 'ACTIVE' },
-      _count: true,
-    });
-
-    const changeLower = changes.toLowerCase();
-    const affectedTypes: string[] = [];
-    const requiredActions: string[] = [];
-    let estimatedEffort: 'low' | 'medium' | 'high' | 'critical' = 'low';
-
-    if (changeLower.includes('kyc') || changeLower.includes('identity')) {
-      affectedTypes.push('NATIONAL_ID', 'PASSPORT', 'DRIVERS_LICENSE');
-      requiredActions.push('Re-verify all active identity credentials');
-      estimatedEffort = 'high';
-    }
-
-    if (changeLower.includes('sanctions') || changeLower.includes('screening')) {
-      requiredActions.push('Update sanctions screening databases');
-      requiredActions.push('Re-screen all active identities against updated lists');
-      estimatedEffort = 'medium';
-    }
-
-    if (changeLower.includes('travel rule') || changeLower.includes('threshold')) {
-      requiredActions.push('Update transaction monitoring thresholds');
-      requiredActions.push('Implement new data collection fields for affected transfers');
-      estimatedEffort = 'medium';
-    }
-
-    if (changeLower.includes('pep') || changeLower.includes('enhanced due diligence')) {
-      requiredActions.push('Expand PEP screening to cover new categories');
-      requiredActions.push('Implement enhanced due diligence workflows');
-      affectedTypes.push('KYC_LEVEL_2', 'KYC_LEVEL_3');
-    }
-
-    if (requiredActions.length === 0) {
-      requiredActions.push('Review regulatory change for applicability');
-      requiredActions.push('Update compliance policy documentation');
-    }
-
-    // Estimate impacted entities
-    const effort: string = estimatedEffort;
-    const impactedRatio = effort === 'critical' ? 1.0
-      : effort === 'high' ? 0.7
-      : effort === 'medium' ? 0.4
-      : 0.1;
-
-    const impact: RegulatoryChangeImpact = {
-      changeId,
-      regulation,
-      effectiveDate: new Date(Date.now() + 90 * 86_400_000), // assume 90-day grace period
-      description: changes,
-      impactedEntities: Math.round(totalIdentities * impactedRatio),
-      impactedCredentialTypes: affectedTypes.length > 0
-        ? affectedTypes
-        : credentialTypes.slice(0, 3).map((c) => c.credentialType),
-      requiredActions,
-      estimatedEffort,
-      automationPossible: effort !== 'critical',
-    };
-
-    logger.info('regulatory_change_simulation_complete', {
-      changeId,
-      impactedEntities: impact.impactedEntities,
-      requiredActions: requiredActions.length,
-      estimatedEffort,
-    });
-
-    return impact;
+    // Backward-compatible alias for older callers.
+    return this.assessRegulatoryChangeImpact(regulation, changes, jurisdiction);
   }
 
   // -------------------------------------------------------------------------
   // Compliance alerts management
   // -------------------------------------------------------------------------
   async getActiveAlerts(entityId?: string): Promise<ComplianceAlert[]> {
-    let alerts = await this.getRedisBackedActiveAlerts();
-    if (alerts.length === 0) {
-      alerts = Array.from(this.alerts.values())
-        .filter((a) => !a.resolvedAt);
+    let rows: StoredComplianceAlert[];
+    try {
+      rows = await prisma.complianceAlert.findMany({
+        where: {
+          resolvedAt: null,
+          entityId: entityId ?? { not: null },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+    } catch (err) {
+      throw this.complianceAlertStoreError('list', err);
     }
 
-    if (entityId) {
-      alerts = alerts.filter((a) => a.entityId === entityId);
-    }
-
-    return alerts.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+    return rows.map((row) => this.fromStoredComplianceAlert(row));
   }
 
   async acknowledgeAlert(alertId: string, actorId: string): Promise<ComplianceAlert> {
-    const alert = await this.loadComplianceAlert(alertId);
-    if (!alert || alert.resolvedAt) {
+    const stored = await this.loadStoredComplianceAlert(alertId);
+    if (!stored || stored.resolvedAt) {
       throw new ComplianceAdvisorError(
         'Compliance alert not found',
         'COMPLIANCE_ALERT_NOT_FOUND',
@@ -920,22 +351,45 @@ export class ComplianceAdvisorService {
       );
     }
 
-    if (!alert.acknowledgedAt) {
-      alert.acknowledgedAt = new Date();
-      await this.persistComplianceAlert(alert);
+    if (stored.acknowledged) {
+      return this.fromStoredComplianceAlert(stored);
     }
+
+    const alert = this.fromStoredComplianceAlert(stored);
+    const acknowledgedAt = new Date();
+    let updated: StoredComplianceAlert;
+    try {
+      updated = await prisma.complianceAlert.update({
+        where: { id: alertId },
+        data: {
+          acknowledged: true,
+          acknowledgedBy: actorId,
+          metadata: {
+            regulation: alert.regulation,
+            actionRequired: alert.actionRequired,
+            acknowledgedAt: acknowledgedAt.toISOString(),
+          },
+        },
+      });
+    } catch (err) {
+      throw this.complianceAlertStoreError('acknowledge', err);
+    }
+
+    const acknowledged = this.fromStoredComplianceAlert(updated);
+    await this.cacheComplianceAlert(acknowledged);
 
     logger.info('compliance_alert_acknowledged', {
       alertId,
       actorId,
-      entityId: alert.entityId,
+      entityId: acknowledged.entityId,
     });
 
-    return alert;
+    return acknowledged;
   }
 
   async getAlert(alertId: string): Promise<ComplianceAlert | null> {
-    return this.loadComplianceAlert(alertId);
+    const stored = await this.loadStoredComplianceAlert(alertId);
+    return stored ? this.fromStoredComplianceAlert(stored) : null;
   }
 
   async createComplianceAlert(
@@ -947,19 +401,31 @@ export class ComplianceAdvisorService {
     regulation: string,
     actionRequired: string,
   ): Promise<ComplianceAlert> {
-    const alert: ComplianceAlert = {
-      alertId: `calert-${crypto.randomUUID()}`,
-      entityId,
-      level,
-      category,
-      title,
-      description,
-      regulation,
-      actionRequired,
-      createdAt: new Date(),
-    };
+    const alertId = `calert-${crypto.randomUUID()}`;
+    let stored: StoredComplianceAlert;
+    try {
+      stored = await prisma.complianceAlert.create({
+        data: {
+          id: alertId,
+          alertType: category,
+          severity: this.toStoredRiskLevel(level),
+          title,
+          description,
+          entityId,
+          entityType: 'identity',
+          actionRequired: actionRequired.trim().length > 0,
+          metadata: {
+            regulation,
+            actionRequired,
+          },
+        },
+      });
+    } catch (err) {
+      throw this.complianceAlertStoreError('create', err);
+    }
 
-    await this.persistComplianceAlert(alert);
+    const alert = this.fromStoredComplianceAlert(stored);
+    await this.cacheComplianceAlert(alert);
 
     logger.warn('compliance_alert_created', {
       alertId: alert.alertId,
@@ -976,332 +442,286 @@ export class ComplianceAdvisorService {
     return `compliance:alert:${alertId}`;
   }
 
-  private serializeComplianceAlert(alert: ComplianceAlert): string {
-    return JSON.stringify({
-      ...alert,
-      createdAt: alert.createdAt.toISOString(),
-      acknowledgedAt: alert.acknowledgedAt?.toISOString(),
-      resolvedAt: alert.resolvedAt?.toISOString(),
-    });
-  }
-
-  private parseComplianceAlert(raw: string | null): ComplianceAlert | null {
-    if (!raw) return null;
+  private async loadStoredComplianceAlert(
+    alertId: string,
+  ): Promise<StoredComplianceAlert | null> {
     try {
-      const parsed = JSON.parse(raw) as Partial<ComplianceAlert>;
-      if (
-        typeof parsed.alertId !== 'string' ||
-        typeof parsed.entityId !== 'string' ||
-        typeof parsed.level !== 'string' ||
-        typeof parsed.category !== 'string' ||
-        typeof parsed.title !== 'string' ||
-        typeof parsed.description !== 'string' ||
-        typeof parsed.regulation !== 'string' ||
-        typeof parsed.actionRequired !== 'string' ||
-        !parsed.createdAt
-      ) {
-        return null;
-      }
-
-      return {
-        alertId: parsed.alertId,
-        entityId: parsed.entityId,
-        level: parsed.level as ComplianceAlertLevel,
-        category: parsed.category,
-        title: parsed.title,
-        description: parsed.description,
-        regulation: parsed.regulation,
-        actionRequired: parsed.actionRequired,
-        createdAt: new Date(parsed.createdAt),
-        acknowledgedAt: parsed.acknowledgedAt
-          ? new Date(parsed.acknowledgedAt)
-          : undefined,
-        resolvedAt: parsed.resolvedAt ? new Date(parsed.resolvedAt) : undefined,
-      };
-    } catch {
-      return null;
+      return await prisma.complianceAlert.findUnique({
+        where: { id: alertId },
+      });
+    } catch (err) {
+      throw this.complianceAlertStoreError('load', err);
     }
   }
 
-  private async persistComplianceAlert(alert: ComplianceAlert): Promise<void> {
-    this.alerts.set(alert.alertId, alert);
+  private fromStoredComplianceAlert(
+    stored: StoredComplianceAlert,
+  ): ComplianceAlert {
+    if (!stored.entityId) {
+      throw new ComplianceAdvisorError(
+        'Stored compliance alert has no identity target.',
+        'COMPLIANCE_ALERT_DATA_INVALID',
+        503,
+      );
+    }
 
+    const metadata = this.parseComplianceAlertMetadata(stored.metadata);
+    return {
+      alertId: stored.id,
+      entityId: stored.entityId,
+      level: this.fromStoredRiskLevel(stored.severity),
+      category: stored.alertType,
+      title: stored.title,
+      description: stored.description,
+      regulation: metadata.regulation,
+      actionRequired: metadata.actionRequired,
+      createdAt: stored.createdAt,
+      acknowledgedAt: stored.acknowledged
+        ? metadata.acknowledgedAt
+        : undefined,
+      resolvedAt: stored.resolvedAt ?? undefined,
+    };
+  }
+
+  private parseComplianceAlertMetadata(metadata: unknown): {
+    regulation: string;
+    actionRequired: string;
+    acknowledgedAt?: Date;
+  } {
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+      throw new ComplianceAdvisorError(
+        'Stored compliance alert metadata is invalid.',
+        'COMPLIANCE_ALERT_DATA_INVALID',
+        503,
+      );
+    }
+
+    const record = metadata as Record<string, unknown>;
+    if (
+      typeof record.regulation !== 'string' ||
+      typeof record.actionRequired !== 'string'
+    ) {
+      throw new ComplianceAdvisorError(
+        'Stored compliance alert metadata is invalid.',
+        'COMPLIANCE_ALERT_DATA_INVALID',
+        503,
+      );
+    }
+
+    const acknowledgedAt = record.acknowledgedAt;
+    if (
+      acknowledgedAt !== undefined &&
+      (typeof acknowledgedAt !== 'string' ||
+        !Number.isFinite(new Date(acknowledgedAt).getTime()))
+    ) {
+      throw new ComplianceAdvisorError(
+        'Stored compliance alert acknowledgement time is invalid.',
+        'COMPLIANCE_ALERT_DATA_INVALID',
+        503,
+      );
+    }
+
+    return {
+      regulation: record.regulation,
+      actionRequired: record.actionRequired,
+      acknowledgedAt: acknowledgedAt
+        ? new Date(acknowledgedAt)
+        : undefined,
+    };
+  }
+
+  private toStoredRiskLevel(
+    level: ComplianceAlertLevel,
+  ): 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL' {
+    const levels: Record<
+      ComplianceAlertLevel,
+      'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'
+    > = {
+      info: 'LOW',
+      warning: 'MEDIUM',
+      violation: 'HIGH',
+      critical: 'CRITICAL',
+    };
+    return levels[level];
+  }
+
+  private fromStoredRiskLevel(level: string): ComplianceAlertLevel {
+    const levels: Record<string, ComplianceAlertLevel> = {
+      LOW: 'info',
+      MEDIUM: 'warning',
+      HIGH: 'violation',
+      CRITICAL: 'critical',
+    };
+    const mapped = levels[level];
+    if (!mapped) {
+      throw new ComplianceAdvisorError(
+        'Stored compliance alert severity is invalid.',
+        'COMPLIANCE_ALERT_DATA_INVALID',
+        503,
+      );
+    }
+    return mapped;
+  }
+
+  private complianceAlertStoreError(
+    operation: string,
+    err: unknown,
+  ): ComplianceAdvisorError {
+    logger.error('compliance_alert_store_error', {
+      operation,
+      error: (err as Error).message,
+    });
+    return new ComplianceAdvisorError(
+      'Compliance alert storage is unavailable.',
+      'COMPLIANCE_ALERT_STORE_UNAVAILABLE',
+      503,
+    );
+  }
+
+  private async cacheComplianceAlert(alert: ComplianceAlert): Promise<void> {
     try {
       await redis.set(
         this.complianceAlertKey(alert.alertId),
-        this.serializeComplianceAlert(alert),
+        JSON.stringify(alert),
         'EX',
         this.alertTtlSeconds,
       );
-
-      if (alert.resolvedAt) {
-        await redis.srem(this.activeAlertSetKey, alert.alertId);
-      } else {
-        await redis.sadd(this.activeAlertSetKey, alert.alertId);
-        await redis.expire(this.activeAlertSetKey, this.alertTtlSeconds);
-      }
     } catch (err) {
-      logger.error('compliance_alert_persist_error', {
+      logger.warn('compliance_alert_cache_error', {
         alertId: alert.alertId,
         error: (err as Error).message,
       });
     }
   }
 
-  private async loadComplianceAlert(alertId: string): Promise<ComplianceAlert | null> {
-    try {
-      const alert = this.parseComplianceAlert(
-        await redis.get(this.complianceAlertKey(alertId)),
-      );
-      if (alert) {
-        this.alerts.set(alert.alertId, alert);
-        return alert;
-      }
-    } catch (err) {
-      logger.warn('compliance_alert_load_failed', {
-        alertId,
-        error: (err as Error).message,
-      });
-    }
-
-    return this.alerts.get(alertId) ?? null;
-  }
-
-  private async getRedisBackedActiveAlerts(): Promise<ComplianceAlert[]> {
-    try {
-      const alertIds = await redis.smembers(this.activeAlertSetKey);
-      if (alertIds.length === 0) return [];
-
-      const alerts = await Promise.all(
-        alertIds.map(async (alertId) => {
-          const alert = this.parseComplianceAlert(
-            await redis.get(this.complianceAlertKey(alertId)),
-          );
-          if (!alert) {
-            await redis.srem(this.activeAlertSetKey, alertId);
-            return null;
-          }
-          this.alerts.set(alert.alertId, alert);
-          return alert;
-        }),
-      );
-
-      return alerts.filter(
-        (alert): alert is ComplianceAlert => Boolean(alert && !alert.resolvedAt),
-      );
-    } catch (err) {
-      logger.warn('compliance_alerts_active_load_failed', {
-        error: (err as Error).message,
-      });
-      return [];
-    }
-  }
-
   // -------------------------------------------------------------------------
   // Compliance score per entity
   // -------------------------------------------------------------------------
-  async computeComplianceScore(entityId: string, jurisdiction: string): Promise<{
+  async computeComplianceScore(
+    _entityId: string,
+    _jurisdiction: string,
+  ): Promise<{
     score: number;
     breakdown: Record<string, number>;
     status: 'compliant' | 'partially_compliant' | 'non_compliant';
   }> {
-    this.getFrameworkForJurisdiction(jurisdiction);
-
-    const identity = await prisma.identity.findUnique({
-      where: { id: entityId },
-      include: { credentials: { where: { status: 'ACTIVE' } } },
-    });
-
-    const breakdown: Record<string, number> = {};
-
-    // KYC completeness
-    const credCount = identity?.credentials.length ?? 0;
-    breakdown.kyc_completeness = Math.min(100, credCount * 25);
-
-    // Identity verification
-    breakdown.identity_verification = identity?.status === 'ACTIVE' ? 100
-      : identity?.status === 'PENDING' ? 50 : 0;
-
-    // TEE attestation
-    breakdown.tee_attestation = identity?.teeAttested ? 100 : 0;
-
-    // Screening recency
-    const lastScreening = await redis.get(`screening:latest:${entityId}`);
-    if (lastScreening) {
-      const screeningAge = Date.now() - new Date(JSON.parse(lastScreening).screenedAt).getTime();
-      breakdown.screening_recency = screeningAge < 86_400_000 ? 100
-        : screeningAge < 7 * 86_400_000 ? 70
-        : 30;
-    } else {
-      breakdown.screening_recency = 0;
-    }
-
-    // Credential freshness
-    const avgAge = credCount > 0
-      ? identity!.credentials.reduce((sum, c) => sum + (Date.now() - new Date(c.issuedAt).getTime()), 0) / credCount / 86_400_000
-      : 999;
-    breakdown.credential_freshness = avgAge < 90 ? 100 : avgAge < 180 ? 80 : avgAge < 365 ? 50 : 20;
-
-    const scores = Object.values(breakdown);
-    const score = Math.round(scores.reduce((a, b) => a + b, 0) / scores.length);
-
-    const status = score >= 80 ? 'compliant' as const
-      : score >= 50 ? 'partially_compliant' as const
-      : 'non_compliant' as const;
-
-    return { score, breakdown, status };
+    throw new ComplianceAdvisorError(
+      'Compliance scoring is unavailable until an approved, versioned scoring policy is configured.',
+      'COMPLIANCE_SCORING_POLICY_UNCONFIGURED',
+      503,
+    );
   }
 
   // -------------------------------------------------------------------------
   // Internal helpers
   // -------------------------------------------------------------------------
-  private computeNameSimilarity(name1: string, name2: string): number {
-    const s1 = name1.toLowerCase().trim();
-    const s2 = name2.toLowerCase().trim();
+  private async persistScreeningResult(
+    result: SanctionsScreeningResult,
+    request: SanctionsScreeningRequest,
+  ): Promise<void> {
+    const sanctionsMatches = result.matchedLists.filter(
+      (match) => match.listSource !== 'pep_database',
+    ).length;
+    const pepMatches = result.matchedLists.filter(
+      (match) => match.listSource === 'pep_database',
+    ).length;
 
-    if (s1 === s2) return 1.0;
-
-    // Normalized Levenshtein distance
-    const maxLen = Math.max(s1.length, s2.length);
-    if (maxLen === 0) return 1.0;
-
-    const distance = this.levenshteinDistance(s1, s2);
-    return 1 - distance / maxLen;
-  }
-
-  private levenshteinDistance(s1: string, s2: string): number {
-    const m = s1.length;
-    const n = s2.length;
-    const dp: number[][] = Array.from({ length: m + 1 }, (_, i) =>
-      Array.from({ length: n + 1 }, (_, j) => (i === 0 ? j : j === 0 ? i : 0)),
-    );
-
-    for (let i = 1; i <= m; i++) {
-      for (let j = 1; j <= n; j++) {
-        const cost = s1[i - 1] === s2[j - 1] ? 0 : 1;
-        dp[i][j] = Math.min(
-          dp[i - 1][j] + 1,
-          dp[i][j - 1] + 1,
-          dp[i - 1][j - 1] + cost,
-        );
-      }
-    }
-
-    return dp[m][n];
-  }
-
-  private tokenize(text: string): string[] {
-    return text
-      .replace(/[^\w\s]/g, ' ')
-      .split(/\s+/)
-      .filter((t) => t.length > 2)
-      .filter((t) => !['the', 'and', 'for', 'are', 'but', 'not', 'you', 'all', 'can', 'had', 'her', 'was', 'one', 'our', 'out', 'has', 'what', 'when', 'who', 'how', 'does', 'with', 'this', 'that', 'from', 'they', 'been', 'have', 'will', 'each', 'about'].includes(t));
-  }
-
-  private async checkAdverseMedia(_name: string): Promise<AdverseMediaHit[]> {
-    // In production, this would call an adverse media screening API
-    // Returning empty for non-demo names
-    return [];
-  }
-
-  private async persistScreeningResult(result: SanctionsScreeningResult): Promise<void> {
     try {
-      await redis.set(
-        `screening:latest:${result.identityId}`,
-        JSON.stringify({
-          screenedAt: result.screenedAt,
-          result: result.result,
-          matchScore: result.matchScore,
-          matchedLists: result.matchedLists,
-          pepMatches: result.pepMatches,
-          listsChecked: result.listsChecked,
-        }),
-        'EX',
-        7 * 86400,
-      );
-
-      await redis.set(
-        `screening:${result.screeningId}`,
-        JSON.stringify(result),
-        'EX',
-        90 * 86400,
-      );
-
-      await prisma.auditLog.create({
-        data: {
-          identityId: result.identityId,
-          action: 'SANCTIONS_SCREENING' as any,
-          resourceType: 'screening',
-          resourceId: result.screeningId,
-          details: {
-            result: result.result,
+      await prisma.$transaction(async (tx) => {
+        await tx.complianceScreening.create({
+          data: {
+            id: result.screeningId,
+            entityId: result.identityId,
+            entityType: 'individual',
+            screeningType: 'sanctions_pep',
+            queryName: request.fullName,
+            queryDetails: {
+              jurisdiction: request.jurisdiction,
+              nationality: request.nationality ?? null,
+              aliasCount: request.aliases?.length ?? 0,
+              documentNumberCount: request.documentNumbers?.length ?? 0,
+              unavailableChecks: result.unavailableChecks,
+            },
+            result: this.toStoredScreeningResult(result.result),
             matchScore: result.matchScore,
-            sanctionsMatches: result.matchedLists.length,
-            pepMatches: result.pepMatches.length,
-            listsChecked: result.listsChecked.length,
+            matches: {
+              signedListMatches: result.matchedLists.map((match) => ({
+                ...match,
+                listedSince: match.listedSince.toISOString(),
+                lastUpdated: match.lastUpdated.toISOString(),
+              })),
+              riskIndicators: result.riskIndicators,
+              unavailableChecks: result.unavailableChecks,
+            },
+            listsChecked: result.listsChecked,
+            screenedAt: result.screenedAt,
+            nextScreeningDue: result.expiresAt,
           },
-        },
+        });
+
+        await tx.auditLog.create({
+          data: {
+            identityId: result.identityId,
+            action: 'SANCTIONS_SCREENING',
+            resourceType: 'compliance_screening',
+            resourceId: result.screeningId,
+            details: {
+              result: result.result,
+              matchScore: result.matchScore,
+              sanctionsMatches,
+              pepMatches,
+              listsChecked: result.listsChecked.length,
+              unavailableChecks: result.unavailableChecks,
+            },
+          },
+        });
       });
     } catch (err) {
       logger.error('screening_persist_error', {
         screeningId: result.screeningId,
         error: (err as Error).message,
       });
+      throw new ComplianceAdvisorError(
+        'Screening evidence could not be durably recorded.',
+        'SCREENING_EVIDENCE_PERSISTENCE_UNAVAILABLE',
+        503,
+      );
     }
-  }
 
-  private getFrameworkForJurisdiction(jurisdiction: string): RegulatoryFramework {
-    const mapping: Record<string, RegulatoryFramework> = {
-      US: 'BSA',
-      EU: 'AMLD6',
-      UK: 'FCA_MLR',
-      SG: 'MAS_PSA',
-      AE: 'VARA',
-      CH: 'FINMA_AMLA',
-    };
-    return mapping[jurisdiction.toUpperCase()] ?? 'FATF';
-  }
-
-  private parseLatestScreening(raw: string | null): LatestScreeningSummary | null {
-    if (!raw) return null;
     try {
-      const parsed = JSON.parse(raw) as Partial<LatestScreeningSummary>;
-      if (!parsed.screenedAt || !parsed.result || typeof parsed.matchScore !== 'number') {
-        return null;
-      }
-      return parsed as LatestScreeningSummary;
-    } catch {
-      return null;
+      await redis.set(
+        `screening:latest:${result.identityId}`,
+        JSON.stringify(result),
+        'EX',
+        7 * 86400,
+      );
+      await redis.set(
+        `screening:${result.screeningId}`,
+        JSON.stringify(result),
+        'EX',
+        90 * 86400,
+      );
+    } catch (err) {
+      logger.warn('screening_cache_error', {
+        screeningId: result.screeningId,
+        error: (err as Error).message,
+      });
     }
   }
 
-  private isScreeningCurrent(summary: LatestScreeningSummary | null): boolean {
-    if (!summary) return false;
-    const screenedAtMs = new Date(summary.screenedAt).getTime();
-    return Number.isFinite(screenedAtMs) && Date.now() - screenedAtMs < 24 * 3600_000;
-  }
-
-  private screeningReportStatus(summary: LatestScreeningSummary | null): ReportSection['status'] {
-    if (!this.isScreeningCurrent(summary)) return 'warning';
-    if (summary?.result === 'confirmed_match') return 'fail';
-    if (summary?.result === 'potential_match' || summary?.result === 'inconclusive') return 'warning';
-    return 'pass';
-  }
-
-  private sanctionsSectionStatus(summary: LatestScreeningSummary | null): ReportSection['status'] {
-    if (!this.isScreeningCurrent(summary)) return 'warning';
-    const matchCount = summary?.matchedLists?.length;
-    if (matchCount && summary?.result === 'confirmed_match') return 'fail';
-    if (matchCount || (summary?.result !== 'clear' && matchCount === undefined)) return 'warning';
-    return 'pass';
-  }
-
-  private pepSectionStatus(summary: LatestScreeningSummary | null): ReportSection['status'] {
-    if (!this.isScreeningCurrent(summary)) return 'warning';
-    const matchCount = summary?.pepMatches?.length;
-    if (matchCount && summary?.result === 'confirmed_match') return 'fail';
-    if (matchCount || (summary?.result !== 'clear' && matchCount === undefined)) return 'warning';
-    return 'pass';
+  private toStoredScreeningResult(
+    result: ScreeningResult,
+  ): 'CLEAR' | 'POTENTIAL_MATCH' | 'CONFIRMED_MATCH' | 'UNDER_REVIEW' {
+    const results: Record<
+      ScreeningResult,
+      'CLEAR' | 'POTENTIAL_MATCH' | 'CONFIRMED_MATCH' | 'UNDER_REVIEW'
+    > = {
+      clear: 'CLEAR',
+      potential_match: 'POTENTIAL_MATCH',
+      confirmed_match: 'CONFIRMED_MATCH',
+      inconclusive: 'UNDER_REVIEW',
+    };
+    return results[result];
   }
 }
 

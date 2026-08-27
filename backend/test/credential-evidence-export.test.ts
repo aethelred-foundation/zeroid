@@ -29,7 +29,7 @@ const mockIssuerTrustFindMany = jest.fn();
 const mockIssuerKeyHistoryFindMany = jest.fn();
 const mockAuditLogCreate = jest.fn();
 
-jest.mock('../src/index', () => ({
+jest.mock('../src/runtime', () => ({
   logger: {
     info: jest.fn(),
     warn: jest.fn(),
@@ -97,9 +97,12 @@ function signForIssuer(issuerDid: string, claimsHash: string): string {
 
 describe('Credential evidence export', () => {
   const service = new CredentialService();
+  let credentialRecord: Record<string, unknown>;
+  let issuerStatus: string;
 
   beforeEach(async () => {
     jest.clearAllMocks();
+    issuerStatus = 'ACTIVE';
 
     const claims = {
       level: 'enhanced',
@@ -108,7 +111,7 @@ describe('Credential evidence export', () => {
     };
     const claimsHash = await hashClaims(claims);
 
-    mockCredentialFindUnique.mockResolvedValue({
+    credentialRecord = {
       id: 'cred-1',
       credentialType: 'kyc_enhanced',
       issuerId: 'issuer-1',
@@ -127,7 +130,8 @@ describe('Credential evidence export', () => {
       status: 'ACTIVE',
       issuedAt: new Date('2026-04-21T00:00:00.000Z'),
       expiresAt: new Date('2027-04-21T00:00:00.000Z'),
-    });
+    };
+    mockCredentialFindUnique.mockImplementation(async () => credentialRecord);
 
     mockIdentityFindUnique.mockImplementation(async ({ where }: any) => {
       if (where.id === 'issuer-1' || where.did === 'did:aethelred:issuer:alpha') {
@@ -138,7 +142,7 @@ describe('Credential evidence export', () => {
           keyVersion: '2',
           keyAlgorithm: 'ES256',
           verificationMethod: 'did:aethelred:issuer:alpha#assertion-key-2',
-          status: 'ACTIVE',
+          status: issuerStatus,
         };
       }
 
@@ -289,4 +293,60 @@ describe('Credential evidence export', () => {
     });
     expect(exported.trustLineage).not.toHaveProperty('selectedTrustRecordId');
   });
+
+  it.each([
+    {
+      reason: 'issuer identity is inactive',
+      failedCheck: 'issuerActive',
+      arrange: () => {
+        issuerStatus = 'SUSPENDED';
+      },
+    },
+    {
+      reason: 'issuer accreditation was revoked',
+      failedCheck: 'issuerTrustValid',
+      arrange: () => {
+        mockIssuerTrustFindMany.mockResolvedValue([
+          {
+            id: 'trust-1',
+            status: 'SUSPENDED',
+            allowedCredentialTypes: ['kyc_enhanced'],
+            allowedJurisdictions: ['UAE'],
+            expiresAt: null,
+          },
+        ]);
+      },
+    },
+    {
+      reason: 'issuer signature is invalid',
+      failedCheck: 'signatureValid',
+      arrange: () => {
+        credentialRecord.proof = {
+          ...(credentialRecord.proof as Record<string, unknown>),
+          signatureValue: 'invalid-signature',
+        };
+      },
+    },
+    {
+      reason: 'credential is present in the revocation registry',
+      failedCheck: 'notRevoked',
+      arrange: () => {
+        mockRevocationFindUnique.mockResolvedValue({
+          credentialId: 'cred-1',
+          reason: 'issuer_revoked',
+        });
+      },
+    },
+  ])(
+    'validates current authoritative state without audit when $reason',
+    async ({ failedCheck, arrange }) => {
+      arrange();
+
+      const validation = await service.validateCredentialForUse('cred-1');
+
+      expect(validation.valid).toBe(false);
+      expect(validation.checks[failedCheck]).toBe(false);
+      expect(mockAuditLogCreate).not.toHaveBeenCalled();
+    },
+  );
 });

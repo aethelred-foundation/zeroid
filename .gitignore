@@ -14,6 +14,7 @@ dist/
 # Testing
 coverage/
 test-results/
+junit.xml
 
 # Environment
 .env
@@ -48,10 +49,19 @@ build/circuits/
 *.zkey
 *.wtns
 pot*.ptau
+# Circuit artifacts served to the browser are ceremony OUTPUT, not source:
+# ceremony/scripts/06-deploy-artifacts.sh re-materialises them from a finalized
+# ceremony at deploy time (the *.zkey rule above already covers proving keys).
+public/circuits/
 
 # Prisma
 backend/prisma/*.db
-backend/prisma/migrations/
 
 # Vercel
 .vercel
+
+# Local integration env (dummy secrets, never committed)
+.env.integration
+
+# Foundry broadcast logs — deployments/<chainId>.json is the source of truth
+broadcast/

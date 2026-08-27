@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { createLogger, format, transports } from 'winston';
 import crypto from 'crypto';
 import * as net from 'net';
-import { prisma, redis } from '../../index';
+import { prisma, redis } from '../../runtime';
 import { isProductionRuntime } from '../production-safety';
 
 // ---------------------------------------------------------------------------
@@ -695,32 +695,31 @@ export class APIGateway {
   }
 
   private async findAPIKeyByPresentedSecret(rawKey: string): Promise<any | null> {
-    const keyHashes = [this.hashAPIKey(rawKey)];
-    if (this.allowLegacySecretHashFallback()) {
-      const legacyHash = this.legacyAPIKeyHash(rawKey);
-      if (!keyHashes.includes(legacyHash)) keyHashes.push(legacyHash);
-    }
-
-    for (const keyHash of keyHashes) {
-      const keyRecord = await prisma.aPIKey.findUnique({
-        where: { keyHash },
-      });
-      if (keyRecord) return keyRecord;
-    }
-
-    return null;
+    return prisma.aPIKey.findUnique({
+      where: { keyHash: this.hashAPIKey(rawKey) },
+    });
   }
 
   private hashAPIKey(rawKey: string): string {
-    return this.hashEnterpriseSecret(
-      'enterprise-api-key',
-      rawKey,
-      () => this.legacyAPIKeyHash(rawKey),
-    );
-  }
+    const pepper = this.getEnterpriseSecretHashPepper();
+    if (!pepper) {
+      // API keys have 192 bits of generated entropy. Scrypt provides a
+      // deterministic, memory-hard development fallback without storing raw
+      // SHA-256 digests. Production always requires the deployment pepper.
+      return crypto
+        .scryptSync(
+          rawKey,
+          'zeroid:enterprise-api-key:v2:development',
+          32,
+        )
+        .toString('hex');
+    }
 
-  private legacyAPIKeyHash(rawKey: string): string {
-    return crypto.createHash('sha256').update(rawKey).digest('hex');
+    return crypto
+      .createHmac('sha256', pepper)
+      .update('zeroid:enterprise-api-key:v2:')
+      .update(rawKey)
+      .digest('hex');
   }
 
   private hashOAuth2ClientSecret(clientSecret: string): string {

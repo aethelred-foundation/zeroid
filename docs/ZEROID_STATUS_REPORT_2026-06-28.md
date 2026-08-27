@@ -1,5 +1,7 @@
 # ZeroID — Engineering Status Report
 
+> **Correction (2026-07-12):** this report describes a W1 "chain-ID fix 7331/7332 → canonical 8821/88210". That direction was WRONG: 8821/88210 were never-deployed placeholders in ecosystem manifest v1.0.0 (8821 is the SLIP-44 coin type, not an EVM chain id). The canonical EVM chain ids are **7331 (mainnet, reserved) / 7332 (testnet & devnet, confirmed live)** per the aethelred repo `ecosystem/manifest.json` **v2.0.0** (2026-07-12). ZeroID's code (`src/config/chains.ts`) has since been re-migrated and is conformant; every 8821/88210 reference below is historical.
+
 **Prepared for:** External strategy/architecture consultant (for review & opinion)
 **Date:** 28 June 2026 (rev. 2 — adds AI Agent Passport v1, §5.4)
 **Subject:** ZeroID re-platforming onto the canonical Aethelred protocol; implementation of the institutional ("20×") moat features; and a new "AI agent's passport" (AI Agent Identity v1) vertical
@@ -30,7 +32,7 @@ Your three documents assumed the protocol's proving layer is **Halo2 / PlonKish*
 | Chain | Cosmos-SDK / CometBFT (Go) | Cosmos-SDK v0.50 / CometBFT v0.38 (Go 1.24) | ✅ Correct |
 | Verifier | Go module + Rust FFI | Go modules + custom **Rust VM** (`crates/vm`) with ZK precompiles | ✅ Correct |
 | **General ZK system** | **Halo2 / PlonKish** | **Groth16 + PLONK over BN254/BLS12-381** (arkworks) | ⚠️ Differs |
-| zkML | EZKL / Halo2 | **EZKL** (Halo2-backed) precompile + Freivalds for LLM inference | ✅ Correct (EZKL is the zkML lane) |
+| zkML | EZKL / Halo2 | **EZKL** (Halo2-backed) precompile + Freivalds for model inference | ✅ Correct (EZKL is the zkML lane) |
 | TEE | Decentralized TEEs / SGX-SEV | **Real DCAP attestation, hardware-agnostic, 6 platforms** | ✅ Correct |
 | Crypto | (PII purge, ZKP) | **Post-quantum ML-DSA-65 + ECDSA hybrid, ML-KEM-768**, BLS12-381 | ✅ Correct + stronger |
 | On-chain cost | ~210k gas flat | precompile-based, flat-cost design | ✅ Consistent |
@@ -163,7 +165,7 @@ Each activation is a config flip with no code change and no regression window �
 2. Stand up the testnet; flip the activation gates one verified circuit/flag at a time (runbook in `src/lib/aethelred/README.md`).
 3. Replicate the boundary to the other four dApps (4-step guide in the README).
 4. Decide the tokenomics design and owner.
-5. Run the AI Agent Passport schema migration on a test database (`prisma migrate`), then enable agent registration for an internal "Compliance Copilot" pilot.
+5. Run the AI Agent Passport schema migration on a test database (`prisma migrate`), then enable agent registration for an internal "Compliance Assistant" pilot.
 
 ---
 

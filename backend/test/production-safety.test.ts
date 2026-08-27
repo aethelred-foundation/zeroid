@@ -1,5 +1,6 @@
 import {
   collectProductionSafetyViolations,
+  getAllowedCorsOrigins,
   isProductionRuntime,
   isMetricsAccessConfigured,
   isMetricsEndpointDisabled,
@@ -28,6 +29,10 @@ const apiJwtPublicKey = apiJwtKeyPair.publicKey.export({
   format: 'pem',
 }) as string;
 
+const oid4vciKeyPair = crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' });
+const oid4vciIssuerJwk = oid4vciKeyPair.privateKey.export({ format: 'jwk' });
+const oid4vciIssuerPublicJwk = oid4vciKeyPair.publicKey.export({ format: 'jwk' });
+
 const BASE_ENV: NodeJS.ProcessEnv = { NODE_ENV: 'test' };
 const circuitDigestManifest = Object.fromEntries(
   circuitArtifactDigestKeys().map((key, index) => [
@@ -44,6 +49,7 @@ const PROD_BASE_ENV: NodeJS.ProcessEnv = {
   API_JWT_ALGORITHM: 'RS256',
   API_JWT_KEY_ID: 'api-jwt-key-1',
   CORS_ORIGINS: 'https://app.zeroid.example,https://admin.zeroid.example',
+  ZEROID_AUTH_ORIGIN: 'https://app.zeroid.example',
   SANCTIONS_SCREENING_DISABLED: 'false',
   SANCTIONS_LIST_SIGNATURE_PUBLIC_KEYS_JSON: JSON.stringify({
     sovereign_list_signer: '-----BEGIN PUBLIC KEY-----trusted-sanctions-list-key-----END PUBLIC KEY-----',
@@ -78,6 +84,8 @@ const PROD_BASE_ENV: NodeJS.ProcessEnv = {
   SCHEMA_REJECTION_THRESHOLD: '3',
   ZK_CONTEXT_BOUND_CIRCUITS_READY: 'true',
   ZK_CIRCUIT_ARTIFACT_DIGESTS_JSON: JSON.stringify(circuitDigestManifest),
+  OID4VCI_ISSUER_JWK: JSON.stringify(oid4vciIssuerJwk),
+  OID4VCI_STORAGE_HASH_PEPPER: 'o'.repeat(64),
 };
 
 describe('production safety controls', () => {
@@ -255,6 +263,57 @@ describe('production safety controls', () => {
     })).toEqual([
       expect.objectContaining({ control: 'CORS_ORIGINS' }),
     ]);
+
+    // The testnet wildcard (reflect any origin) must never survive production.
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      CORS_ORIGINS: '*',
+      METRICS_PUBLIC_DISABLED: 'true',
+    })).toEqual([
+      expect.objectContaining({ control: 'CORS_ORIGINS' }),
+    ]);
+  });
+
+  it('requires a trusted wallet authentication origin included in CORS', () => {
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      ZEROID_AUTH_ORIGIN: '',
+      METRICS_PUBLIC_DISABLED: 'true',
+    })).toEqual([
+      expect.objectContaining({ control: 'ZEROID_AUTH_ORIGIN' }),
+    ]);
+
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      ZEROID_AUTH_ORIGIN: 'http://localhost:3003',
+      METRICS_PUBLIC_DISABLED: 'true',
+    })).toEqual([
+      expect.objectContaining({ control: 'ZEROID_AUTH_ORIGIN' }),
+    ]);
+
+    expect(collectProductionSafetyViolations({
+      ...PROD_BASE_ENV,
+      ZEROID_AUTH_ORIGIN: 'https://wallet.zeroid.example',
+      METRICS_PUBLIC_DISABLED: 'true',
+    })).toEqual([
+      expect.objectContaining({ control: 'ZEROID_AUTH_ORIGIN' }),
+    ]);
+  });
+
+  it('rejects wildcard CORS semantics and keeps only explicit origins', () => {
+    expect(getAllowedCorsOrigins({ CORS_ORIGINS: '*' } as NodeJS.ProcessEnv)).toEqual([]);
+    // A wildcard cannot override an explicit allowlist.
+    expect(
+      getAllowedCorsOrigins({
+        CORS_ORIGINS: 'http://localhost:3003,*',
+      } as NodeJS.ProcessEnv),
+    ).toEqual(['http://localhost:3003']);
+    // Explicit lists still resolve to a deduplicated allowlist.
+    expect(
+      getAllowedCorsOrigins({
+        CORS_ORIGINS: 'http://localhost:3003,http://localhost:3003',
+      } as NodeJS.ProcessEnv),
+    ).toEqual(['http://localhost:3003']);
   });
 
   it('rejects wildcard trusted proxy configuration in production', () => {
@@ -822,5 +881,60 @@ describe('production safety controls', () => {
     })).toEqual([
       expect.objectContaining({ control: 'ZK_CONTEXT_BOUND_CIRCUITS_READY' }),
     ]);
+  });
+});
+
+describe('OpenID4VCI / OpenID4VP production controls', () => {
+  const cleanProdEnv: NodeJS.ProcessEnv = {
+    ...PROD_BASE_ENV,
+    METRICS_PUBLIC_DISABLED: 'true',
+  };
+
+  it('blocks production startup when OID4VCI_ISSUER_JWK is missing (ephemeral-key fail-open)', () => {
+    const { OID4VCI_ISSUER_JWK: _omit, ...withoutKey } = cleanProdEnv;
+    expect(collectProductionSafetyViolations(withoutKey)).toEqual([
+      expect.objectContaining({ control: 'OID4VCI_ISSUER_JWK' }),
+    ]);
+  });
+
+  it('rejects a malformed OID4VCI_ISSUER_JWK', () => {
+    expect(
+      collectProductionSafetyViolations({ ...cleanProdEnv, OID4VCI_ISSUER_JWK: 'not-json' }),
+    ).toEqual([expect.objectContaining({ control: 'OID4VCI_ISSUER_JWK' })]);
+  });
+
+  it('rejects a public-only OID4VCI_ISSUER_JWK (no private component)', () => {
+    expect(
+      collectProductionSafetyViolations({
+        ...cleanProdEnv,
+        OID4VCI_ISSUER_JWK: JSON.stringify(oid4vciIssuerPublicJwk),
+      }),
+    ).toEqual([expect.objectContaining({ control: 'OID4VCI_ISSUER_JWK' })]);
+  });
+
+  it('accepts a valid private OID4VCI_ISSUER_JWK (no violations)', () => {
+    expect(collectProductionSafetyViolations(cleanProdEnv)).toEqual([]);
+  });
+
+  it('requires a strong OpenID4VCI storage pepper', () => {
+    expect(
+      collectProductionSafetyViolations({
+        ...cleanProdEnv,
+        OID4VCI_STORAGE_HASH_PEPPER: '',
+      }),
+    ).toEqual([expect.objectContaining({ control: 'OID4VCI_STORAGE_HASH_PEPPER' })]);
+    expect(
+      collectProductionSafetyViolations({
+        ...cleanProdEnv,
+        OID4VCI_STORAGE_HASH_PEPPER: 'short',
+      }),
+    ).toEqual([expect.objectContaining({ control: 'OID4VCI_STORAGE_HASH_PEPPER' })]);
+  });
+
+  it('flags OID4VP_ISSUER_JWKS only when set but malformed (absence is fail-closed by design)', () => {
+    expect(
+      collectProductionSafetyViolations({ ...cleanProdEnv, OID4VP_ISSUER_JWKS: '{broken' }),
+    ).toEqual([expect.objectContaining({ control: 'OID4VP_ISSUER_JWKS' })]);
+    expect(collectProductionSafetyViolations(cleanProdEnv)).toEqual([]);
   });
 });

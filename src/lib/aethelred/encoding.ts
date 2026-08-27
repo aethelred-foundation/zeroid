@@ -81,6 +81,8 @@ export function serializeGroth16ProofUncompressed(
     proof.c[1],
   ];
   const out = new Uint8Array(elements.length * FIELD_BYTES);
-  elements.forEach((el, i) => out.set(fieldElementToBytes(el), i * FIELD_BYTES));
+  elements.forEach((el, i) =>
+    out.set(fieldElementToBytes(el), i * FIELD_BYTES),
+  );
   return toBase64(out);
 }

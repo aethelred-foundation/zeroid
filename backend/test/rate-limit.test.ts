@@ -4,7 +4,7 @@ const mockEval = jest.fn();
 const mockWarn = jest.fn();
 const mockError = jest.fn();
 
-jest.mock('../src/index', () => ({
+jest.mock('../src/runtime', () => ({
   redis: {
     eval: mockEval,
   },

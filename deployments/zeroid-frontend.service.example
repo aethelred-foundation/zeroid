@@ -1,0 +1,23 @@
+[Unit]
+Description=ZeroID production frontend
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=zeroid
+Group=zeroid
+WorkingDirectory=/opt/zeroid/current
+Environment=NODE_ENV=production
+Environment=HOSTNAME=0.0.0.0
+Environment=PORT=3003
+ExecStart=/usr/bin/npm run start
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+KillSignal=SIGTERM
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

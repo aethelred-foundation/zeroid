@@ -11,14 +11,18 @@ import React from "react";
 import { renderHook, act, waitFor } from "@testing-library/react";
 import { IdentityProvider, useIdentity } from "@/contexts/IdentityContext";
 import { apiClient } from "@/lib/api/client";
+import {
+  clearIdentityAuthToken,
+  getIdentityAuthToken,
+  storeIdentityAuthToken,
+} from "@/lib/identity/registration";
+import { expireIdentitySession } from "@/lib/identity/session";
 import { createDID } from "@/lib/utils";
+import type { IdentityProfile, DID, Bytes32 } from "@/types";
 import type {
-  IdentityProfile,
-  Credential,
-  CredentialStatus,
-  DID,
-  Bytes32,
-} from "@/types";
+  CredentialSummary,
+  CredentialSummaryStatus,
+} from "@/lib/credentials/summary";
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -33,7 +37,6 @@ const mockUseAccount = jest.fn<
 const mockSignMessageAsync = jest.fn();
 const validRecoveryHash =
   "0x1111111111111111111111111111111111111111111111111111111111111111" as Bytes32;
-const validPublicKey = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
 
 jest.mock("wagmi", () => ({
   useAccount: () => mockUseAccount(),
@@ -45,6 +48,9 @@ jest.mock("@/lib/api/client", () => ({
     getIdentityByAddress: jest.fn(),
     listCredentials: jest.fn(),
     registerIdentity: jest.fn(),
+    createIdentityAuthChallenge: jest.fn(),
+    loginWithWallet: jest.fn(),
+    getCurrentIdentity: jest.fn(),
   },
 }));
 
@@ -88,19 +94,20 @@ const makeProfile = (addr: string): IdentityProfile => ({
 });
 
 const makeCredential = (
-  hash: string,
-  status: CredentialStatus = 1,
-): Credential => ({
-  hash: hash as Bytes32,
-  schemaHash:
-    "0xschema0000000000000000000000000000000000000000000000000000000001" as Bytes32,
-  issuerDid: makeDID("0xissuer"),
-  subjectDid: makeDID(mockAddress),
-  issuedAt: 1700000000,
-  expiresAt: 1800000000,
+  index: number,
+  status: CredentialSummaryStatus = "active",
+): CredentialSummary => ({
+  id: `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
+  credentialType: "KYC_LEVEL_2",
+  typeLabel: "KYC Level 2",
+  category: "kyc",
+  issuerId: "issuer-identity-id",
+  subjectId: "subject-identity-id",
+  claimsHash: "a".repeat(64),
+  proofAvailable: true,
   status,
-  merkleRoot:
-    "0xmerkle0000000000000000000000000000000000000000000000000000000001" as Bytes32,
+  issuedAt: "2023-11-14T22:13:20.000Z",
+  expiresAt: "2027-01-15T08:00:00.000Z",
 });
 
 // ---------------------------------------------------------------------------
@@ -109,6 +116,17 @@ const makeCredential = (
 
 function wrapper({ children }: { children: React.ReactNode }) {
   return <IdentityProvider>{children}</IdentityProvider>;
+}
+
+function establishIdentitySession(
+  profile: IdentityProfile = makeProfile(mockAddress),
+): void {
+  storeIdentityAuthToken("identity-token");
+  (apiClient.getCurrentIdentity as jest.Mock).mockResolvedValue({
+    id: "identity-1",
+    did: typeof profile.did === "string" ? profile.did : profile.did.uri,
+    status: "ACTIVE",
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -124,11 +142,13 @@ beforeEach(() => {
   (createDID as jest.Mock).mockImplementation((id: string, network: string) =>
     makeDID(id),
   );
+  clearIdentityAuthToken();
   window.sessionStorage.clear();
 });
 
 afterEach(() => {
   jest.useRealTimers();
+  clearIdentityAuthToken();
 });
 
 // ---------------------------------------------------------------------------
@@ -177,7 +197,7 @@ describe("IdentityContext", () => {
   // =========================================================================
 
   describe("DID derivation", () => {
-    it("derives DID from connected address", () => {
+    it("derives DID from connected address", async () => {
       mockUseAccount.mockReturnValue({
         address: mockAddress,
         isConnected: true,
@@ -192,6 +212,9 @@ describe("IdentityContext", () => {
         expect.any(String),
       );
       expect(result.current.did).toEqual(makeDID(mockAddress.toLowerCase()));
+      await waitFor(() => {
+        expect(result.current.identity.isLoading).toBe(false);
+      });
     });
 
     it("returns null DID when disconnected", () => {
@@ -211,9 +234,10 @@ describe("IdentityContext", () => {
   // =========================================================================
 
   describe("loading identity on connect", () => {
-    it("fetches profile and credentials when wallet connects", async () => {
+    it("fetches profile and protected credentials for a validated session", async () => {
       const profile = makeProfile(mockAddress);
-      const creds = [makeCredential("0xcred01"), makeCredential("0xcred02")];
+      const creds = [makeCredential(1), makeCredential(2)];
+      establishIdentitySession(profile);
 
       (apiClient.getIdentityByAddress as jest.Mock).mockResolvedValue(profile);
       (apiClient.listCredentials as jest.Mock).mockResolvedValue({
@@ -240,6 +264,30 @@ describe("IdentityContext", () => {
       expect(result.current.identity.credentials).toEqual(creds);
       expect(result.current.identity.isRegistered).toBe(true);
       expect(result.current.identity.error).toBeNull();
+      expect(result.current.sessionStatus).toBe("authenticated");
+      expect(apiClient.getCurrentIdentity).toHaveBeenCalledWith(
+        "identity-token",
+      );
+    });
+
+    it("marks a registered wallet as sign-in-required without reading protected credentials", async () => {
+      const profile = makeProfile(mockAddress);
+      (apiClient.getIdentityByAddress as jest.Mock).mockResolvedValue(profile);
+      mockUseAccount.mockReturnValue({
+        address: mockAddress,
+        isConnected: true,
+      });
+
+      const { result } = renderHook(() => useIdentity(), { wrapper });
+
+      await waitFor(() => {
+        expect(result.current.identity.isLoading).toBe(false);
+      });
+
+      expect(result.current.identity.isRegistered).toBe(true);
+      expect(result.current.identity.credentials).toEqual([]);
+      expect(result.current.sessionStatus).toBe("sign-in-required");
+      expect(apiClient.listCredentials).not.toHaveBeenCalled();
     });
 
     it("sets isRegistered to false when profile is not found (404)", async () => {
@@ -321,6 +369,165 @@ describe("IdentityContext", () => {
   });
 
   // =========================================================================
+  // Wallet-backed sessions
+  // =========================================================================
+
+  describe("wallet-backed session", () => {
+    it("signs the server challenge, stores the returned token in memory, and refreshes credentials", async () => {
+      const profile = makeProfile(mockAddress);
+      const credentials = [makeCredential(1)];
+      const challengeMessage = "server-issued sign-in message";
+
+      (apiClient.getIdentityByAddress as jest.Mock).mockResolvedValue(profile);
+      (apiClient.createIdentityAuthChallenge as jest.Mock).mockResolvedValue({
+        challengeId: "a".repeat(64),
+        message: challengeMessage,
+        expiresAt: "2026-07-18T10:05:00.000Z",
+      });
+      (apiClient.loginWithWallet as jest.Mock).mockResolvedValue({
+        identity: {
+          id: "identity-1",
+          did: makeDID(mockAddress).uri,
+          status: "ACTIVE",
+        },
+        token: "wallet-session-token",
+        sessionId: "session-1",
+      });
+      (apiClient.listCredentials as jest.Mock).mockResolvedValue({
+        items: credentials,
+        total: 1,
+        page: 1,
+        pageSize: 100,
+        hasMore: false,
+      });
+      mockUseAccount.mockReturnValue({
+        address: mockAddress,
+        isConnected: true,
+      });
+
+      const { result } = renderHook(() => useIdentity(), { wrapper });
+      await waitFor(() => {
+        expect(result.current.sessionStatus).toBe("sign-in-required");
+      });
+
+      await act(() => result.current.signIn());
+
+      expect(apiClient.createIdentityAuthChallenge).toHaveBeenCalledWith(
+        mockAddress,
+      );
+      expect(mockSignMessageAsync).toHaveBeenCalledWith({
+        message: challengeMessage,
+      });
+      expect(apiClient.loginWithWallet).toHaveBeenCalledWith({
+        challengeId: "a".repeat(64),
+        signature: "0xsignature",
+      });
+      expect(apiClient.listCredentials).toHaveBeenCalledWith(
+        1,
+        100,
+        "wallet-session-token",
+      );
+      expect(result.current.sessionStatus).toBe("authenticated");
+      expect(result.current.identity.credentials).toEqual(credentials);
+      expect(getIdentityAuthToken()).toBe("wallet-session-token");
+      expect(
+        window.sessionStorage.getItem("zeroid.identity.authToken"),
+      ).toBeNull();
+    });
+
+    it("does not retain a token when wallet signing is rejected", async () => {
+      const profile = makeProfile(mockAddress);
+      (apiClient.getIdentityByAddress as jest.Mock).mockResolvedValue(profile);
+      (apiClient.createIdentityAuthChallenge as jest.Mock).mockResolvedValue({
+        challengeId: "b".repeat(64),
+        message: "sign this",
+        expiresAt: "2026-07-18T10:05:00.000Z",
+      });
+      mockSignMessageAsync.mockRejectedValueOnce(
+        Object.assign(new Error("User rejected"), { code: 4001 }),
+      );
+      mockUseAccount.mockReturnValue({
+        address: mockAddress,
+        isConnected: true,
+      });
+
+      const { result } = renderHook(() => useIdentity(), { wrapper });
+      await waitFor(() => {
+        expect(result.current.sessionStatus).toBe("sign-in-required");
+      });
+
+      let caught: unknown;
+      await act(async () => {
+        try {
+          await result.current.signIn();
+        } catch (error) {
+          caught = error;
+        }
+      });
+
+      expect(caught).toBeInstanceOf(Error);
+      expect(apiClient.loginWithWallet).not.toHaveBeenCalled();
+      expect(getIdentityAuthToken()).toBeUndefined();
+      expect(result.current.sessionStatus).toBe("sign-in-required");
+      expect(result.current.sessionError).toBeTruthy();
+    });
+
+    it("clears protected state when any API surface reports an expired session", async () => {
+      const profile = makeProfile(mockAddress);
+      establishIdentitySession(profile);
+      (apiClient.getIdentityByAddress as jest.Mock).mockResolvedValue(profile);
+      (apiClient.listCredentials as jest.Mock).mockResolvedValue({
+        items: [makeCredential(1)],
+        total: 1,
+        page: 1,
+        pageSize: 100,
+        hasMore: false,
+      });
+      mockUseAccount.mockReturnValue({
+        address: mockAddress,
+        isConnected: true,
+      });
+
+      const { result } = renderHook(() => useIdentity(), { wrapper });
+      await waitFor(() => {
+        expect(result.current.sessionStatus).toBe("authenticated");
+      });
+
+      act(() => expireIdentitySession());
+
+      expect(getIdentityAuthToken()).toBeUndefined();
+      expect(result.current.sessionStatus).toBe("sign-in-required");
+      expect(result.current.identity.credentials).toEqual([]);
+      expect(result.current.sessionError).toMatch(/expired/i);
+    });
+
+    it("rejects a stored session whose DID belongs to another wallet", async () => {
+      const profile = makeProfile(mockAddress);
+      storeIdentityAuthToken("wrong-wallet-token");
+      (apiClient.getCurrentIdentity as jest.Mock).mockResolvedValue({
+        id: "identity-other",
+        did: "did:aethelred:testnet:0xabcdefabcdefabcdefabcdefabcdefabcdefabcd",
+        status: "ACTIVE",
+      });
+      (apiClient.getIdentityByAddress as jest.Mock).mockResolvedValue(profile);
+      mockUseAccount.mockReturnValue({
+        address: mockAddress,
+        isConnected: true,
+      });
+
+      const { result } = renderHook(() => useIdentity(), { wrapper });
+      await waitFor(() => {
+        expect(result.current.identity.isLoading).toBe(false);
+      });
+
+      expect(getIdentityAuthToken()).toBeUndefined();
+      expect(result.current.sessionStatus).toBe("sign-in-required");
+      expect(result.current.sessionError).toMatch(/does not match/i);
+      expect(apiClient.listCredentials).not.toHaveBeenCalled();
+    });
+  });
+
+  // =========================================================================
   // State cleanup on disconnect
   // =========================================================================
 
@@ -364,6 +571,46 @@ describe("IdentityContext", () => {
       expect(result.current.identity.isRegistered).toBe(false);
       expect(result.current.identity.credentials).toEqual([]);
     });
+
+    it("clears the bearer session and protected data when the wallet account changes", async () => {
+      const nextAddress = "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd" as const;
+      const firstProfile = makeProfile(mockAddress);
+      establishIdentitySession(firstProfile);
+      (apiClient.getIdentityByAddress as jest.Mock).mockImplementation(
+        (walletAddress: string) => Promise.resolve(makeProfile(walletAddress)),
+      );
+      (apiClient.listCredentials as jest.Mock).mockResolvedValue({
+        items: [makeCredential(1)],
+        total: 1,
+        page: 1,
+        pageSize: 100,
+        hasMore: false,
+      });
+      mockUseAccount.mockReturnValue({
+        address: mockAddress,
+        isConnected: true,
+      });
+
+      const { result, rerender } = renderHook(() => useIdentity(), { wrapper });
+      await waitFor(() => {
+        expect(result.current.sessionStatus).toBe("authenticated");
+      });
+
+      mockUseAccount.mockReturnValue({
+        address: nextAddress,
+        isConnected: true,
+      });
+      rerender();
+
+      await waitFor(() => {
+        expect(result.current.identity.profile?.controller).toBe(nextAddress);
+      });
+
+      expect(getIdentityAuthToken()).toBeUndefined();
+      expect(result.current.sessionStatus).toBe("sign-in-required");
+      expect(result.current.identity.credentials).toEqual([]);
+      expect(apiClient.listCredentials).toHaveBeenCalledTimes(1);
+    });
   });
 
   // =========================================================================
@@ -373,11 +620,9 @@ describe("IdentityContext", () => {
   describe("credential polling", () => {
     it("polls credentials every CREDENTIAL_POLL_INTERVAL_MS when registered", async () => {
       const profile = makeProfile(mockAddress);
-      const credsFirst = [makeCredential("0xcred01")];
-      const credsSecond = [
-        makeCredential("0xcred01"),
-        makeCredential("0xcred02"),
-      ];
+      establishIdentitySession(profile);
+      const credsFirst = [makeCredential(1)];
+      const credsSecond = [makeCredential(1), makeCredential(2)];
 
       (apiClient.getIdentityByAddress as jest.Mock).mockResolvedValue(profile);
       (apiClient.listCredentials as jest.Mock)
@@ -447,6 +692,7 @@ describe("IdentityContext", () => {
 
     it("silently ignores polling errors", async () => {
       const profile = makeProfile(mockAddress);
+      establishIdentitySession(profile);
 
       (apiClient.getIdentityByAddress as jest.Mock).mockResolvedValue(profile);
       (apiClient.listCredentials as jest.Mock)
@@ -485,19 +731,8 @@ describe("IdentityContext", () => {
   // =========================================================================
 
   describe("registerIdentity", () => {
-    it("registers identity and re-fetches profile on success", async () => {
-      const profile = makeProfile(mockAddress);
-      const recoveryHash = validRecoveryHash;
-
-      (apiClient.getIdentityByAddress as jest.Mock)
-        .mockResolvedValueOnce(null) // initial fetch
-        .mockResolvedValueOnce(profile); // post-registration fetch
-      (apiClient.registerIdentity as jest.Mock).mockResolvedValue({
-        identity: profile,
-        token: "identity-token",
-        sessionId: "session-1",
-      });
-
+    it("fails closed without asking for a signature or calling the API", async () => {
+      (apiClient.getIdentityByAddress as jest.Mock).mockResolvedValue(null);
       mockUseAccount.mockReturnValue({
         address: mockAddress,
         isConnected: true,
@@ -509,21 +744,27 @@ describe("IdentityContext", () => {
         expect(result.current.identity.isLoading).toBe(false);
       });
 
-      await act(() => result.current.registerIdentity(recoveryHash));
-
-      expect(apiClient.registerIdentity).toHaveBeenCalledWith({
-        did: expect.any(String),
-        publicKey: validPublicKey,
-        recoveryHash: recoveryHash.slice(2),
-        metadata: { controller: mockAddress.toLowerCase() },
+      let caught: unknown;
+      await act(async () => {
+        try {
+          await result.current.registerIdentity(validRecoveryHash);
+        } catch (error) {
+          caught = error;
+        }
       });
-      expect(window.sessionStorage.getItem("zeroid.identity.authToken")).toBe(
-        "identity-token",
-      );
-      expect(result.current.identity.isRegistered).toBe(true);
-      expect(result.current.identity.profile).toEqual(profile);
-      expect(result.current.identity.credentials).toEqual([]);
+
+      expect(caught).toMatchObject({
+        code: "IDENTITY_REGISTRY_VERIFICATION_UNAVAILABLE",
+        statusCode: 503,
+      });
+      expect(mockSignMessageAsync).not.toHaveBeenCalled();
+      expect(apiClient.registerIdentity).not.toHaveBeenCalled();
+      expect(getIdentityAuthToken()).toBeUndefined();
+      expect(result.current.identity.isRegistered).toBe(false);
       expect(result.current.identity.isLoading).toBe(false);
+      expect(result.current.identity.error).toContain(
+        "server-side verification of the on-chain registry transaction",
+      );
     });
 
     it("throws when wallet is not connected (no DID)", async () => {
@@ -539,72 +780,8 @@ describe("IdentityContext", () => {
       await expect(
         act(() => result.current.registerIdentity(recoveryHash)),
       ).rejects.toThrow("Wallet must be connected to register");
-    });
-
-    it("sets error state and re-throws when registration API fails", async () => {
-      (apiClient.getIdentityByAddress as jest.Mock).mockResolvedValue(null);
-      (apiClient.registerIdentity as jest.Mock).mockRejectedValue(
-        new Error("Registration server error"),
-      );
-
-      mockUseAccount.mockReturnValue({
-        address: mockAddress,
-        isConnected: true,
-      });
-
-      const { result } = renderHook(() => useIdentity(), { wrapper });
-
-      await waitFor(() => {
-        expect(result.current.identity.isLoading).toBe(false);
-      });
-
-      const recoveryHash = validRecoveryHash;
-
-      let caught: Error | undefined;
-      await act(async () => {
-        try {
-          await result.current.registerIdentity(recoveryHash);
-        } catch (e) {
-          caught = e as Error;
-        }
-      });
-
-      expect(caught).toBeDefined();
-      expect(caught!.message).toBe("Registration server error");
-      expect(result.current.identity.error).toBe("Registration server error");
-      expect(result.current.identity.isLoading).toBe(false);
-    });
-
-    it("handles non-Error thrown in registration catch", async () => {
-      (apiClient.getIdentityByAddress as jest.Mock).mockResolvedValue(null);
-      (apiClient.registerIdentity as jest.Mock).mockRejectedValue(
-        "string registration error",
-      );
-
-      mockUseAccount.mockReturnValue({
-        address: mockAddress,
-        isConnected: true,
-      });
-
-      const { result } = renderHook(() => useIdentity(), { wrapper });
-
-      await waitFor(() => {
-        expect(result.current.identity.isLoading).toBe(false);
-      });
-
-      const recoveryHash = validRecoveryHash;
-
-      let caught: unknown;
-      await act(async () => {
-        try {
-          await result.current.registerIdentity(recoveryHash);
-        } catch (e) {
-          caught = e;
-        }
-      });
-
-      expect(caught).toBe("string registration error");
-      expect(result.current.identity.error).toBe("Registration failed");
+      expect(mockSignMessageAsync).not.toHaveBeenCalled();
+      expect(apiClient.registerIdentity).not.toHaveBeenCalled();
     });
   });
 
@@ -721,10 +898,11 @@ describe("IdentityContext", () => {
   describe("refreshCredentials", () => {
     it("updates credentials when profile is available", async () => {
       const profile = makeProfile(mockAddress);
+      establishIdentitySession(profile);
       const credsNew = [
-        makeCredential("0xcred01"),
-        makeCredential("0xcred02"),
-        makeCredential("0xcred03"),
+        makeCredential(1),
+        makeCredential(2),
+        makeCredential(3),
       ];
 
       (apiClient.getIdentityByAddress as jest.Mock).mockResolvedValue(profile);
@@ -781,8 +959,9 @@ describe("IdentityContext", () => {
       expect(apiClient.listCredentials).not.toHaveBeenCalled();
     });
 
-    it("swallows fetch error via fetchCredentials and sets credentials to empty", async () => {
+    it("surfaces credential refresh failures instead of treating them as empty data", async () => {
       const profile = makeProfile(mockAddress);
+      establishIdentitySession(profile);
 
       (apiClient.getIdentityByAddress as jest.Mock).mockResolvedValue(profile);
       (apiClient.listCredentials as jest.Mock)
@@ -806,11 +985,16 @@ describe("IdentityContext", () => {
         expect(result.current.identity.isRegistered).toBe(true);
       });
 
-      await act(() => result.current.refreshCredentials());
+      let caught: unknown;
+      await act(async () => {
+        try {
+          await result.current.refreshCredentials();
+        } catch (error) {
+          caught = error;
+        }
+      });
 
-      // fetchCredentials swallows errors internally and returns [],
-      // so refreshCredentials succeeds with empty credentials and no error.
-      expect(result.current.identity.error).toBeNull();
+      expect(caught).toEqual(new Error("Cred refresh failed"));
       expect(result.current.identity.credentials).toEqual([]);
     });
   });
@@ -820,8 +1004,9 @@ describe("IdentityContext", () => {
   // =========================================================================
 
   describe("getCredential", () => {
-    it("returns the credential matching the hash", async () => {
-      const cred = makeCredential("0xcred01");
+    it("returns the credential matching the backend UUID", async () => {
+      const cred = makeCredential(1);
+      establishIdentitySession();
 
       (apiClient.getIdentityByAddress as jest.Mock).mockResolvedValue(
         makeProfile(mockAddress),
@@ -845,7 +1030,7 @@ describe("IdentityContext", () => {
         expect(result.current.identity.credentials.length).toBe(1);
       });
 
-      expect(result.current.getCredential("0xcred01" as Bytes32)).toEqual(cred);
+      expect(result.current.getCredential(cred.id)).toEqual(cred);
     });
 
     it("returns undefined for non-existent credential", async () => {
@@ -872,7 +1057,7 @@ describe("IdentityContext", () => {
       });
 
       expect(
-        result.current.getCredential("0xnonexistent" as Bytes32),
+        result.current.getCredential("ffffffff-ffff-4fff-8fff-ffffffffffff"),
       ).toBeUndefined();
     });
   });
@@ -883,9 +1068,10 @@ describe("IdentityContext", () => {
 
   describe("getCredentialsByStatus", () => {
     it("filters credentials by status", async () => {
-      const activeCred = makeCredential("0xcred01", 1);
-      const revokedCred = makeCredential("0xcred02", 3);
-      const expiredCred = makeCredential("0xcred03", 4);
+      const activeCred = makeCredential(1, "active");
+      const revokedCred = makeCredential(2, "revoked");
+      const expiredCred = makeCredential(3, "expired");
+      establishIdentitySession();
 
       (apiClient.getIdentityByAddress as jest.Mock).mockResolvedValue(
         makeProfile(mockAddress),
@@ -909,15 +1095,13 @@ describe("IdentityContext", () => {
         expect(result.current.identity.credentials.length).toBe(3);
       });
 
-      expect(
-        result.current.getCredentialsByStatus(1 as CredentialStatus),
-      ).toEqual([activeCred]);
-      expect(
-        result.current.getCredentialsByStatus(3 as CredentialStatus),
-      ).toEqual([revokedCred]);
-      expect(
-        result.current.getCredentialsByStatus(2 as CredentialStatus),
-      ).toEqual([]);
+      expect(result.current.getCredentialsByStatus("active")).toEqual([
+        activeCred,
+      ]);
+      expect(result.current.getCredentialsByStatus("revoked")).toEqual([
+        revokedCred,
+      ]);
+      expect(result.current.getCredentialsByStatus("suspended")).toEqual([]);
     });
   });
 
@@ -931,7 +1115,7 @@ describe("IdentityContext", () => {
         makeProfile(mockAddress),
       );
       (apiClient.listCredentials as jest.Mock).mockResolvedValue({
-        items: [makeCredential("0xcred01")],
+        items: [makeCredential(1)],
         total: 1,
         page: 1,
         pageSize: 100,
@@ -996,6 +1180,7 @@ describe("IdentityContext", () => {
 
     it("cancels in-flight fetches when unmounting after profile but before credentials", async () => {
       const profile = makeProfile(mockAddress);
+      establishIdentitySession(profile);
       let resolveCredentials: (val: any) => void;
 
       (apiClient.getIdentityByAddress as jest.Mock).mockResolvedValue(profile);
@@ -1051,6 +1236,10 @@ describe("IdentityContext", () => {
       });
 
       const { unmount } = renderHook(() => useIdentity(), { wrapper });
+
+      await waitFor(() => {
+        expect(apiClient.getIdentityByAddress).toHaveBeenCalled();
+      });
 
       // Unmount before the fetch rejects
       unmount();

@@ -13,11 +13,13 @@ import {
   updateWitnessWithDelta,
   AccumulatorTracker,
   batchUpdateWitnesses,
+  configureAccumulatorPairingVerifier,
 } from "@/lib/crypto/accumulator";
 import type {
   NonMembershipWitness,
   AccumulatorState,
   AccumulatorDelta,
+  AccumulatorPairingVerifier,
 } from "@/lib/crypto/accumulator";
 
 // ---------------------------------------------------------------------------
@@ -70,15 +72,15 @@ function makeAccumulatorState(
   overrides: Partial<AccumulatorState> = {},
 ): AccumulatorState {
   return {
-    value: "0xaccvalue",
+    value: "0x" + "ac".repeat(32),
     version: 5,
     size: 100,
-    stateHash: "0xstatehash",
+    stateHash: "0x" + "12".repeat(32),
     lastUpdatedAt: Math.floor(Date.now() / 1000),
     publicParams: {
-      g1: "0xg1point",
-      g2: "0xg2point",
-      z: "0xzpoint",
+      g1: "0x" + "01".repeat(48),
+      g2: "0x" + "02".repeat(96),
+      z: "0x" + "03".repeat(48),
       maxSize: 10000,
     },
     ...overrides,
@@ -106,6 +108,7 @@ function makeDelta(
 describe("verifyNonMembershipWitness", () => {
   beforeEach(() => {
     mockDigest.mockClear();
+    configureAccumulatorPairingVerifier(null);
   });
 
   it("returns valid=true when all checks pass", async () => {
@@ -186,7 +189,7 @@ describe("verifyNonMembershipWitness", () => {
     expect(vCheck?.detail).toContain("v7");
   });
 
-  it("pairing_check always passes with structural mock", async () => {
+  it("uses the deterministic development verifier outside production", async () => {
     const witness = makeWitness();
     const state = makeAccumulatorState();
 
@@ -194,7 +197,70 @@ describe("verifyNonMembershipWitness", () => {
 
     const pCheck = result.checks.find((c) => c.name === "pairing_check");
     expect(pCheck?.passed).toBe(true);
-    expect(pCheck?.detail).toBe("Pairing equation satisfied");
+    expect(pCheck?.detail).toBe(
+      "Development transcript verifier accepted accumulator witness binding",
+    );
+  });
+
+  it("fails closed in production when no pairing verifier is configured", async () => {
+    const originalZeroIdEnv = process.env.NEXT_PUBLIC_ZEROID_ENV;
+    process.env.NEXT_PUBLIC_ZEROID_ENV = "production";
+
+    try {
+      const witness = makeWitness();
+      const state = makeAccumulatorState();
+
+      const result = await verifyNonMembershipWitness(witness, state);
+
+      const pCheck = result.checks.find((c) => c.name === "pairing_check");
+      expect(pCheck?.passed).toBe(false);
+      expect(pCheck?.detail).toBe(
+        "No production accumulator pairing verifier configured",
+      );
+      expect(result.valid).toBe(false);
+    } finally {
+      if (originalZeroIdEnv === undefined) {
+        delete process.env.NEXT_PUBLIC_ZEROID_ENV;
+      } else {
+        process.env.NEXT_PUBLIC_ZEROID_ENV = originalZeroIdEnv;
+      }
+    }
+  });
+
+  it("uses an injected pairing verifier in production mode", async () => {
+    const originalZeroIdEnv = process.env.NEXT_PUBLIC_ZEROID_ENV;
+    process.env.NEXT_PUBLIC_ZEROID_ENV = "production";
+    const verifier: AccumulatorPairingVerifier = {
+      verifierId: "test-production-pairing-verifier",
+      verifyNonMembership: jest.fn(async () => ({
+        valid: true,
+        detail: "Production pairing verifier accepted witness",
+      })),
+    };
+
+    try {
+      const witness = makeWitness();
+      const state = makeAccumulatorState();
+
+      const result = await verifyNonMembershipWitness(witness, state, {
+        pairingVerifier: verifier,
+      });
+
+      expect(result.valid).toBe(true);
+      expect(verifier.verifyNonMembership).toHaveBeenCalledWith(
+        expect.objectContaining({
+          witness,
+          accumulatorState: state,
+          elementG2Commitment: expect.stringMatching(/^0x[0-9a-f]{64}$/),
+        }),
+      );
+    } finally {
+      if (originalZeroIdEnv === undefined) {
+        delete process.env.NEXT_PUBLIC_ZEROID_ENV;
+      } else {
+        process.env.NEXT_PUBLIC_ZEROID_ENV = originalZeroIdEnv;
+      }
+    }
   });
 
   it("fails element_validity when element is the zero element", async () => {

@@ -46,6 +46,7 @@ enum AuditAction {
   DELEGATION_GRANTED
   DELEGATION_REVOKED
   SCHEMA_PROPOSED
+  SCHEMA_VOTE_CAST
   SCHEMA_APPROVED
   SCHEMA_REJECTED
   SCHEMA_REVOKED
@@ -108,6 +109,11 @@ model Identity {
   issuerTrustRecords IssuerTrustRecord[] @relation("trusted_issuer")
   issuerKeyHistory  IssuerKeyHistory[]   @relation("issuer_key_history")
   policyDecisionReceipts PolicyDecisionLedger[] @relation("policy_receipt_actor")
+  agentApprovalRequests AgentApprovalRequest[] @relation("AgentApprovalOperator")
+  agentAudienceApprovals AgentApprovalRequest[] @relation("AgentApprovalAudience")
+  agentVerificationChallenges AgentVerificationChallenge[] @relation("AgentVerificationAudience")
+  agentVerificationFailureWindows AgentVerificationFailureWindow[]
+  agentAuthorizationOperations AgentAuthorizationOperation[] @relation("AgentAuthorizationAudience")
 
   @@index([did])
   @@index([status])
@@ -178,7 +184,7 @@ model AuditLog {
   details         Json?
   previousState   Json?
   newState        Json?
-  previousHash    String?
+  previousHash    String?      @unique
   entryHash       String?      @unique
   integrityVersion String?
   timestamp       DateTime     @default(now())
@@ -189,7 +195,6 @@ model AuditLog {
   @@index([action])
   @@index([resourceType, resourceId])
   @@index([timestamp])
-  @@index([previousHash])
   @@map("audit_logs")
 }
 
@@ -260,6 +265,36 @@ enum AgentStatus {
   SUSPENDED
   REVOKED
   PENDING_APPROVAL
+}
+
+enum AgentDelegationStatus {
+  ACTIVE
+  EXPIRED
+  REVOKED
+}
+
+enum AgentApprovalRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  EXPIRED
+  CONSUMED
+}
+
+enum AgentVerificationChallengeStatus {
+  ISSUED
+  CONSUMED
+  EXPIRED
+}
+
+enum AgentAuthorizationWindow {
+  HOUR
+  DAY
+}
+
+enum AgentAuthorizationOperationStatus {
+  PENDING_APPROVAL
+  AUTHORIZED
 }
 
 enum AgentActionDecision {
@@ -340,7 +375,10 @@ model AIAgent {
   operatorId      String
   controllerDid   String?      // v1 passport: denormalized DID of controlling Identity
   riskTier        RiskLevel    @default(LOW)
-  agentType       String       // llm, autonomous, bot, iot
+  agentType       String       // model_client, autonomous, bot, iot
+  agentProtocol   String?      // nullable only for legacy rows; registrations always set it
+  publicKey       String?      // nullable only for legacy rows; required for M2M verification
+  publicKeyHash   String?      // SHA-256 fingerprint of publicKey
   capabilities    Json         // array of capability objects
   delegationChain Json?        // parent agent chain
   maxDelegationDepth Int       @default(3)
@@ -348,6 +386,19 @@ model AIAgent {
   status          AgentStatus  @default(PENDING_APPROVAL)
   humanApprovalRequired Boolean @default(true)
   rateLimitPerMinute Int       @default(60)
+  teeAttested     Boolean      @default(false)
+  teeAttestationId String?
+  totalActions    Int          @default(0)
+  actionsToday    Int          @default(0)
+  successfulActions Int        @default(0)
+  totalLatencyMs  Float        @default(0)
+  anomalyCount    Int          @default(0)
+  lastAnomalyAt   DateTime?
+  suspendedAt     DateTime?
+  suspendedBy     String?
+  suspensionReason String?
+  version         Int          @default(0)
+  authorizationVersion Int     @default(0)
   metadata        Json?
   lastActiveAt    DateTime?
   createdAt       DateTime     @default(now())
@@ -356,12 +407,181 @@ model AIAgent {
   operator        Identity     @relation(fields: [operatorId], references: [id])
   agentActions    AgentAction[]
   agentCredentials AgentCredential[]
+  outgoingDelegations AgentDelegation[] @relation("AgentDelegationSource")
+  incomingDelegations AgentDelegation[] @relation("AgentDelegationTarget")
+  approvalRequests AgentApprovalRequest[]
+  authorizationUsage AgentAuthorizationUsage[]
+  verificationChallenges AgentVerificationChallenge[]
+  verificationFailureWindows AgentVerificationFailureWindow[]
+  authorizationOperations AgentAuthorizationOperation[]
 
   @@index([operatorId])
   @@index([status])
   @@index([agentType])
   @@index([reputationScore])
   @@map("ai_agents")
+}
+
+model AgentDelegation {
+  id                 String                 @id @default(uuid())
+  fromAgentId        String
+  toAgentId          String
+  capabilities       String[]
+  constraints        Json
+  depth              Int
+  maxDepth           Int
+  status             AgentDelegationStatus @default(ACTIVE)
+  parentDelegationId String?
+  createdAt          DateTime               @default(now())
+  expiresAt          DateTime
+  revokedAt          DateTime?
+  revokedBy          String?
+  authorizationCount Int                    @default(0)
+  lastAuthorizedAt   DateTime?
+  version            Int                    @default(0)
+
+  fromAgent          AIAgent                @relation("AgentDelegationSource", fields: [fromAgentId], references: [id])
+  toAgent            AIAgent                @relation("AgentDelegationTarget", fields: [toAgentId], references: [id])
+  parentDelegation   AgentDelegation?        @relation("AgentDelegationParent", fields: [parentDelegationId], references: [id], onDelete: Restrict)
+  childDelegations   AgentDelegation[]       @relation("AgentDelegationParent")
+  authorizationUsage AgentAuthorizationUsage[]
+
+  @@index([fromAgentId, status, expiresAt])
+  @@index([toAgentId, status, expiresAt])
+  @@index([parentDelegationId])
+  @@map("agent_delegations")
+}
+
+model AgentApprovalRequest {
+  id                    String                     @id @default(uuid())
+  approvalGroupId       String
+  operationId           String
+  operationDigest       String
+  authorizationSnapshotDigest String
+  requestedCapabilities String[]
+  requiredApproverIds   String[]
+  agentId               String
+  audienceId            String
+  operatorId            String
+  action                String
+  resourceType          String
+  resourceId            String
+  riskLevel             String
+  context               Json
+  status                AgentApprovalRequestStatus @default(PENDING)
+  createdAt             DateTime                   @default(now())
+  expiresAt             DateTime
+  respondedAt           DateTime?
+  respondedBy           String?
+  responseNote          String?
+  consumedAt            DateTime?
+  consumedByChallengeId String?
+  version               Int                        @default(0)
+
+  agent        AIAgent                    @relation(fields: [agentId], references: [id])
+  operator     Identity                   @relation("AgentApprovalOperator", fields: [operatorId], references: [id])
+  audience     Identity                   @relation("AgentApprovalAudience", fields: [audienceId], references: [id])
+
+  @@unique([approvalGroupId, operatorId])
+  @@index([operatorId, status, createdAt])
+  @@index([approvalGroupId, status])
+  @@index([operationDigest])
+  @@index([audienceId, status])
+  @@index([agentId, status])
+  @@index([status, expiresAt])
+  @@map("agent_approval_requests")
+}
+
+model AgentVerificationChallenge {
+  id                    String                           @id @default(uuid())
+  agentId               String
+  audienceId            String
+  nonceHash             String                           @unique
+  operationId           String
+  operationDigest       String
+  requestedCapabilities String[]
+  context               Json
+  approvalGroupId       String?
+  status                AgentVerificationChallengeStatus @default(ISSUED)
+  issuedAt              DateTime                         @default(now())
+  expiresAt             DateTime
+  consumedAt            DateTime?
+  version               Int                              @default(0)
+
+  agent                  AIAgent  @relation(fields: [agentId], references: [id])
+  audience               Identity @relation("AgentVerificationAudience", fields: [audienceId], references: [id])
+
+  @@index([agentId, status, expiresAt])
+  @@index([audienceId, status, expiresAt])
+  @@index([operationDigest])
+  @@map("agent_verification_challenges")
+}
+
+model AgentVerificationFailureWindow {
+  id              String   @id @default(uuid())
+  audienceId      String
+  agentId         String
+  windowStart     DateTime
+  count           Int      @default(0)
+  lastChallengeId String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  audience        Identity @relation(fields: [audienceId], references: [id])
+  agent           AIAgent  @relation(fields: [agentId], references: [id])
+
+  @@unique([audienceId, agentId, windowStart], map: "agent_verification_failure_audience_agent_window_key")
+  @@index([agentId, windowStart])
+  @@index([windowStart])
+  @@map("agent_verification_failure_windows")
+}
+
+model AgentAuthorizationOperation {
+  id                        String                            @id @default(uuid())
+  agentId                   String
+  audienceId                String
+  operationId               String
+  operationDigest           String
+  status                    AgentAuthorizationOperationStatus
+  approvalGroupId           String?
+  initialChallengeId        String
+  initialVerificationId     String
+  authorizedChallengeId     String?
+  authorizationVerificationId String?
+  createdAt                 DateTime                          @default(now())
+  updatedAt                 DateTime                          @updatedAt
+  authorizedAt              DateTime?
+  version                   Int                               @default(0)
+
+  agent                     AIAgent                           @relation(fields: [agentId], references: [id])
+  audience                  Identity                          @relation("AgentAuthorizationAudience", fields: [audienceId], references: [id])
+
+  @@unique([agentId, audienceId, operationId], map: "agent_authorization_operation_scope_key")
+  @@unique([operationDigest])
+  @@index([agentId, status, createdAt])
+  @@index([audienceId, status, createdAt])
+  @@map("agent_authorization_operations")
+}
+
+model AgentAuthorizationUsage {
+  id           String                   @id @default(uuid())
+  agentId      String
+  delegationId String?
+  scopeKey     String
+  capability   String
+  windowType   AgentAuthorizationWindow
+  windowStart  DateTime
+  count        Int                      @default(0)
+  createdAt    DateTime                 @default(now())
+  updatedAt    DateTime                 @updatedAt
+
+  agent        AIAgent                  @relation(fields: [agentId], references: [id])
+  delegation   AgentDelegation?         @relation(fields: [delegationId], references: [id], onDelete: Restrict)
+
+  @@unique([agentId, scopeKey, capability, windowType, windowStart], map: "agent_auth_usage_scope_window_key")
+  @@index([delegationId, windowStart])
+  @@index([windowStart])
+  @@map("agent_authorization_usage")
 }
 
 model AgentAction {
@@ -966,4 +1186,46 @@ model IdempotencyRecord {
 
   @@index([scope, createdAt])
   @@map("idempotency_records")
+}
+
+// ── OpenID4VP / OpenID4VCI persistence ─────────────────────────
+// Cross-device presentation requests (state + one-time nonce for replay
+// protection) and the OpenID4VCI pre-authorized-code / token sessions.
+model Oid4vpPresentationRequest {
+  state     String   @id // opaque request id (also the callback lookup key)
+  nonce     String   @unique // issued once; consumed atomically on callback
+  policyId  String
+  audience  String
+  status    String   @default("PENDING") // PENDING | CONSUMED | COMPLETED
+  decision  Json?
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+
+  @@index([status, expiresAt])
+  @@map("oid4vp_presentation_requests")
+}
+
+model Oid4vciOffer {
+  preAuthCode String   @id // HMAC digest; the bearer code is never persisted
+  configId    String
+  subjectDid  String
+  txCode      String?  // HMAC digest; protects low-entropy PINs after DB disclosure
+  createdAt   DateTime @default(now())
+  expiresAt   DateTime
+
+  @@map("oid4vci_offers")
+}
+
+model Oid4vciTokenSession {
+  accessToken   String    @id // HMAC digest; the bearer token is never persisted
+  configId      String
+  subjectDid    String
+  cNonce        String    // AES-256-GCM envelope bound to accessToken
+  claimId       String?
+  claimExpiresAt DateTime?
+  createdAt     DateTime  @default(now())
+  expiresAt     DateTime
+
+  @@index([claimExpiresAt])
+  @@map("oid4vci_token_sessions")
 }

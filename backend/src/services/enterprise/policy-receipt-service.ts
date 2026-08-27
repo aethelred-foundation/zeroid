@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import { prisma, redis } from '../../index';
+import { prisma, redis } from '../../runtime';
 import { credentialService } from '../credential';
 import { isProductionRuntime } from '../production-safety';
 

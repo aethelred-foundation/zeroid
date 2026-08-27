@@ -6,20 +6,15 @@
  */
 
 import { http, createConfig, createStorage } from "wagmi";
-import { injected, walletConnect, coinbaseWallet } from "wagmi/connectors";
+import { injected } from "wagmi/connectors/injected";
+import type { EIP1193Provider } from "viem";
 import {
   aethelredMainnet,
   aethelredTestnet,
   aethelredDevnet,
   activeChain,
 } from "./chains";
-
-// ---------------------------------------------------------------------------
-// WalletConnect Project ID
-// ---------------------------------------------------------------------------
-
-const WALLETCONNECT_PROJECT_ID =
-  process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID || "";
+import { AETHELRED_CONNECTOR_ID } from "./wallet-picker";
 
 // ---------------------------------------------------------------------------
 // SSR-Safe Storage
@@ -42,8 +37,9 @@ export const ssrSafeStorage =
 
 /**
  * Sovereign-grade wallet config that keeps connector ownership local. The app
- * can run without WalletConnect in development, and production can enable it
- * by providing NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID.
+ * compiles without optional connector peer SDKs. Coinbase, Safe, WalletConnect,
+ * and Tempo can be enabled after their SDKs are explicitly installed and
+ * audited.
  */
 export const wagmiConfig = createZeroIdWalletConfig();
 
@@ -53,29 +49,52 @@ export const wagmiConfig = createZeroIdWalletConfig();
 
 function createZeroIdWalletConfig() {
   const connectors = [
-    injected({ shimDisconnect: true }),
-    coinbaseWallet({
-      appName: "ZeroID by Aethelred",
-      appLogoUrl: "https://zeroid.aethelred.network/icon.png",
+    injected({
+      shimDisconnect: true,
+      target: {
+        id: AETHELRED_CONNECTOR_ID,
+        name: "Aethelred Wallet",
+        provider: () => {
+          if (typeof window === "undefined") return undefined;
+          return (
+            window as Window & {
+              aethelred?: EIP1193Provider;
+            }
+          ).aethelred;
+        },
+      },
     }),
+    injected({ shimDisconnect: true }),
   ];
 
-  if (WALLETCONNECT_PROJECT_ID) {
-    connectors.push(
-      walletConnect({
-        projectId: WALLETCONNECT_PROJECT_ID,
-      }),
-    );
-  }
-
+  // Testnet and devnet share the confirmed EVM chain id (7332), so one 7332
+  // transport covers both; mainnet is the distinct id.
   const transports = {
     [aethelredMainnet.id]: http(),
-    [aethelredTestnet.id]: http(),
-    [aethelredDevnet.id]: http(),
+    [aethelredTestnet.id]: http(), // 7332 — also serves aethelredDevnet
   };
 
+  // wagmi rejects duplicate chain ids in its chains tuple. Testnet and devnet
+  // share id 7332 (same chain, different endpoints), so dedupe by id — and put
+  // `activeChain` FIRST. wagmi treats chains[0] as the default chain for any
+  // hook called without an explicit chainId, so the active environment's chain
+  // must lead: otherwise those background calls resolve to mainnet's hardcoded,
+  // non-overridable RPC (evm-rpc.aethelred.network), which is not deployed and
+  // floods the console with net::ERR_NAME_NOT_RESOLVED. Keeping activeChain
+  // first also means the surviving 7332 object carries the RPC for the
+  // environment we're actually running (hosted testnet vs local devnet).
+  const uniqueChains = [
+    activeChain,
+    aethelredMainnet,
+    aethelredTestnet,
+    aethelredDevnet,
+  ].filter((c, i, arr) => arr.findIndex((x) => x.id === c.id) === i);
+
   return createConfig({
-    chains: [aethelredMainnet, aethelredTestnet, aethelredDevnet],
+    chains: uniqueChains as unknown as readonly [
+      typeof aethelredMainnet,
+      ...(typeof aethelredMainnet)[],
+    ],
     connectors,
     transports,
     storage: createStorage({

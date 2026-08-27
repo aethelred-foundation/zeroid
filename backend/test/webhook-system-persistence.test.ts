@@ -11,6 +11,7 @@ const mockWebhookUpdate = jest.fn();
 const mockWebhookDeliveryFindMany = jest.fn();
 const mockWebhookDeliveryFindUnique = jest.fn();
 const mockWebhookDeliveryUpsert = jest.fn();
+const mockWebhookDeliveryUpdateMany = jest.fn();
 
 const redisStore: Record<string, string> = {};
 const redisSortedSets: Record<
@@ -62,7 +63,7 @@ const mockRedisEval = jest.fn(
   },
 );
 
-jest.mock('../src/index', () => ({
+jest.mock('../src/runtime', () => ({
   prisma: {
     webhook: {
       create: mockWebhookCreate,
@@ -75,6 +76,7 @@ jest.mock('../src/index', () => ({
       findMany: mockWebhookDeliveryFindMany,
       findUnique: mockWebhookDeliveryFindUnique,
       upsert: mockWebhookDeliveryUpsert,
+      updateMany: mockWebhookDeliveryUpdateMany,
     },
   },
   redis: {
@@ -734,6 +736,17 @@ describe('WebhookSystem persistence', () => {
     const request = fetchSpy.mock.calls[0][1] as RequestInit;
     expect(deliveryIds).toHaveLength(1);
     expect(request.redirect).toBe('manual');
+    expect(mockWebhookDeliveryUpsert.mock.calls[0][0]).toEqual(
+      expect.objectContaining({
+        where: { id: deliveryIds[0] },
+        create: expect.objectContaining({
+          id: deliveryIds[0],
+          attempt: 0,
+          success: false,
+          nextRetryAt: expect.any(Date),
+        }),
+      }),
+    );
     expect(mockWebhookDeliveryUpsert).toHaveBeenCalledWith(expect.objectContaining({
       where: { id: deliveryIds[0] },
       create: expect.objectContaining({
@@ -759,6 +772,44 @@ describe('WebhookSystem persistence', () => {
       }),
     }));
     fetchSpy.mockRestore();
+  });
+
+  it('does not send an event that could not be durably scheduled', async () => {
+    mockWebhookFindMany.mockResolvedValue([
+      {
+        id: 'wh-persist-failure',
+        organizationId: 'org-1',
+        url: 'https://hooks.zeroid.example/ingest',
+        secret: 's'.repeat(64),
+        events: ['credential.issued'],
+        status: 'ACTIVE',
+        failureCount: 0,
+        lastDeliveredAt: null,
+        lastStatusCode: null,
+        createdAt: new Date('2026-04-21T00:00:00.000Z'),
+        updatedAt: new Date('2026-04-21T00:00:00.000Z'),
+      },
+    ]);
+    mockWebhookDeliveryUpsert.mockRejectedValue(
+      new Error('database unavailable'),
+    );
+    const fetchSpy = jest.spyOn(global, 'fetch');
+
+    try {
+      await expect(
+        webhookSystem.emit(
+          'credential.issued',
+          { credentialId: 'cred-not-sent' },
+          'org-1',
+        ),
+      ).rejects.toMatchObject({
+        code: 'WEBHOOK_DELIVERY_PERSIST_FAILED',
+        statusCode: 503,
+      });
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+    }
   });
 
   it('captures only a bounded webhook response preview', async () => {
@@ -1003,6 +1054,166 @@ describe('WebhookSystem persistence', () => {
       response: { statusCode: 200, body: 'ok', latencyMs: 12 },
     });
     expect(deliveries[0].request.headers).toEqual({});
+  });
+
+  it('recovers a due pending delivery after process restart', async () => {
+    const restartedSystem = new WebhookSystem();
+    const now = new Date('2026-04-21T00:05:00.000Z');
+    const dueAt = new Date('2026-04-21T00:04:00.000Z');
+    const persistedPayload = {
+      id: 'evt-pending',
+      type: 'credential.issued',
+      timestamp: '2026-04-21T00:00:01.000Z',
+      data: { credentialId: 'cred-pending' },
+      source: 'zeroid',
+    };
+    const dueRecord = {
+      id: 'del-pending',
+      webhookId: 'wh-1',
+      eventType: 'credential.issued',
+      payload: persistedPayload,
+      statusCode: 503,
+      responseBody: 'temporary failure',
+      responseTimeMs: 25,
+      attempt: 1,
+      success: false,
+      deliveredAt: new Date('2026-04-21T00:00:05.000Z'),
+      nextRetryAt: dueAt,
+    };
+
+    mockWebhookDeliveryFindMany.mockResolvedValue([dueRecord]);
+    mockWebhookDeliveryUpdateMany.mockResolvedValue({ count: 1 });
+    mockWebhookFindUnique.mockResolvedValue({
+      id: 'wh-1',
+      organizationId: 'org-1',
+      url: 'https://hooks.zeroid.example/ingest',
+      secret: 's'.repeat(64),
+      events: ['credential.issued'],
+      status: 'ACTIVE',
+      failureCount: 1,
+      lastDeliveredAt: null,
+      lastStatusCode: 503,
+      createdAt: new Date('2026-04-21T00:00:00.000Z'),
+      updatedAt: new Date('2026-04-21T00:00:00.000Z'),
+    });
+    mockWebhookDeliveryUpsert.mockResolvedValue({});
+    const fetchSpy = jest
+      .spyOn(global, 'fetch')
+      .mockResolvedValue(new Response('ok', { status: 200 }));
+
+    try {
+      await expect(restartedSystem.runRetryWorkerTick(now)).resolves.toBe(1);
+
+      expect(mockWebhookDeliveryFindMany).toHaveBeenCalledWith({
+        where: {
+          success: false,
+          nextRetryAt: { lte: now },
+        },
+        orderBy: [{ nextRetryAt: 'asc' }, { id: 'asc' }],
+        take: 5,
+      });
+      expect(mockWebhookDeliveryUpdateMany).toHaveBeenCalledWith({
+        where: {
+          id: 'del-pending',
+          success: false,
+          attempt: 1,
+          nextRetryAt: dueAt,
+        },
+        data: { nextRetryAt: new Date('2026-04-21T00:07:00.000Z') },
+      });
+      expect(fetchSpy).toHaveBeenCalledWith(
+        'https://hooks.zeroid.example/ingest',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify(persistedPayload),
+          headers: expect.objectContaining({
+            'X-ZeroID-Delivery': 'del-pending',
+            'X-ZeroID-Event': 'credential.issued',
+          }),
+        }),
+      );
+      expect(mockWebhookDeliveryUpsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'del-pending' },
+          update: expect.objectContaining({
+            attempt: 2,
+            success: true,
+            nextRetryAt: null,
+          }),
+        }),
+      );
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  it('allows only one of two workers to claim the same due delivery', async () => {
+    const firstWorker = new WebhookSystem();
+    const secondWorker = new WebhookSystem();
+    const now = new Date('2026-04-21T00:05:00.000Z');
+    const dueAt = new Date('2026-04-21T00:04:00.000Z');
+    const dueRecord = {
+      id: 'del-contended',
+      webhookId: 'wh-1',
+      eventType: 'credential.issued',
+      payload: {
+        id: 'evt-contended',
+        type: 'credential.issued',
+        timestamp: '2026-04-21T00:00:01.000Z',
+        data: { credentialId: 'cred-contended' },
+        source: 'zeroid',
+      },
+      statusCode: 503,
+      responseBody: 'temporary failure',
+      responseTimeMs: 25,
+      attempt: 1,
+      success: false,
+      deliveredAt: new Date('2026-04-21T00:00:05.000Z'),
+      nextRetryAt: dueAt,
+    };
+    let claimed = false;
+
+    mockWebhookDeliveryFindMany.mockResolvedValue([dueRecord]);
+    mockWebhookDeliveryUpdateMany.mockImplementation(async () => {
+      if (claimed) return { count: 0 };
+      claimed = true;
+      return { count: 1 };
+    });
+    mockWebhookFindUnique.mockResolvedValue({
+      id: 'wh-1',
+      organizationId: 'org-1',
+      url: 'https://hooks.zeroid.example/ingest',
+      secret: 's'.repeat(64),
+      events: ['credential.issued'],
+      status: 'ACTIVE',
+      failureCount: 1,
+      lastDeliveredAt: null,
+      lastStatusCode: 503,
+      createdAt: new Date('2026-04-21T00:00:00.000Z'),
+      updatedAt: new Date('2026-04-21T00:00:00.000Z'),
+    });
+    mockWebhookDeliveryUpsert.mockResolvedValue({});
+    const fetchSpy = jest
+      .spyOn(global, 'fetch')
+      .mockResolvedValue(new Response('ok', { status: 200 }));
+
+    try {
+      const results = await Promise.all([
+        firstWorker.runRetryWorkerTick(now),
+        secondWorker.runRetryWorkerTick(now),
+      ]);
+
+      expect(results.sort()).toEqual([0, 1]);
+      expect(mockWebhookDeliveryUpdateMany).toHaveBeenCalledTimes(2);
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(
+        (fetchSpy.mock.calls[0][1] as RequestInit).headers,
+      ).toEqual(
+        expect.objectContaining({ 'X-ZeroID-Delivery': 'del-contended' }),
+      );
+    } finally {
+      fetchSpy.mockRestore();
+    }
   });
 
   it('retries persisted dead-letter deliveries after process restart', async () => {

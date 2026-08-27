@@ -3,9 +3,18 @@ const mockIdentityFindUnique = jest.fn();
 const mockRedisSet = jest.fn();
 const mockRedisGet = jest.fn();
 const mockScreenEntity = jest.fn();
+const mockComplianceScreeningCreate = jest.fn();
+const mockTransaction = jest.fn(async (operation: (tx: unknown) => unknown) => operation({
+  complianceScreening: { create: mockComplianceScreeningCreate },
+  auditLog: { create: mockAuditLogCreate },
+}));
 
-jest.mock('../src/index', () => ({
+jest.mock('../src/runtime', () => ({
   prisma: {
+    $transaction: mockTransaction,
+    complianceScreening: {
+      create: mockComplianceScreeningCreate,
+    },
     auditLog: {
       create: mockAuditLogCreate,
     },
@@ -50,12 +59,27 @@ const request: SanctionsScreeningRequest = {
   jurisdiction: 'AE',
 };
 
+function clearScreeningResult() {
+  return {
+    screeningId: 'screening-clear',
+    entityId: request.identityId,
+    timestamp: '2026-05-03T00:00:00.000Z',
+    overallRisk: 'clear',
+    matches: [],
+    listsScreened: ['ofac_sdn', 'eu_consolidated', 'un_sanctions', 'uae_local', 'pep_database'],
+    processingTimeMs: 5,
+    nextScreeningDate: '2026-05-04T00:00:00.000Z',
+  };
+}
+
 describe('ComplianceAdvisorService production screening guardrails', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     process.env.NODE_ENV = 'production';
     mockRedisSet.mockResolvedValue('OK');
     mockRedisGet.mockResolvedValue(null);
+    mockAuditLogCreate.mockResolvedValue({ id: 'audit-1' });
+    mockComplianceScreeningCreate.mockResolvedValue({ id: 'screening-1' });
   });
 
   afterAll(() => {
@@ -113,6 +137,7 @@ describe('ComplianceAdvisorService production screening guardrails', () => {
       result: 'potential_match',
       matchScore: 91,
       listsChecked: ['ofac_sdn', 'eu_consolidated', 'un_sanctions', 'uae_local', 'pep_database'],
+      unavailableChecks: ['adverse_media', 'pep_profile_enrichment'],
     });
     expect(result.matchedLists).toEqual([
       expect.objectContaining({
@@ -121,6 +146,82 @@ describe('ComplianceAdvisorService production screening guardrails', () => {
         matchConfidence: 0.91,
       }),
     ]);
+    expect(mockAuditLogCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        identityId: request.identityId,
+        action: 'SANCTIONS_SCREENING',
+        resourceId: 'screening-1',
+      }),
+    });
+    expect(mockComplianceScreeningCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        id: 'screening-1',
+        entityId: request.identityId,
+        result: 'POTENTIAL_MATCH',
+        listsChecked: ['ofac_sdn', 'eu_consolidated', 'un_sanctions', 'uae_local', 'pep_database'],
+      }),
+    });
+    expect(mockTransaction).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not fall back to demo records outside production', async () => {
+    process.env.NODE_ENV = 'development';
+    const notReady = new Error('list data is not ready') as Error & { code: string };
+    notReady.code = 'SANCTIONS_LIST_NOT_READY';
+    mockScreenEntity.mockRejectedValue(notReady);
+
+    await expect(new ComplianceAdvisorService().screenIdentity(request))
+      .rejects
+      .toMatchObject<Partial<ComplianceAdvisorError>>({
+        code: 'PRODUCTION_SCREENING_UNAVAILABLE',
+        statusCode: 503,
+      });
+    expect(mockScreenEntity).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not invent structured PEP attributes from a signed-list hit', async () => {
+    mockScreenEntity.mockResolvedValue({
+      screeningId: 'screening-pep',
+      entityId: request.identityId,
+      timestamp: '2026-05-03T00:00:00.000Z',
+      overallRisk: 'potential_match',
+      matches: [{
+        matchId: 'match-pep',
+        listSource: 'pep_database',
+        listEntryId: 'pep-entry-1',
+        matchedName: 'Example Person',
+        matchScore: 0.91,
+        matchType: 'fuzzy',
+        matchedFields: ['name'],
+        listingDetails: {
+          programs: [],
+          listedDate: '2024-01-01',
+          remarks: '',
+        },
+        status: 'pending_review',
+      }],
+      listsScreened: ['pep_database'],
+      processingTimeMs: 8,
+      nextScreeningDate: '2026-05-04T00:00:00.000Z',
+    });
+
+    const result = await new ComplianceAdvisorService().screenIdentity(request);
+
+    expect(result.pepMatches).toEqual([]);
+    expect(result.matchedLists).toEqual([
+      expect.objectContaining({
+        listSource: 'pep_database',
+        sdnId: 'pep-entry-1',
+      }),
+    ]);
+    expect(mockAuditLogCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        details: expect.objectContaining({
+          sanctionsMatches: 0,
+          pepMatches: 1,
+        }),
+      }),
+    });
   });
 
   it('fails closed when production list data is not ready', async () => {
@@ -134,5 +235,81 @@ describe('ComplianceAdvisorService production screening guardrails', () => {
         code: 'PRODUCTION_SCREENING_UNAVAILABLE',
         statusCode: 503,
       });
+  });
+
+  it('returns durable screening evidence when the Redis cache is unavailable', async () => {
+    mockScreenEntity.mockResolvedValue(clearScreeningResult());
+    mockRedisSet.mockRejectedValueOnce(new Error('redis unavailable'));
+
+    await expect(new ComplianceAdvisorService().screenIdentity(request))
+      .resolves
+      .toMatchObject({ screeningId: 'screening-clear', result: 'clear' });
+    expect(mockComplianceScreeningCreate).toHaveBeenCalled();
+    expect(mockAuditLogCreate).toHaveBeenCalled();
+  });
+
+  it('fails closed when the screening audit record cannot be written', async () => {
+    mockScreenEntity.mockResolvedValue(clearScreeningResult());
+    mockAuditLogCreate.mockRejectedValueOnce(new Error('database unavailable'));
+
+    await expect(new ComplianceAdvisorService().screenIdentity(request))
+      .rejects
+      .toMatchObject<Partial<ComplianceAdvisorError>>({
+        code: 'SCREENING_EVIDENCE_PERSISTENCE_UNAVAILABLE',
+        statusCode: 503,
+      });
+    expect(mockRedisSet).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the durable screening record cannot be written', async () => {
+    mockScreenEntity.mockResolvedValue(clearScreeningResult());
+    mockComplianceScreeningCreate.mockRejectedValueOnce(new Error('database unavailable'));
+
+    await expect(new ComplianceAdvisorService().screenIdentity(request))
+      .rejects
+      .toMatchObject<Partial<ComplianceAdvisorError>>({
+        code: 'SCREENING_EVIDENCE_PERSISTENCE_UNAVAILABLE',
+        statusCode: 503,
+      });
+    expect(mockAuditLogCreate).not.toHaveBeenCalled();
+    expect(mockRedisSet).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      operation: () => new ComplianceAdvisorService().generateReport(
+        request.identityId,
+        'comprehensive',
+        'AE',
+      ),
+      code: 'COMPLIANCE_REPORT_POLICY_UNCONFIGURED',
+    },
+    {
+      operation: () => new ComplianceAdvisorService().queryComplianceAdvisor({
+        question: 'What controls apply to this organization?',
+        context: { jurisdiction: 'AE' },
+      }),
+      code: 'COMPLIANCE_ADVISOR_KB_UNCONFIGURED',
+    },
+    {
+      operation: () => new ComplianceAdvisorService().assessRegulatoryChangeImpact(
+        'Authority notice',
+        'A material policy change requiring an approved scope mapping.',
+        'AE',
+      ),
+      code: 'REGULATORY_IMPACT_POLICY_UNCONFIGURED',
+    },
+    {
+      operation: () => new ComplianceAdvisorService().computeComplianceScore(
+        request.identityId,
+        'AE',
+      ),
+      code: 'COMPLIANCE_SCORING_POLICY_UNCONFIGURED',
+    },
+  ])('fails closed for ungoverned production compliance content: $code', async ({ operation, code }) => {
+    await expect(operation()).rejects.toMatchObject<Partial<ComplianceAdvisorError>>({
+      code,
+      statusCode: 503,
+    });
   });
 });

@@ -77,7 +77,9 @@ export interface DisclosureContractRunner {
 
 /** Ensure a 0x-prefixed bytes32 from a (possibly bare) sha256 hex digest. */
 export function commitmentToBytes32(commitmentHex: string): Hex {
-  return (commitmentHex.startsWith("0x") ? commitmentHex : `0x${commitmentHex}`) as Hex;
+  return (
+    commitmentHex.startsWith("0x") ? commitmentHex : `0x${commitmentHex}`
+  ) as Hex;
 }
 
 export interface RegisterEscrowParams {

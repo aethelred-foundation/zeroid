@@ -47,7 +47,9 @@ export function splitSecret(
   shares: number,
 ): Share[] {
   if (threshold < 2 || shares < threshold || shares > 255) {
-    throw new Error("invalid threshold/shares (need 2<=threshold<=shares<=255)");
+    throw new Error(
+      "invalid threshold/shares (need 2<=threshold<=shares<=255)",
+    );
   }
   if (secret.length === 0) {
     throw new Error("splitSecret: empty secret");
@@ -82,7 +84,9 @@ export function combineShares(shares: Share[]): Uint8Array {
   const seenX = new Set<number>();
   for (const share of shares) {
     if (!Number.isInteger(share.x) || share.x < 1 || share.x > 255) {
-      throw new Error(`combineShares: invalid share index ${share.x} (must be 1..255)`);
+      throw new Error(
+        `combineShares: invalid share index ${share.x} (must be 1..255)`,
+      );
     }
     if (seenX.has(share.x)) {
       // Duplicate x-coordinates make the Lagrange denominator (x_j ^ x_m) zero.

@@ -1,62 +1,27 @@
-# AI Agent Passport v1 — `POLICY_AGENT_ELIGIBILITY_VIEW_V1`
+# AI Agent Passport v1
 
-ZeroID as the **AI agent's passport**: each agent has a verifiable identity (DID),
-a scoped credential, and policy bindings, so every action it takes is attributable,
-governed, and audited. v1 ships a single, tightly-constrained flagship scenario —
-an agent requesting an **eligibility proof on behalf of its controller**,
-read-only and fully logged.
+ZeroID's agent identity control plane gives an operator-owned agent a DID, bounded capabilities, durable delegations, and attributable authorization records. It does not make agent eligibility proof issuance available.
 
-## Scope vocabulary (v1, read-only)
+## Identity and operation authorization
 
-Controlled list (`src/services/ai/agent-passport.ts` → `AGENT_SCOPES`):
-`eligibility.read` · `audit.read` · `identity.read`. Out-of-vocabulary scopes are
-rejected at registration. State-changing scopes (`transactions.submit`, …) are
-intentionally **not** in v1.
+The current agent identity API supports operator-authenticated registration, listing, capability updates, delegation, suspension, approval handling, audit retrieval, and operation verification. The deployment must apply the reviewed Prisma migrations before enabling these routes.
 
-## Policy: `POLICY_AGENT_ELIGIBILITY_VIEW_V1`
+An operation is authorized only against a short-lived, server-issued challenge bound to the agent, operator, audience, requested capabilities, action, resource, and operation digest. The agent signs the complete operation envelope. Challenge consumption, capability/delegation version checks, required approvals, authorization claim, and audit evidence must be committed transactionally; Redis is a cache, not the authority. Approval records are operation- and snapshot-bound and single use.
 
-An agent's powers are a **layered trust object** — bounded by BOTH its own
-credential AND the controller's KYC/policy status. The agent may call eligibility
-on behalf of its controller iff ALL hold:
+## Eligibility policy: `POLICY_AGENT_ELIGIBILITY_VIEW_V1`
 
-| Condition | Deny code on failure |
-|---|---|
-| `agent.status == ACTIVE` | `AGENT_NOT_AUTHORIZED` |
-| `agentCredential.status == ACTIVE` | `AGENT_NOT_AUTHORIZED` |
-| `scopes` contains `eligibility.read` | `AGENT_NOT_AUTHORIZED` |
-| `controller.status == ACTIVE` | `CONTROLLER_NOT_ELIGIBLE` |
-| controller holds a valid KYC credential | `CONTROLLER_NOT_ELIGIBLE` |
-| `agent.maxRiskTier >= controller.riskTier` | `POLICY_CONDITIONS_NOT_MET` |
+The intended read-only scope vocabulary remains `eligibility.read`, `audit.read`, and `identity.read`. An eventual eligibility request must satisfy both the agent credential/delegation policy and the controller's current credential/policy state. It must never use a human bearer session, an active database row, or client-supplied controller metadata as proof that the agent authorized the operation.
 
-On allow, the call delegates to the existing human eligibility machinery and the
-decision is recorded as an `AgentAction` (`actionType = ELIGIBILITY_PROOF_REQUEST`).
-This layers cleanly on top of the human eligibility policy
-(`POLICY_REGULATED_SERVICE_18PLUS_V1` etc.) — the agent path is a governed wrapper,
-never a bypass.
+## Current availability
 
-## API
+Agent eligibility proof issuance and the Cruzible partner agent-scan path are intentionally unavailable. The reserved service fails closed with `AGENT_ELIGIBILITY_PROOF_UNAVAILABLE`; integrations must not synthesize a decision or `AgentAction` when it is returned.
 
-`POST /api/v1/ai/agents/eligibility/proof` → `AgentEligibilityProofResponse`
-(`status`, `decisionId`, `actor{agentDid,controllerDid,agentScopes}`, `proof`,
-`evaluation`, `evidence{…, agentActionId}`). Errors: 400 `INVALID_INPUT`,
-401 `UNAUTHENTICATED_AGENT`, 403 `AGENT_NOT_AUTHORIZED`/`CONTROLLER_MISMATCH`,
-404 `AGENT_NOT_FOUND`/`CREDENTIAL_NOT_FOUND`, 422 `POLICY_CONDITIONS_NOT_MET`,
-500 `INTERNAL_ERROR`.
+Activation requires all of the following in one end-to-end design:
 
-## Implementation status
+- a provider-signed credential witness;
+- audited, digest-pinned Groth16 artifacts and a real prover/verifier;
+- a durable one-time relying-party challenge and a durable one-time agent-operation challenge;
+- an agent signature covering the full request context;
+- atomic revalidation and persistence of both challenge consumptions, authorization, proof result, decision, and sealed evidence/audit records.
 
-| Piece | Status |
-|---|---|
-| Scope vocabulary + policy (`agent-passport.ts`) | Implemented, unit-tested (no DB) |
-| Agent→eligibility wrapper service (DI, `agent-eligibility.ts`) | Implemented, unit-tested |
-| Route + HTTP contract / error mapping (`routes/ai/agent-eligibility.ts`) | Implemented, route-tested (service mocked) |
-| Prisma additive fields (`scopes`, `maxRiskTier`, `controllerDid`, `policyId`, `decision`) | Added; `prisma generate` done; **`prisma migrate` is DB-gated** |
-| Eligibility delegation (`runEligibility`) | **Integration seam** — human eligibility logic is currently inline in `routes/verification.ts`; extracting it into a callable service (without destabilising the human workflow) is the one task to go fully live |
-| Frontend (agent-identity page wiring, audit agent filter) | Sprint 2 (not yet) |
-
-## Rollout (per consultant)
-
-Phase A schema + backend (here) → Phase B internal UI + internal "Compliance
-Copilot" agent → Phase C pilot external agents. The production gate stays tied to
-the human eligibility workflow; AI agents are an additive, separately-logged
-vertical.
+The agent identity lifecycle may be deployed independently after its migrations and normal release gates pass. Eligibility issuance remains disabled until the separate ZK and relying-party evidence gate is complete.

@@ -19,6 +19,7 @@ import {
   isAttestationFresh,
   getPlatformLabel,
   getAttestationTypeLabel,
+  requestBiometricEnrollment,
   requestBiometricVerification,
   requestCredentialIssuance,
 } from "@/lib/tee/attestation";
@@ -54,6 +55,7 @@ jest.mock("@/config/constants", () => ({
   TEE_ENDPOINTS: {
     NODE_STATUS: "/api/v1/tee/nodes/status",
     ATTESTATION_VERIFY: "/api/v1/tee/attestation/verify",
+    BIOMETRIC_ENROLL: "/api/v1/tee/biometric/enroll",
     BIOMETRIC_VERIFY: "/api/v1/tee/biometric/verify",
     CREDENTIAL_ISSUE: "/api/v1/tee/credential/issue",
   },
@@ -676,6 +678,73 @@ describe("requestBiometricVerification", () => {
     await requestBiometricVerification(makeBiometricPayload(), "token");
 
     expect(mockWithTimeout).toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// requestBiometricEnrollment
+// ---------------------------------------------------------------------------
+
+describe("requestBiometricEnrollment", () => {
+  beforeEach(() => {
+    mockFetch.mockReset();
+    mockWithTimeout.mockClear();
+    mockWithTimeout.mockImplementation(async <T>(p: Promise<T>) => p);
+  });
+
+  it("returns enrollment receipt on HTTP 200", async () => {
+    const payload = makeBiometricPayload();
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        success: true,
+        enrollmentId: "enroll-123",
+        templateHash: "0xtemplatehash",
+      }),
+    });
+
+    const result = await requestBiometricEnrollment(payload, "jwt-token");
+
+    expect(result.success).toBe(true);
+    expect(result.verificationId).toBe("enroll-123");
+    expect(result.biometricHash).toBe("0xtemplatehash");
+    expect(result.enclaveHash).toBe("0xenclave1");
+  });
+
+  it("sends enrollment request to the TEE enrollment endpoint", async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({ success: true, enrollmentId: "enroll-1" }),
+    });
+
+    await requestBiometricEnrollment(makeBiometricPayload(), "my-token");
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      "https://tee.test.local/api/v1/tee/biometric/enroll",
+      expect.objectContaining({
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer my-token",
+        },
+      }),
+    );
+  });
+
+  it("returns failure result on non-OK response", async () => {
+    const payload = makeBiometricPayload();
+    mockFetch.mockResolvedValue({
+      ok: false,
+      status: 409,
+      json: async () => ({ message: "Template already enrolled" }),
+    });
+
+    const result = await requestBiometricEnrollment(payload, "token");
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe("Template already enrolled");
+    expect(result.verificationId).toBe("");
+    expect(result.enclaveHash).toBe("0xenclave1");
   });
 });
 

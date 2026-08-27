@@ -149,7 +149,7 @@ jest.mock('../src/services/enterprise/issuer-trust-service', () => ({
   },
 }));
 
-jest.mock('../src/index', () => ({
+jest.mock('../src/runtime', () => ({
   prisma: {},
 }));
 

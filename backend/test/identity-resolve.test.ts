@@ -6,7 +6,7 @@ const mockIdentityFindFirst = jest.fn();
 const mockGetVerificationStatus = jest.fn();
 const mockIsAttestationValid = jest.fn();
 
-jest.mock('../src/index', () => ({
+jest.mock('../src/runtime', () => ({
   logger: {
     info: jest.fn(),
     warn: jest.fn(),
@@ -82,6 +82,10 @@ describe('identity DID resolution freshness', () => {
       status: 'ACTIVE',
       teeAttestationId: 'attestation-current',
       displayName: 'Alice',
+      _count: {
+        credentials: 3,
+        verificationsSubject: 7,
+      },
       createdAt: new Date('2026-04-28T00:00:00.000Z'),
       updatedAt: new Date('2026-04-29T00:00:00.000Z'),
     });
@@ -116,6 +120,8 @@ describe('identity DID resolution freshness', () => {
       did: 'did:aethelred:testnet:0x1234567890abcdef1234567890abcdef12345678',
       controller: '0x1234567890abcdef1234567890abcdef12345678',
       displayName: 'Alice',
+      credentialCount: 3,
+      verificationCount: 7,
       teeAttested: true,
       governmentVerified: true,
     });

@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang xml:lang>
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>ZeroID — Engineering Status Report</title>
+  <style>
+    code{white-space: pre-wrap;}
+    span.smallcaps{font-variant: small-caps;}
+    span.underline{text-decoration: underline;}
+    div.column{display: inline-block; vertical-align: top; width: 50%;}
+    div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+    ul.task-list{list-style: none;}
+    pre > code.sourceCode { white-space: pre; position: relative; }
+    pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+    pre > code.sourceCode > span:empty { height: 1.2em; }
+    .sourceCode { overflow: visible; }
+    code.sourceCode > span { color: inherit; text-decoration: inherit; }
+    div.sourceCode { margin: 1em 0; }
+    pre.sourceCode { margin: 0; }
+    @media screen {
+    div.sourceCode { overflow: auto; }
+    }
+    @media print {
+    pre > code.sourceCode { white-space: pre-wrap; }
+    pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+    }
+    pre.numberSource code
+      { counter-reset: source-line 0; }
+    pre.numberSource code > span
+      { position: relative; left: -4em; counter-increment: source-line; }
+    pre.numberSource code > span > a:first-child::before
+      { content: counter(source-line);
+        position: relative; left: -1em; text-align: right; vertical-align: baseline;
+        border: none; display: inline-block;
+        -webkit-touch-callout: none; -webkit-user-select: none;
+        -khtml-user-select: none; -moz-user-select: none;
+        -ms-user-select: none; user-select: none;
+        padding: 0 4px; width: 4em;
+        color: #aaaaaa;
+      }
+    pre.numberSource { margin-left: 3em; border-left: 1px solid #aaaaaa;  padding-left: 4px; }
+    div.sourceCode
+      {   }
+    @media screen {
+    pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+    }
+    code span.al { color: #ff0000; font-weight: bold; } /* Alert */
+    code span.an { color: #60a0b0; font-weight: bold; font-style: italic; } /* Annotation */
+    code span.at { color: #7d9029; } /* Attribute */
+    code span.bn { color: #40a070; } /* BaseN */
+    code span.bu { } /* BuiltIn */
+    code span.cf { color: #007020; font-weight: bold; } /* ControlFlow */
+    code span.ch { color: #4070a0; } /* Char */
+    code span.cn { color: #880000; } /* Constant */
+    code span.co { color: #60a0b0; font-style: italic; } /* Comment */
+    code span.cv { color: #60a0b0; font-weight: bold; font-style: italic; } /* CommentVar */
+    code span.do { color: #ba2121; font-style: italic; } /* Documentation */
+    code span.dt { color: #902000; } /* DataType */
+    code span.dv { color: #40a070; } /* DecVal */
+    code span.er { color: #ff0000; font-weight: bold; } /* Error */
+    code span.ex { } /* Extension */
+    code span.fl { color: #40a070; } /* Float */
+    code span.fu { color: #06287e; } /* Function */
+    code span.im { } /* Import */
+    code span.in { color: #60a0b0; font-weight: bold; font-style: italic; } /* Information */
+    code span.kw { color: #007020; font-weight: bold; } /* Keyword */
+    code span.op { color: #666666; } /* Operator */
+    code span.ot { color: #007020; } /* Other */
+    code span.pp { color: #bc7a00; } /* Preprocessor */
+    code span.sc { color: #4070a0; } /* SpecialChar */
+    code span.ss { color: #bb6688; } /* SpecialString */
+    code span.st { color: #4070a0; } /* String */
+    code span.va { color: #19177c; } /* Variable */
+    code span.vs { color: #4070a0; } /* VerbatimString */
+    code span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } /* Warning */
+    .display.math{display: block; text-align: center; margin: 0.5rem auto;}
+  </style>
+  <link rel="stylesheet" href="data:text/css,body%20%7B%20font%2Dfamily%3A%20%2Dapple%2Dsystem%2C%20%22Segoe%20UI%22%2C%20Helvetica%2C%20Arial%2C%20sans%2Dserif%3B%20max%2Dwidth%3A%20840px%3B%20margin%3A%202rem%20auto%3B%20padding%3A%200%201%2E6rem%3B%20line%2Dheight%3A%201%2E6%3B%20color%3A%20%231a1a1a%3B%20%7D%0Ah1%20%7B%20font%2Dsize%3A%201%2E85rem%3B%20border%2Dbottom%3A%202px%20solid%20%23333%3B%20padding%2Dbottom%3A%20%2E4rem%3B%20%7D%0Ah2%20%7B%20font%2Dsize%3A%201%2E3rem%3B%20margin%2Dtop%3A%202rem%3B%20border%2Dbottom%3A%201px%20solid%20%23ddd%3B%20padding%2Dbottom%3A%20%2E3rem%3B%20%7D%0Ah3%20%7B%20font%2Dsize%3A%201%2E08rem%3B%20margin%2Dtop%3A%201%2E4rem%3B%20%7D%0Acode%20%7B%20background%3A%20%23f4f4f4%3B%20padding%3A%20%2E1rem%20%2E3rem%3B%20border%2Dradius%3A%203px%3B%20font%2Dsize%3A%20%2E9em%3B%20%7D%0Apre%20%7B%20background%3A%20%23f6f8fa%3B%20padding%3A%20%2E9rem%3B%20border%2Dradius%3A%206px%3B%20overflow%2Dx%3A%20auto%3B%20border%3A%201px%20solid%20%23e1e4e8%3B%20%7D%0Apre%20code%20%7B%20background%3A%20none%3B%20padding%3A%200%3B%20%7D%0Atable%20%7B%20border%2Dcollapse%3A%20collapse%3B%20width%3A%20100%25%3B%20margin%3A%201rem%200%3B%20font%2Dsize%3A%20%2E93rem%3B%20%7D%0Ath%2C%20td%20%7B%20border%3A%201px%20solid%20%23ddd%3B%20padding%3A%20%2E5rem%20%2E7rem%3B%20text%2Dalign%3A%20left%3B%20vertical%2Dalign%3A%20top%3B%20%7D%0Ath%20%7B%20background%3A%20%23f4f4f4%3B%20%7D%0Ablockquote%20%7B%20border%2Dleft%3A%204px%20solid%20%23ccc%3B%20margin%3A%201rem%200%3B%20padding%3A%20%2E2rem%201rem%3B%20color%3A%20%23555%3B%20%7D%0Ahr%20%7B%20border%3A%20none%3B%20border%2Dtop%3A%201px%20solid%20%23ddd%3B%20margin%3A%202rem%200%3B%20%7D%0Aa%20%7B%20color%3A%20%230b5fff%3B%20%7D%0A%40media%20print%20%7B%20body%20%7B%20margin%3A%200%3B%20max%2Dwidth%3A%20none%3B%20%7D%20a%20%7B%20color%3A%20%23000%3B%20%7D%20%7D%0A" />
+  <!--[if lt IE 9]>
+    <script src="//cdnjs.cloudflare.com/ajax/libs/html5shiv/3.7.3/html5shiv-printshiv.min.js"></script>
+  <![endif]-->
+</head>
+<body>
+<div style="border:2px solid #b45309;background:#fef3c7;color:#78350f;padding:12px 16px;margin:16px 0;border-radius:8px"><strong>Correction (2026-07-12):</strong> chain IDs 8821 / 88210 referenced in this report were never-deployed placeholders (8821 is the SLIP-44 coin type, not an EVM chain id). Canonical EVM chain ids are <strong>7331 (mainnet, reserved) / 7332 (testnet &amp; devnet, confirmed live)</strong> per the aethelred <code>ecosystem/manifest.json</code> v2.0.0; ZeroID&rsquo;s <code>src/config/chains.ts</code> is conformant. All 8821/88210 references below are historical.</div>
+<header id="title-block-header">
+<h1 class="title">ZeroID — Engineering Status Report</h1>
+</header>
+<h1 id="zeroid-engineering-status-report">ZeroID — Engineering Status Report</h1>
+<p><strong>Prepared for:</strong> External strategy/architecture consultant (for review &amp; opinion) <strong>Date:</strong> 28 June 2026 (rev. 2 — adds AI Agent Passport v1, §5.4) <strong>Subject:</strong> ZeroID re-platforming onto the canonical Aethelred protocol; implementation of the institutional (“20×”) moat features; and a new “AI agent’s passport” (AI Agent Identity v1) vertical <strong>Status of work:</strong> Implemented and tested on a feature branch; activation gated on testnet. Not yet merged or deployed.</p>
+<hr />
+<h2 id="executive-summary">1. Executive summary</h2>
+<p>ZeroID has been <strong>re-based onto the real canonical Aethelred stack</strong> and the <strong>institutional moat features from your strategy documents have been implemented and tested in code</strong>. Importantly, this was a <em>conformance</em> exercise, not a rewrite: ZeroID’s existing cryptography (Circom/Groth16 over BN254) and EVM/Solidity contracts were already compatible with the protocol’s on-chain verifier, so the work was to make ZeroID <strong>consume</strong> the protocol’s canonical capabilities instead of its own parallel re-implementations.</p>
+<p>All work is consolidated behind a single, CI-enforced integration seam (<code>src/lib/aethelred/</code>), which doubles as the <strong>reusable conformance template</strong> for the other four ecosystem dApps (Cruzible, TerraQura, NoblePay, Shiora) — directly addressing the “no coordination between teams” problem.</p>
+<p><strong>Headline status:</strong> 108 test suites / 2,367 unit tests + 6 Solidity (Foundry) tests passing; type-check clean; boundary guard enforced in CI. Most canonical paths are built and <strong>flag-gated OFF</strong> so nothing breaks pre-testnet; activation is configuration (env flips), not code, with zero regression risk.</p>
+<p><strong>AI Agent Passport v1 (new — see §5.4):</strong> Per your <em>AI Agent Identity v1</em> spec, ZeroID is now positioned as <strong>“the AI agent’s passport.”</strong> The flagship vertical — an AI agent requesting an eligibility proof on behalf of its KYC’d controller, tightly scoped and fully audited — is implemented end-to-end (backend policy + service + route that reuses the <em>exact</em> human eligibility logic; frontend register wizard + live list + audit attribution). It lives on its own branch (<code>feat/ai-agent-passport-v1</code>): <strong>21 backend AI/eligibility tests + the full frontend suite (110 suites / 2,372) green</strong>, type-check clean. Maturity is honestly bounded to “Pilot / Preview” pending the database migration.</p>
+<p><strong>The one item that most needs your opinion is in §2</strong> (a correction to an assumption in your technical specs), followed by the open questions in §10.</p>
+<hr />
+<h2 id="critical-finding-canonical-stack-reconciliation-please-weigh-in">2. Critical finding — canonical stack reconciliation (please weigh in)</h2>
+<p>Your three documents assumed the protocol’s proving layer is <strong>Halo2 / PlonKish</strong> with a <strong>Cosmos-SDK Go + Rust-FFI</strong> verifier. We verified the assumption against the canonical Aethelred monorepo (the source-of-truth repo, governance policy adopted 2026-04-05). The reality:</p>
+<table>
+<colgroup>
+<col style="width: 25%" />
+<col style="width: 25%" />
+<col style="width: 25%" />
+<col style="width: 25%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>Dimension</th>
+<th>Your spec assumed</th>
+<th>Canonical Aethelred (verified)</th>
+<th>Verdict</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>Chain</td>
+<td>Cosmos-SDK / CometBFT (Go)</td>
+<td>Cosmos-SDK v0.50 / CometBFT v0.38 (Go 1.24)</td>
+<td>✅ Correct</td>
+</tr>
+<tr class="even">
+<td>Verifier</td>
+<td>Go module + Rust FFI</td>
+<td>Go modules + custom <strong>Rust VM</strong> (<code>crates/vm</code>) with ZK precompiles</td>
+<td>✅ Correct</td>
+</tr>
+<tr class="odd">
+<td><strong>General ZK system</strong></td>
+<td><strong>Halo2 / PlonKish</strong></td>
+<td><strong>Groth16 + PLONK over BN254/BLS12-381</strong> (arkworks)</td>
+<td>⚠️ Differs</td>
+</tr>
+<tr class="even">
+<td>zkML</td>
+<td>EZKL / Halo2</td>
+<td><strong>EZKL</strong> (Halo2-backed) precompile + Freivalds for model inference</td>
+<td>✅ Correct (EZKL is the zkML lane)</td>
+</tr>
+<tr class="odd">
+<td>TEE</td>
+<td>Decentralized TEEs / SGX-SEV</td>
+<td><strong>Real DCAP attestation, hardware-agnostic, 6 platforms</strong></td>
+<td>✅ Correct</td>
+</tr>
+<tr class="even">
+<td>Crypto</td>
+<td>(PII purge, ZKP)</td>
+<td><strong>Post-quantum ML-DSA-65 + ECDSA hybrid, ML-KEM-768</strong>, BLS12-381</td>
+<td>✅ Correct + stronger</td>
+</tr>
+<tr class="odd">
+<td>On-chain cost</td>
+<td>~210k gas flat</td>
+<td>precompile-based, flat-cost design</td>
+<td>✅ Consistent</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Implication:</strong> the canonical general-purpose ZK system is <strong>Groth16/PLONK</strong> (BN254); <strong>EZKL (which is Halo2-backed) is specifically the zkML lane.</strong> This is <em>good news</em> — ZeroID’s existing Groth16/BN254 attribute circuits map directly to the chain’s Groth16 precompile, so no proving-system migration was required.</p>
+<p><strong>Question for you:</strong> do you concur with treating <strong>Groth16/PLONK for attribute proofs + EZKL for zkML liveness</strong> as the canonical split? And is your zkML spec’s byte-format guidance (G2 Fp2 limb order, point compression) something you can confirm against a known proof, so we can finalise the snarkjs→arkworks serialisation (see §9, gate W2c)?</p>
+<hr />
+<h2 id="starting-point">3. Starting point</h2>
+<p>ZeroID was a strong, genuinely-built self-sovereign identity platform (Next.js 14, Express/Prisma, 12 Solidity contracts, 9 Circom/Groth16 circuits, a software-simulated TEE crate, Go/Python SDKs) — but built <strong>in parallel</strong> to the protocol: its own chain client, its own ZK verifier contract, a simulated TEE, ECDSA-only signing, and bespoke hooks. It had even been de-vendored (“retired”) from the protocol monorepo during the move to a hub-and-spoke (standalone-repos) model — a process change, not a quality judgement.</p>
+<hr />
+<h2 id="strategy-adopted">4. Strategy adopted</h2>
+<p><strong>Conformance-first via a strangler-fig boundary.</strong> A single internal module, <code>src/lib/aethelred/</code>, wraps the canonical SDK and chain. ZeroID’s chain access was migrated subsystem-by-subsystem behind this seam; each parallel implementation is retained as a flag-gated fallback until a live-node check lets us delete it. The app keeps running throughout, and every increment is independently shippable. A CI guard forbids any other file from importing the SDK — which is what stops re-divergence and makes the boundary a copyable standard for the other dApps.</p>
+<p>The deeper rationale: the protocol owns the hard primitives (DCAP attestation, EZKL, ML-DSA-65, Digital Seals), so the moat features <strong>compose</strong> canonical capabilities rather than reinventing weaker versions — exactly the structural advantage your positioning report describes.</p>
+<hr />
+<h2 id="work-completed">5. Work completed</h2>
+<h3 id="phase-1-conformance-workstreams-w1w6">5.1 Phase 1 — Conformance (workstreams W1–W6)</h3>
+<table>
+<colgroup>
+<col style="width: 33%" />
+<col style="width: 33%" />
+<col style="width: 33%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>WS</th>
+<th>Delivered</th>
+<th>Status</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>W1</td>
+<td>Conformance boundary client + <code>@aethelred/sdk</code> wiring; <strong>chain-ID fix 7331/7332 → canonical 8821/88210</strong></td>
+<td>✅ tested</td>
+</tr>
+<tr class="even">
+<td>W2</td>
+<td>ZK verification routed to the chain precompile (Groth16/PLONK/EZKL); canonical wire encoding; verifying-key registry; flag-gated strategy</td>
+<td>✅ tested (activation gated)</td>
+</tr>
+<tr class="odd">
+<td>W3</td>
+<td>TEE attestation → canonical <strong>DCAP</strong> verify; <strong>Digital Seals</strong> (<code>x/seal</code>) adapter</td>
+<td>✅ tested (activation gated)</td>
+</tr>
+<tr class="even">
+<td>W4</td>
+<td><strong>ML-DSA-65 + ECDSA</strong> post-quantum hybrid signing</td>
+<td>✅ tested (activation gated)</td>
+</tr>
+<tr class="odd">
+<td>W5</td>
+<td>Canonical <code>@aethelred/sdk/react</code> hooks (seal/job state)</td>
+<td>✅ tested</td>
+</tr>
+<tr class="even">
+<td>W6</td>
+<td>Ecosystem compatibility CI: boundary import guard + GitHub Actions workflow (builds against pinned protocol SHA)</td>
+<td>✅ enforced</td>
+</tr>
+</tbody>
+</table>
+<h3 id="phase-2-institutional-moat">5.2 Phase 2 — Institutional moat</h3>
+<ul>
+<li><strong>EZKL zkML liveness</strong> (<code>liveness.ts</code>): verifies a zero-knowledge liveness inference on the chain’s EZKL rail, and a combined check requiring <strong>both</strong> the zkML proof <strong>and</strong> a DCAP hardware attestation (<code>VerificationResult{zk_proof_verified, tee_attestation_verified}</code>). ✅ unit-tested. (The proof-<em>production</em> pipeline — model → ONNX → EZKL circuit → keys — is gated on the EZKL toolchain; see §9.)</li>
+<li><strong>Conditional disclosure / key-split escrow</strong> — the FATF travel-rule “asymmetric key-split escrow”, complete across both layers:
+<ul>
+<li>Off-chain (<code>shamir.ts</code>, <code>disclosure.ts</code>): AES-256-GCM-encrypt the payload, <strong>Shamir t-of-n split</strong> the key to a compliance quorum, anchor only <code>sha256(ciphertext)</code> (zero PII), reconstitute under quorum, and <strong>key-shred erasure</strong> (destroying shares makes the on-chain commitment permanently un-linkable — GDPR/DPR-2021 on an immutable ledger). ✅ real crypto round-trip tested.</li>
+<li>On-chain (<code>contracts/ConditionalDisclosure.sol</code>): anchors the commitment + an un-linkable nullifier, gates disclosure behind a <strong>t-of-n compliance-officer quorum bound to a warrant hash</strong>, supports erasure. ✅ 6 Foundry tests.</li>
+<li>TS client + one-call orchestrator (<code>disclosure-contract.ts</code>, <code>disclose.ts</code>). ✅ tested.</li>
+</ul></li>
+</ul>
+<h3 id="protocol-side-fix">5.3 Protocol-side fix</h3>
+<p>The canonical SDK had a complete ML-DSA-65 implementation that <strong>was never exported</strong> from its public entry point, so no dApp could use it. We exported it (Aethelred branch <code>feat/sdk-export-pqc</code>) — a one-line fix that unblocks post-quantum signing <strong>for all five dApps</strong>.</p>
+<h3 id="ai-agent-passport-v1-the-ai-agents-passport">5.4 AI Agent Passport v1 — “the AI agent’s passport”</h3>
+<p>Implementing your <em>AI Agent Identity v1</em> spec. We grounded it in the real codebase first: the agent registry already existed (<code>AgentIdentityService</code>), so v1 is the <strong>constrained agent→eligibility vertical</strong> layered on additively — not new infrastructure, and with no destabilisation of the human workflow.</p>
+<ul>
+<li><strong>Scopes + policy (pure, unit-tested):</strong> a controlled read-only vocabulary (<code>eligibility.read</code> / <code>audit.read</code> / <code>identity.read</code>) and <code>POLICY_AGENT_ELIGIBILITY_VIEW_V1</code> — an agent may act only if its own credential is in good standing AND scoped AND the controller is itself eligible AND the agent’s risk ceiling covers the controller’s tier (the <em>layered trust object</em> from your spec), with your exact deny-codes.</li>
+<li><strong>Agent→eligibility wrapper (dependency-injected):</strong> scope + policy check → delegate → record an <code>AgentAction</code>. Returns your <code>AgentEligibilityProofResponse</code> (actor + proof + evaluation + evidence incl. <code>agentActionId</code>).</li>
+<li><strong><code>POST /api/v1/ai/agents/eligibility/proof</code></strong> with your full error contract (400/401/403/404/422/500).</li>
+<li><strong>Eligibility reuse — the integration seam, now closed:</strong> the human eligibility logic was <em>inline</em> in <code>routes/verification.ts</code> (no callable service). We extracted it <strong>mechanically</strong> into an exported <code>eligibilityProofHandler</code> (byte-identical; the six pre-existing eligibility route tests confirm parity), and the agent path reuses it <strong>in-process via a response shim — no re-implementation, the human workflow untouched.</strong></li>
+<li><strong>Additive schema:</strong> <code>scopes</code>, <code>maxRiskTier</code>, <code>controllerDid</code>, <code>policyId</code>, <code>decision</code> (+<code>AgentActionDecision</code>). <code>prisma generate</code> done; the <strong>migration is the only DB-gated step.</strong></li>
+<li><strong>Frontend:</strong> v1 API client + <code>useAIAgents</code> / <code>useCreateAIAgent</code> hooks; the agent-identity <strong>register wizard now performs real registration</strong> (name + scope multi-select + max risk tier) behind a “Pilot / Preview” banner with a live agent list; the <strong>audit timeline has an “Agent actions” filter</strong> rendering <em>“AI Agent X acting for Controller Y.”</em></li>
+</ul>
+<p>Maturity is bounded to <strong>“Pilot / Preview”</strong> pending the migration, matching your phased rollout (schema+backend → internal UI → pilot external agents). Policy details: <code>docs/policies/agent_identity_v1.md</code>.</p>
+<hr />
+<h2 id="mapping-to-your-20-moat-pillars">6. Mapping to your “20× moat” pillars</h2>
+<table>
+<colgroup>
+<col style="width: 33%" />
+<col style="width: 33%" />
+<col style="width: 33%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>Your pillar (Strategic Positioning Report)</th>
+<th>Implemented as</th>
+<th>Status</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>Hardware isolation (TEE)</td>
+<td>DCAP attestation adapter (<code>attestation.ts</code>)</td>
+<td>Built; activation needs raw DCAP quote (W3c)</td>
+</tr>
+<tr class="even">
+<td>Verifiable AI (zkML)</td>
+<td>EZKL liveness verify, zkML <strong>+</strong> DCAP (<code>liveness.ts</code>)</td>
+<td>Built; needs trained model/circuit (Phase 2b)</td>
+</tr>
+<tr class="odd">
+<td>Zero-PII / right-to-be-forgotten</td>
+<td>nullifier + commitment-only + key-shred erasure</td>
+<td>Built &amp; tested</td>
+</tr>
+<tr class="even">
+<td>Conditional jurisdictional disclosure (FATF)</td>
+<td>Shamir key-split + on-chain compliance quorum + warrant</td>
+<td>Built &amp; tested (off-chain + on-chain)</td>
+</tr>
+<tr class="odd">
+<td>Quantum-resistant sovereign identity</td>
+<td>ML-DSA-65 + ECDSA hybrid signing</td>
+<td>Built; needs backend injection (W4c)</td>
+</tr>
+<tr class="even">
+<td>Continuous verification</td>
+<td>Digital Seals + (periodic) re-attestation</td>
+<td>Seals built; cadence is a product decision</td>
+</tr>
+<tr class="odd">
+<td><strong>Economic flywheel ($0.10 / 50% burn / 50% Cruzible)</strong></td>
+<td>—</td>
+<td><strong>Not built — deferred</strong> (cross-app; see §9)</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="architecture-the-boundary">7. Architecture (the boundary)</h2>
+<p><code>src/lib/aethelred/</code> — 15 modules, fully documented in its own README + activation runbook: <code>client</code> · <code>zk</code>+<code>encoding</code>+<code>vkeys</code>+<code>verify</code> (ZK) · <code>attestation</code> (DCAP) · <code>seals</code> · <code>signing</code> (PQC) · <code>react</code> (hooks) · <code>liveness</code> (zkML) · <code>shamir</code>+<code>disclosure</code>+<code>disclosure-contract</code>+<code>disclose</code> (conditional disclosure). Two planes: the canonical <strong>Cosmos-REST</strong> plane (SDK) for verification/seals/attestation, and the <strong>EVM</strong> plane (viem) for Solidity contracts — ZeroID already ran on the protocol’s EVM RPC.</p>
+<hr />
+<h2 id="verification-evidence">8. Verification &amp; evidence</h2>
+<ul>
+<li><strong>108 unit-test suites / 2,367 tests</strong> passing (clean tree), incl. 15 boundary suites / 59 boundary tests.</li>
+<li><strong>6 Solidity (Foundry) tests</strong> for the on-chain disclosure quorum; project compiles (solc 0.8.28).</li>
+<li>TypeScript <code>tsc --noEmit</code> clean; <strong>boundary import guard</strong> passing (240 files scanned); GitHub Actions compatibility workflow added.</li>
+<li>Developed test-first (TDD) throughout; the off-chain crypto and the Solidity contract are tested for real, while chain-integration paths are unit-tested with mocks pending the live node.</li>
+<li><strong>Branches (not merged/pushed):</strong> ZeroID <code>design/aethelred-conformance-moat</code> (20 commits, conformance + moat); ZeroID <code>feat/ai-agent-passport-v1</code> (6 AI Agent Passport commits atop that branch); Aethelred <code>feat/sdk-export-pqc</code> (1 commit). Full commit lists in the appendix.</li>
+<li><strong>AI Agent Passport v1:</strong> 21 backend AI/eligibility tests + full frontend suite (110 suites / 2,372 tests) green; type-check clean. The eligibility extraction is parity-verified by the 6 pre-existing eligibility route tests.</li>
+</ul>
+<hr />
+<h2 id="current-maturity-activation-gates-honest-framing">9. Current maturity &amp; activation gates (honest framing)</h2>
+<p>ZeroID is best described as <strong>“testnet-candidate: conformance complete, moat cores implemented and tested, activation pending the live testnet.”</strong> The remaining work is deliberately <em>not</em> code we could responsibly fabricate without the running chain:</p>
+<table>
+<colgroup>
+<col style="width: 33%" />
+<col style="width: 33%" />
+<col style="width: 33%" />
+</colgroup>
+<thead>
+<tr class="header">
+<th>Gate</th>
+<th>What it unlocks</th>
+<th>Needs</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><strong>W2c</strong></td>
+<td>Canonical ZK verification live</td>
+<td>Live-node proof byte-format confirmation + on-chain verifying-key registration → flip <code>NEXT_PUBLIC_CANONICAL_VERIFY</code> + <code>NEXT_PUBLIC_AETHELRED_VKEYS</code></td>
+</tr>
+<tr class="even">
+<td><strong>W3c</strong></td>
+<td>DCAP attestation live</td>
+<td>TEE worker surfaces the raw DCAP quote/pcrValues</td>
+</tr>
+<tr class="odd">
+<td><strong>W4c</strong></td>
+<td>PQC signing live</td>
+<td>Inject a real ML-DSA-65 backend via <code>configurePQCProvider</code>, flip <code>NEXT_PUBLIC_PQC_SIGNING</code></td>
+</tr>
+<tr class="even">
+<td><strong>Phase 2b</strong></td>
+<td>zkML liveness live</td>
+<td>Train liveness CNN → ONNX → EZKL circuit/keys → register Circuit on-chain</td>
+</tr>
+<tr class="odd">
+<td><strong>Deploy</strong></td>
+<td>On-chain conditional disclosure live</td>
+<td>Deploy <code>ConditionalDisclosure.sol</code>, grant roles, wire contract address</td>
+</tr>
+<tr class="even">
+<td><strong>Tokenomics</strong></td>
+<td>Economic flywheel</td>
+<td>Product/protocol decision (see open questions)</td>
+</tr>
+</tbody>
+</table>
+<p>Each activation is a config flip with no code change and no regression window — by design of the strangler-fig approach.</p>
+<hr />
+<h2 id="open-questions-for-your-opinion">10. Open questions for your opinion</h2>
+<ol type="1">
+<li><strong>Proving split</strong> — confirm Groth16/PLONK (attributes) + EZKL/Halo2 (zkML) is the right canonical model, and the snarkjs→arkworks byte-format (G2 limb order/compression).</li>
+<li><strong>Conditional disclosure design</strong> — is “AES-GCM payload + Shamir t-of-n split of the symmetric key + sha256 commitment anchored as a Digital Seal + on-chain warrant-bound quorum + key-shred erasure” sufficient for the FATF Travel Rule and ADGM DPR-2021/GDPR as you envisaged the “asymmetric key-split escrow”? Would you prefer threshold/MPC encryption over Shamir-of-symmetric-key for the quorum?</li>
+<li><strong>Liveness</strong> — agree that the strong claim should require <strong>both</strong> the zkML proof and a DCAP attestation? And what model size/latency is realistic for an ADFW demo — your spec’s ~2.8s edge proof of a 15M-parameter CNN looks aggressive for current EZKL; should we plan a smaller model or a TEE-side fallback?</li>
+<li><strong>Post-quantum</strong> — is ML-DSA-65 hybrid signing sufficient, or do you also want ML-KEM-768 key-encapsulation surfaced for confidential channels?</li>
+<li><strong>Tokenomics</strong> — is the <strong>$0.10 / 50% burn / 50% Cruzible</strong> flywheel still the plan, and should it live in ZeroID or at the protocol level? (Currently unbuilt; it is the main investor-narrative piece still open.)</li>
+<li><strong>ADFW 2027 positioning</strong> — given the testnet-gated maturity, how would you frame “implemented, tested, activating on testnet” to institutional investors without overstating live deployment?</li>
+<li><strong>AI Agent Passport (v1 auth + evidence)</strong> — the agent path currently authenticates with the controller’s JWT (the controller acts on the agent’s behalf). Do you want a dedicated agent-token credential signed by the agent identity for v1, or is controller-auth acceptable for the pilot? And should agent-initiated <code>AgentAction</code>s also be anchored as on-chain Digital Seals, or is the off-chain action ledger sufficient for v1?</li>
+</ol>
+<hr />
+<h2 id="recommended-next-steps">11. Recommended next steps</h2>
+<ol type="1">
+<li>Review the two branches (self-contained, documented).</li>
+<li>Stand up the testnet; flip the activation gates one verified circuit/flag at a time (runbook in <code>src/lib/aethelred/README.md</code>).</li>
+<li>Replicate the boundary to the other four dApps (4-step guide in the README).</li>
+<li>Decide the tokenomics design and owner.</li>
+<li>Run the AI Agent Passport schema migration on a test database (<code>prisma migrate</code>), then enable agent registration for an internal “Compliance Assistant” pilot.</li>
+</ol>
+<hr />
+<h2 id="appendix">12. Appendix</h2>
+<p><strong>ZeroID branch <code>design/aethelred-conformance-moat</code> — commits (newest first):</strong></p>
+<pre><code>49b9731 docs(aethelred): boundary architecture + activation runbook
+81fc13a feat(aethelred): end-to-end conditional disclosure orchestrator
+9c7f902 feat(aethelred): ConditionalDisclosure TS client (viem wiring)
+4d9a1dd feat(contracts): ConditionalDisclosure on-chain compliance-quorum gate
+e5648e3 feat(aethelred): conditional disclosure key-split escrow (Shamir + Seals)
+21bbced feat(aethelred): EZKL zkML liveness verification + TEE binding (Phase 2a)
+350e9c2 feat(aethelred): ecosystem compatibility CI (boundary guard + workflow)
+2d8bfcb feat(aethelred): canonical react hooks (client-injected useSeal/useJob)
+312a4f7 feat(aethelred): PQC hybrid signing adapter (ML-DSA-65 + ECDSA)
+a45b6e5 feat(aethelred): Digital Seals boundary adapter (x/seal)
+871f62f feat(aethelred): TEE attestation boundary adapter (DCAP verify + platform map)
+e520d89 feat(aethelred): prefer canonical verification at call sites (flag-gated)
+450eb43 feat(aethelred): ZKProof -&gt; canonical verify adapter
+3fd1f13 feat(aethelred): canonical ZK wire encoding (field elements, proof bytes)
+da8dfcb feat(aethelred): route ZK proof verification through the conformance boundary
+ce0f98e fix(config): reconcile chain IDs to canonical 8821/88210 (ecosystem manifest)
+3ff25a9 feat(aethelred): conformance boundary client (verification + seals modules)
+0ee5bc0 feat(aethelred): wire @aethelred/sdk dependency (local file link)
+e7fef3a docs: W1 conformance-boundary implementation plan (TDD)
+659ca62 docs: ZeroID x Aethelred canonical conformance &amp; 20x moat design spec</code></pre>
+<p><strong>Aethelred branch <code>feat/sdk-export-pqc</code>:</strong> <code>f5a408ae feat(sdk-ts): export PQC (ML-DSA/ML-KEM) from crypto entrypoint</code></p>
+<p><strong>ZeroID branch <code>feat/ai-agent-passport-v1</code> — AI Agent Passport commits (atop the conformance branch, newest first):</strong></p>
+<pre><code>09866e6 feat(ai): audit timeline agent-actions filter + attribution
+d331444 feat(ai): wire register wizard to useCreateAIAgent (real v1 registration)
+c703584 feat(ai): close eligibility integration seam — agent reuses human handler
+4baf980 feat(ai): AI Agent Passport v1 frontend — client + hooks + page wiring
+b7c19e2 feat(ai): agent eligibility route + additive schema + policy doc
+f13684b feat(ai): AI Agent Passport v1 core — scopes + policy + eligibility wrapper</code></pre>
+<p>AI Agent Passport policy doc: <code>docs/policies/agent_identity_v1.md</code>.</p>
+<p><strong>Design specs &amp; plans:</strong> <code>docs/superpowers/specs/</code> and <code>docs/superpowers/plans/</code> (design spec, per-workstream TDD plans, Phase 2 zkML-liveness and conditional-disclosure designs).</p>
+<p><strong>Reproduce the verification:</strong></p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode bash"><code class="sourceCode bash"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="ex">npx</span> jest <span class="at">--silent</span>                                      <span class="co"># 2,367 unit tests</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="ex">forge</span> test <span class="at">--match-contract</span> ConditionalDisclosureTest  <span class="co"># 6 Foundry tests</span></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a><span class="ex">npm</span> run type-check <span class="kw">&amp;&amp;</span> <span class="ex">npm</span> run boundary:check           <span class="co"># types + boundary guard</span></span></code></pre></div>
+</body>
+</html>

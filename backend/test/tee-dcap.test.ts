@@ -37,7 +37,7 @@ import { TEEAttestationService, AttestationError, TCBStatus } from '../src/servi
 // ---------------------------------------------------------------------------
 // Suppress logger and stub redis/prisma before the service module loads
 // ---------------------------------------------------------------------------
-jest.mock('../src/index', () => {
+jest.mock('../src/runtime', () => {
   const { Registry } = require('prom-client');
   return {
     logger: {

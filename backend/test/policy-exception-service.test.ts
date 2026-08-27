@@ -7,7 +7,7 @@ const mockGetApprovalAuthority = jest.fn();
 
 const mockGetEffectivePolicy = jest.fn();
 
-jest.mock('../src/index', () => ({
+jest.mock('../src/runtime', () => ({
   prisma: {
     policyException: {
       create: mockPolicyExceptionCreate,

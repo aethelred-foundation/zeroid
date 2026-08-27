@@ -2,6 +2,11 @@ import crypto from 'crypto';
 import * as https from 'https';
 import * as net from 'net';
 import { promises as dns } from 'dns';
+import {
+  GetPublicKeyCommand as AwsGetPublicKeyCommand,
+  KMSClient as AwsKMSClient,
+  SignCommand as AwsSignCommand,
+} from '@aws-sdk/client-kms';
 import { isProductionRuntime } from '../production-safety';
 
 export type EnterpriseKmsProvider = 'aws-kms' | 'gcp-kms' | 'azure-kms' | 'local';
@@ -96,24 +101,18 @@ function getAwsKmsSdk(): {
     SigningAlgorithm: AwsSigningAlgorithmSpec;
   }) => unknown;
 } {
-  try {
-    return require('@aws-sdk/client-kms') as {
-      KMSClient: new (config: { region: string }) => AwsKmsClient;
-      GetPublicKeyCommand: new (input: { KeyId: string }) => unknown;
-      SignCommand: new (input: {
-        KeyId: string;
-        Message: Buffer;
-        MessageType?: 'RAW' | 'DIGEST';
-        SigningAlgorithm: AwsSigningAlgorithmSpec;
-      }) => unknown;
-    };
-  } catch (error) {
-    throw new EnterpriseSigningError(
-      `AWS KMS signing requested but @aws-sdk/client-kms is not installed: ${(error as Error).message}`,
-      DEFAULT_ERROR_CODES.kmsConfigMissing,
-      500,
-    );
-  }
+  return {
+    KMSClient: AwsKMSClient as unknown as new (config: {
+      region: string;
+    }) => AwsKmsClient,
+    GetPublicKeyCommand: AwsGetPublicKeyCommand,
+    SignCommand: AwsSignCommand as unknown as new (input: {
+      KeyId: string;
+      Message: Buffer;
+      MessageType?: 'RAW' | 'DIGEST';
+      SigningAlgorithm: AwsSigningAlgorithmSpec;
+    }) => unknown,
+  };
 }
 
 function getAwsKmsClient(): AwsKmsClient {
@@ -494,9 +493,13 @@ async function readKmsResponseBody(
   let totalBytes = 0;
 
   try {
-    while (true) {
+    let reading = true;
+    while (reading) {
       const { done, value } = await reader.read();
-      if (done) break;
+      if (done) {
+        reading = false;
+        continue;
+      }
       if (!value) continue;
 
       const chunk = Buffer.from(value);

@@ -179,7 +179,7 @@ jest.mock('../src/services/enterprise/policy-exception-service', () => ({
   policyExceptionService: {},
 }));
 
-jest.mock('../src/index', () => ({
+jest.mock('../src/runtime', () => ({
   prisma: {
     identity: {
       findUnique: mockIdentityFindUnique,

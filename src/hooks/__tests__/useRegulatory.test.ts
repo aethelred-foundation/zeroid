@@ -1,102 +1,88 @@
-/**
- * useRegulatory — Unit Tests
- *
- * Tests for regulatory hooks: jurisdictions, requirements, compliance status,
- * cross-border assessment, gap analysis, regulatory feed, and data sovereignty.
- */
-
-import { renderHook, waitFor, act } from "@testing-library/react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import React from "react";
+import { act, renderHook, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
-// ---------------------------------------------------------------------------
-// Mocks
-// ---------------------------------------------------------------------------
-
-const mockAddress = "0x1234567890abcdef1234567890abcdef12345678";
+const walletAddress = "0x1234567890abcdef1234567890abcdef12345678";
 
 jest.mock("wagmi", () => ({
-  useAccount: jest.fn(() => ({ address: mockAddress, isConnected: true })),
+  useAccount: jest.fn(),
 }));
 
-jest.mock("sonner", () => ({
-  toast: {
-    success: jest.fn(),
-    error: jest.fn(),
-    warning: jest.fn(),
-  },
+jest.mock("@/lib/identity/registration", () => ({
+  getIdentityAuthToken: jest.fn(),
 }));
-const mockToast = jest.requireMock("sonner").toast;
 
 jest.mock("@/lib/api/client", () => ({
   apiClient: {
     get: jest.fn(),
     post: jest.fn(),
-    put: jest.fn(),
-    del: jest.fn(),
-  },
-  ZeroIDApiError: class ZeroIDApiError extends Error {
-    code: string;
-    status: number;
-
-    constructor(message: string, code: string, status: number) {
-      super(message);
-      this.name = "ZeroIDApiError";
-      this.code = code;
-      this.status = status;
-    }
   },
 }));
-const mockApiClient = jest.requireMock("@/lib/api/client").apiClient;
 
 import { useAccount } from "wagmi";
+import { apiClient } from "@/lib/api/client";
+import { getIdentityAuthToken } from "@/lib/identity/registration";
 import {
-  useJurisdictions,
-  useJurisdictionRequirements,
-  useComplianceStatus,
   useCheckCrossBorder,
-  useGapAnalysis,
-  useRegulatoryFeed,
+  useComplianceStatus,
   useDataSovereigntyStatus,
+  useJurisdictionRequirements,
+  useJurisdictions,
 } from "@/hooks/useRegulatory";
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+const mockUseAccount = useAccount as jest.Mock;
+const mockGetIdentityAuthToken = getIdentityAuthToken as jest.Mock;
+const mockApiClient = apiClient as jest.Mocked<typeof apiClient>;
 
 function createWrapper() {
   const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
   });
+
   return ({ children }: { children: React.ReactNode }) =>
     React.createElement(QueryClientProvider, { client: queryClient }, children);
 }
 
+const jurisdiction = {
+  code: "AE-CBUAE",
+  name: "UAE Central Bank",
+  region: "mena",
+  dataResidencyRequired: true,
+  retentionDays: 1825,
+  reportingCurrency: "AED",
+  regulatoryBody: "Central Bank of UAE",
+  consentModel: "explicit",
+  crossBorderRestricted: false,
+};
+
 beforeEach(() => {
   jest.clearAllMocks();
-  (useAccount as jest.Mock).mockReturnValue({
-    address: mockAddress,
+  mockUseAccount.mockReturnValue({
+    address: walletAddress,
     isConnected: true,
   });
+  mockGetIdentityAuthToken.mockReturnValue("identity-token");
 });
 
-// ===========================================================================
-// useJurisdictions
-// ===========================================================================
-
 describe("useJurisdictions", () => {
-  const mockJurisdictions = [
-    {
-      id: "uae",
-      name: "United Arab Emirates",
-      code: "AE",
-      region: "mena",
-      isActive: true,
-    },
-  ];
+  it("requires an authenticated wallet session", () => {
+    mockGetIdentityAuthToken.mockReturnValue(null);
 
-  it("fetches jurisdictions", async () => {
-    mockApiClient.get.mockResolvedValue(mockJurisdictions);
+    const { result } = renderHook(() => useJurisdictions(), {
+      wrapper: createWrapper(),
+    });
+
+    expect(result.current.fetchStatus).toBe("idle");
+    expect(result.current.data).toBeUndefined();
+    expect(mockApiClient.get).not.toHaveBeenCalled();
+  });
+
+  it("loads and strictly validates configured jurisdictions", async () => {
+    mockApiClient.get.mockResolvedValue([jurisdiction]);
+
     const { result } = renderHook(() => useJurisdictions(), {
       wrapper: createWrapper(),
     });
@@ -104,100 +90,135 @@ describe("useJurisdictions", () => {
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(mockApiClient.get).toHaveBeenCalledWith(
       "/api/v1/enterprise/compliance/jurisdictions",
+      undefined,
+      "identity-token",
     );
-    expect(result.current.data).toEqual(mockJurisdictions);
+    expect(result.current.data).toEqual([jurisdiction]);
+  });
+
+  it("rejects fabricated score fields instead of silently trusting them", async () => {
+    mockApiClient.get.mockResolvedValue([{ ...jurisdiction, score: 97 }]);
+
+    const { result } = renderHook(() => useJurisdictions(), {
+      wrapper: createWrapper(),
+    });
+
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(result.current.data).toBeUndefined();
   });
 });
 
-// ===========================================================================
-// useJurisdictionRequirements
-// ===========================================================================
-
 describe("useJurisdictionRequirements", () => {
-  it("fails closed because detailed requirements are not exposed", async () => {
+  it("returns only configured policy evidence for the selected operation", async () => {
+    const requirements = {
+      jurisdictionId: "AE-CBUAE",
+      operationType: "transfer",
+      evidenceStatus: "configured_policy_only",
+      policySource: {
+        kind: "internal_configuration",
+        externalAuthorityVerified: false,
+      },
+      requiredCredentials: [
+        {
+          credentialType: "kyc_enhanced",
+          label: "Kyc Enhanced",
+          mandatory: true,
+        },
+      ],
+      retentionPolicy: {
+        retentionDays: 1825,
+        dataResidencyRequired: true,
+        consentModel: "explicit",
+      },
+      regulatoryBodyLabel: "Central Bank of UAE",
+      unavailableCapabilities: ["accepted_issuer_verification"],
+    };
+    mockApiClient.get.mockResolvedValue(requirements);
+
     const { result } = renderHook(
-      () => useJurisdictionRequirements("AE-CBUAE"),
+      () => useJurisdictionRequirements("AE-CBUAE", "transfer"),
       { wrapper: createWrapper() },
     );
 
-    await waitFor(() => expect(result.current.isError).toBe(true));
-    expect(mockApiClient.get).not.toHaveBeenCalled();
-    expect(result.current.error).toMatchObject({
-      code: "REGULATORY_REQUIREMENTS_UNAVAILABLE",
-      status: 501,
-    });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(mockApiClient.get).toHaveBeenCalledWith(
+      "/api/v1/enterprise/compliance/jurisdictions/AE-CBUAE/requirements",
+      { operationType: "transfer" },
+      "identity-token",
+    );
+    expect(result.current.data).toEqual(requirements);
+    expect(result.current.data).not.toHaveProperty("amlThresholds");
+    expect(result.current.data).not.toHaveProperty("reportingObligations");
   });
 
-  it("is disabled when jurisdictionId is undefined", () => {
+  it("does not run without a jurisdiction", () => {
     const { result } = renderHook(
       () => useJurisdictionRequirements(undefined),
       { wrapper: createWrapper() },
     );
+
     expect(result.current.fetchStatus).toBe("idle");
+    expect(mockApiClient.get).not.toHaveBeenCalled();
   });
 });
 
-// ===========================================================================
-// useComplianceStatus
-// ===========================================================================
-
 describe("useComplianceStatus", () => {
-  const mockStatus = {
-    jurisdictionId: "AE-CBUAE",
-    jurisdictionName: "UAE",
-    overallStatus: "compliant",
-    score: 95,
-    credentialStatus: [],
-    lastAssessedAt: "2026-01-01T00:00:00Z",
-    nextAssessmentAt: "2026-04-01T00:00:00Z",
-    blockers: [],
-  };
+  it("returns the recorded backend evaluation without calculating a score", async () => {
+    const evaluation = {
+      entityId: walletAddress,
+      jurisdiction: "AE-CBUAE",
+      overallStatus: "partial",
+      missingCredentials: ["source_of_funds"],
+      expiringCredentials: [
+        {
+          credentialType: "passport",
+          expiresAt: "2026-08-01T00:00:00.000Z",
+          daysRemaining: 14,
+        },
+      ],
+      rules: [
+        {
+          ruleId: "11111111-1111-4111-8111-111111111111",
+          name: "KYC Completeness",
+          status: "fail",
+          detail: "Missing: source_of_funds",
+        },
+      ],
+      lastEvaluated: "2026-07-18T00:00:00.000Z",
+      nextReviewDate: "2027-01-14T00:00:00.000Z",
+    };
+    mockApiClient.get.mockResolvedValue(evaluation);
 
-  it("fetches compliance status for jurisdiction and address", async () => {
-    mockApiClient.get.mockResolvedValue(mockStatus);
     const { result } = renderHook(() => useComplianceStatus("AE-CBUAE"), {
       wrapper: createWrapper(),
     });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(mockApiClient.get).toHaveBeenCalledWith(
-      `/api/v1/enterprise/compliance/status/${mockAddress}`,
+      `/api/v1/enterprise/compliance/status/${walletAddress}`,
       { jurisdiction: "AE-CBUAE" },
+      "identity-token",
     );
-  });
-
-  it("is disabled when jurisdictionId is undefined", () => {
-    const { result } = renderHook(() => useComplianceStatus(undefined), {
-      wrapper: createWrapper(),
-    });
-    expect(result.current.fetchStatus).toBe("idle");
-  });
-
-  it("is disabled when no address", () => {
-    (useAccount as jest.Mock).mockReturnValue({
-      address: undefined,
-      isConnected: false,
-    });
-    const { result } = renderHook(() => useComplianceStatus("AE-CBUAE"), {
-      wrapper: createWrapper(),
-    });
-    expect(result.current.fetchStatus).toBe("idle");
+    expect(result.current.data).toEqual(evaluation);
+    expect(result.current.data).not.toHaveProperty("score");
+    expect(result.current.data).not.toHaveProperty("estimatedRemediationDays");
   });
 });
 
-// ===========================================================================
-// useCheckCrossBorder
-// ===========================================================================
-
 describe("useCheckCrossBorder", () => {
-  it("shows success toast when eligible", async () => {
-    mockApiClient.post.mockResolvedValue({
+  it("submits the real wallet subject and user-supplied transfer context", async () => {
+    const assessment = {
       allowed: true,
-      riskLevel: "low",
-      restrictions: [],
-      requirements: [],
-      mutualRecognitionAgreements: ["UAE-EU MRA"],
-    });
+      sourceJurisdiction: "AE-CBUAE",
+      targetJurisdiction: "EU-GDPR",
+      mutualRecognition: false,
+      acceptedCredentials: [],
+      additionalRequired: ["gdpr_consent"],
+      dataTransferMechanism: "standard_contractual_clauses",
+      restrictions: ["EU SCCs required"],
+    };
+    mockApiClient.post.mockResolvedValue(assessment);
+
     const { result } = renderHook(() => useCheckCrossBorder(), {
       wrapper: createWrapper(),
     });
@@ -206,6 +227,8 @@ describe("useCheckCrossBorder", () => {
       await result.current.mutateAsync({
         fromJurisdiction: "AE-CBUAE",
         toJurisdiction: "EU-GDPR",
+        dataCategory: "financial",
+        purpose: "credential verification",
       });
     });
 
@@ -214,147 +237,91 @@ describe("useCheckCrossBorder", () => {
       {
         sourceJurisdiction: "AE-CBUAE",
         targetJurisdiction: "EU-GDPR",
-        entityId: "current-subject",
-        dataCategories: ["personal"],
-        purpose: "identity_verification",
+        entityId: walletAddress,
+        dataCategories: ["financial"],
+        purpose: "credential verification",
       },
+      "identity-token",
     );
-    expect(mockToast.success).toHaveBeenCalledWith(
-      "Cross-border transfer eligible",
-      {
-        description: expect.stringContaining("low"),
-      },
-    );
+    await waitFor(() => expect(result.current.data).toEqual(assessment));
+    expect(result.current.data).not.toHaveProperty("estimatedProcessingDays");
   });
 
-  it("shows warning toast when not eligible", async () => {
-    mockApiClient.post.mockResolvedValue({
-      allowed: false,
-      riskLevel: "prohibited",
-      restrictions: ["Sanctions apply", "No bilateral agreement"],
-    });
+  it("fails closed when the session is unavailable", async () => {
+    mockGetIdentityAuthToken.mockReturnValue(null);
     const { result } = renderHook(() => useCheckCrossBorder(), {
       wrapper: createWrapper(),
     });
 
-    await act(async () => {
-      await result.current.mutateAsync({
-        fromJurisdiction: "AE-CBUAE",
-        toJurisdiction: "RESTRICTED",
-      });
-    });
-
-    expect(mockToast.warning).toHaveBeenCalledWith(
-      "Cross-border transfer not eligible",
-      {
-        description: "2 restriction(s) apply",
-      },
-    );
-  });
-
-  it("shows error toast on failure", async () => {
-    mockApiClient.post.mockRejectedValue(new Error("Service down"));
-    const { result } = renderHook(() => useCheckCrossBorder(), {
-      wrapper: createWrapper(),
-    });
-
-    await act(async () => {
-      try {
+    await expect(
+      act(async () => {
         await result.current.mutateAsync({
-          fromJurisdiction: "a",
-          toJurisdiction: "b",
+          fromJurisdiction: "AE-CBUAE",
+          toJurisdiction: "EU-GDPR",
+          dataCategory: "personal",
+          purpose: "identity verification",
         });
-      } catch {}
+      }),
+    ).rejects.toThrow("authenticated ZeroID session");
+    expect(mockApiClient.post).not.toHaveBeenCalled();
+  });
+
+  it("does not synthesize a result after a backend failure", async () => {
+    mockApiClient.post.mockRejectedValue(new Error("Policy service offline"));
+    const { result } = renderHook(() => useCheckCrossBorder(), {
+      wrapper: createWrapper(),
     });
 
-    expect(mockToast.error).toHaveBeenCalledWith("Cross-border check failed", {
-      description: "Service down",
-    });
+    await expect(
+      act(async () => {
+        await result.current.mutateAsync({
+          fromJurisdiction: "AE-CBUAE",
+          toJurisdiction: "EU-GDPR",
+          dataCategory: "personal",
+          purpose: "identity verification",
+        });
+      }),
+    ).rejects.toThrow("Policy service offline");
+    expect(result.current.data).toBeUndefined();
   });
 });
-
-// ===========================================================================
-// useGapAnalysis
-// ===========================================================================
-
-describe("useGapAnalysis", () => {
-  it("fails closed because gap analysis is not exposed", async () => {
-    const { result } = renderHook(() => useGapAnalysis("AE-CBUAE"), {
-      wrapper: createWrapper(),
-    });
-
-    await waitFor(() => expect(result.current.isError).toBe(true));
-    expect(mockApiClient.get).not.toHaveBeenCalled();
-    expect(result.current.error).toMatchObject({
-      code: "REGULATORY_GAP_ANALYSIS_UNAVAILABLE",
-      status: 501,
-    });
-  });
-
-  it("is disabled when jurisdictionId is undefined", () => {
-    const { result } = renderHook(() => useGapAnalysis(undefined), {
-      wrapper: createWrapper(),
-    });
-    expect(result.current.fetchStatus).toBe("idle");
-  });
-
-  it("is disabled when no address", () => {
-    (useAccount as jest.Mock).mockReturnValue({
-      address: undefined,
-      isConnected: false,
-    });
-    const { result } = renderHook(() => useGapAnalysis("AE-CBUAE"), {
-      wrapper: createWrapper(),
-    });
-    expect(result.current.fetchStatus).toBe("idle");
-  });
-});
-
-// ===========================================================================
-// useRegulatoryFeed
-// ===========================================================================
-
-describe("useRegulatoryFeed", () => {
-  it("fails closed because the change feed is not exposed", async () => {
-    const { result } = renderHook(() => useRegulatoryFeed(), {
-      wrapper: createWrapper(),
-    });
-
-    await waitFor(() => expect(result.current.isError).toBe(true));
-    expect(mockApiClient.get).not.toHaveBeenCalled();
-    expect(result.current.error).toMatchObject({
-      code: "REGULATORY_FEED_UNAVAILABLE",
-      status: 501,
-    });
-  });
-});
-
-// ===========================================================================
-// useDataSovereigntyStatus
-// ===========================================================================
 
 describe("useDataSovereigntyStatus", () => {
-  it("fails closed because sovereignty status is not exposed", async () => {
+  it("returns recorded workflow evidence without GDPR legal claims", async () => {
+    const evidence = {
+      evidenceStatus: "recorded_workflow_evidence",
+      compliantRegions: ["me-central-1"],
+      nonCompliantRegions: [],
+      dataResidencyMap: [
+        {
+          dataType: "personal",
+          currentRegion: "me-central-1",
+          requiredRegion: "me-central-1",
+          compliant: true,
+          migrationRequired: false,
+          retentionExpiresAt: "2027-07-18T00:00:00.000Z",
+          autoDeleteScheduled: true,
+        },
+      ],
+      consentRecords: 1,
+      retentionRecords: 1,
+      legalConclusionAvailable: false,
+      unavailableCapabilities: ["gdpr_legal_conclusion"],
+    };
+    mockApiClient.get.mockResolvedValue(evidence);
+
     const { result } = renderHook(() => useDataSovereigntyStatus(), {
       wrapper: createWrapper(),
     });
 
-    await waitFor(() => expect(result.current.isError).toBe(true));
-    expect(mockApiClient.get).not.toHaveBeenCalled();
-    expect(result.current.error).toMatchObject({
-      code: "REGULATORY_DATA_SOVEREIGNTY_UNAVAILABLE",
-      status: 501,
-    });
-  });
-
-  it("is disabled when no address", () => {
-    (useAccount as jest.Mock).mockReturnValue({
-      address: undefined,
-      isConnected: false,
-    });
-    const { result } = renderHook(() => useDataSovereigntyStatus(), {
-      wrapper: createWrapper(),
-    });
-    expect(result.current.fetchStatus).toBe("idle");
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(mockApiClient.get).toHaveBeenCalledWith(
+      `/api/v1/enterprise/compliance/sovereignty/status/${walletAddress}`,
+      undefined,
+      "identity-token",
+    );
+    expect(result.current.data).toEqual(evidence);
+    expect(result.current.data).not.toHaveProperty("gdprStatus");
+    expect(result.current.data).not.toHaveProperty("pendingTransfers");
   });
 });

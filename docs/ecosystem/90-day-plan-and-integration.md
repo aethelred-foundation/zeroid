@@ -1,47 +1,48 @@
-# ZeroID — 90-Day Ecosystem Plan & Integration Contracts
+# ZeroID — 90-Day Ecosystem Plan and Integration Gates
 
-> Operationalises the consultant's 90-day plan: make ZeroID the **identity spine + AI agents' passport** of Aethelred, tightly bound to Cruzible (staking) and the Wallet (custody). Status flags: **[done]** built+tested here · **[gated]** needs live testnet / other repos / infra · **[decide]** product/legal decision.
+> This is the current operational plan, not a historical status report. Flags: **[available]** code may be enabled after migrations/configuration and release gates · **[unavailable]** intentionally fails closed · **[gated]** needs external infrastructure or another repository · **[decide]** needs a product/legal decision.
 
-## Phase 1 (Days 0–30) — Testnet activation & evidence
+## Phase 1 (Days 0–30) — trusted testnet evidence
 
-| Item | Status | Note |
-|---|---|---|
-| W2c — canonical ZK verification live | [gated] | needs testnet node; confirm snarkjs→arkworks byte format vs a known proof, register vkeys, flip `NEXT_PUBLIC_CANONICAL_VERIFY`/`_VKEYS`. Boundary + adapter already built. |
-| W3c — DCAP attestation live | [gated] | needs ≥1 TEE worker exposing raw quotes/PCRs; wire into `attestation.ts`. Adapter built. |
-| W4c — PQC signing live | [gated] | inject real ML-DSA-65 provider via `configurePQCProvider`; choose ops (VC issuance, agent creds, Digital Seals). Adapter built. |
-| Phase 2b — zkML liveness | [gated] | train small (<15M-param) liveness CNN → ONNX → EZKL circuit/keys → register on-chain; bind to DCAP. Verification lane built. |
-| Deploy `ConditionalDisclosure.sol` + `FeeRouter.sol` | [gated] | deploy to testnet, assign roles, set sinks; wire addresses into clients. Contracts built+tested. |
-| Testnet evidence pack | [gated] | CI logs (2,367 + AI tests), contract addresses, sample Digital Seals, circuit manifests/hashes, DCAP reports. |
+| Item | Status | Exit evidence |
+| --- | --- | --- |
+| Human eligibility proof issuance | [unavailable] | Provider-signed credential witness, audited and pinned Groth16 artifacts, real prover/verifier, durable one-time relying-party challenge, and atomic challenge/decision/evidence persistence. |
+| Agent and partner eligibility issuance | [unavailable] | All human-proof evidence above plus durable agent-operation challenges, agent signatures, and atomic agent authorization/audit persistence. |
+| Agent identity control plane | [available] | Reviewed Prisma migrations applied; challenge, delegation, approval, suspension, and audit tests pass against the deployment database. |
+| OIDC login/status assurance | [available] | Managed signing keys, HTTPS issuer, registered confidential clients, and current government/TEE status evidence. Profile/contact claims remain omitted pending an encrypted provider evidence store. |
+| Canonical on-chain ZK verification | [gated] | Known Groth16 vector verified through the target precompile; verification keys registered and client configuration pinned. |
+| DCAP, PQC, and zkML activation | [gated] | Real worker/provider/model evidence, registered keys/circuits, and end-to-end verification records. |
+| Contract deployment and evidence pack | [gated] | Addresses, roles, sinks, manifests, hashes, CI logs, and operational runbooks captured from the target testnet. |
 
-## Phase 2 (Days 30–60) — Integration: ZeroID as the identity spine
+An environment that previously emitted OIDC identity values from client-mutable metadata should include a coordinated signing-key/JWKS rotation in its deployment plan.
 
-### Economic flywheel — **[done] (mechanism)**
-`contracts/FeeRouter.sol` (7 Foundry tests): per-operation fee → configurable burn share to protocol burn sink + remainder to Cruzible sink, with `FeeRouted` accounting events. **Deploy-time integration:** set `burnSink` (protocol burn address) + `cruzibleSink` (Cruzible staking pool). **[decide]** exact per-op price ($0.10 equiv) and whether the fee policy sits at protocol or ZeroID-app level.
+## Phase 2 (Days 30–60) — Wallet and Cruzible integration
 
-### Integration 1 — Wallet (custody) ↔ ZeroID
-ZeroID-side contract (reuses existing eligibility + conditional-disclosure orchestrators):
-- `POST /api/v1/partners/wallet/eligibility` → eligibility decision for an account owner (wraps the human `eligibilityProofHandler`). **[done — ZeroID-side]**
-- `POST /api/v1/partners/wallet/disclosure` → orchestrate conditional disclosure under `warrantHash` (wraps `discloseIdentityPath` + on-chain quorum). **[done — ZeroID-side]**
-- `GET /api/v1/partners/wallet/evidence/:decisionId` → evidence bundle (Digital Seal). **[done — ZeroID-side]**
-- Wallet stores only references (commitments, seal ids, decision ids) — **never raw PII**. **[gated]** (Wallet repo)
+### Wallet (custody) <-> ZeroID
 
-### Integration 2 — Cruzible (staking) ↔ ZeroID
-- `POST /api/v1/partners/cruzible/pools/:poolId/eligibility` → check staker against the pool's `PolicyDefinition` (accreditation/jurisdiction/sanctions). **[done — ZeroID-side]**
-- `POST /api/v1/partners/cruzible/pools/:poolId/agent-scan` → trigger an AI-agent compliance scan (scopes `eligibility.read`/`audit.read`), recording `AgentAction`s + optional Digital Seals. **[done — ZeroID-side]** (reuses AI Agent Passport v1)
-- Route a share of pool fees through `FeeRouter`. **[gated]** (Cruzible repo)
+- `POST /api/v1/partners/wallet/eligibility` is **[unavailable]** and must return an explicit unavailable error until a one-time relying-party challenge is atomically bound to verified proof evidence.
+- `GET /api/v1/partners/wallet/evidence/:decisionId` is **[unavailable]** until it can load a verified, sealed, subject-bound receipt rather than synthesize a bundle.
+- `POST /api/v1/partners/wallet/disclosure` is **[unavailable]** until a durable quorum escrow is configured.
+- The Wallet should persist only commitments and receipt/seal identifiers, never raw provider PII. Counterpart wiring is **[gated]** on the Wallet repository.
 
-### Integration 3 — shared conformance boundary
-Replicate `src/lib/aethelred/` (+ the `boundary:check` CI guard) into Cruzible and Wallet so all three share ZK semantics, DCAP, Digital Seals, and PQC key handling. **[gated]** (other repos) — template + README already in ZeroID.
+### Cruzible (staking) <-> ZeroID
 
-## Phase 3 (Days 60–90) — ADFW-grade packaging
+- `POST /api/v1/partners/cruzible/pools/:poolId/eligibility` is **[unavailable]** under the same proof/challenge gate as Wallet eligibility.
+- `POST /api/v1/partners/cruzible/pools/:poolId/agent-scan` is **[unavailable]** until both agent-operation and relying-party challenges, proof verification, and durable evidence commit atomically.
+- Fee routing and the counterpart integration remain **[gated]** on reviewed contract deployment and the Cruzible repository.
 
-- **Investor pack** [gated on testnet metrics]: ZeroID↔Cruzible↔Wallet↔protocol diagram; fee/burn flow; testnet metrics (eligibility proofs, agent actions, fees routed).
-- **Regulator/ADGM pack** [done — foundation]: `docs/compliance/conditional-disclosure-regulatory-memo.md` (FATF/ADGM DPR-2021/GDPR mapping) + AI Agent Passport governance (`docs/policies/agent_identity_v1.md`).
-- **ADFW positioning (honest):** "ZeroID is a **testnet-candidate** identity & compliance dApp on Aethelred — fully conformed to protocol primitives, institutional moat features implemented and tested with activation gated on the live testnet for safe rollout, and AI Agent Passport v1 live in Pilot/Preview. In production it sits between Cruzible (staking) and the Wallet (custody) as the eligibility/disclosure/agent-passport spine." Emphasis: *implemented and tested with activation gates* — not "live on mainnet."
+### Shared conformance boundary
 
-## What's built here vs. what needs infra
+Replicating the reviewed Aethelred boundary and CI guard into Wallet and Cruzible is **[gated]** on those repositories. Shared types or adapters do not by themselves establish cryptographic interoperability; validate with known proofs and deployed contracts.
 
-- **Built + tested now:** conformance boundary (W1–W6), moat features (zkML liveness, conditional disclosure on/off-chain, PQC adapter), AI Agent Passport v1 (backend+frontend), **FeeRouter economic flywheel**, **ZeroID-side partner endpoints** (`/partners/wallet/*`, `/partners/cruzible/*`) reusing the eligibility + AI-agent orchestrators (mounted at `/api/v1/partners`, 17 partner tests), regulatory memo, integration API contracts.
-- **Needs the live testnet / TEE-EZKL-PQC infra:** W2c/W3c/W4c/Phase 2b activation; contract deployment; evidence pack.
-- **Needs the Cruzible & Wallet repos:** the partner integrations + boundary replication (ZeroID-side endpoints are buildable independently and listed above).
-- **Decisions outstanding:** fee price + level (protocol vs app); conditional-disclosure escrow v1 (Shamir) vs v2 (MPC) — see the memo.
+## Phase 3 (Days 60–90) — release packaging
+
+- Publish testnet metrics only from durable, queryable evidence. Do not count unavailable requests as proofs, decisions, or agent actions.
+- Keep regulatory and security documents tied to the deployed control set and recorded operational evidence.
+- Position ZeroID as a hardened testnet candidate with agent identity foundations. Do not describe ZK eligibility issuance, partner eligibility, conditional disclosure, DCAP/PQC/zkML activation, or mainnet operation as live until their gates above have closed.
+
+## Outstanding decisions
+
+- Fee price and whether policy lives at protocol or application level.
+- Conditional-disclosure escrow design and operator/quorum model.
+- OIDC provider-evidence schema, encryption/key custody, retention, deletion, and relying-party claim minimization.

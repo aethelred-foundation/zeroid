@@ -16,10 +16,14 @@ import {
 } from "lucide-react";
 import CredentialCard from "./CredentialCard";
 import { useCredentials } from "@/hooks/useCredentials";
-import type { Credential, CredentialSchemaType } from "@/types";
+import type {
+  CredentialCategory,
+  CredentialSummary,
+  CredentialSummaryStatus,
+} from "@/lib/credentials/summary";
 
 type ViewMode = "grid" | "list";
-type CredentialFilterStatus = "verified" | "pending" | "revoked" | "expired";
+type CredentialFilterStatus = Exclude<CredentialSummaryStatus, "unknown">;
 
 const STATUS_FILTERS: {
   value: CredentialFilterStatus | "all";
@@ -27,50 +31,48 @@ const STATUS_FILTERS: {
   icon: typeof ShieldCheck;
 }[] = [
   { value: "all", label: "All", icon: Filter },
-  { value: "verified", label: "Verified", icon: ShieldCheck },
-  { value: "pending", label: "Pending", icon: Clock },
+  { value: "active", label: "Active", icon: ShieldCheck },
+  { value: "suspended", label: "Suspended", icon: Clock },
   { value: "revoked", label: "Revoked", icon: ShieldAlert },
   { value: "expired", label: "Expired", icon: AlertTriangle },
 ];
 
-const SCHEMA_FILTERS: { value: CredentialSchemaType | "all"; label: string }[] =
-  [
-    { value: "all", label: "All Types" },
-    { value: "identity", label: "Identity" },
-    { value: "accreditation", label: "Accreditation" },
-    { value: "kyc", label: "KYC" },
-    { value: "education", label: "Education" },
-    { value: "employment", label: "Employment" },
-  ];
+const SCHEMA_FILTERS: { value: CredentialCategory | "all"; label: string }[] = [
+  { value: "all", label: "All Categories" },
+  { value: "identity", label: "Identity" },
+  { value: "accreditation", label: "Accreditation" },
+  { value: "kyc", label: "KYC" },
+  { value: "professional", label: "Professional" },
+  { value: "education", label: "Education" },
+  { value: "employment", label: "Employment" },
+  { value: "custom", label: "Custom" },
+];
 
 export default function CredentialList() {
-  const { credentials, isLoading, error, revokeCredential, verifyCredential } =
-    useCredentials();
+  const { credentials, isLoading, error, verifyCredential } = useCredentials();
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<
     CredentialFilterStatus | "all"
   >("all");
-  const [schemaFilter, setSchemaFilter] = useState<
-    CredentialSchemaType | "all"
-  >("all");
+  const [schemaFilter, setSchemaFilter] = useState<CredentialCategory | "all">(
+    "all",
+  );
   const [viewMode, setViewMode] = useState<ViewMode>("grid");
 
   const filteredCredentials = useMemo(() => {
     if (!credentials) return [];
 
-    return credentials.filter((cred: Credential) => {
+    return credentials.filter((cred: CredentialSummary) => {
       if (statusFilter !== "all" && cred.status !== statusFilter) return false;
-      if (schemaFilter !== "all" && cred.schemaType !== schemaFilter)
+      if (schemaFilter !== "all" && cred.category !== schemaFilter)
         return false;
       if (searchQuery) {
         const q = searchQuery.toLowerCase();
-        const name = cred.name ?? cred.schemaName ?? "";
-        const issuer = cred.issuer ?? cred.issuerDid?.uri ?? "";
-        const schemaType = cred.schemaType ?? "";
         return (
-          name.toLowerCase().includes(q) ||
-          issuer.toLowerCase().includes(q) ||
-          schemaType.toLowerCase().includes(q)
+          cred.typeLabel.toLowerCase().includes(q) ||
+          cred.credentialType.toLowerCase().includes(q) ||
+          cred.issuerId.toLowerCase().includes(q) ||
+          cred.category.toLowerCase().includes(q)
         );
       }
       return true;
@@ -117,7 +119,7 @@ export default function CredentialList() {
           <select
             value={schemaFilter}
             onChange={(e) =>
-              setSchemaFilter(e.target.value as CredentialSchemaType | "all")
+              setSchemaFilter(e.target.value as CredentialCategory | "all")
             }
             className="input w-auto"
           >
@@ -193,7 +195,7 @@ export default function CredentialList() {
           <p className="text-[var(--text-secondary)] text-sm">
             {credentials && credentials.length > 0
               ? "No credentials match your filters."
-              : "No credentials yet. Request your first credential to get started."}
+              : "No credentials were returned for this identity."}
           </p>
         </motion.div>
       ) : (
@@ -206,11 +208,10 @@ export default function CredentialList() {
           layout
         >
           <AnimatePresence mode="popLayout">
-            {filteredCredentials.map((credential: Credential) => (
+            {filteredCredentials.map((credential: CredentialSummary) => (
               <CredentialCard
                 key={credential.id}
                 credential={credential}
-                onRevoke={revokeCredential}
                 onVerify={verifyCredential}
               />
             ))}

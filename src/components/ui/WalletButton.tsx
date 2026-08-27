@@ -17,30 +17,44 @@ import {
   aethelredMainnet,
   aethelredTestnet,
 } from "@/config/chains";
+import {
+  isAethelredWallet,
+  orderWalletConnectors,
+} from "@/config/wallet-picker";
+import { useIdentity } from "@/contexts/IdentityContext";
 
-type VerificationLevel = "verified" | "pending" | "unverified";
+type SessionLevel =
+  | "authenticated"
+  | "authentication-required"
+  | "wallet-only"
+  | "unsupported-network";
 
 const SUPPORTED_CHAINS = [aethelredMainnet, aethelredTestnet, aethelredDevnet];
 
-function VerificationBadge({ level }: { level: VerificationLevel }) {
+function SessionBadge({ level }: { level: SessionLevel }) {
   const config: Record<
-    VerificationLevel,
+    SessionLevel,
     { icon: React.ReactNode; className: string; label: string }
   > = {
-    verified: {
+    authenticated: {
       icon: <BadgeCheck className="w-3 h-3" />,
       className: "text-emerald-400 bg-emerald-400/8 border-emerald-400/15",
-      label: "Verified",
+      label: "Signed in to ZeroID",
     },
-    pending: {
+    "authentication-required": {
       icon: <AlertCircle className="w-3 h-3" />,
       className: "text-amber-400 bg-amber-400/8 border-amber-400/15",
-      label: "Pending",
+      label: "ZeroID sign-in required",
     },
-    unverified: {
+    "wallet-only": {
       icon: <AlertCircle className="w-3 h-3" />,
       className: "text-zero-400 bg-zero-400/8 border-zero-400/15",
-      label: "Unverified",
+      label: "Wallet connected; no registered ZeroID",
+    },
+    "unsupported-network": {
+      icon: <AlertCircle className="w-3 h-3" />,
+      className: "text-rose-400 bg-rose-400/8 border-rose-400/15",
+      label: "Unsupported network",
     },
   };
 
@@ -68,13 +82,14 @@ export function WalletButton({ className = "" }: WalletButtonProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const { address, isConnected, isConnecting } = useAccount();
   const chainId = useChainId();
-  const { connectors, connect, isPending } = useConnect();
+  const { connectors, connect, isPending, error: connectError } = useConnect();
   const { disconnect } = useDisconnect();
   const { switchChain } = useSwitchChain();
   const { data: balance } = useBalance({
     address,
     query: { enabled: Boolean(address) },
   });
+  const { identity, sessionStatus, sessionError, signIn } = useIdentity();
 
   const chain = SUPPORTED_CHAINS.find((candidate) => candidate.id === chainId);
   const wrongNetwork = isConnected && !chain;
@@ -122,7 +137,7 @@ export function WalletButton({ className = "" }: WalletButtonProps) {
               backdropFilter: "blur(18px)",
             }}
           >
-            {connectors.map((connector) => (
+            {orderWalletConnectors(connectors).map((connector) => (
               <button
                 key={connector.uid}
                 disabled={isPending}
@@ -130,23 +145,58 @@ export function WalletButton({ className = "" }: WalletButtonProps) {
                   connect({ connector });
                   setMenuOpen(false);
                 }}
-                className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-[12px] font-medium text-zero-200 transition-colors hover:bg-white/[0.06] disabled:opacity-60"
+                className="flex w-full items-center justify-between gap-2 rounded-xl px-3 py-2 text-left text-[12px] font-medium text-zero-200 transition-colors hover:bg-white/[0.06] disabled:opacity-60"
               >
-                {connector.name}
+                <span className="flex items-center gap-2">
+                  {connector.icon && (
+                    // EIP-6963 wallet icons are data: URIs announced by the
+                    // wallet itself; next/image adds nothing for inline data.
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={connector.icon}
+                      alt=""
+                      aria-hidden
+                      className="h-4 w-4 rounded"
+                    />
+                  )}
+                  {connector.name}
+                </span>
                 <span className="text-[10px] uppercase tracking-[0.18em] text-zero-500">
-                  Wallet
+                  {isAethelredWallet(connector) ? "Recommended" : "Wallet"}
                 </span>
               </button>
             ))}
+          </div>
+        )}
+
+        {connectError && !menuOpen && (
+          <div
+            role="alert"
+            className="absolute right-0 top-11 z-50 min-w-[190px] max-w-[260px] rounded-lg px-3 py-2 text-[11px] text-rose-300"
+            style={{
+              background: "rgba(251,113,133,0.10)",
+              border: "1px solid rgba(251,113,133,0.20)",
+            }}
+          >
+            {/^(4001|.*not initialized|.*locked)/i.test(connectError.message)
+              ? "Wallet is locked or has no account. Open the wallet, unlock it and create/select an account, then try again."
+              : connectError.message}
           </div>
         )}
       </div>
     );
   }
 
-  const verificationLevel: VerificationLevel = wrongNetwork
-    ? "unverified"
-    : "verified";
+  const sessionLevel: SessionLevel = wrongNetwork
+    ? "unsupported-network"
+    : !identity.isRegistered
+      ? "wallet-only"
+      : sessionStatus === "authenticated"
+        ? "authenticated"
+        : "authentication-required";
+  const requiresSignIn =
+    identity.isRegistered &&
+    (sessionStatus === "sign-in-required" || sessionStatus === "signing");
 
   return (
     <div className={`flex items-center gap-1.5 ${className}`}>
@@ -174,6 +224,32 @@ export function WalletButton({ className = "" }: WalletButtonProps) {
         </button>
       )}
 
+      {requiresSignIn && !wrongNetwork && (
+        <button
+          type="button"
+          disabled={sessionStatus === "signing"}
+          onClick={() => {
+            void signIn().catch(() => {
+              // IdentityContext exposes the actionable error and restores the
+              // sign-in-required state; avoid an unhandled click promise.
+            });
+          }}
+          className="px-2.5 py-1.5 rounded-lg text-[11px] font-semibold transition-colors text-cyan-300 disabled:cursor-wait disabled:opacity-60"
+          style={{
+            background: "rgba(34,211,238,0.08)",
+            border: "1px solid rgba(34,211,238,0.18)",
+          }}
+          title={sessionError ?? "Sign in to your registered ZeroID identity"}
+          aria-label={
+            sessionError
+              ? `Sign in to ZeroID. ${sessionError}`
+              : "Sign in to ZeroID"
+          }
+        >
+          {sessionStatus === "signing" ? "Signing..." : "Sign In"}
+        </button>
+      )}
+
       <button
         onClick={() => disconnect()}
         className="flex items-center gap-2 px-3 py-1.5 rounded-[10px] transition-all text-[13px] font-body"
@@ -186,7 +262,7 @@ export function WalletButton({ className = "" }: WalletButtonProps) {
         <span className="text-zero-200 font-medium font-mono text-[11px]">
           {formatAddress(address)}
         </span>
-        <VerificationBadge level={verificationLevel} />
+        <SessionBadge level={sessionLevel} />
         {displayBalance && (
           <span className="hidden md:inline text-[11px] text-zero-500 font-mono">
             {displayBalance}

@@ -333,24 +333,67 @@ describe("useRegisterWebhook", () => {
 // ===========================================================================
 
 describe("useTestWebhook", () => {
-  it("fails closed because ad-hoc webhook tests are not exposed", async () => {
+  it("posts to backend webhook test delivery and shows success toast", async () => {
+    mockApiClient.post.mockResolvedValue({
+      deliveryId: "del-1",
+      delivered: true,
+      statusCode: 204,
+      responseTimeMs: 72,
+    });
+    const { result } = renderHook(() => useTestWebhook(), {
+      wrapper: createWrapper(),
+    });
+
+    await act(async () => {
+      await result.current.mutateAsync("wh-1");
+    });
+
+    expect(mockApiClient.post).toHaveBeenCalledWith(
+      "/api/v1/enterprise/webhooks/wh-1/test",
+      {},
+    );
+    expect(mockToast.success).toHaveBeenCalledWith("Webhook test delivered", {
+      description: "Status 204, 72ms",
+    });
+  });
+
+  it("shows failed-delivery toast when backend test attempt reaches endpoint but fails", async () => {
+    mockApiClient.post.mockResolvedValue({
+      deliveryId: "del-2",
+      delivered: false,
+      statusCode: 500,
+      responseTimeMs: 91,
+      error: "Receiver returned 500",
+    });
+    const { result } = renderHook(() => useTestWebhook(), {
+      wrapper: createWrapper(),
+    });
+
+    await act(async () => {
+      await result.current.mutateAsync("wh-2");
+    });
+
+    expect(mockToast.error).toHaveBeenCalledWith("Webhook test failed", {
+      description: "Receiver returned 500",
+    });
+  });
+
+  it("shows request error toast when backend test API fails", async () => {
+    mockApiClient.post.mockRejectedValue(new Error("Webhook disabled"));
     const { result } = renderHook(() => useTestWebhook(), {
       wrapper: createWrapper(),
     });
 
     await act(async () => {
       try {
-        await result.current.mutateAsync("wh-1");
+        await result.current.mutateAsync("wh-disabled");
       } catch {}
     });
-
-    expect(mockApiClient.post).not.toHaveBeenCalled();
 
     expect(mockToast.error).toHaveBeenCalledWith(
       "Webhook test request failed",
       {
-        description:
-          "Ad-hoc webhook test delivery is not exposed by the backend API.",
+        description: "Webhook disabled",
       },
     );
   });

@@ -46,6 +46,7 @@ The platform combines 12 on-chain smart contracts, 9 ZK circuits (Circom), a TEE
 - [Architecture](#architecture)
 - [Tech Stack](#tech-stack)
 - [Quick Start](#quick-start)
+- [Production frontend on port 3003](#production-frontend-on-port-3003)
 - [Project Structure](#project-structure)
 
 </td>
@@ -97,7 +98,7 @@ The platform combines 12 on-chain smart contracts, 9 ZK circuits (Circom), a TEE
 - AI agent identity registry and verification
 - Behavioral biometrics for fraud detection
 - Real-time risk scoring engine
-- Compliance copilot for regulatory guidance
+- Compliance risk assistant for regulatory guidance
 
 </td>
 <td width="50%">
@@ -136,7 +137,7 @@ graph TB
     end
 
     subgraph AI / ML Services
-        E[Agent Identity / Fraud Detection<br/>Risk Scoring / Compliance Copilot<br/>Behavioral Biometrics]
+        E[Agent Identity / Fraud Detection<br/>Risk Scoring / Compliance Assistant<br/>Behavioral Biometrics]
     end
 
     subgraph Rust SDK
@@ -194,8 +195,9 @@ npm ci
 cd backend && npm ci && cd ..
 
 # Configure
-cp .env.example .env
-# Edit .env with your configuration
+cp .env.example .env.local
+cp backend/.env.testnet.example backend/.env
+# Edit both files; frontend and API variables are intentionally separate.
 
 # Compile ZK circuits
 cd circuits && ./build.sh && cd ..
@@ -207,9 +209,13 @@ forge build
 cd backend && npx prisma migrate dev && cd ..
 
 # Start development servers
-npm run dev           # Frontend  — http://localhost:3000
-npm run dev:api       # API       — http://localhost:3001
+npm run dev                    # Frontend — http://localhost:3003
+npm --prefix backend run dev   # API      — http://localhost:4003
 ```
+
+For a fresh Aethelred public-testnet deployment, do not infer broadcast,
+contract, or hosting commands from this development quick start. Use the
+[canonical public-testnet runbook](deployments/PUBLIC_TESTNET_RUNBOOK.md).
 
 <details>
 <summary>Environment variables</summary>
@@ -245,6 +251,37 @@ SENTRY_DSN=your-sentry-dsn
 
 ---
 
+## Production frontend on port 3003
+
+Do not use `npm run dev` on a shared VPS. Build once, then run the compiled
+Next.js server:
+
+```bash
+cp .env.testnet.example .env.production.local
+# Set the RPC, browser/API URLs, and deployed contract addresses in the file.
+npm --prefix ../aethelred/sdk/typescript ci
+npm --prefix ../aethelred/sdk/typescript run build
+npm ci
+npm run build
+npm run start
+```
+
+`npm run start` serves the production build on `0.0.0.0:3003`, so it is
+reachable through the VPS firewall or reverse proxy. Verify it locally on the
+server with:
+
+```bash
+curl --fail http://127.0.0.1:3003/api/health
+npm run smoke:production
+```
+
+All `NEXT_PUBLIC_*` values are embedded during `npm run build`; changing them
+requires another build. Keep secrets out of `NEXT_PUBLIC_*` variables. For a
+durable background service, reverse-proxy and restart guidance, use
+[the frontend VPS runbook](docs/production/frontend-vps.md).
+
+---
+
 ## Project Structure
 
 ```
@@ -270,7 +307,7 @@ zeroid/
 │   │   ├── routes/                 # Express API routes
 │   │   ├── services/               # Core services
 │   │   │   ├── ai/                 # Agent identity, behavioral biometrics,
-│   │   │   │                       #   compliance copilot, fraud detection, risk scoring
+│   │   │   │                       #   compliance assistant, fraud detection, risk scoring
 │   │   │   ├── compliance/         # Data sovereignty, jurisdiction engine,
 │   │   │   │                       #   regulatory reporting, sanctions screening
 │   │   │   └── enterprise/         # API gateway, OIDC bridge, SLA monitor, webhooks
@@ -319,7 +356,7 @@ zeroid/
 ├── test/                           # End-to-end and integration tests
 ├── docs/                           # Architecture and security documentation
 ├── .github/workflows/              # CI/CD pipeline
-└── .env.example                    # Environment template
+└── .env.example                    # Frontend build environment template
 ```
 
 ---
@@ -339,9 +376,6 @@ cd backend && npm test && cd ..
 forge test -vvv
 forge coverage
 
-# Smart contracts — Hardhat
-npx hardhat test
-
 # ZK circuits
 cd circuits && npm test && cd ..
 
@@ -351,7 +385,7 @@ cd sdk/go && go test ./... && cd ../..
 # SDK — Python
 cd sdk/python && pytest && cd ../..
 
-# E2E tests (Playwright)
+# E2E tests (requires a committed, explicitly scoped Playwright config and suite)
 npx playwright install
 npm run test:e2e
 ```

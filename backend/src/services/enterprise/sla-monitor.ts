@@ -33,25 +33,44 @@ export const ServiceComponentSchema = z.enum([
 
 export type ServiceComponent = z.infer<typeof ServiceComponentSchema>;
 
+const SLAComponentDefinitionSchema = z.object({
+  component: ServiceComponentSchema,
+  uptimeTarget: z.number().min(90).max(100),
+  latencyP50Ms: z.number().int().positive(),
+  latencyP95Ms: z.number().int().positive(),
+  latencyP99Ms: z.number().int().positive(),
+  errorRateTarget: z.number().min(0).max(10),
+}).strict().refine(
+  ({ latencyP50Ms, latencyP95Ms, latencyP99Ms }) => (
+    latencyP50Ms <= latencyP95Ms && latencyP95Ms <= latencyP99Ms
+  ),
+  {
+    message: 'Latency targets must be ordered p50 <= p95 <= p99',
+    path: ['latencyP95Ms'],
+  },
+);
+
 export const SLADefinitionSchema = z.object({
-  clientId: z.string(),
+  clientId: z.string().trim().min(1).max(160),
   tier: z.enum(['standard', 'professional', 'enterprise']),
-  components: z.array(z.object({
-    component: ServiceComponentSchema,
-    uptimeTarget: z.number().min(90).max(100).default(99.9),
-    latencyP50Ms: z.number().int().positive(),
-    latencyP95Ms: z.number().int().positive(),
-    latencyP99Ms: z.number().int().positive(),
-    errorRateTarget: z.number().min(0).max(10).default(0.1),
-    proofGenerationTimeMs: z.number().int().positive().optional(),
-  })),
+  components: z.array(SLAComponentDefinitionSchema).min(1),
   creditPercentages: z.object({
-    tier1: z.number().default(10),
-    tier2: z.number().default(25),
-    tier3: z.number().default(50),
-  }).default({}),
-  reportingIntervalDays: z.number().int().positive().default(30),
-});
+      tier1: z.number().min(0).max(100),
+      tier2: z.number().min(0).max(100),
+      tier3: z.number().min(0).max(100),
+    })
+    .strict()
+    .refine(
+      ({ tier1, tier2, tier3 }) => tier1 <= tier2 && tier2 <= tier3,
+      { message: 'Credit tiers must be ordered tier1 <= tier2 <= tier3' },
+    ),
+  reportingIntervalDays: z.number().int().min(1).max(366),
+}).strict().refine(
+  ({ components }) => (
+    new Set(components.map(({ component }) => component)).size === components.length
+  ),
+  { message: 'Each SLA component may be configured only once', path: ['components'] },
+);
 
 export type SLADefinition = z.infer<typeof SLADefinitionSchema>;
 
@@ -122,6 +141,20 @@ export interface SLAReport {
   overallCompliance: boolean;
 }
 
+interface LatencySummary {
+  p50: number | null;
+  p95: number | null;
+  p99: number | null;
+  count: number;
+  errorRate: number | null;
+}
+
+interface UptimeSummary {
+  uptimePercentage: number | null;
+  totalChecks: number;
+  downChecks: number;
+}
+
 interface SLAMonitorSnapshot {
   version: 1;
   savedAt: string;
@@ -182,6 +215,7 @@ export class SLAMonitor {
   recordLatency(component: ServiceComponent, latencyMs: number, success: boolean): void {
     this.refreshStateFromStore();
     this.assertStoreAvailable();
+    this.assertMetricSample(component, latencyMs, success);
     this.latencyBuckets.push({
       timestamp: Date.now(),
       component,
@@ -198,6 +232,7 @@ export class SLAMonitor {
   recordUptime(component: ServiceComponent, available: boolean, responseTimeMs: number): void {
     this.refreshStateFromStore();
     this.assertStoreAvailable();
+    this.assertMetricSample(component, responseTimeMs, available);
     this.uptimeRecords.push({
       component,
       checkTimestamp: Date.now(),
@@ -224,13 +259,7 @@ export class SLAMonitor {
   // -------------------------------------------------------------------------
   // Calculate percentiles
   // -------------------------------------------------------------------------
-  getLatencyPercentiles(component: ServiceComponent, windowMs: number): {
-    p50: number;
-    p95: number;
-    p99: number;
-    count: number;
-    errorRate: number;
-  } {
+  getLatencyPercentiles(component: ServiceComponent, windowMs: number): LatencySummary {
     this.refreshStateFromStore();
     const cutoff = Date.now() - windowMs;
     const buckets = this.latencyBuckets.filter(
@@ -238,7 +267,7 @@ export class SLAMonitor {
     );
 
     if (buckets.length === 0) {
-      return { p50: 0, p95: 0, p99: 0, count: 0, errorRate: 0 };
+      return { p50: null, p95: null, p99: null, count: 0, errorRate: null };
     }
 
     const latencies = buckets.map((b) => b.latencyMs).sort((a, b) => a - b);
@@ -262,7 +291,7 @@ export class SLAMonitor {
   // -------------------------------------------------------------------------
   // Calculate uptime
   // -------------------------------------------------------------------------
-  getUptime(component: ServiceComponent, windowMs: number): { uptimePercentage: number; totalChecks: number; downChecks: number } {
+  getUptime(component: ServiceComponent, windowMs: number): UptimeSummary {
     this.refreshStateFromStore();
     const cutoff = Date.now() - windowMs;
     const records = this.uptimeRecords.filter(
@@ -270,7 +299,7 @@ export class SLAMonitor {
     );
 
     if (records.length === 0) {
-      return { uptimePercentage: 100, totalChecks: 0, downChecks: 0 };
+      return { uptimePercentage: null, totalChecks: 0, downChecks: 0 };
     }
 
     const downChecks = records.filter((r) => !r.available).length;
@@ -282,164 +311,22 @@ export class SLAMonitor {
   // -------------------------------------------------------------------------
   // Evaluate SLA compliance
   // -------------------------------------------------------------------------
-  evaluateSLA(clientId: string, periodMs?: number): SLAViolation[] {
-    this.refreshStateFromStore();
-    this.assertStoreAvailable();
-    const sla = this.slaDefinitions.get(clientId);
-    if (!sla) return [];
-
-    const window = periodMs ?? sla.reportingIntervalDays * 24 * 60 * 60 * 1000;
-    const now = new Date();
-    const periodStart = new Date(now.getTime() - window);
-    const newViolations: SLAViolation[] = [];
-
-    for (const compDef of sla.components) {
-      const uptime = this.getUptime(compDef.component, window);
-      const latency = this.getLatencyPercentiles(compDef.component, window);
-
-      // Uptime violation
-      if (uptime.uptimePercentage < compDef.uptimeTarget) {
-        newViolations.push(this.createViolation(clientId, compDef.component, 'uptime', compDef.uptimeTarget, uptime.uptimePercentage, periodStart, now, sla));
-      }
-
-      // Latency violations
-      if (latency.p50 > compDef.latencyP50Ms && latency.count > 0) {
-        newViolations.push(this.createViolation(clientId, compDef.component, 'latency_p50', compDef.latencyP50Ms, latency.p50, periodStart, now, sla));
-      }
-      if (latency.p95 > compDef.latencyP95Ms && latency.count > 0) {
-        newViolations.push(this.createViolation(clientId, compDef.component, 'latency_p95', compDef.latencyP95Ms, latency.p95, periodStart, now, sla));
-      }
-      if (latency.p99 > compDef.latencyP99Ms && latency.count > 0) {
-        newViolations.push(this.createViolation(clientId, compDef.component, 'latency_p99', compDef.latencyP99Ms, latency.p99, periodStart, now, sla));
-      }
-
-      // Error rate violation
-      if (latency.errorRate > compDef.errorRateTarget && latency.count > 0) {
-        newViolations.push(this.createViolation(clientId, compDef.component, 'error_rate', compDef.errorRateTarget, latency.errorRate, periodStart, now, sla));
-      }
-    }
-
-    this.violations.push(...newViolations);
-    for (const v of newViolations) {
-      this.emitAlert(clientId, `SLA violation: ${v.component} ${v.violationType} (target: ${v.target}, actual: ${v.actual})`, 'high');
-    }
-    if (newViolations.length > 0) {
-      this.persistState();
-    }
-
-    return newViolations;
-  }
-
-  private createViolation(
-    clientId: string,
-    component: ServiceComponent,
-    violationType: SLAViolation['violationType'],
-    target: number,
-    actual: number,
-    periodStart: Date,
-    periodEnd: Date,
-    sla: SLADefinition,
-  ): SLAViolation {
-    // Determine credit tier based on severity
-    const deviation = Math.abs(target - actual) / target;
-    let creditPercentage = sla.creditPercentages.tier1;
-    if (deviation > 0.1) creditPercentage = sla.creditPercentages.tier2;
-    if (deviation > 0.25) creditPercentage = sla.creditPercentages.tier3;
-
-    return {
-      id: crypto.randomUUID(),
-      clientId,
-      component,
-      violationType,
-      target,
-      actual: Math.round(actual * 100) / 100,
-      detectedAt: new Date().toISOString(),
-      periodStart: periodStart.toISOString(),
-      periodEnd: periodEnd.toISOString(),
-      creditPercentage,
-      acknowledged: false,
-    };
+  evaluateSLA(_clientId: string, _periodMs?: number): SLAViolation[] {
+    return this.authoritativeTelemetryUnavailable();
   }
 
   // -------------------------------------------------------------------------
   // Generate SLA report
   // -------------------------------------------------------------------------
-  generateReport(clientId: string, periodDays?: number): SLAReport {
-    this.refreshStateFromStore();
-    const sla = this.slaDefinitions.get(clientId);
-    if (!sla) {
-      throw new Error(`No SLA definition for client: ${clientId}`);
-    }
-
-    const days = periodDays ?? sla.reportingIntervalDays;
-    const windowMs = days * 24 * 60 * 60 * 1000;
-    const now = new Date();
-    const periodStart = new Date(now.getTime() - windowMs);
-
-    const components = sla.components.map((compDef) => {
-      const uptime = this.getUptime(compDef.component, windowMs);
-      const latency = this.getLatencyPercentiles(compDef.component, windowMs);
-
-      return {
-        component: compDef.component,
-        uptimeTarget: compDef.uptimeTarget,
-        uptimeActual: uptime.uptimePercentage,
-        uptimeMet: uptime.uptimePercentage >= compDef.uptimeTarget,
-        latencyP50Actual: latency.p50,
-        latencyP50Target: compDef.latencyP50Ms,
-        latencyP95Actual: latency.p95,
-        latencyP95Target: compDef.latencyP95Ms,
-        latencyP99Actual: latency.p99,
-        latencyP99Target: compDef.latencyP99Ms,
-        errorRateActual: latency.errorRate,
-        errorRateTarget: compDef.errorRateTarget,
-        totalRequests: latency.count,
-        totalErrors: Math.round(latency.count * latency.errorRate / 100),
-      };
-    });
-
-    const periodViolations = this.violations.filter(
-      (v) => v.clientId === clientId && new Date(v.detectedAt) >= periodStart,
-    );
-
-    const totalCredit = periodViolations.reduce((sum, v) => sum + v.creditPercentage, 0);
-    const overallCompliance = periodViolations.length === 0;
-
-    const report: SLAReport = {
-      reportId: crypto.randomUUID(),
-      clientId,
-      tier: sla.tier,
-      periodStart: periodStart.toISOString(),
-      periodEnd: now.toISOString(),
-      generatedAt: now.toISOString(),
-      components,
-      violations: periodViolations,
-      totalCredit: Math.min(totalCredit, 100),
-      overallCompliance,
-    };
-
-    logger.info('sla_report_generated', {
-      reportId: report.reportId,
-      clientId,
-      compliance: overallCompliance,
-      violations: periodViolations.length,
-      credit: report.totalCredit,
-    });
-
-    return report;
+  generateReport(_clientId: string, _periodDays?: number): SLAReport {
+    return this.authoritativeTelemetryUnavailable();
   }
 
   // -------------------------------------------------------------------------
   // Get violations
   // -------------------------------------------------------------------------
-  getViolations(clientId: string, since?: string): SLAViolation[] {
-    this.refreshStateFromStore();
-    let violations = this.violations.filter((v) => v.clientId === clientId);
-    if (since) {
-      const sinceDate = new Date(since);
-      violations = violations.filter((v) => new Date(v.detectedAt) >= sinceDate);
-    }
-    return violations;
+  getViolations(_clientId: string, _since?: string): SLAViolation[] {
+    return this.authoritativeTelemetryUnavailable();
   }
 
   acknowledgeViolation(violationId: string): boolean {
@@ -468,12 +355,8 @@ export class SLAMonitor {
     logger.warn('sla_alert', alert);
   }
 
-  getAlerts(clientId: string, limit = 50): typeof this.alerts {
-    this.refreshStateFromStore();
-    return this.alerts
-      .filter((a) => a.clientId === clientId)
-      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
-      .slice(0, limit);
+  getAlerts(_clientId: string, _limit = 50): typeof this.alerts {
+    return this.authoritativeTelemetryUnavailable();
   }
 
   private initializeStore(): void {
@@ -499,6 +382,33 @@ export class SLAMonitor {
       'SLA_MONITOR_STORE_REQUIRED',
       503,
     );
+  }
+
+  private authoritativeTelemetryUnavailable(): never {
+    throw new SLAMonitorError(
+      'SLA evidence is unavailable until an instrumented durable telemetry adapter is deployed',
+      'SLA_AUTHORITATIVE_TELEMETRY_UNAVAILABLE',
+      503,
+    );
+  }
+
+  private assertMetricSample(
+    component: ServiceComponent,
+    durationMs: number,
+    outcome: boolean,
+  ): void {
+    if (
+      !ServiceComponentSchema.safeParse(component).success
+      || !Number.isFinite(durationMs)
+      || durationMs < 0
+      || typeof outcome !== 'boolean'
+    ) {
+      throw new SLAMonitorError(
+        'SLA metric sample is invalid',
+        'SLA_METRIC_SAMPLE_INVALID',
+        400,
+      );
+    }
   }
 
   private persistState(): void {
@@ -554,13 +464,11 @@ export class SLAMonitor {
         error: (error as Error).message,
       });
 
-      if (isProductionRuntime()) {
-        throw new SLAMonitorError(
-          `Durable SLA monitor store could not be loaded: ${(error as Error).message}`,
-          'SLA_MONITOR_STORE_READ_FAILED',
-          503,
-        );
-      }
+      throw new SLAMonitorError(
+        `Durable SLA monitor store could not be loaded: ${(error as Error).message}`,
+        'SLA_MONITOR_STORE_READ_FAILED',
+        503,
+      );
     }
   }
 }

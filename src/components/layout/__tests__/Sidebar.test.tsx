@@ -46,43 +46,51 @@ jest.mock("wagmi", () => ({
   useConnect: jest.fn(() => ({ connectors: [], connect: jest.fn() })),
 }));
 
-// Mock framer-motion
+// Mock framer-motion — generic across tags (div, span, ...)
 jest.mock("framer-motion", () => ({
-  motion: {
-    div: React.forwardRef(
-      (
-        {
-          children,
-          ...props
-        }: React.PropsWithChildren<Record<string, unknown>>,
-        ref: React.Ref<HTMLDivElement>,
-      ) => {
-        const filteredProps: Record<string, unknown> = {};
-        for (const [key, value] of Object.entries(props)) {
-          if (
-            ![
-              "initial",
-              "animate",
-              "exit",
-              "transition",
-              "whileHover",
-              "whileTap",
-              "variants",
-              "layout",
-              "layoutId",
-            ].includes(key)
-          ) {
-            filteredProps[key] = value;
-          }
-        }
-        return (
-          <div ref={ref} {...filteredProps}>
-            {children}
-          </div>
+  motion: new Proxy(
+    {},
+    {
+      get: (_target: unknown, tag: string) => {
+        const Component = React.forwardRef(
+          (
+            {
+              children,
+              ...props
+            }: React.PropsWithChildren<Record<string, unknown>>,
+            ref: React.Ref<HTMLElement>,
+          ) => {
+            const filteredProps: Record<string, unknown> = {};
+            for (const [key, value] of Object.entries(props)) {
+              if (
+                ![
+                  "initial",
+                  "animate",
+                  "exit",
+                  "transition",
+                  "whileHover",
+                  "whileTap",
+                  "variants",
+                  "layout",
+                  "layoutId",
+                ].includes(key)
+              ) {
+                filteredProps[key] = value;
+              }
+            }
+            const Tag = tag as keyof React.JSX.IntrinsicElements;
+            return React.createElement(
+              Tag,
+              { ref, ...filteredProps },
+              children,
+            );
+          },
         );
+        Component.displayName = `motion.${tag}`;
+        return Component;
       },
-    ),
-  },
+    },
+  ),
   AnimatePresence: ({ children }: React.PropsWithChildren) => <>{children}</>,
 }));
 
@@ -98,6 +106,7 @@ jest.mock("lucide-react", () => {
     LayoutDashboard: createIcon("dashboard"),
     Fingerprint: createIcon("fingerprint"),
     BadgeCheck: createIcon("badge-check"),
+    ShieldCheck: createIcon("shield-check"),
     ScanEye: createIcon("scan-eye"),
     Vote: createIcon("vote"),
     ClipboardList: createIcon("clipboard"),
@@ -164,10 +173,13 @@ describe("Sidebar", () => {
       expect(link).toHaveAttribute("href", "/credentials");
     });
 
-    it("renders badges on nav items", () => {
+    it("gives the honest readiness badge priority over decorative chips", () => {
       render(<Sidebar {...defaultProps} mobile />);
-      expect(screen.getByText("AI")).toBeInTheDocument();
-      expect(screen.getByText("New")).toBeInTheDocument();
+      // Gated features surface their readiness state...
+      expect(screen.getAllByText("Preview").length).toBeGreaterThanOrEqual(1);
+      // ...and the decorative AI/New chips yield the row's single badge slot.
+      expect(screen.queryByText("AI")).not.toBeInTheDocument();
+      expect(screen.queryByText("New")).not.toBeInTheDocument();
     });
 
     it("shows disconnect button when connected", () => {
@@ -216,12 +228,13 @@ describe("Sidebar", () => {
     });
   });
 
-  describe("Desktop mode (dock)", () => {
-    it("renders as floating dock", () => {
+  describe("Desktop mode (labeled sidebar)", () => {
+    it("renders as a fixed labeled sidebar", () => {
       const { container } = render(<Sidebar {...defaultProps} />);
       const aside = container.querySelector("aside");
       expect(aside).toBeInTheDocument();
       expect(aside?.className).toContain("fixed");
+      expect(aside?.className).toContain("sidebar-panel");
     });
 
     it("renders logo link", () => {
@@ -230,7 +243,18 @@ describe("Sidebar", () => {
       expect(logoLink).toHaveAttribute("href", "/");
     });
 
-    it("renders nav item links with aria-labels", () => {
+    it("names every destination — labels are visible, not tooltip-only", () => {
+      render(<Sidebar {...defaultProps} />);
+      expect(screen.getByText("Dashboard")).toBeInTheDocument();
+      expect(screen.getByText("Credentials")).toBeInTheDocument();
+      NAV_SECTIONS.forEach((section) => {
+        expect(
+          screen.getAllByText(section.title).length,
+        ).toBeGreaterThanOrEqual(1);
+      });
+    });
+
+    it("keeps aria-labels on nav links", () => {
       render(<Sidebar {...defaultProps} />);
       expect(screen.getByLabelText("Dashboard")).toBeInTheDocument();
       expect(screen.getByLabelText("Credentials")).toBeInTheDocument();
@@ -241,98 +265,54 @@ describe("Sidebar", () => {
       expect(screen.getByLabelText("Documentation")).toBeInTheDocument();
     });
 
-    it("shows disconnect in dock when connected", () => {
+    it("shows disconnect when connected", () => {
       const useAccount = require("wagmi").useAccount;
       useAccount.mockReturnValue({ isConnected: true });
       render(<Sidebar {...defaultProps} />);
       expect(screen.getByLabelText("Disconnect")).toBeInTheDocument();
     });
 
-    it("hides disconnect in dock when not connected", () => {
+    it("hides disconnect when not connected", () => {
       const useAccount = require("wagmi").useAccount;
       useAccount.mockReturnValue({ isConnected: false });
       render(<Sidebar {...defaultProps} />);
       expect(screen.queryByLabelText("Disconnect")).not.toBeInTheDocument();
     });
 
-    it("shows tooltip on hover", () => {
-      render(<Sidebar {...defaultProps} />);
-      const dashboardLink = screen.getByLabelText("Dashboard");
-      fireEvent.mouseEnter(dashboardLink);
-      // The tooltip text should appear
-      const tooltips = screen.getAllByText("Dashboard");
-      expect(tooltips.length).toBeGreaterThanOrEqual(1);
-    });
-
-    it("hides tooltip on mouse leave", () => {
-      render(<Sidebar {...defaultProps} />);
-      const dashboardLink = screen.getByLabelText("Dashboard");
-      fireEvent.mouseEnter(dashboardLink);
-      fireEvent.mouseLeave(dashboardLink);
-      // Tooltip content handled by AnimatePresence mock - should still render due to mock
-    });
-
-    it("shows active indicator for current route", () => {
-      const usePathname = require("next/navigation").usePathname;
-      usePathname.mockReturnValue("/");
-      const { container } = render(<Sidebar {...defaultProps} />);
-      const activeItems = container.querySelectorAll(".dock-item-active");
-      expect(activeItems.length).toBe(1);
-    });
-
-    it("shows docs tooltip on hover and hides on leave", () => {
-      render(<Sidebar {...defaultProps} />);
-      const docsLink = screen.getByLabelText("Documentation");
-      fireEvent.mouseEnter(docsLink);
-      expect(screen.getByText("Documentation")).toBeInTheDocument();
-      fireEvent.mouseLeave(docsLink);
-    });
-
-    it("shows disconnect tooltip on hover and hides on leave", () => {
-      const useAccount = require("wagmi").useAccount;
-      useAccount.mockReturnValue({ isConnected: true });
-      render(<Sidebar {...defaultProps} />);
-      const disconnectBtn = screen.getByLabelText("Disconnect");
-      fireEvent.mouseEnter(disconnectBtn);
-      // Tooltip should show 'Disconnect'
-      const tooltips = screen.getAllByText("Disconnect");
-      expect(tooltips.length).toBeGreaterThanOrEqual(1);
-      fireEvent.mouseLeave(disconnectBtn);
-    });
-
-    it("calls disconnect when dock disconnect button is clicked", () => {
+    it("calls disconnect when the disconnect row is clicked", () => {
       const disconnect = jest.fn();
       const useAccount = require("wagmi").useAccount;
       const useDisconnect = require("wagmi").useDisconnect;
       useAccount.mockReturnValue({ isConnected: true });
       useDisconnect.mockReturnValue({ disconnect });
       render(<Sidebar {...defaultProps} />);
-      const disconnectBtn = screen.getByLabelText("Disconnect");
-      fireEvent.click(disconnectBtn);
+      fireEvent.click(screen.getByLabelText("Disconnect"));
       expect(disconnect).toHaveBeenCalledTimes(1);
     });
 
-    it("renders badge dots on dock items", () => {
-      const { container } = render(<Sidebar {...defaultProps} />);
-      // Items with badges should have badge dot elements
-      const badgeDots = container.querySelectorAll(".bg-chrome-300");
-      expect(badgeDots.length).toBeGreaterThan(0);
-    });
-
-    it("marks non-root paths as active correctly", () => {
+    it("marks exactly one row active for the current route", () => {
       const usePathname = require("next/navigation").usePathname;
       usePathname.mockReturnValue("/credentials");
       const { container } = render(<Sidebar {...defaultProps} />);
-      const activeItems = container.querySelectorAll(".dock-item-active");
+      const activeItems = container.querySelectorAll(".nav-row-active");
       expect(activeItems.length).toBe(1);
+      expect(activeItems[0].textContent).toContain("Credentials");
     });
 
-    it("applies custom className to dock", () => {
+    it("stays quiet for ready features and labels gated ones honestly", () => {
+      render(<Sidebar {...defaultProps} />);
+      // Ready states carry no badge noise...
+      expect(screen.queryByText("Configured")).not.toBeInTheDocument();
+      // ...while preview features remain explicitly labeled.
+      expect(screen.getAllByText("Preview").length).toBeGreaterThanOrEqual(1);
+    });
+
+    it("applies custom className", () => {
       const { container } = render(
-        <Sidebar {...defaultProps} className="dock-custom" />,
+        <Sidebar {...defaultProps} className="sidebar-custom" />,
       );
       const aside = container.querySelector("aside");
-      expect(aside?.className).toContain("dock-custom");
+      expect(aside?.className).toContain("sidebar-custom");
     });
   });
 });

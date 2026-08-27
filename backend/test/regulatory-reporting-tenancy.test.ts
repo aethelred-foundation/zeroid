@@ -83,7 +83,9 @@ describe('RegulatoryReportingService tenant scoping', () => {
   });
 
   it('isolates report reads, dashboards, and mutations by organization', async () => {
-    const service = new RegulatoryReportingService();
+    const service = new RegulatoryReportingService({
+      storeDir: createTempReportStore(),
+    });
     const orgAReport = await service.generateSAR(sarRequest('entity-a'), 'org-a');
     await service.generateSAR(sarRequest('entity-b'), 'org-b');
 
@@ -103,8 +105,26 @@ describe('RegulatoryReportingService tenant scoping', () => {
       statusCode: 404,
     });
 
-    const submission = await service.submitReport(orgAReport.reportId, 'org-a');
-    expect(submission.filingReference).toMatch(/^SAR-/);
+    await expect(
+      service.submitReport(orgAReport.reportId, 'org-a'),
+    ).rejects.toMatchObject({
+      code: 'REPORT_SUBMISSION_CONNECTOR_REQUIRED',
+      statusCode: 503,
+    });
+    expect(service.getReport(orgAReport.reportId, 'org-a')?.status).toBe('draft');
+  });
+
+  it('requires durable tenant-scoped storage in every runtime', async () => {
+    const service = new RegulatoryReportingService();
+
+    await expect(
+      service.generateSAR(sarRequest('entity-without-store'), 'org-a'),
+    ).rejects.toMatchObject({
+      code: 'REGULATORY_REPORT_STORE_REQUIRED',
+      statusCode: 503,
+    });
+
+    expect(service.listReports({ organizationId: 'org-a' })).toHaveLength(0);
   });
 
   it('fails closed for production submissions without an authority connector', async () => {
@@ -126,7 +146,24 @@ describe('RegulatoryReportingService tenant scoping', () => {
     expect(service.getReport(report.reportId, 'org-a')?.status).toBe('draft');
   });
 
-  it('fails closed for production data subject rights workflows without a connector', async () => {
+  it('does not label JSON bytes as a PDF export', async () => {
+    const service = new RegulatoryReportingService({
+      storeDir: createTempReportStore(),
+    });
+    const report = await service.generateSAR(sarRequest('entity-pdf'), 'org-a');
+
+    await expect(
+      service.exportReport(report.reportId, 'pdf', 'org-a'),
+    ).rejects.toMatchObject({
+      code: 'PDF_EXPORT_RENDERER_UNAVAILABLE',
+      statusCode: 501,
+    });
+
+    expect(report.exportFormats).not.toContain('pdf');
+    expect(report.authorityManifest?.supportedExportFormats).not.toContain('pdf');
+  });
+
+  it('fails closed for data subject rights workflows without a connector', async () => {
     process.env = {
       ...originalEnv,
       NODE_ENV: 'production',
@@ -143,6 +180,26 @@ describe('RegulatoryReportingService tenant scoping', () => {
 
     await expect(
       service.processErasure(erasureRequest('subject-prod'), 'org-a'),
+    ).rejects.toMatchObject({
+      code: 'DATA_SUBJECT_RIGHTS_CONNECTOR_REQUIRED',
+      statusCode: 503,
+    });
+
+    expect(service.listReports({ organizationId: 'org-a' })).toHaveLength(0);
+  });
+
+  it('does not fabricate local DSAR collection metadata in development', async () => {
+    const service = new RegulatoryReportingService();
+
+    await expect(
+      service.fulfillDSAR(dsarRequest('subject-dev'), 'org-a'),
+    ).rejects.toMatchObject({
+      code: 'DATA_SUBJECT_RIGHTS_CONNECTOR_REQUIRED',
+      statusCode: 503,
+    });
+
+    await expect(
+      service.processErasure(erasureRequest('subject-dev'), 'org-a'),
     ).rejects.toMatchObject({
       code: 'DATA_SUBJECT_RIGHTS_CONNECTOR_REQUIRED',
       statusCode: 503,
@@ -169,15 +226,13 @@ describe('RegulatoryReportingService tenant scoping', () => {
       { reviewer: 'compliance-officer' },
       'org-a',
     );
-    await restartedService.submitReport(generated.reportId, 'org-a');
-
     const secondRestart = new RegulatoryReportingService({ storeDir });
     expect(secondRestart.getReport(generated.reportId, 'org-a')).toMatchObject({
       reportId: generated.reportId,
       organizationId: 'org-a',
       version: 2,
-      status: 'submitted',
-      filingReference: expect.stringMatching(/^SAR-/),
+      status: 'amended',
+      filingReference: null,
       content: expect.objectContaining({
         reviewer: 'compliance-officer',
       }),

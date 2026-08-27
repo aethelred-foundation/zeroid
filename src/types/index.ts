@@ -777,7 +777,7 @@ export interface CircuitMeta {
 // AI Agent Identity Types
 // ============================================================================
 
-export type AgentType = "llm" | "autonomous" | "bot" | "iot" | "mpc";
+export type AgentType = "model_client" | "autonomous" | "bot" | "iot" | "mpc";
 export type AgentStatus =
   | "active"
   | "suspended"
@@ -883,23 +883,23 @@ export interface ComplianceAlert {
   createdAt: ISODateString;
 }
 
-export interface ComplianceCopilotMessage {
+export interface ComplianceAssistantMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
   messageType: "text" | "alert" | "action" | "report";
-  actions?: CopilotAction[];
-  citations?: CopilotCitation[];
+  actions?: AssistantAction[];
+  citations?: AssistantCitation[];
   timestamp: ISODateString;
 }
 
-export interface CopilotAction {
+export interface AssistantAction {
   label: string;
   actionType: string;
   params?: Record<string, unknown>;
 }
 
-export interface CopilotCitation {
+export interface AssistantCitation {
   text: string;
   source: string;
   url?: string;
@@ -1445,4 +1445,5 @@ export type IdentityCreationStep =
   | "uae-pass"
   | "biometric"
   | "generate-did"
-  | "on-chain";
+  | "on-chain"
+  | "register";

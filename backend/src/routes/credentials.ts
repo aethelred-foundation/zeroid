@@ -12,7 +12,7 @@ import {
   apiRateLimiter,
   credentialIssuanceLimiter,
 } from '../middleware/rateLimit';
-import { logger } from '../index';
+import { logger, prisma } from '../runtime';
 import { z } from 'zod';
 
 const router = Router();
@@ -62,7 +62,6 @@ router.post(
       const issuer = req.identity!;
 
       // Resolve subject DID to identity
-      const { prisma } = await import('../index');
       const subject = await prisma.identity.findUnique({
         where: { did: subjectDid },
       });

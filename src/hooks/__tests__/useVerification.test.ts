@@ -42,10 +42,19 @@ jest.mock("@/lib/api/client", () => ({
     }
   },
   apiClient: {
+    createVerificationRequest: jest.fn(),
     get: jest.fn(),
     post: jest.fn(),
+    respondToVerification: jest.fn(),
   },
 }));
+
+jest.mock("@/lib/identity/registration", () => ({
+  getIdentityAuthToken: jest.fn(() => "identity-token"),
+}));
+const mockGetIdentityAuthToken = jest.requireMock(
+  "@/lib/identity/registration",
+).getIdentityAuthToken;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -68,12 +77,35 @@ function createQueryWrapper() {
   };
 }
 
+function makeProof() {
+  return {
+    id: "proof-1",
+    circuitId: "0xcircuit",
+    circuitName: "selective_disclosure",
+    proofSystem: "groth16",
+    proof: {
+      a: ["0x1", "0x2"],
+      b: [
+        ["0x3", "0x4"],
+        ["0x5", "0x6"],
+      ],
+      c: ["0x7", "0x8"],
+    },
+    publicInputs: ["0x1"],
+    publicOutputs: ["0x1"],
+    generatedAt: 1700000000,
+    validityDuration: 300,
+    proofHash: "0xproofhash",
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Setup
 // ---------------------------------------------------------------------------
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockGetIdentityAuthToken.mockReturnValue("identity-token");
   mockUseAccount.mockReturnValue({ address: mockAddress });
 });
 
@@ -87,41 +119,47 @@ describe("useVerification hooks", () => {
   // =========================================================================
 
   describe("useCreateVerificationRequest", () => {
-    it("fails closed instead of calling a stale request creation route", async () => {
+    it("creates a durable backend verification request", async () => {
+      (apiClient.createVerificationRequest as jest.Mock).mockResolvedValue({
+        id: "vreq-1",
+      });
       const { useCreateVerificationRequest } =
         await import("@/hooks/useVerification");
       const { result } = renderHook(() => useCreateVerificationRequest(), {
         wrapper: createQueryWrapper(),
       });
 
+      let created: { requestId: string } | undefined;
       await act(async () => {
-        await expect(
-          result.current.mutateAsync({
-            subjectDid: "did:aethelred:testnet:0xsubject",
-            requiredCredentials: ["schema-1"],
-            requiredAttributes: ["fullName", "nationality"],
-            purpose: "KYC verification",
-            expiresIn: 86400,
-          } as any),
-        ).rejects.toMatchObject({
-          code: "VERIFICATION_REQUEST_CREATE_UNAVAILABLE",
-          statusCode: 501,
-        });
+        created = await result.current.mutateAsync({
+          subjectDid: "did:aethelred:testnet:0xsubject",
+          credentialHash: `0x${"ab".repeat(32)}`,
+          circuitId: "selective_disclosure",
+          requestedAttributes: ["fullName", "nationality"],
+          purpose: "KYC verification",
+          expiresIn: 86400,
+        } as any);
       });
 
-      expect(apiClient.post).not.toHaveBeenCalled();
-      expect(toast.error).toHaveBeenCalledWith(
-        "Failed to create verification request",
-        {
-          description: expect.stringContaining(
-            "Verifier-created request inboxes are not exposed",
-          ),
-        },
+      expect(created).toEqual({ requestId: "vreq-1" });
+      expect(apiClient.createVerificationRequest).toHaveBeenCalledWith(
+        expect.objectContaining({
+          subjectDid: "did:aethelred:testnet:0xsubject",
+          credentialHash: `0x${"ab".repeat(32)}`,
+          circuitId: "selective_disclosure",
+          requestedAttributes: ["fullName", "nationality"],
+          purpose: "KYC verification",
+        }),
+        "identity-token",
       );
-      expect(toast.success).not.toHaveBeenCalled();
+      expect(toast.success).toHaveBeenCalledWith(
+        "Verification request created",
+        { description: expect.stringContaining("vreq-1") },
+      );
     });
 
-    it("does not call the stale route even when optional fields are present", async () => {
+    it("fails before calling the backend when auth is unavailable", async () => {
+      mockGetIdentityAuthToken.mockReturnValue(undefined);
       const { useCreateVerificationRequest } =
         await import("@/hooks/useVerification");
       const { result } = renderHook(() => useCreateVerificationRequest(), {
@@ -132,16 +170,21 @@ describe("useVerification hooks", () => {
         try {
           await result.current.mutateAsync({
             subjectDid: "did:aethelred:testnet:0xsubject",
-            requiredCredentials: [],
-            requiredAttributes: [],
-            purpose: "Test",
+            credentialHash: `0x${"ab".repeat(32)}`,
+            requestedAttributes: ["fullName"],
           } as any);
         } catch {
           // Expected
         }
       });
 
-      expect(apiClient.post).not.toHaveBeenCalled();
+      expect(apiClient.createVerificationRequest).not.toHaveBeenCalled();
+      expect(toast.error).toHaveBeenCalledWith(
+        "Failed to create verification request",
+        {
+          description: "An authenticated ZeroID identity session is required.",
+        },
+      );
     });
   });
 
@@ -150,38 +193,43 @@ describe("useVerification hooks", () => {
   // =========================================================================
 
   describe("useRespondToVerification", () => {
-    it("fails closed instead of calling a stale response route", async () => {
+    it("submits generated proof responses through the API client", async () => {
+      (apiClient.respondToVerification as jest.Mock).mockResolvedValue({
+        requestId: "vreq-1",
+        verified: true,
+        attributeResults: [],
+        verifiedAt: 1700000000,
+      });
       const { useRespondToVerification } =
         await import("@/hooks/useVerification");
       const { result } = renderHook(() => useRespondToVerification(), {
         wrapper: createQueryWrapper(),
       });
 
+      let response: any;
       await act(async () => {
-        await expect(
-          result.current.mutateAsync({
-            requestId: "vreq-1",
-            selectedAttributes: [
-              { key: "fullName", credentialHash: "0xcred1" },
-            ],
-            proofData: "0xzkproof_data",
-          }),
-        ).rejects.toMatchObject({
-          code: "VERIFICATION_REQUEST_RESPONSE_UNAVAILABLE",
-          statusCode: 501,
+        response = await result.current.mutateAsync({
+          requestId: "vreq-1",
+          selectedAttributes: [{ key: "fullName", value: "Ada" }],
+          proofData: JSON.stringify(makeProof()),
         });
       });
 
-      expect(apiClient.post).not.toHaveBeenCalled();
-      expect(toast.error).toHaveBeenCalledWith("Verification response failed", {
-        description: expect.stringContaining(
-          "Verification request responses are not exposed",
-        ),
-      });
-      expect(toast.success).not.toHaveBeenCalled();
+      expect(response.verified).toBe(true);
+      expect(apiClient.respondToVerification).toHaveBeenCalledWith(
+        "vreq-1",
+        {
+          consent: true,
+          proof: expect.objectContaining({ id: "proof-1" }),
+        },
+        "identity-token",
+      );
+      expect(toast.success).toHaveBeenCalledWith(
+        "Verification response submitted",
+      );
     });
 
-    it("rejects even when the proof payload is present", async () => {
+    it("rejects malformed proof data before calling the backend", async () => {
       const { useRespondToVerification } =
         await import("@/hooks/useVerification");
       const { result } = renderHook(() => useRespondToVerification(), {
@@ -201,11 +249,40 @@ describe("useVerification hooks", () => {
       });
 
       expect(toast.error).toHaveBeenCalledWith("Verification response failed", {
-        description: expect.stringContaining(
-          "Verification request responses are not exposed",
-        ),
+        description:
+          "Verification response requires a generated ZK proof JSON payload.",
       });
-      expect(apiClient.post).not.toHaveBeenCalled();
+      expect(apiClient.respondToVerification).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("useDeclineVerification", () => {
+    it("persists a holder decline through the response API", async () => {
+      (apiClient.respondToVerification as jest.Mock).mockResolvedValue({
+        requestId: "vreq-1",
+        verified: false,
+        attributeResults: [],
+        verifiedAt: 1700000000,
+        reason: "User declined verification",
+      });
+      const { useDeclineVerification } =
+        await import("@/hooks/useVerification");
+      const { result } = renderHook(() => useDeclineVerification(), {
+        wrapper: createQueryWrapper(),
+      });
+
+      await act(async () => {
+        await result.current.mutateAsync("vreq-1");
+      });
+
+      expect(apiClient.respondToVerification).toHaveBeenCalledWith(
+        "vreq-1",
+        { consent: false },
+        "identity-token",
+      );
+      expect(toast.success).toHaveBeenCalledWith(
+        "Verification request declined",
+      );
     });
   });
 
@@ -214,21 +291,30 @@ describe("useVerification hooks", () => {
   // =========================================================================
 
   describe("useSelectAttributes", () => {
-    it("fails closed instead of calling stale request detail routes", async () => {
+    it("loads request detail from pending verification requests", async () => {
+      (apiClient.get as jest.Mock).mockResolvedValue([
+        {
+          id: "vreq-1",
+          requestedAttributes: ["fullName", "nationality"],
+          requiredAttributes: ["fullName", "nationality"],
+        },
+      ]);
       const { useSelectAttributes } = await import("@/hooks/useVerification");
       const { result } = renderHook(() => useSelectAttributes("vreq-1"), {
         wrapper: createQueryWrapper(),
       });
 
       await waitFor(() => {
-        expect(result.current.isError).toBe(true);
+        expect(result.current.isSuccess).toBe(true);
       });
 
-      expect(result.current.error).toMatchObject({
-        code: "VERIFICATION_REQUEST_DETAIL_UNAVAILABLE",
-        statusCode: 501,
+      expect(result.current.data).toMatchObject({
+        request: { id: "vreq-1" },
+        availableAttributes: [{ key: "fullName" }, { key: "nationality" }],
       });
-      expect(apiClient.get).not.toHaveBeenCalled();
+      expect(apiClient.get).toHaveBeenCalledWith(
+        "/api/v1/verification/requests?role=subject&result=PENDING&limit=100",
+      );
     });
 
     it("does not fetch when requestId is undefined", async () => {
@@ -252,7 +338,8 @@ describe("useVerification hooks", () => {
       expect(result.current.isFetching).toBe(false);
     });
 
-    it("does not call the stale credentials attributes endpoint", async () => {
+    it("fails when the request is not in the pending inbox", async () => {
+      (apiClient.get as jest.Mock).mockResolvedValue([]);
       const { useSelectAttributes } = await import("@/hooks/useVerification");
       const { result } = renderHook(() => useSelectAttributes("vreq-1"), {
         wrapper: createQueryWrapper(),
@@ -262,7 +349,9 @@ describe("useVerification hooks", () => {
         expect(result.current.isError).toBe(true);
       });
 
-      expect(apiClient.get).not.toHaveBeenCalled();
+      expect(String(result.current.error)).toContain(
+        "Verification request vreq-1 was not found",
+      );
     });
   });
 
@@ -289,7 +378,7 @@ describe("useVerification hooks", () => {
       });
 
       expect(apiClient.get).toHaveBeenCalledWith(
-        "/api/v1/verification/history?result=PENDING&limit=100",
+        "/api/v1/verification/requests?role=subject&result=PENDING&limit=100",
       );
     });
 

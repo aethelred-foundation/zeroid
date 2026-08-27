@@ -2,22 +2,17 @@ import express, { Request, Response, NextFunction } from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
 import compression from 'compression';
-import { PrismaClient } from '@prisma/client';
-import {
-  Registry,
-  collectDefaultMetrics,
-  Counter,
-  Histogram,
-} from 'prom-client';
-import { createLogger, format, transports } from 'winston';
-import Redis from 'ioredis';
+import { rateLimit } from 'express-rate-limit';
 
 import { credentialRoutes } from './routes/credentials';
 import { verificationRoutes } from './routes/verification';
 import { identityRoutes } from './routes/identity';
+import { identityAuthRoutes } from './routes/identity-auth';
 import { governanceRoutes } from './routes/governance';
 import { auditRoutes } from './routes/audit';
 import partnersRoutes from './routes/partners';
+import oid4vpRoutes from './routes/oid4vp';
+import oid4vciRoutes from './routes/oid4vci';
 import enterpriseIntegrationRoutes, {
   oidcPublicRouter,
 } from './routes/enterprise/integration';
@@ -40,126 +35,35 @@ import {
   parseExpectedCircuitArtifactDigests,
   validateCircuitArtifacts,
 } from './services/circuit-artifacts';
+import { webhookSystem } from './services/enterprise/webhook-system';
+
+// ---------------------------------------------------------------------------
+// Shared runtime singletons (logger, Prisma, Redis, Prometheus metrics) live in
+// ./runtime to avoid a circular dependency: services construct at module load
+// and importing these from this entrypoint ran before they were defined.
+// ---------------------------------------------------------------------------
 import {
-  AUDIT_CHAIN_GENESIS,
-  buildAuditIntegrityFields,
-} from './services/audit-integrity';
+  logger,
+  prisma,
+  redis,
+  metricsRegistry,
+  httpRequestCounter,
+  httpRequestDuration,
+  credentialIssuedCounter,
+  verificationCounter,
+} from './runtime';
 
-// ---------------------------------------------------------------------------
-// Logger
-// ---------------------------------------------------------------------------
-export const logger = createLogger({
-  level: process.env.LOG_LEVEL ?? 'info',
-  format: format.combine(
-    format.timestamp({ format: 'YYYY-MM-DDTHH:mm:ss.SSSZ' }),
-    format.errors({ stack: true }),
-    format.json(),
-  ),
-  defaultMeta: { service: 'zeroid-api' },
-  transports: [
-    new transports.Console({
-      format:
-        process.env.NODE_ENV === 'production'
-          ? format.json()
-          : format.combine(format.colorize(), format.simple()),
-    }),
-  ],
-});
-
-// ---------------------------------------------------------------------------
-// Prisma
-// ---------------------------------------------------------------------------
-export const prisma = new PrismaClient({
-  log:
-    process.env.NODE_ENV === 'production'
-      ? ['error']
-      : ['query', 'info', 'warn', 'error'],
-});
-
-if (typeof (prisma as any).$use === 'function') {
-  prisma.$use(async (params, next) => {
-    if (params.model === 'AuditLog' && params.action === 'create') {
-      const data = (params.args?.data ?? {}) as Record<string, unknown>;
-      if (!data.entryHash) {
-        const lastSealedAudit = await (prisma.auditLog as any).findFirst({
-          where: {
-            entryHash: { not: null },
-          },
-          orderBy: [{ timestamp: 'desc' }, { id: 'desc' }],
-          select: {
-            entryHash: true,
-          },
-        });
-
-        Object.assign(
-          data,
-          buildAuditIntegrityFields(
-            data as any,
-            lastSealedAudit?.entryHash ?? AUDIT_CHAIN_GENESIS,
-          ),
-        );
-        params.args.data = data;
-      }
-    }
-
-    return next(params);
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Redis
-// ---------------------------------------------------------------------------
-export const redis = new Redis(
-  process.env.REDIS_URL ?? 'redis://localhost:6379',
-  {
-    maxRetriesPerRequest: 3,
-    retryStrategy(times: number) {
-      if (times > 5) return null;
-      return Math.min(times * 200, 2000);
-    },
-    enableReadyCheck: true,
-    lazyConnect: true,
-  },
-);
-
-redis.on('error', (err) =>
-  logger.error('Redis connection error', { error: err.message }),
-);
-redis.on('connect', () => logger.info('Redis connected'));
-
-// ---------------------------------------------------------------------------
-// Prometheus metrics
-// ---------------------------------------------------------------------------
-export const metricsRegistry = new Registry();
-collectDefaultMetrics({ register: metricsRegistry });
-
-export const httpRequestCounter = new Counter({
-  name: 'zeroid_http_requests_total',
-  help: 'Total HTTP requests',
-  labelNames: ['method', 'route', 'status'] as const,
-  registers: [metricsRegistry],
-});
-
-export const httpRequestDuration = new Histogram({
-  name: 'zeroid_http_request_duration_seconds',
-  help: 'HTTP request duration in seconds',
-  labelNames: ['method', 'route', 'status'] as const,
-  buckets: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10],
-  registers: [metricsRegistry],
-});
-
-export const credentialIssuedCounter = new Counter({
-  name: 'zeroid_credentials_issued_total',
-  help: 'Total credentials issued',
-  registers: [metricsRegistry],
-});
-
-export const verificationCounter = new Counter({
-  name: 'zeroid_verifications_total',
-  help: 'Total verification requests',
-  labelNames: ['result'] as const,
-  registers: [metricsRegistry],
-});
+// Re-export for backwards compatibility (tests + importers using '../index').
+export {
+  logger,
+  prisma,
+  redis,
+  metricsRegistry,
+  httpRequestCounter,
+  httpRequestDuration,
+  credentialIssuedCounter,
+  verificationCounter,
+};
 
 // ---------------------------------------------------------------------------
 // Express application
@@ -253,15 +157,21 @@ export function buildHelmetOptions(
 app.use(helmet(buildHelmetOptions()));
 
 // CORS
+const allowedCorsOrigins = new Set(getAllowedCorsOrigins());
 app.use(
   cors({
-    origin: getAllowedCorsOrigins(),
+    origin: (origin, callback) => {
+      // Requests without Origin are non-browser or same-origin. Browser
+      // cross-origin requests must match the configured allowlist exactly.
+      callback(null, origin === undefined || allowedCorsOrigins.has(origin));
+    },
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
     allowedHeaders: [
       'Content-Type',
       'Authorization',
       'X-Request-Id',
       'X-Zeroid-Org-Id',
+      'Idempotency-Key',
     ],
     credentials: true,
     maxAge: 86400,
@@ -449,7 +359,22 @@ const globalLimiter = createRateLimiter({
   maxRequests: 120,
   keyPrefix: 'rl:global',
 });
+const localApiAbuseGuard = rateLimit({
+  windowMs: 60_000,
+  limit: 240,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  message: {
+    error: 'Too many requests',
+    code: 'RATE_LIMIT_EXCEEDED',
+    retryAfter: 60,
+  },
+});
 app.use('/api', setSensitiveApiCacheHeaders);
+// Keep a process-local limiter in front of the Redis sliding-window limiter.
+// Redis remains the authoritative distributed control; this guard also
+// protects development/testnet if their Redis instance is briefly unavailable.
+app.use('/api', localApiAbuseGuard);
 app.use('/api', globalLimiter);
 
 // ---------------------------------------------------------------------------
@@ -472,8 +397,11 @@ const auditPrincipalLimiter = createAuthenticatedPrincipalLimiter(
   30,
 );
 
+app.use('/api/v1/identity/auth', apiRouteLimiter, identityAuthRoutes);
 app.use('/api/v1/identity', apiRouteLimiter, identityRoutes);
 app.use('/api/v1/partners', apiRouteLimiter, partnersRoutes);
+app.use('/api/v1/oid4vp', oid4vpRoutes); // OpenID4VP verifier (self-limited; per-route auth)
+app.use('/api/v1/oid4vci', oid4vciRoutes); // OpenID4VCI issuer (self-limited)
 app.use(
   '/api/v1/credentials',
   apiRouteLimiter,
@@ -667,6 +595,7 @@ async function bootstrap(): Promise<void> {
     await redis.connect();
     await prisma.$connect();
     logger.info('Database connected');
+    webhookSystem.startRetryWorker();
 
     app.listen(PORT, () => {
       logger.info(`ZeroID API server listening on port ${PORT}`, {
@@ -682,6 +611,7 @@ async function bootstrap(): Promise<void> {
 // Graceful shutdown
 async function shutdown(signal: string): Promise<void> {
   logger.info(`Received ${signal}, shutting down gracefully`);
+  await webhookSystem.stopRetryWorker();
   await prisma.$disconnect();
   redis.disconnect();
   process.exit(0);

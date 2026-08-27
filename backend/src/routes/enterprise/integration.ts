@@ -2,12 +2,10 @@ import { Router, Request, Response } from 'express';
 import { z } from 'zod';
 import { createLogger, format, transports } from 'winston';
 import {
-  webhookSystem,
   WebhookRegistrationSchema,
   WebhookUpdateSchema,
 } from '../../services/enterprise/webhook-system';
 import {
-  apiGateway,
   CreateAPIKeySchema,
 } from '../../services/enterprise/api-gateway';
 import {
@@ -52,7 +50,7 @@ import {
   policyExceptionService,
   RevokePolicyExceptionSchema,
 } from '../../services/enterprise/policy-exception-service';
-import { prisma } from '../../index';
+import { prisma } from '../../runtime';
 
 // ---------------------------------------------------------------------------
 // Logger
@@ -465,6 +463,75 @@ function getClientId(req: Request): string {
   }
 
   return organizationId;
+}
+
+type EnterpriseControlPlaneCapability =
+  | 'api_keys'
+  | 'oauth_client_credentials'
+  | 'usage_analytics';
+
+/**
+ * The legacy enterprise API gateway can mint credentials and aggregate usage,
+ * but those credentials are not connected to the runtime route-authentication
+ * boundary and request metering has no production caller. Keep every mounted
+ * surface fail closed until those dependencies are integrated end to end.
+ */
+function sendEnterpriseControlPlaneUnavailable(
+  req: Request,
+  res: Response,
+  capability: EnterpriseControlPlaneCapability,
+): void {
+  try {
+    // Defense in depth: retain an explicit organization-context check even
+    // though these routes are mounted behind enterprise auth middleware.
+    getClientId(req);
+  } catch (err) {
+    const error = err as Error & { statusCode?: number; code?: string };
+    res.status(error.statusCode ?? 403).json({
+      error: error.message,
+      code: error.code ?? 'ENTERPRISE_CONTEXT_REQUIRED',
+    });
+    return;
+  }
+
+  res.status(503).json({
+    error:
+      'Enterprise API access is unavailable until runtime credential authentication and durable request metering are integrated',
+    code: 'ENTERPRISE_API_CONTROL_PLANE_UNAVAILABLE',
+    capability,
+    status: 'configuration_required',
+  });
+}
+
+/**
+ * Webhook configuration and delivery evidence are not authoritative until
+ * domain mutations are committed to a durable outbox. Keep every mounted
+ * webhook surface fail closed so synthetic test deliveries cannot be
+ * mistaken for an operational event pipeline.
+ */
+function sendWebhookEventOutboxUnavailable(
+  req: Request,
+  res: Response,
+): void {
+  try {
+    // Defense in depth: preserve the tenant boundary even though the route's
+    // enterprise middleware has already resolved the caller's organization.
+    getClientId(req);
+  } catch (err) {
+    const error = err as Error & { statusCode?: number; code?: string };
+    res.status(error.statusCode ?? 403).json({
+      error: error.message,
+      code: error.code ?? 'ENTERPRISE_CONTEXT_REQUIRED',
+    });
+    return;
+  }
+
+  res.status(503).json({
+    error:
+      'Enterprise webhooks are unavailable until authoritative domain mutations are connected to a durable event outbox',
+    code: 'WEBHOOK_EVENT_OUTBOX_UNAVAILABLE',
+    status: 'configuration_required',
+  });
 }
 
 const ENTERPRISE_READ_ROLES: EnterpriseRole[] = [
@@ -1245,28 +1312,8 @@ router.post(
   '/webhooks',
   requireEnterpriseContext(ENTERPRISE_OPERATOR_ROLES),
   validate({ body: WebhookRegistrationSchema }),
-  async (req: Request, res: Response): Promise<void> => {
-    try {
-      const clientId = getClientId(req);
-      const webhook = await webhookSystem.register(clientId, req.body);
-      res.status(201).json({
-        data: {
-          id: webhook.id,
-          url: webhook.url,
-          events: webhook.events,
-          secret: webhook.secret,
-          active: webhook.active,
-          createdAt: webhook.createdAt,
-        },
-        message: 'Webhook registered successfully',
-      });
-    } catch (err) {
-      const error = err as Error & { statusCode?: number; code?: string };
-      logger.error('webhook_register_error', { error: error.message });
-      res
-        .status(error.statusCode ?? 500)
-        .json({ error: error.message, code: error.code ?? 'WEBHOOK_ERROR' });
-    }
+  (req: Request, res: Response): void => {
+    sendWebhookEventOutboxUnavailable(req, res);
   },
 );
 
@@ -1276,28 +1323,8 @@ router.post(
 router.get(
   '/webhooks',
   requireEnterpriseContext(ENTERPRISE_READ_ROLES),
-  async (req: Request, res: Response): Promise<void> => {
-    try {
-      const clientId = getClientId(req);
-      const webhooks = await webhookSystem.list(clientId);
-      res.status(200).json({
-        data: webhooks.map((w) => ({
-          id: w.id,
-          url: w.url,
-          events: w.events,
-          active: w.active,
-          health: w.health,
-          createdAt: w.createdAt,
-          updatedAt: w.updatedAt,
-        })),
-      });
-    } catch (err) {
-      const error = err as Error;
-      logger.error('webhook_list_error', { error: error.message });
-      res
-        .status(500)
-        .json({ error: error.message, code: 'WEBHOOK_LIST_ERROR' });
-    }
+  (req: Request, res: Response): void => {
+    sendWebhookEventOutboxUnavailable(req, res);
   },
 );
 
@@ -1307,35 +1334,9 @@ router.get(
 router.patch(
   '/webhooks/:id',
   requireEnterpriseContext(ENTERPRISE_OPERATOR_ROLES),
-  validate({ body: WebhookUpdateSchema }),
-  async (req: Request, res: Response): Promise<void> => {
-    try {
-      const clientId = getClientId(req);
-      const webhook = await webhookSystem.update(
-        req.params.id as string,
-        clientId,
-        req.body,
-      );
-      res.status(200).json({
-        data: {
-          id: webhook.id,
-          url: webhook.url,
-          events: webhook.events,
-          active: webhook.active,
-          health: webhook.health,
-          createdAt: webhook.createdAt,
-          updatedAt: webhook.updatedAt,
-        },
-        message: 'Webhook updated',
-      });
-    } catch (err) {
-      const error = err as Error & { statusCode?: number; code?: string };
-      logger.error('webhook_update_error', { error: error.message });
-      res.status(error.statusCode ?? 500).json({
-        error: error.message,
-        code: error.code ?? 'WEBHOOK_UPDATE_ERROR',
-      });
-    }
+  validate({ params: RouteIdParamSchema, body: WebhookUpdateSchema }),
+  (req: Request, res: Response): void => {
+    sendWebhookEventOutboxUnavailable(req, res);
   },
 );
 
@@ -1346,19 +1347,8 @@ router.delete(
   '/webhooks/:id',
   requireEnterpriseContext(ENTERPRISE_OPERATOR_ROLES),
   validate({ params: RouteIdParamSchema }),
-  async (req: Request, res: Response): Promise<void> => {
-    try {
-      const clientId = getClientId(req);
-      await webhookSystem.remove(req.params.id as string, clientId);
-      res.status(204).send();
-    } catch (err) {
-      const error = err as Error & { statusCode?: number; code?: string };
-      logger.error('webhook_delete_error', { error: error.message });
-      res.status(error.statusCode ?? 500).json({
-        error: error.message,
-        code: error.code ?? 'WEBHOOK_DELETE_ERROR',
-      });
-    }
+  (req: Request, res: Response): void => {
+    sendWebhookEventOutboxUnavailable(req, res);
   },
 );
 
@@ -1369,25 +1359,20 @@ router.get(
   '/webhooks/:id/deliveries',
   requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES),
   validate({ params: RouteIdParamSchema, query: LimitedListQuerySchema }),
-  async (req: Request, res: Response): Promise<void> => {
-    try {
-      const clientId = getClientId(req);
-      const { limit } = req.query as unknown as z.infer<
-        typeof LimitedListQuerySchema
-      >;
-      const deliveries = await webhookSystem.getDeliveries(
-        req.params.id as string,
-        clientId,
-        limit,
-      );
-      res.status(200).json({ data: deliveries });
-    } catch (err) {
-      const error = err as Error;
-      logger.error('webhook_deliveries_error', { error: error.message });
-      res
-        .status(500)
-        .json({ error: error.message, code: 'DELIVERY_LOG_ERROR' });
-    }
+  (req: Request, res: Response): void => {
+    sendWebhookEventOutboxUnavailable(req, res);
+  },
+);
+
+// ---------------------------------------------------------------------------
+// POST /enterprise/webhooks/:id/test — Send synthetic test delivery
+// ---------------------------------------------------------------------------
+router.post(
+  '/webhooks/:id/test',
+  requireEnterpriseContext(ENTERPRISE_OPERATOR_ROLES),
+  validate({ params: RouteIdParamSchema }),
+  (req: Request, res: Response): void => {
+    sendWebhookEventOutboxUnavailable(req, res);
   },
 );
 
@@ -1398,24 +1383,8 @@ router.post(
   '/webhooks/:id/replay',
   requireEnterpriseContext(ENTERPRISE_OPERATOR_ROLES),
   validate({ params: RouteIdParamSchema, body: WebhookReplaySchema }),
-  async (req: Request, res: Response): Promise<void> => {
-    try {
-      const { since, until } = req.body;
-      const clientId = getClientId(req);
-      const result = await webhookSystem.replayEvents(
-        req.params.id as string,
-        since,
-        until,
-        clientId,
-      );
-      res.status(200).json({ data: result, message: 'Events replayed' });
-    } catch (err) {
-      const error = err as Error & { statusCode?: number; code?: string };
-      logger.error('webhook_replay_error', { error: error.message });
-      res
-        .status(error.statusCode ?? 500)
-        .json({ error: error.message, code: error.code ?? 'REPLAY_ERROR' });
-    }
+  (req: Request, res: Response): void => {
+    sendWebhookEventOutboxUnavailable(req, res);
   },
 );
 
@@ -1424,98 +1393,49 @@ router.post(
 // ==========================================================================
 
 // ---------------------------------------------------------------------------
-// POST /enterprise/api-keys — Generate API key
+// POST /enterprise/api-keys — API-key creation capability gate
 // ---------------------------------------------------------------------------
 router.post(
   '/api-keys',
   requireEnterpriseContext(ENTERPRISE_OPERATOR_ROLES),
   validate({ body: CreateAPIKeySchema }),
-  async (req: Request, res: Response): Promise<void> => {
-    try {
-      const clientId = getClientId(req);
-      const result = await apiGateway.createAPIKey(clientId, req.body);
-      res.status(201).json({
-        data: result,
-        message:
-          'API key created. Store the key securely — it will not be shown again.',
-      });
-    } catch (err) {
-      const error = err as Error & { statusCode?: number; code?: string };
-      logger.error('api_key_create_error', { error: error.message });
-      res
-        .status(error.statusCode ?? 500)
-        .json({ error: error.message, code: error.code ?? 'API_KEY_ERROR' });
-    }
+  (req: Request, res: Response): void => {
+    sendEnterpriseControlPlaneUnavailable(req, res, 'api_keys');
   },
 );
 
 // ---------------------------------------------------------------------------
-// GET /enterprise/api-keys — List API keys
+// GET /enterprise/api-keys — API-key inventory capability gate
 // ---------------------------------------------------------------------------
 router.get(
   '/api-keys',
   requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES),
-  async (req: Request, res: Response): Promise<void> => {
-    try {
-      const clientId = getClientId(req);
-      const keys = await apiGateway.listAPIKeys(clientId);
-      res.status(200).json({ data: keys });
-    } catch (err) {
-      const error = err as Error;
-      logger.error('api_key_list_error', { error: error.message });
-      res
-        .status(500)
-        .json({ error: error.message, code: 'API_KEY_LIST_ERROR' });
-    }
+  (req: Request, res: Response): void => {
+    sendEnterpriseControlPlaneUnavailable(req, res, 'api_keys');
   },
 );
 
 // ---------------------------------------------------------------------------
-// DELETE /enterprise/api-keys/:id — Revoke API key
+// DELETE /enterprise/api-keys/:id — API-key revocation capability gate
 // ---------------------------------------------------------------------------
 router.delete(
   '/api-keys/:id',
   requireEnterpriseContext(ENTERPRISE_OPERATOR_ROLES),
   validate({ params: RouteIdParamSchema, body: OptionalReasonSchema }),
-  async (req: Request, res: Response): Promise<void> => {
-    try {
-      const clientId = getClientId(req);
-      const reason = (req.body?.reason as string) ?? 'Revoked by client';
-      await apiGateway.revokeAPIKey(req.params.id as string, clientId, reason);
-      res.status(200).json({ message: 'API key revoked' });
-    } catch (err) {
-      const error = err as Error & { statusCode?: number; code?: string };
-      logger.error('api_key_revoke_error', { error: error.message });
-      res.status(error.statusCode ?? 500).json({
-        error: error.message,
-        code: error.code ?? 'API_KEY_REVOKE_ERROR',
-      });
-    }
+  (req: Request, res: Response): void => {
+    sendEnterpriseControlPlaneUnavailable(req, res, 'api_keys');
   },
 );
 
 // ---------------------------------------------------------------------------
-// GET /enterprise/api-keys/:id/quota — Get quota status
+// GET /enterprise/api-keys/:id/quota — API-key quota capability gate
 // ---------------------------------------------------------------------------
 router.get(
   '/api-keys/:id/quota',
   requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES),
   validate({ params: RouteIdParamSchema }),
-  async (req: Request, res: Response): Promise<void> => {
-    try {
-      const clientId = getClientId(req);
-      const quota = await apiGateway.getQuotaStatus(
-        req.params.id as string,
-        clientId,
-      );
-      res.status(200).json({ data: quota });
-    } catch (err) {
-      const error = err as Error & { statusCode?: number; code?: string };
-      logger.error('api_key_quota_error', { error: error.message });
-      res
-        .status(error.statusCode ?? 500)
-        .json({ error: error.message, code: error.code ?? 'QUOTA_ERROR' });
-    }
+  (req: Request, res: Response): void => {
+    sendEnterpriseControlPlaneUnavailable(req, res, 'api_keys');
   },
 );
 
@@ -1524,35 +1444,38 @@ router.get(
 // ==========================================================================
 
 // ---------------------------------------------------------------------------
-// POST /enterprise/oauth2/token — OAuth2 token exchange
+// POST /enterprise/oauth2/token — OAuth2 client-credentials capability gate
 // ---------------------------------------------------------------------------
 router.post(
   '/oauth2/token',
+  requireEnterpriseContext(ENTERPRISE_OPERATOR_ROLES),
   validatePublicOAuthBody(OAuth2ClientCredentialsTokenBodySchema),
-  async (req: Request, res: Response): Promise<void> => {
-    try {
-      const grantType = req.body.grantType ?? req.body.grant_type;
-
-      if (grantType === 'client_credentials') {
-        const token = await apiGateway.issueOAuth2Token({
-          grantType: 'client_credentials',
-          clientId: req.body.clientId ?? req.body.client_id,
-          clientSecret: req.body.clientSecret ?? req.body.client_secret,
-          scope: req.body.scope,
-        });
-        res.status(200).json(token);
-        return;
-      }
-
+  (req: Request, res: Response): void => {
+    const grantType = req.body.grantType ?? req.body.grant_type;
+    if (grantType !== 'client_credentials') {
       res.status(400).json({
         error: 'unsupported_grant_type',
         error_description: 'Only client_credentials supported on this endpoint',
       });
+      return;
+    }
+
+    try {
+      getClientId(req);
     } catch (err) {
       const error = err as Error & { statusCode?: number; code?: string };
-      logger.error('oauth2_token_error', { error: error.message });
-      sendPublicOAuthError(res, error, 'oauth2_error');
+      res.status(error.statusCode ?? 403).json({
+        error: 'access_denied',
+        error_description: error.message,
+      });
+      return;
     }
+
+    res.status(503).json({
+      error: 'temporarily_unavailable',
+      error_description:
+        'Enterprise OAuth client credentials are unavailable until runtime token authentication and durable request metering are integrated',
+    });
   },
 );
 
@@ -2681,8 +2604,6 @@ router.post(
       const subject = await prisma.identity.findUnique({
         where: { id: subjectId },
         select: {
-          displayName: true,
-          metadata: true,
           status: true,
           teeAttestationId: true,
           updatedAt: true,
@@ -2866,6 +2787,14 @@ router.post('/oidc/saml', (_req: Request, res: Response): void => {
 // SLA ROUTES
 // ==========================================================================
 
+const sendSLATelemetryUnavailable = (res: Response): void => {
+  res.status(503).json({
+    error:
+      'SLA evidence is unavailable until an instrumented durable telemetry adapter is deployed',
+    code: 'SLA_AUTHORITATIVE_TELEMETRY_UNAVAILABLE',
+  });
+};
+
 // ---------------------------------------------------------------------------
 // POST /enterprise/sla/register — Register SLA definition
 // ---------------------------------------------------------------------------
@@ -2880,7 +2809,15 @@ router.post(
         ...req.body,
         clientId,
       });
-      res.status(201).json({ message: 'SLA definition registered' });
+      res.status(201).json({
+        message: 'SLA configuration registered',
+        data: {
+          clientId,
+          configurationStatus: 'configured',
+          reportingStatus:
+            'unavailable_until_instrumented_durable_telemetry_adapter_is_deployed',
+        },
+      });
     } catch (err) {
       const error = err as Error & { statusCode?: number; code?: string };
       logger.error('sla_register_error', { error: error.message });
@@ -2899,21 +2836,8 @@ router.get(
   '/sla/report',
   requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES),
   validate({ query: PeriodQuerySchema }),
-  async (req: Request, res: Response): Promise<void> => {
-    try {
-      const clientId = getClientId(req);
-      const { period: periodDays } = req.query as unknown as z.infer<
-        typeof PeriodQuerySchema
-      >;
-      const report = slaMonitor.generateReport(clientId, periodDays);
-      res.status(200).json({ data: report });
-    } catch (err) {
-      const error = err as Error & { statusCode?: number; code?: string };
-      logger.error('sla_report_error', { error: error.message });
-      res
-        .status(error.statusCode ?? 500)
-        .json({ error: error.message, code: error.code ?? 'SLA_REPORT_ERROR' });
-    }
+  (_req: Request, res: Response): void => {
+    sendSLATelemetryUnavailable(res);
   },
 );
 
@@ -2924,22 +2848,8 @@ router.get(
   '/sla/violations',
   requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES),
   validate({ query: SinceQuerySchema }),
-  async (req: Request, res: Response): Promise<void> => {
-    try {
-      const clientId = getClientId(req);
-      const { since } = req.query as unknown as z.infer<
-        typeof SinceQuerySchema
-      >;
-      const violations = slaMonitor.getViolations(clientId, since);
-      res.status(200).json({ data: violations });
-    } catch (err) {
-      const error = err as Error & { statusCode?: number; code?: string };
-      logger.error('sla_violations_error', { error: error.message });
-      res.status(error.statusCode ?? 500).json({
-        error: error.message,
-        code: error.code ?? 'SLA_VIOLATIONS_ERROR',
-      });
-    }
+  (_req: Request, res: Response): void => {
+    sendSLATelemetryUnavailable(res);
   },
 );
 
@@ -2950,22 +2860,8 @@ router.get(
   '/sla/alerts',
   requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES),
   validate({ query: LimitedListQuerySchema }),
-  async (req: Request, res: Response): Promise<void> => {
-    try {
-      const clientId = getClientId(req);
-      const { limit } = req.query as unknown as z.infer<
-        typeof LimitedListQuerySchema
-      >;
-      const alerts = slaMonitor.getAlerts(clientId, limit);
-      res.status(200).json({ data: alerts });
-    } catch (err) {
-      const error = err as Error & { statusCode?: number; code?: string };
-      logger.error('sla_alerts_error', { error: error.message });
-      res.status(error.statusCode ?? 500).json({
-        error: error.message,
-        code: error.code ?? 'SLA_ALERTS_ERROR',
-      });
-    }
+  (_req: Request, res: Response): void => {
+    sendSLATelemetryUnavailable(res);
   },
 );
 
@@ -2974,36 +2870,42 @@ router.get(
 // ==========================================================================
 
 // ---------------------------------------------------------------------------
-// GET /enterprise/usage — Usage metrics
+// GET /enterprise/usage — Durable usage-metrics capability gate
 // ---------------------------------------------------------------------------
 router.get(
   '/usage',
   requireEnterpriseContext(ENTERPRISE_AUDIT_ROLES),
   validate({ query: PeriodQuerySchema }),
-  async (req: Request, res: Response): Promise<void> => {
-    try {
-      const clientId = getClientId(req);
-      const { period: periodDays = 30 } = req.query as unknown as z.infer<
-        typeof PeriodQuerySchema
-      >;
-      const analytics = await apiGateway.getAnalytics(clientId, periodDays);
-      res.status(200).json({ data: analytics });
-    } catch (err) {
-      const error = err as Error & { statusCode?: number; code?: string };
-      logger.error('usage_error', { error: error.message });
-      res.status(error.statusCode ?? 500).json({
-        error: error.message,
-        code: error.code ?? 'USAGE_ERROR',
-      });
-    }
+  (req: Request, res: Response): void => {
+    sendEnterpriseControlPlaneUnavailable(req, res, 'usage_analytics');
   },
 );
 
 // ---------------------------------------------------------------------------
-// GET /enterprise/sdk/metadata — SDK generation metadata
+// GET /enterprise/sdk/metadata — Published SDK-contract capability gate
 // ---------------------------------------------------------------------------
-router.get('/sdk/metadata', (_req: Request, res: Response): void => {
-  res.status(200).json({ data: apiGateway.getSDKMetadata() });
-});
+router.get(
+  '/sdk/metadata',
+  requireEnterpriseContext(ENTERPRISE_READ_ROLES),
+  (req: Request, res: Response): void => {
+    try {
+      getClientId(req);
+    } catch (err) {
+      const error = err as Error & { statusCode?: number; code?: string };
+      res.status(error.statusCode ?? 403).json({
+        error: error.message,
+        code: error.code ?? 'ENTERPRISE_CONTEXT_REQUIRED',
+      });
+      return;
+    }
+
+    res.status(501).json({
+      error:
+        'Enterprise SDK metadata is unavailable because no production API contract is published',
+      code: 'ENTERPRISE_SDK_METADATA_NOT_IMPLEMENTED',
+      status: 'not_implemented',
+    });
+  },
+);
 
 export default router;

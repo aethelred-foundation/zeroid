@@ -3,7 +3,6 @@ import { createLogger, format, transports } from 'winston';
 import crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
-import { isProductionRuntime } from '../production-safety';
 
 // ---------------------------------------------------------------------------
 // Logger
@@ -324,9 +323,9 @@ export class RegulatoryReportingService {
       },
       amendments: [],
       filingReference: null,
-      exportFormats: ['json', 'xml', 'pdf'],
+      exportFormats: ['json', 'xml'],
       evidenceTrail: [],
-      authorityManifest: this.buildAuthorityManifest('SAR', parsed.filingInstitution.jurisdiction, reportId, 1, ['json', 'xml', 'pdf']),
+      authorityManifest: this.buildAuthorityManifest('SAR', parsed.filingInstitution.jurisdiction, reportId, 1, ['json', 'xml']),
     };
 
     this.saveReport(report);
@@ -365,9 +364,9 @@ export class RegulatoryReportingService {
       },
       amendments: [],
       filingReference: null,
-      exportFormats: ['json', 'xml', 'pdf'],
+      exportFormats: ['json', 'xml'],
       evidenceTrail: [],
-      authorityManifest: this.buildAuthorityManifest('CTR', parsed.filingInstitution.jurisdiction, reportId, 1, ['json', 'xml', 'pdf']),
+      authorityManifest: this.buildAuthorityManifest('CTR', parsed.filingInstitution.jurisdiction, reportId, 1, ['json', 'xml']),
     };
 
     this.saveReport(report);
@@ -409,9 +408,9 @@ export class RegulatoryReportingService {
       },
       amendments: [],
       filingReference: null,
-      exportFormats: ['json', 'xml', 'pdf'],
+      exportFormats: ['json', 'xml'],
       evidenceTrail: [],
-      authorityManifest: this.buildAuthorityManifest('STR', `AE-${parsed.filingInstitution.emirate}`, reportId, 1, ['json', 'xml', 'pdf']),
+      authorityManifest: this.buildAuthorityManifest('STR', `AE-${parsed.filingInstitution.emirate}`, reportId, 1, ['json', 'xml']),
     };
 
     this.saveReport(report);
@@ -425,119 +424,18 @@ export class RegulatoryReportingService {
   // DSAR fulfillment
   // -------------------------------------------------------------------------
   async fulfillDSAR(request: DSARRequest, organizationId?: string): Promise<GeneratedReport> {
-    const parsed = DSARRequestSchema.parse(request);
+    DSARRequestSchema.parse(request);
+    void organizationId;
     this.assertDataSubjectRightsConnectorAvailable();
-    const reportId = crypto.randomUUID();
-
-    // Development-only local collection placeholder.
-    const collectedData: Record<string, unknown> = {};
-    for (const category of parsed.dataCategories) {
-      collectedData[category] = {
-        status: 'collected',
-        recordCount: Math.floor(Math.random() * 50) + 1,
-        lastUpdated: new Date().toISOString(),
-        retentionPolicy: this.getRetentionPolicyForCategory(category),
-      };
-    }
-
-    const report: GeneratedReport = {
-      reportId,
-      ...(organizationId ? { organizationId } : {}),
-      reportType: 'DSAR',
-      version: 1,
-      status: 'pending_review',
-      filingJurisdiction: parsed.jurisdiction,
-      generatedAt: new Date().toISOString(),
-      submittedAt: null,
-      expiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
-      content: {
-        requestorId: parsed.requestorId,
-        requestorEmail: parsed.requestorEmail,
-        requestType: parsed.requestType,
-        dataCategories: parsed.dataCategories,
-        collectedData,
-        responseDeadline: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
-        gdprArticle: parsed.requestType === 'access' ? '15' : parsed.requestType === 'portability' ? '20' : '16',
-        verificationStatus: 'verified',
-        thirdPartyDisclosures: [],
-        automaticProcessing: true,
-      },
-      amendments: [],
-      filingReference: null,
-      exportFormats: ['json', 'csv', 'pdf'],
-      evidenceTrail: [],
-      authorityManifest: this.buildAuthorityManifest('DSAR', parsed.jurisdiction, reportId, 1, ['json', 'csv', 'pdf']),
-    };
-
-    this.saveReport(report);
-
-    logger.info('dsar_fulfilled', { reportId, requestorId: parsed.requestorId, categories: parsed.dataCategories });
-    return report;
   }
 
   // -------------------------------------------------------------------------
   // Right-to-erasure with cryptographic erasure
   // -------------------------------------------------------------------------
   async processErasure(request: ErasureRequest, organizationId?: string): Promise<GeneratedReport> {
-    const parsed = ErasureRequestSchema.parse(request);
+    ErasureRequestSchema.parse(request);
+    void organizationId;
     this.assertDataSubjectRightsConnectorAvailable();
-    const reportId = crypto.randomUUID();
-
-    const erasureResults: Record<string, { erased: boolean; method: string; retainedReason?: string; retainUntil?: string }> = {};
-
-    for (const category of parsed.dataCategories) {
-      const override = parsed.retentionOverrides.find((o) => o.category === category);
-      if (override) {
-        erasureResults[category] = {
-          erased: false,
-          method: 'retention_override',
-          retainedReason: override.reason,
-          retainUntil: override.retainUntil,
-        };
-      } else {
-        // Cryptographic erasure — destroy encryption keys
-        const erasureKeyId = crypto.randomUUID();
-        erasureResults[category] = {
-          erased: true,
-          method: 'cryptographic_erasure',
-        };
-        logger.info('cryptographic_erasure_executed', { category, erasureKeyId, requestorId: parsed.requestorId });
-      }
-    }
-
-    const report: GeneratedReport = {
-      reportId,
-      ...(organizationId ? { organizationId } : {}),
-      reportType: 'ERASURE',
-      version: 1,
-      status: 'submitted',
-      filingJurisdiction: parsed.jurisdiction,
-      generatedAt: new Date().toISOString(),
-      submittedAt: new Date().toISOString(),
-      expiresAt: null,
-      content: {
-        requestorId: parsed.requestorId,
-        requestorEmail: parsed.requestorEmail,
-        reason: parsed.reason,
-        erasureResults,
-        gdprArticle: '17',
-        completionTimestamp: new Date().toISOString(),
-        verificationStatus: 'verified',
-        dataProcessorsNotified: ['credential_store', 'verification_cache', 'analytics_pipeline'],
-        backupPurgePending: true,
-        backupPurgeDeadline: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString(),
-      },
-      amendments: [],
-      filingReference: null,
-      exportFormats: ['json', 'pdf'],
-      evidenceTrail: [],
-      authorityManifest: this.buildAuthorityManifest('ERASURE', parsed.jurisdiction, reportId, 1, ['json', 'pdf']),
-    };
-
-    this.saveReport(report);
-
-    logger.info('erasure_processed', { reportId, requestorId: parsed.requestorId, categoriesErased: Object.keys(erasureResults).filter((k) => erasureResults[k].erased).length });
-    return report;
   }
 
   // -------------------------------------------------------------------------
@@ -582,9 +480,9 @@ export class RegulatoryReportingService {
       },
       amendments: [],
       filingReference: null,
-      exportFormats: ['json', 'xml', 'pdf', 'csv'],
+      exportFormats: ['json', 'xml', 'csv'],
       evidenceTrail: [],
-      authorityManifest: this.buildAuthorityManifest('AUDIT', jurisdiction, reportId, 1, ['json', 'xml', 'pdf', 'csv']),
+      authorityManifest: this.buildAuthorityManifest('AUDIT', jurisdiction, reportId, 1, ['json', 'xml', 'csv']),
     };
 
     this.saveReport(report);
@@ -691,24 +589,11 @@ export class RegulatoryReportingService {
       throw new ReportingError('Report already submitted', 'ALREADY_SUBMITTED', 409);
     }
 
-    if (isProductionRuntime()) {
-      throw new ReportingError(
-        'Regulatory authority submission connector is required in production',
-        'REPORT_SUBMISSION_CONNECTOR_REQUIRED',
-        503,
-      );
-    }
-
-    // Simulate regulatory API submission
-    const filingReference = `${report.reportType}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
-    report.filingReference = filingReference;
-    report.submittedAt = new Date().toISOString();
-    report.status = 'submitted';
-
-    this.saveReport(report);
-    logger.info('report_submitted', { reportId, filingReference, reportType: report.reportType });
-
-    return { filingReference, submittedAt: report.submittedAt };
+    throw new ReportingError(
+      'Regulatory authority submission connector is required',
+      'REPORT_SUBMISSION_CONNECTOR_REQUIRED',
+      503,
+    );
   }
 
   // -------------------------------------------------------------------------
@@ -724,6 +609,14 @@ export class RegulatoryReportingService {
       throw new ReportingError(`Report not found: ${reportId}`, 'REPORT_NOT_FOUND', 404);
     }
 
+    if (format === 'pdf') {
+      throw new ReportingError(
+        'A real PDF renderer is not configured for regulatory exports',
+        'PDF_EXPORT_RENDERER_UNAVAILABLE',
+        501,
+      );
+    }
+
     if (!report.exportFormats.includes(format)) {
       throw new ReportingError(`Format ${format} not supported for ${report.reportType}`, 'FORMAT_NOT_SUPPORTED', 400);
     }
@@ -737,8 +630,6 @@ export class RegulatoryReportingService {
         return { data: this.toXML(report), contentType: 'application/xml', filename: `${filename}.xml` };
       case 'csv':
         return { data: this.toCSV(report), contentType: 'text/csv', filename: `${filename}.csv` };
-      case 'pdf':
-        return { data: Buffer.from(JSON.stringify(report)).toString('base64'), contentType: 'application/pdf', filename: `${filename}.pdf` };
       default:
         throw new ReportingError(`Unknown format: ${format}`, 'UNKNOWN_FORMAT', 400);
     }
@@ -929,15 +820,22 @@ export class RegulatoryReportingService {
 
   private saveReport(report: GeneratedReport): void {
     this.assertReportStoreAvailable();
+    if (!report.organizationId) {
+      throw new ReportingError(
+        'Regulatory reports must be bound to an organization',
+        'REGULATORY_REPORT_TENANT_REQUIRED',
+        503,
+      );
+    }
     this.reports.set(report.reportId, report);
     this.persistReport(report);
   }
 
   private assertReportStoreAvailable(): void {
-    if (!isProductionRuntime() || this.storeDir) return;
+    if (this.storeDir) return;
 
     throw new ReportingError(
-      'Durable regulatory report store is required in production',
+      'Durable regulatory report store is required',
       'REGULATORY_REPORT_STORE_REQUIRED',
       503,
     );
@@ -1023,11 +921,9 @@ export class RegulatoryReportingService {
     );
   }
 
-  private assertDataSubjectRightsConnectorAvailable(): void {
-    if (!isProductionRuntime()) return;
-
+  private assertDataSubjectRightsConnectorAvailable(): never {
     throw new ReportingError(
-      'Data subject rights connector is required in production',
+      'Data subject rights connector is required',
       'DATA_SUBJECT_RIGHTS_CONNECTOR_REQUIRED',
       503,
     );
@@ -1087,20 +983,6 @@ export class RegulatoryReportingService {
     }
 
     return ['portal_upload', 'api', 'sftp'];
-  }
-
-  private getRetentionPolicyForCategory(category: string): { days: number; basis: string } {
-    const policies: Record<string, { days: number; basis: string }> = {
-      personal_data: { days: 1825, basis: 'GDPR Art. 5(1)(e)' },
-      financial_data: { days: 2555, basis: 'AML Directive / FinCEN' },
-      biometric_data: { days: 365, basis: 'GDPR Art. 9' },
-      credential_history: { days: 1825, basis: 'eIDAS Regulation' },
-      verification_history: { days: 1825, basis: 'KYC/AML Requirements' },
-      consent_records: { days: 1825, basis: 'GDPR Art. 7(1)' },
-      communication_logs: { days: 365, basis: 'Internal Policy' },
-      processing_activities: { days: 1825, basis: 'GDPR Art. 30' },
-    };
-    return policies[category] ?? { days: 1825, basis: 'Default Policy' };
   }
 
   private groupBy(reports: GeneratedReport[], key: keyof GeneratedReport): Record<string, number> {

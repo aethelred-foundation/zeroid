@@ -1,29 +1,20 @@
 /**
  * useIdentity — Hook for managing self-sovereign identity (DID) lifecycle.
  *
- * Handles DID creation, profile reads/updates, delegate control,
- * and recovery via on-chain registry + API layer.
+ * Handles DID creation, profile reads/updates, and controller-authorized
+ * delegate transactions against the on-chain registry.
  */
 
 import { useCallback } from "react";
-import {
-  useAccount,
-  useReadContract,
-  useSignMessage,
-  useWriteContract,
-} from "wagmi";
+import { useAccount, useReadContract } from "wagmi";
+import { useSafeWriteContract } from "./useSafeWriteContract";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { type Address, type Hash } from "viem";
 import { toast } from "sonner";
 import { apiClient } from "@/lib/api/client";
 import {
-  buildRegistrationMessage,
-  extractRegistrationPublicKey,
+  createIdentityRegistrationUnavailableError,
   getIdentityAuthToken,
-  getRegistrationDid,
-  normalizeRecoveryHash,
-  recoverRegistrationPublicKey,
-  storeIdentityAuthToken,
 } from "@/lib/identity/registration";
 import {
   IDENTITY_REGISTRY_ADDRESS,
@@ -32,7 +23,6 @@ import {
 import type {
   IdentityProfile,
   DIDDocument,
-  DelegateRecord,
   CreateIdentityParams,
   UpdateProfileParams,
   Bytes32,
@@ -40,6 +30,21 @@ import type {
 
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000" as Address;
 const EMPTY_BYTES32 = `0x${"0".repeat(64)}` as Bytes32;
+const MAX_DELEGATION_DURATION_SECONDS = 365n * 24n * 60n * 60n;
+
+function isNonZeroDidHash(value: unknown): value is Bytes32 {
+  return (
+    typeof value === "string" &&
+    /^0x[0-9a-fA-F]{64}$/.test(value) &&
+    value.toLowerCase() !== EMPTY_BYTES32
+  );
+}
+
+function finiteRecordCount(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+    ? value
+    : undefined;
+}
 
 // ---------------------------------------------------------------------------
 // On-chain DID resolution
@@ -51,24 +56,16 @@ export function useOnChainIdentity() {
   const { data: didHash, isLoading: isDIDLoading } = useReadContract({
     address: IDENTITY_REGISTRY_ADDRESS as Address,
     abi: IDENTITY_REGISTRY_ABI,
-    functionName: "identityOf",
-    args: address ? [address] : undefined,
-    query: { enabled: !!address },
-  });
-
-  const { data: delegates, isLoading: isDelegatesLoading } = useReadContract({
-    address: IDENTITY_REGISTRY_ADDRESS as Address,
-    abi: IDENTITY_REGISTRY_ABI,
-    functionName: "getDelegates",
+    functionName: "resolveByController",
     args: address ? [address] : undefined,
     query: { enabled: !!address },
   });
 
   return {
     didHash: didHash as string | undefined,
-    delegates: (delegates as DelegateRecord[]) ?? [],
-    isLoading: isDIDLoading || isDelegatesLoading,
-    hasIdentity: !!didHash && didHash !== "0x",
+    isLoading: isDIDLoading,
+    // Only an actual non-zero bytes32 response is registration evidence.
+    hasIdentity: isNonZeroDidHash(didHash),
   };
 }
 
@@ -76,13 +73,31 @@ export function useOnChainIdentity() {
 // Identity profile (off-chain, API-backed)
 // ---------------------------------------------------------------------------
 
+/** True for the backend's "no identity for this address" 404. */
+function isNotRegistered(error: unknown): boolean {
+  const statusCode = (error as { statusCode?: number })?.statusCode;
+  const code = (error as { code?: string })?.code;
+  return statusCode === 404 || code === "IDENTITY_ADDRESS_NOT_FOUND";
+}
+
 export function useIdentityProfile() {
   const { address } = useAccount();
 
   return useQuery({
     queryKey: ["identity", "profile", address],
-    queryFn: () =>
-      apiClient.get<IdentityProfile>(`/api/v1/identity/address/${address}`),
+    queryFn: async (): Promise<IdentityProfile | null> => {
+      try {
+        return await apiClient.get<IdentityProfile>(
+          `/api/v1/identity/address/${address}`,
+        );
+      } catch (error) {
+        // A wallet with no ZeroID yet resolves to 404 — the normal first-run
+        // state, not a failure. Null lets the UI show the onboarding prompt
+        // instead of an error card; genuine errors still propagate.
+        if (isNotRegistered(error)) return null;
+        throw error;
+      }
+    },
     enabled: !!address,
     staleTime: 30_000,
   });
@@ -93,59 +108,17 @@ export function useIdentityProfile() {
 // ---------------------------------------------------------------------------
 
 export function useCreateIdentity() {
-  const queryClient = useQueryClient();
-  const { writeContractAsync } = useWriteContract();
-  const { signMessageAsync } = useSignMessage();
-  const { address } = useAccount();
-
   return useMutation({
-    mutationFn: async (params: CreateIdentityParams): Promise<Hash> => {
-      const recoveryHash = normalizeRecoveryHash(params.didDocumentHash);
-      const did = getRegistrationDid(params.didDocument, address);
-      let publicKey = extractRegistrationPublicKey(params.publicKeys);
-
-      if (!publicKey) {
-        if (!address) {
-          throw new Error("Wallet must be connected to register an identity.");
-        }
-        const message = buildRegistrationMessage({
-          did,
-          controller: address,
-          recoveryHash,
-        });
-        const signature = await signMessageAsync({ message });
-        publicKey = await recoverRegistrationPublicKey(message, signature);
-      }
-
-      // Register DID document hash on-chain
-      const hash = await writeContractAsync({
-        address: IDENTITY_REGISTRY_ADDRESS as Address,
-        abi: IDENTITY_REGISTRY_ABI,
-        functionName: "registerIdentity",
-        args: [params.didDocumentHash, params.recoveryAddress],
-      });
-
-      // Persist full DID document via API
-      const registration = await apiClient.registerIdentity({
-        did,
-        publicKey,
-        recoveryHash,
-        metadata: {
-          controller: address?.toLowerCase(),
-          txHash: hash,
-          didDocument: params.didDocument,
-        },
-      });
-      storeIdentityAuthToken(registration.token);
-
-      return hash;
-    },
-    onSuccess: () => {
-      toast.success("Identity created successfully");
-      queryClient.invalidateQueries({ queryKey: ["identity"] });
+    mutationFn: async (_params: CreateIdentityParams): Promise<Hash> => {
+      // Do not ask for a signature or submit an irreversible wallet
+      // transaction while the API cannot independently bind the confirmed
+      // registry event to the identity being persisted.
+      throw createIdentityRegistrationUnavailableError();
     },
     onError: (err: Error) => {
-      toast.error("Failed to create identity", { description: err.message });
+      toast.error("Identity registration unavailable", {
+        description: err.message,
+      });
     },
   });
 }
@@ -209,11 +182,14 @@ function toBackendProfileUpdate(params: UpdateProfileParams): {
 // ---------------------------------------------------------------------------
 
 export function useIdentity() {
-  const { didHash, hasIdentity, delegates, isLoading } = useOnChainIdentity();
+  const { didHash, hasIdentity, isLoading } = useOnChainIdentity();
   const profileQuery = useIdentityProfile();
   const profile = profileQuery.data;
   const createMutation = useCreateIdentity();
-  const { delegateControl, revokeDelegate } = useDelegateControl();
+  const {
+    delegateControl: submitDelegateTransaction,
+    revokeDelegate: submitRevokeDelegateTransaction,
+  } = useDelegateControl();
   const { address } = useAccount();
 
   const createIdentity = useCallback(
@@ -221,7 +197,9 @@ export function useIdentity() {
       createMutation.mutateAsync({
         didDocumentHash: params?.didDocumentHash ?? EMPTY_BYTES32,
         recoveryAddress: params?.recoveryAddress ?? address ?? ZERO_ADDRESS,
-        didDocument: params?.didDocument ?? { id: "did:aethelred:pending" },
+        // No placeholder id: getRegistrationDid derives the canonical
+        // address-bound DID when the document carries none.
+        didDocument: params?.didDocument ?? {},
         publicKeys: params?.publicKeys ?? [],
       }),
     [address, createMutation],
@@ -231,21 +209,55 @@ export function useIdentity() {
     typeof profile?.did === "string"
       ? profile.did
       : (profile?.did?.uri ?? didHash);
+  const profileEvidence = profile as unknown as
+    | Record<string, unknown>
+    | null
+    | undefined;
+
+  const delegateControl = useCallback(
+    async (delegateAddress: Address, durationSeconds: bigint) => {
+      if (!isNonZeroDidHash(didHash)) {
+        throw new Error(
+          "A confirmed on-chain DID is required before adding a delegate.",
+        );
+      }
+      return submitDelegateTransaction(
+        didHash,
+        delegateAddress,
+        durationSeconds,
+      );
+    },
+    [didHash, submitDelegateTransaction],
+  );
+
+  const revokeDelegate = useCallback(
+    async (delegateAddress: Address) => {
+      if (!isNonZeroDidHash(didHash)) {
+        throw new Error(
+          "A confirmed on-chain DID is required before revoking a delegate.",
+        );
+      }
+      return submitRevokeDelegateTransaction(didHash, delegateAddress);
+    },
+    [didHash, submitRevokeDelegateTransaction],
+  );
 
   return {
     identity: {
       did: normalizedDid,
       didHash,
       hasIdentity,
-      delegates,
       isRegistered: hasIdentity,
       profile: profile ?? null,
-      credentialCount: profile?.credentialCount ?? 0,
-      verificationCount: profile?.verificationCount ?? 0,
-      verificationStatus: profile?.verificationStatus ?? "unverified",
+      credentialCount: finiteRecordCount(profile?.credentialCount),
+      verificationCount: finiteRecordCount(profile?.verificationCount),
+      verificationStatus: profile?.verificationStatus,
+      status: profileEvidence?.status,
+      teeAttested: profileEvidence?.teeAttested,
+      governmentVerified: profileEvidence?.governmentVerified,
+      verificationEvidence: profileEvidence?.verificationEvidence,
       createdAt: profile?.createdAt,
     },
-    delegates,
     isLoading: isLoading || profileQuery.isLoading,
     error: profileQuery.error as Error | null,
     createIdentity,
@@ -257,15 +269,30 @@ export function useIdentity() {
 
 export function useDelegateControl() {
   const queryClient = useQueryClient();
-  const { writeContractAsync } = useWriteContract();
+  const { writeContractAsync } = useSafeWriteContract();
 
   const delegateControl = useCallback(
-    async (delegateAddress: Address, expirySeconds: bigint): Promise<Hash> => {
+    async (
+      didHash: Bytes32,
+      delegateAddress: Address,
+      durationSeconds: bigint,
+    ): Promise<Hash> => {
+      if (!isNonZeroDidHash(didHash)) {
+        throw new Error("Delegation requires a non-zero DID hash.");
+      }
+      if (
+        durationSeconds <= 0n ||
+        durationSeconds > MAX_DELEGATION_DURATION_SECONDS
+      ) {
+        throw new Error(
+          "Delegation duration must be between 1 second and 365 days.",
+        );
+      }
       const hash = await writeContractAsync({
         address: IDENTITY_REGISTRY_ADDRESS as Address,
         abi: IDENTITY_REGISTRY_ABI,
         functionName: "addDelegate",
-        args: [delegateAddress, expirySeconds],
+        args: [didHash, delegateAddress, durationSeconds],
       });
       toast.success("Delegate added");
       queryClient.invalidateQueries({ queryKey: ["identity"] });
@@ -275,12 +302,15 @@ export function useDelegateControl() {
   );
 
   const revokeDelegate = useCallback(
-    async (delegateAddress: Address): Promise<Hash> => {
+    async (didHash: Bytes32, delegateAddress: Address): Promise<Hash> => {
+      if (!isNonZeroDidHash(didHash)) {
+        throw new Error("Delegation revocation requires a non-zero DID hash.");
+      }
       const hash = await writeContractAsync({
         address: IDENTITY_REGISTRY_ADDRESS as Address,
         abi: IDENTITY_REGISTRY_ABI,
         functionName: "revokeDelegate",
-        args: [delegateAddress],
+        args: [didHash, delegateAddress],
       });
       toast.success("Delegate revoked");
       queryClient.invalidateQueries({ queryKey: ["identity"] });

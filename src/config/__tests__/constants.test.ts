@@ -7,6 +7,7 @@ import {
   GOVERNANCE_ABI,
   GOVERNANCE_TOKEN_ABI,
   ZK_VERIFIER_ABI,
+  TEE_REGISTRY_ABI,
   GOVERNANCE_ADDRESS,
   GOVERNANCE_TOKEN_ADDRESS,
   ZK_VERIFIER_ADDRESS,
@@ -49,6 +50,30 @@ describe("constants - ABIs", () => {
     expect(IDENTITY_REGISTRY_ABI.length).toBeGreaterThan(0);
   });
 
+  it("matches the deployed DID-bound delegate function signatures", () => {
+    expect(
+      IDENTITY_REGISTRY_ABI.find((item: any) => item.name === "addDelegate"),
+    ).toEqual(
+      expect.objectContaining({
+        inputs: [
+          { name: "didHash", type: "bytes32" },
+          { name: "delegate", type: "address" },
+          { name: "duration", type: "uint64" },
+        ],
+      }),
+    );
+    expect(
+      IDENTITY_REGISTRY_ABI.find((item: any) => item.name === "revokeDelegate"),
+    ).toEqual(
+      expect.objectContaining({
+        inputs: [
+          { name: "didHash", type: "bytes32" },
+          { name: "delegate", type: "address" },
+        ],
+      }),
+    );
+  });
+
   it("exports CREDENTIAL_REGISTRY_ABI with getCredential function", () => {
     const fn = CREDENTIAL_REGISTRY_ABI.find(
       (item: any) => item.name === "getCredential",
@@ -63,7 +88,38 @@ describe("constants - ABIs", () => {
 
   it("exports ZK_VERIFIER_ABI with verifyProof function", () => {
     const fn = ZK_VERIFIER_ABI.find((item: any) => item.name === "verifyProof");
-    expect(fn).toBeDefined();
+    expect(fn).toEqual(
+      expect.objectContaining({
+        stateMutability: "view",
+        inputs: [
+          { name: "circuitId", type: "bytes32" },
+          {
+            name: "proof",
+            type: "tuple",
+            components: [
+              { name: "a", type: "uint256[2]" },
+              { name: "b", type: "uint256[2][2]" },
+              { name: "c", type: "uint256[2]" },
+            ],
+          },
+          { name: "publicInputs", type: "uint256[]" },
+        ],
+        outputs: [{ name: "", type: "bool" }],
+      }),
+    );
+  });
+
+  it("exports the TEE registry boolean validity query", () => {
+    const fn = TEE_REGISTRY_ABI.find(
+      (item: any) => item.name === "isAttestationValid",
+    );
+    expect(fn).toEqual(
+      expect.objectContaining({
+        stateMutability: "view",
+        inputs: [{ name: "enclaveHash", type: "bytes32" }],
+        outputs: [{ name: "", type: "bool" }],
+      }),
+    );
   });
 });
 
