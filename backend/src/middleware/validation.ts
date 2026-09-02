@@ -212,10 +212,21 @@ export const clientIdentityMetadataSchema = z
       )
       .optional(),
     didDocument: z.record(z.unknown()).optional(),
-    didHash: z.string().regex(/^0x[a-fA-F0-9]{64}$/).optional(),
-    txHash: z.string().regex(/^0x[a-fA-F0-9]{64}$/).optional(),
   })
   .strict();
+
+/**
+ * Hash of the registerIdentity transaction the browser submitted. It is the
+ * only chain reference the client supplies; everything it implies (target,
+ * sender, arguments, event, registry state) is re-derived by the verifier.
+ */
+export const registryTxHashSchema = z
+  .string()
+  .regex(
+    /^0x[0-9a-fA-F]{64}$/,
+    'Registry transaction hash must be a 32-byte hex hash',
+  )
+  .transform((value) => value.toLowerCase());
 
 export const registerIdentitySchema = z
   .object({
@@ -224,6 +235,7 @@ export const registerIdentitySchema = z
     publicKey: publicKeySchema,
     recoveryHash: recoveryHashSchema.transform((value) => value.toLowerCase()),
     signature: walletRegistrationSignatureSchema,
+    txHash: registryTxHashSchema,
     displayName: z.string().min(1).max(100).optional(),
     metadata: clientIdentityMetadataSchema.optional(),
   })

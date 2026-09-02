@@ -11,6 +11,23 @@ import {
   buildClientIdentityMetadata,
   findNonClientWritableIdentityMetadataKey,
 } from '../utils/identity-metadata';
+import {
+  createIdentityRegistryProvider,
+  destroyProvider,
+  IdentityRegistryConfigurationError,
+  loadIdentityRegistryConfiguration,
+  type IdentityRegistryConfiguration,
+} from '../lib/identity-registry-config';
+import {
+  assertCanonicalChainSnapshot,
+  CanonicalTransactionError,
+} from '../lib/canonical-chain-transaction';
+import {
+  IdentityRegistryVerificationError,
+  mapCanonicalFailure,
+  verifyIdentityRegistration,
+  type VerifiedIdentityRegistration,
+} from './identity-registry-verification';
 // tee import removed — not used in this module
 import { IdentityStatus } from '@prisma/client';
 import nodeCrypto from 'crypto';
@@ -27,6 +44,8 @@ export interface RegisterIdentityRequest {
   publicKey: string;
   recoveryHash: string;
   signature: string;
+  /** Hash of the registerIdentity transaction the wallet submitted. */
+  txHash: string;
   displayName?: string;
   metadata?: Record<string, unknown>;
 }
@@ -70,6 +89,15 @@ export class IdentityService {
   // -------------------------------------------------------------------------
   // Register a new identity
   // -------------------------------------------------------------------------
+  /**
+   * Registration order is deliberate: everything that can be decided without
+   * the chain (metadata allowlist, DID conflicts, verifier configuration, DID
+   * network policy, the wallet proof, replay pre-checks) runs first, so a
+   * request that will be refused never spends an RPC call. The chain is then
+   * read once through the verifier, re-checked at the persistence boundary
+   * inside the same transaction as the identity and audit rows, and only a
+   * committed identity is issued a session.
+   */
   async register(request: RegisterIdentityRequest): Promise<{
     identity: IdentityResponse;
     token: string;
@@ -87,6 +115,9 @@ export class IdentityService {
     if (existing) {
       throw new IdentityError('DID already registered', 'IDENTITY_DID_EXISTS', 409);
     }
+
+    const config = this.loadRegistryConfiguration();
+    this.assertDidNetworkAllowed(did, config);
 
     // The server, not the browser, reconstructs the signed message from the
     // normalized fields and configured origin/chain. The returned values are
@@ -112,63 +143,136 @@ export class IdentityService {
       throw new IdentityError('Invalid recovery hash format', 'IDENTITY_INVALID_RECOVERY_HASH');
     }
 
+    const txHash = this.normalizeRegistryTxHash(request.txHash);
+    await this.assertRegistryEvidenceUnused(txHash, verifiedProof.controller);
+
+    const provider = createIdentityRegistryProvider(config);
     let identity;
     try {
-      identity = await this.runIdentityAuditTransaction(async (tx) => {
-        const created = await tx.identity.create({
-          data: {
+      let evidence: VerifiedIdentityRegistration;
+      try {
+        // The recovery hash is compared against the chain in plaintext; the
+        // pepper is applied only to the value stored at rest.
+        evidence = await verifyIdentityRegistration(
+          {
+            txHash,
             did: verifiedProof.did,
-            publicKey: verifiedProof.publicKey,
-            recoveryHash: this.protectRecoveryHash(verifiedProof.recoveryHash),
-            displayName: request.displayName,
-            metadata: buildClientIdentityMetadata(
-              request.metadata,
-              verifiedProof.controller,
-            ) as any,
-            status: 'ACTIVE',
-            delegatedTo: [],
+            controller: verifiedProof.controller,
+            recoveryHash: verifiedProof.recoveryHash,
           },
-        });
-
-        await tx.auditLog.create({
-          data: {
-            identityId: created.id,
-            action: 'IDENTITY_CREATED',
-            resourceType: 'identity',
-            resourceId: created.id,
-            details: {
-              did: verifiedProof.did,
-              controller: verifiedProof.controller,
-              proofVersion: 'zeroid.identity.registration.v1',
-              displayName: request.displayName,
-            },
-          },
-        });
-
-        return created;
-      });
-    } catch (error) {
-      // Two identical signed requests can pass the read check concurrently.
-      // The database unique constraint remains authoritative; translate that
-      // race into the same stable 409 as an ordinary replay.
-      if ((error as { code?: unknown })?.code === 'P2002') {
-        throw new IdentityError('DID already registered', 'IDENTITY_DID_EXISTS', 409);
+          config,
+          provider,
+        );
+      } catch (error) {
+        throw this.mapRegistryVerificationError(error);
       }
-      throw error;
+
+      try {
+        identity = await this.runIdentityAuditTransaction(async (tx) => {
+          // Re-read the chain at the persistence boundary so a receipt that
+          // was orphaned or lost depth after verification cannot be persisted.
+          try {
+            await assertCanonicalChainSnapshot(
+              provider,
+              config,
+              evidence.blockNumber,
+              evidence.blockHash,
+              txHash,
+              config.minimumConfirmations,
+            );
+          } catch (error) {
+            throw this.mapRegistryVerificationError(error, config);
+          }
+
+          const registryVerifiedAt = new Date();
+          const created = await tx.identity.create({
+            data: {
+              did: verifiedProof.did,
+              publicKey: verifiedProof.publicKey,
+              recoveryHash: this.protectRecoveryHash(verifiedProof.recoveryHash),
+              displayName: request.displayName,
+              metadata: buildClientIdentityMetadata(
+                request.metadata,
+                verifiedProof.controller,
+              ) as any,
+              status: 'ACTIVE',
+              delegatedTo: [],
+              registryChainId: evidence.chainId,
+              registryAddress: evidence.registryAddress,
+              registryTxHash: evidence.txHash,
+              registryBlockNumber: evidence.blockNumber,
+              registryBlockHash: evidence.blockHash,
+              registryDidHash: evidence.didHash,
+              registryController: evidence.controller,
+              registryEventTimestamp: evidence.eventTimestamp,
+              registryConfirmations: evidence.confirmations,
+              registryVerifiedAt,
+              registryVerificationVersion: evidence.verificationVersion,
+            },
+          });
+
+          await tx.auditLog.create({
+            data: {
+              identityId: created.id,
+              action: 'IDENTITY_CREATED',
+              resourceType: 'identity',
+              resourceId: created.id,
+              details: {
+                did: verifiedProof.did,
+                controller: verifiedProof.controller,
+                proofVersion: 'zeroid.identity.registration.v1',
+                displayName: request.displayName,
+                dataSource: evidence.dataSource,
+                txHash: evidence.txHash,
+                blockNumber: evidence.blockNumber,
+                blockHash: evidence.blockHash,
+                didHash: evidence.didHash,
+                confirmations: evidence.confirmations,
+                registryVerificationVersion: evidence.verificationVersion,
+              },
+            },
+          });
+
+          return created;
+        });
+      } catch (error) {
+        // Two identical signed requests can pass the read checks concurrently.
+        // The database unique constraints remain authoritative; translate that
+        // race into the same stable 409 as an ordinary replay.
+        if ((error as { code?: unknown })?.code === 'P2002') {
+          throw this.mapUniqueViolation(error);
+        }
+        throw error;
+      }
+    } finally {
+      destroyProvider(provider);
     }
 
-    // Generate authentication token
+    // The session is issued only for a committed identity.
     const { token, sessionId } = await generateToken(identity.id, identity.did);
 
-    // Cache identity lookup
-    await redis.set(
-      `identity:did:${verifiedProof.did}`,
-      JSON.stringify({ id: identity.id, did: identity.did, status: identity.status }),
-      'EX',
-      3600,
-    );
+    // Cache identity lookup. The cache is an optimization over the committed
+    // row (getIdentity falls back to the database), so a cache outage must not
+    // turn a verified, persisted registration into a failure.
+    try {
+      await redis.set(
+        `identity:did:${verifiedProof.did}`,
+        JSON.stringify({ id: identity.id, did: identity.did, status: identity.status }),
+        'EX',
+        3600,
+      );
+    } catch (error) {
+      logger.warn('identity_cache_write_failed', {
+        identityId: identity.id,
+        error: (error as Error).message,
+      });
+    }
 
-    logger.info('identity_registered', { identityId: identity.id, did: verifiedProof.did });
+    logger.info('identity_registered', {
+      identityId: identity.id,
+      did: verifiedProof.did,
+      txHash,
+    });
 
     return {
       identity: this.formatIdentity(identity),
@@ -322,6 +426,140 @@ export class IdentityService {
         400,
       );
     }
+  }
+
+  private loadRegistryConfiguration(): IdentityRegistryConfiguration {
+    try {
+      return loadIdentityRegistryConfiguration();
+    } catch (error) {
+      if (error instanceof IdentityRegistryConfigurationError) {
+        throw new IdentityError(error.message, error.code, error.statusCode);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * The DID network segment feeds the didHash the verifier expects, so a DID
+   * whose segment does not belong to the configured chain is refused before
+   * any proof or RPC work.
+   */
+  private assertDidNetworkAllowed(
+    did: string,
+    config: IdentityRegistryConfiguration,
+  ): void {
+    const network = did.split(':')[2];
+    if (!network || !config.allowedDidNetworks.includes(network)) {
+      throw new IdentityError(
+        `DID network "${network ?? ''}" is not served by chain ${config.chainId}; expected one of ${config.allowedDidNetworks.join(', ')}`,
+        'IDENTITY_DID_NETWORK_MISMATCH',
+        400,
+      );
+    }
+  }
+
+  private normalizeRegistryTxHash(value: string): string {
+    if (!/^0x[0-9a-fA-F]{64}$/.test(value)) {
+      throw new IdentityError(
+        'Registry transaction hash must be a 32-byte hex hash',
+        'VALIDATION_ERROR',
+        400,
+      );
+    }
+    return value.toLowerCase();
+  }
+
+  /**
+   * A transaction hash verifies exactly one identity and a controller owns
+   * exactly one verified registry row. Checked before any RPC call; the unique
+   * columns remain authoritative for concurrent requests.
+   */
+  private async assertRegistryEvidenceUnused(
+    txHash: string,
+    controller: string,
+  ): Promise<void> {
+    const byTxHash = await prisma.identity.findUnique({
+      where: { registryTxHash: txHash },
+    });
+    if (byTxHash) {
+      throw new IdentityError(
+        'This registry transaction has already been used to verify an identity',
+        'IDENTITY_REGISTRY_TX_ALREADY_USED',
+        409,
+      );
+    }
+
+    const byController = await prisma.identity.findUnique({
+      where: { registryController: controller },
+    });
+    if (byController) {
+      throw new IdentityError(
+        'This wallet already controls a verified identity',
+        'IDENTITY_CONTROLLER_EXISTS',
+        409,
+      );
+    }
+  }
+
+  private mapRegistryVerificationError(
+    error: unknown,
+    config?: IdentityRegistryConfiguration,
+  ): Error {
+    if (error instanceof IdentityRegistryVerificationError) {
+      return new IdentityError(error.message, error.code, error.statusCode);
+    }
+    if (error instanceof CanonicalTransactionError) {
+      if (!config) {
+        return new IdentityError(
+          'The registry transaction is not canonical on the configured chain',
+          'IDENTITY_REGISTRY_CHAIN_MISMATCH',
+          422,
+        );
+      }
+      const mapped = mapCanonicalFailure(error, config);
+      // At the persistence boundary nothing is retried: the receipt was
+      // canonical moments ago, so any divergence is a chain mismatch unless
+      // the RPC itself failed.
+      if (mapped.code === 'IDENTITY_REGISTRY_RPC_UNAVAILABLE') {
+        return new IdentityError(mapped.message, mapped.code, mapped.statusCode);
+      }
+      return new IdentityError(
+        'The registry transaction was no longer canonical when the identity was about to be persisted',
+        'IDENTITY_REGISTRY_CHAIN_MISMATCH',
+        422,
+      );
+    }
+    if (error instanceof IdentityRegistryConfigurationError) {
+      return new IdentityError(error.message, error.code, error.statusCode);
+    }
+    return error instanceof Error ? error : new Error(String(error));
+  }
+
+  private mapUniqueViolation(error: unknown): IdentityError {
+    const rawTarget = (error as { meta?: { target?: unknown } })?.meta?.target;
+    const targets = Array.isArray(rawTarget)
+      ? rawTarget.map(String)
+      : typeof rawTarget === 'string'
+        ? [rawTarget]
+        : [];
+    const hits = (column: string) =>
+      targets.some((target) => target.includes(column));
+
+    if (hits('registryTxHash')) {
+      return new IdentityError(
+        'This registry transaction has already been used to verify an identity',
+        'IDENTITY_REGISTRY_TX_ALREADY_USED',
+        409,
+      );
+    }
+    if (hits('registryController') || hits('registryDidHash')) {
+      return new IdentityError(
+        'This wallet already controls a verified identity',
+        'IDENTITY_CONTROLLER_EXISTS',
+        409,
+      );
+    }
+    return new IdentityError('DID already registered', 'IDENTITY_DID_EXISTS', 409);
   }
 
   private getControllerFromWalletDid(did: string): string {

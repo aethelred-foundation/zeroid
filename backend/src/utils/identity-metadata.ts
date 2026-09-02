@@ -1,8 +1,11 @@
+/**
+ * Registry evidence (transaction hash, DID hash, block, controller) is derived
+ * by the server-side verifier and stored in the identity's registry* columns.
+ * It is never accepted from the client, so those keys are not listed here.
+ */
 export const CLIENT_WRITABLE_IDENTITY_METADATA_KEYS = [
   'avatarUri',
   'didDocument',
-  'didHash',
-  'txHash',
 ] as const;
 
 const CLIENT_WRITABLE_IDENTITY_METADATA_KEY_SET = new Set<string>(
