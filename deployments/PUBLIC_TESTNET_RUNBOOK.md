@@ -474,7 +474,22 @@ AETHELRED_CHAIN_ID=7332
 CORS_ORIGINS=http://93.127.132.52:3003
 ZEROID_AUTH_ORIGIN=http://93.127.132.52:3003
 KMS_PROVIDER=local
+AETHELRED_RPC_URL=http://54.165.44.130:8545
+IDENTITY_REGISTRY_ADDRESS="$IDENTITY_REGISTRY"
+IDENTITY_REGISTRY_MIN_CONFIRMATIONS=1
 ```
+
+`IDENTITY_REGISTRY_ADDRESS` is the accepted manifest's `identityRegistry`
+(the `IDENTITY_REGISTRY` exported in section 9) and must equal the frontend's
+`NEXT_PUBLIC_IDENTITY_REGISTRY_ADDRESS`. The API verifies every wallet
+registration against `AETHELRED_RPC_URL`, so that node must serve the same
+chain state as the RPC compiled into the frontend and the RPC the test wallet
+uses. Until `AETHELRED_RPC_URL` and `IDENTITY_REGISTRY_ADDRESS` are set,
+`POST /api/v1/identity/register` answers `503 IDENTITY_REGISTRY_NOT_CONFIGURED`
+and `/ready` reports `identityRegistry: unavailable`. Leave
+`AETHELRED_NETWORK_ANCHOR_BLOCK` / `AETHELRED_NETWORK_ANCHOR_HASH` unset until a
+public-testnet anchor block has been agreed and recorded; chain id alone binds
+the network until then, which is the weaker guarantee.
 
 `NODE_ENV=development` is intentional for the public testnet's local credential
 signer. It is not acceptable for production. A production environment must
@@ -502,6 +517,20 @@ for attempt in {1..30}; do
   sleep 2
 done
 ```
+
+Prove that the API host can reach the verification RPC, that the node serves
+chain `7332`, and that the registry address holds code, before any registration
+is attempted:
+
+```bash
+docker compose exec api node dist/ops/identity-registry-smoke.js --probe
+curl --fail --silent http://127.0.0.1:4003/ready | jq .checks.identityRegistry
+```
+
+The probe must print `observedChainId: "7332"` and a non-zero
+`registryCodeBytes`; `/ready` must report `identityRegistry: "ok"`
+(`unavailable` means unconfigured or no code at the address; `degraded` means
+the RPC is unreachable or serves another chain id).
 
 The one-shot `migrate` service runs the read-only database preflight and then
 `prisma migrate deploy`. The API starts only after that service succeeds. If a
@@ -628,11 +657,23 @@ Browser checks:
 4. confirm the app reads from each configured core contract without console
    errors;
 5. submit one low-value test identity registration only after the read-only
-   checks pass;
-6. confirm the wallet prompts before signing and the receipt succeeds;
-7. resolve the new identity from a second session;
-8. keep proof issuance and optional external-provider flows disabled until
-   their readiness gates pass.
+   checks pass and `/ready` reports `identityRegistry: "ok"`;
+6. confirm the wallet prompts for the signature, then for the transaction, and
+   that the wizard shows "Identity Registered" only after the API has verified
+   the receipt (the button reads "Verifying..." during that step);
+7. if the wizard reports that the API's node has not seen the transaction yet
+   (`409 IDENTITY_REGISTRY_TX_NOT_MINED` or `409 IDENTITY_REGISTRY_TX_NOT_CONFIRMED`),
+   click "Register Identity" again after a few seconds; the signed proof and the
+   mined transaction are reused, no new signature or transaction is requested.
+   Repeated occurrences mean the browser, wallet and API RPCs do not share chain
+   state and must be aligned before continuing;
+8. confirm the API refused nothing else: any `422 IDENTITY_REGISTRY_*` response
+   is a verification failure that must be investigated with the transaction
+   hash, not retried;
+9. resolve the new identity from a second session and confirm
+   `GET /api/v1/identity/address/<address>` returns the DID;
+10. keep proof issuance and optional external-provider flows disabled until
+    their readiness gates pass.
 
 Record block number, transaction hash, wallet address, HTTP results, screenshot,
 and operator/reviewer names. Do not record seed phrases, private keys, bearer
@@ -665,9 +706,16 @@ A public-testnet setup is complete only when:
 - all six contract receipts and bytecodes are verified;
 - constructor relationships and admin custody match the manifest;
 - the manifest is reviewed and committed;
-- the API `/health` check passes and the `/ready` result is understood;
+- the API `/health` check passes and the `/ready` result is understood, with
+  `identityRegistry: "ok"` before the registration check;
 - the frontend production smoke passes with all compiled addresses and URLs;
-- one wallet-confirmed registration succeeds;
+- the browser, wallet and API RPCs share chain state (same node set for
+  `NEXT_PUBLIC_AETHELRED_TESTNET_RPC_URL`, the wallet's network RPC and
+  `AETHELRED_RPC_URL`);
+- one wallet-confirmed registration succeeds and the API verified it (the
+  identity row carries `registryTxHash`; transient
+  `409 IDENTITY_REGISTRY_TX_NOT_MINED` / `_NOT_CONFIRMED` retries are
+  acceptable, `422 IDENTITY_REGISTRY_*` refusals are not);
 - logs show no repeated errors;
 - rollback owners and evidence locations are recorded.
 
