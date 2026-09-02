@@ -21,13 +21,7 @@ import React, {
 
 import { useAccount, useSignMessage } from "wagmi";
 
-import type {
-  IdentityState,
-  IdentityProfile,
-  DID,
-  Bytes32,
-  Address,
-} from "@/types";
+import type { IdentityState, IdentityProfile, DID, Address } from "@/types";
 import { apiClient } from "@/lib/api/client";
 import type {
   CredentialSummary,
@@ -36,7 +30,6 @@ import type {
 import { friendlyWalletError } from "@/lib/wallet-errors";
 import {
   clearIdentityAuthToken,
-  createIdentityRegistrationUnavailableError,
   getIdentityAuthToken,
   storeIdentityAuthToken,
 } from "@/lib/identity/registration";
@@ -65,9 +58,6 @@ export type IdentityContextState = Omit<IdentityState, "credentials"> & {
 export interface IdentityContextValue {
   /** Current identity state */
   identity: IdentityContextState;
-
-  /** Register a new identity on-chain */
-  registerIdentity: (recoveryHash: Bytes32) => Promise<void>;
 
   /** Authenticate a registered identity with a one-time wallet signature. */
   signIn: () => Promise<void>;
@@ -387,23 +377,6 @@ export function IdentityProvider({ children }: { children: React.ReactNode }) {
   // Actions
   // -------------------------------------------------------------------------
 
-  const registerIdentity = useCallback(
-    async (_recoveryHash: Bytes32) => {
-      if (!did || !address) {
-        throw new Error("Wallet must be connected to register");
-      }
-
-      const error = createIdentityRegistrationUnavailableError();
-      setState((prev) => ({
-        ...prev,
-        isLoading: false,
-        error: error.message,
-      }));
-      throw error;
-    },
-    [did, address],
-  );
-
   const signIn = useCallback(async () => {
     if (!isConnected || !address) {
       throw new Error("Connect the registered wallet before signing in.");
@@ -564,7 +537,6 @@ export function IdentityProvider({ children }: { children: React.ReactNode }) {
   const value = useMemo<IdentityContextValue>(
     () => ({
       identity: state,
-      registerIdentity,
       signIn,
       sessionStatus,
       sessionError,
@@ -577,7 +549,6 @@ export function IdentityProvider({ children }: { children: React.ReactNode }) {
     }),
     [
       state,
-      registerIdentity,
       signIn,
       sessionStatus,
       sessionError,

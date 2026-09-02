@@ -5,21 +5,43 @@
  * delegate transactions against the on-chain registry.
  */
 
-import { useCallback } from "react";
-import { useAccount, useReadContract } from "wagmi";
+import { useCallback, useState } from "react";
+import {
+  useAccount,
+  usePublicClient,
+  useReadContract,
+  useSignMessage,
+} from "wagmi";
 import { useSafeWriteContract } from "./useSafeWriteContract";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { type Address, type Hash } from "viem";
+import { parseEventLogs, type Address, type Hash, type Hex } from "viem";
 import { toast } from "sonner";
 import { apiClient } from "@/lib/api/client";
 import {
-  createIdentityRegistrationUnavailableError,
+  buildRegistrationMessage,
+  clearPendingRegistration,
+  deriveRegistrationArtifacts,
   getIdentityAuthToken,
+  getPendingRegistration,
+  getRegistrationAuthContext,
+  getRegistrationDid,
+  isRetryableRegistrationCode,
+  recoverRegistrationPublicKey,
+  storeIdentityAuthToken,
+  storePendingRegistration,
+  type PendingRegistration,
 } from "@/lib/identity/registration";
+import {
+  CONTROLLER_ALREADY_BOUND_MESSAGE,
+  friendlyRegistrationError,
+  friendlyWalletError,
+  REGISTRY_PAUSED_MESSAGE,
+} from "@/lib/wallet-errors";
 import {
   IDENTITY_REGISTRY_ADDRESS,
   IDENTITY_REGISTRY_ABI,
 } from "@/config/constants";
+import { IdentityRegistryABI } from "@/config/abis";
 import type {
   IdentityProfile,
   DIDDocument,
@@ -107,20 +129,210 @@ export function useIdentityProfile() {
 // Mutations
 // ---------------------------------------------------------------------------
 
+/**
+ * Where a registration attempt currently is. Surfaced so the wizard can label
+ * its button honestly ("Signing…" vs "Confirming…") and so a retry after a
+ * retryable API refusal is visibly "Verifying…" only.
+ */
+export type RegistrationStage =
+  | "idle"
+  | "preflight"
+  | "signing"
+  | "submitting"
+  | "confirming"
+  | "verifying"
+  | "done";
+
+const RECEIPT_TIMEOUT_MS = 90_000;
+
+/**
+ * A retryable refusal (the API's node has not seen the receipt yet) and a
+ * service outage both leave the signed proof and the mined transaction
+ * valid, so the pending slot is kept for a later click. Any other refusal
+ * means these exact artifacts will never be accepted; clearing lets the next
+ * attempt run the pre-flight again, which then reports an already-bound
+ * wallet instead of paying for a ControllerAlreadyBound revert.
+ */
+function shouldKeepPendingRegistration(error: unknown): boolean {
+  const statusCode = (error as { statusCode?: number })?.statusCode;
+  const code = (error as { code?: string })?.code;
+  if (isRetryableRegistrationCode(code)) return true;
+  if (typeof statusCode === "number") return statusCode >= 500;
+  // No HTTP status at all: the request never reached the API.
+  return true;
+}
+
 export function useCreateIdentity() {
-  return useMutation({
-    mutationFn: async (_params: CreateIdentityParams): Promise<Hash> => {
-      // Do not ask for a signature or submit an irreversible wallet
-      // transaction while the API cannot independently bind the confirmed
-      // registry event to the identity being persisted.
-      throw createIdentityRegistrationUnavailableError();
+  const queryClient = useQueryClient();
+  const { writeContractAsync } = useSafeWriteContract();
+  const { signMessageAsync } = useSignMessage();
+  const { address } = useAccount();
+  const publicClient = usePublicClient();
+  const [stage, setStage] = useState<RegistrationStage>("idle");
+
+  const mutation = useMutation({
+    mutationFn: async (params: CreateIdentityParams): Promise<Hash> => {
+      if (!address) {
+        throw new Error("Wallet must be connected to register an identity.");
+      }
+      if (!publicClient) {
+        throw new Error(
+          "No RPC client for the active network — cannot verify the registry before registering.",
+        );
+      }
+
+      const registry = IDENTITY_REGISTRY_ADDRESS as Address;
+      const did = getRegistrationDid(params.didDocument, address);
+
+      // A previous attempt already signed, submitted and confirmed the
+      // transaction but the API refused with a retryable code (or was down).
+      // Re-POST those exact artifacts; never ask the wallet again.
+      let pending = getPendingRegistration(address);
+
+      if (!pending) {
+        setStage("preflight");
+        const paused = await publicClient.readContract({
+          address: registry,
+          abi: IdentityRegistryABI,
+          functionName: "paused",
+        });
+        if (paused) {
+          throw new Error(REGISTRY_PAUSED_MESSAGE);
+        }
+        const boundDidHash = await publicClient.readContract({
+          address: registry,
+          abi: IDENTITY_REGISTRY_ABI,
+          functionName: "resolveByController",
+          args: [address],
+        });
+        if (isNonZeroDidHash(boundDidHash)) {
+          throw new Error(CONTROLLER_ALREADY_BOUND_MESSAGE);
+        }
+
+        const recoveryController =
+          params.recoveryAddress && params.recoveryAddress !== ZERO_ADDRESS
+            ? params.recoveryAddress
+            : address;
+        const { didHash, recoveryHashHex, recoveryHash } =
+          deriveRegistrationArtifacts(did, recoveryController);
+
+        // A DID document key supplied by the wizard cannot prove control of
+        // the connected EVM account. Always request a wallet signature and
+        // derive the registration key from that exact proof.
+        setStage("signing");
+        const message = buildRegistrationMessage({
+          did,
+          controller: address,
+          recoveryHash,
+          ...getRegistrationAuthContext(),
+        });
+        let signature: Hex;
+        try {
+          signature = await signMessageAsync({ message });
+        } catch (error) {
+          throw friendlyWalletError(error);
+        }
+        const publicKey = await recoverRegistrationPublicKey(
+          message,
+          signature,
+        );
+
+        // Anchor the DID on-chain through the gas-buffered write (GAS-01:
+        // eth_estimateGas under-reports registerIdentity by roughly 8x).
+        setStage("submitting");
+        const hash = await writeContractAsync({
+          address: registry,
+          abi: IDENTITY_REGISTRY_ABI,
+          functionName: "registerIdentity",
+          args: [didHash, recoveryHashHex],
+        });
+
+        // A wallet returning a hash only means it accepted the request. The
+        // API performs the authoritative verification, but the browser still
+        // waits for a successful receipt with the expected event on its own
+        // RPC before it reports anything, so a reverted transaction or a
+        // wallet pointed at a different node is caught here first.
+        setStage("confirming");
+        let receipt;
+        try {
+          receipt = await publicClient.waitForTransactionReceipt({
+            hash,
+            timeout: RECEIPT_TIMEOUT_MS,
+          });
+        } catch {
+          throw new Error(
+            `The registration transaction (${hash}) was not confirmed on this network's RPC. ` +
+              "If your wallet talks to a different node for this chain, point it at the same RPC as this app and retry.",
+          );
+        }
+        if (receipt.status !== "success") {
+          throw new Error(
+            "The registration transaction was rejected on-chain. No identity was created.",
+          );
+        }
+        const registered = parseEventLogs({
+          abi: IdentityRegistryABI,
+          eventName: "IdentityRegistered",
+          logs: receipt.logs.filter(
+            (log) => log.address.toLowerCase() === registry.toLowerCase(),
+          ),
+        }).some((log) => log.args.didHash.toLowerCase() === didHash);
+        if (!registered) {
+          throw new Error(
+            "The transaction confirmed but the registry emitted no IdentityRegistered event for this DID. No identity was created.",
+          );
+        }
+
+        pending = {
+          did,
+          didHash,
+          recoveryHash,
+          publicKey,
+          signature,
+          txHash: hash,
+          didDocument: { ...params.didDocument, id: did },
+        } satisfies PendingRegistration;
+        storePendingRegistration(address, pending);
+      }
+
+      // Hand the API the transaction hash only; it re-derives everything else
+      // from the chain and refuses to create an identity or a session until
+      // every binding holds.
+      setStage("verifying");
+      let registration: Awaited<ReturnType<typeof apiClient.registerIdentity>>;
+      try {
+        registration = await apiClient.registerIdentity({
+          did: pending.did,
+          controller: address,
+          publicKey: pending.publicKey,
+          recoveryHash: pending.recoveryHash,
+          signature: pending.signature,
+          txHash: pending.txHash,
+          metadata: { didDocument: pending.didDocument },
+        });
+      } catch (error) {
+        if (!shouldKeepPendingRegistration(error)) {
+          clearPendingRegistration(address);
+        }
+        throw friendlyRegistrationError(error);
+      }
+      storeIdentityAuthToken(registration.token);
+      clearPendingRegistration(address);
+      setStage("done");
+
+      return pending.txHash;
+    },
+    onSuccess: () => {
+      toast.success("Identity created successfully");
+      queryClient.invalidateQueries({ queryKey: ["identity"] });
     },
     onError: (err: Error) => {
-      toast.error("Identity registration unavailable", {
-        description: err.message,
-      });
+      setStage("idle");
+      toast.error("Failed to create identity", { description: err.message });
     },
   });
+
+  return { ...mutation, stage };
 }
 
 export function useUpdateProfile() {
@@ -262,6 +474,7 @@ export function useIdentity() {
     error: profileQuery.error as Error | null,
     createIdentity,
     registerOnChain: createIdentity,
+    registrationStage: createMutation.stage,
     delegateControl,
     revokeDelegate,
   };
