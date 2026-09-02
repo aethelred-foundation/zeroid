@@ -177,6 +177,8 @@ export function checkedProductionSafetyControls(): string[] {
     'SLA_MONITOR_STORE_FILE',
     'ENTERPRISE_SECRET_HASH_PEPPER',
     'IDENTITY_RECOVERY_HASH_PEPPER',
+    'AETHELRED_RPC_URL',
+    'IDENTITY_REGISTRY_ADDRESS',
     'GOVERNMENT_CACHE_HASH_PEPPER',
     'OIDC_ISSUER_URL',
     'OIDC_SIGNING_KEYPAIR',
@@ -535,6 +537,8 @@ export function collectProductionSafetyViolations(
       risk: 'Identity recovery hash pepper must not use a known development or test placeholder',
     });
   }
+
+  validateIdentityRegistryVerifierConfig(env, violations);
 
   const governmentCacheHashPepper = env.GOVERNMENT_CACHE_HASH_PEPPER?.trim();
   if (!governmentCacheHashPepper) {
@@ -1069,6 +1073,57 @@ function decodeSecretEncryptionKey(value: string): Buffer | null {
     return Buffer.from(padded, 'base64');
   } catch {
     return null;
+  }
+}
+
+/**
+ * Identity registration is refused with 503 until the registry verifier has
+ * an RPC and a deployed registry address. In production that silent
+ * unavailability is a deployment error, so it blocks startup instead.
+ */
+function validateIdentityRegistryVerifierConfig(
+  env: NodeJS.ProcessEnv,
+  violations: ProductionSafetyViolation[],
+): void {
+  const rpcUrl = env.AETHELRED_RPC_URL?.trim();
+  if (!rpcUrl) {
+    violations.push({
+      control: 'AETHELRED_RPC_URL',
+      risk: 'Production identity registration requires a JSON-RPC endpoint for server-side registry verification; without it registration is silently unavailable',
+    });
+  } else if (!isTrustedRpcUrl(rpcUrl)) {
+    violations.push({
+      control: 'AETHELRED_RPC_URL',
+      risk: 'Production registry verification RPC must be a credential-free HTTPS endpoint (plain HTTP is accepted only for private-network hosts)',
+    });
+  }
+
+  const registryAddress = env.IDENTITY_REGISTRY_ADDRESS?.trim();
+  if (!registryAddress) {
+    violations.push({
+      control: 'IDENTITY_REGISTRY_ADDRESS',
+      risk: 'Production identity registration requires the deployed registry address so receipts can be bound to the accepted deployment',
+    });
+  } else if (
+    !/^0x[0-9a-fA-F]{40}$/.test(registryAddress) ||
+    /^0x0{40}$/.test(registryAddress)
+  ) {
+    violations.push({
+      control: 'IDENTITY_REGISTRY_ADDRESS',
+      risk: 'Production identity registry address must be a non-zero 20-byte address from the accepted deployment manifest',
+    });
+  }
+}
+
+function isTrustedRpcUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    if (url.username || url.password) return false;
+    if (url.protocol === 'https:') return true;
+    if (url.protocol !== 'http:') return false;
+    return isLocalHostname(url.hostname.toLowerCase());
+  } catch {
+    return false;
   }
 }
 

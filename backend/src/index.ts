@@ -36,6 +36,10 @@ import {
   validateCircuitArtifacts,
 } from './services/circuit-artifacts';
 import { webhookSystem } from './services/enterprise/webhook-system';
+import {
+  loadIdentityRegistryConfiguration,
+  probeIdentityRegistryReadiness,
+} from './lib/identity-registry-config';
 
 // ---------------------------------------------------------------------------
 // Shared runtime singletons (logger, Prisma, Redis, Prometheus metrics) live in
@@ -299,6 +303,10 @@ app.get('/ready', publicHealthLimiter, async (_req: Request, res: Response) => {
       checks.circuitArtifacts = 'degraded';
     }
   }
+
+  // Identity registration answers 503 until the registry verifier can reach
+  // its RPC and sees code at the configured registry address.
+  checks.identityRegistry = await probeIdentityRegistryReadiness();
 
   const allHealthy = Object.values(checks).every((v) => v === 'ok');
   res.status(allHealthy ? 200 : 503).json({
@@ -588,9 +596,30 @@ function validateProductionConfig(): void {
   });
 }
 
+export function logIdentityRegistryConfiguration(): void {
+  try {
+    const config = loadIdentityRegistryConfiguration();
+    logger.info('identity_registry_config', {
+      chainId: config.chainId.toString(),
+      registryAddress: config.registryAddress,
+      minimumConfirmations: config.minimumConfirmations,
+      receiptWaitMs: config.receiptWaitMs,
+      allowedDidNetworks: config.allowedDidNetworks,
+      anchorConfigured: config.networkAnchorBlock !== undefined,
+    });
+  } catch (error) {
+    logger.warn('identity_registry_not_configured', {
+      reason: (error as Error).message,
+      effect:
+        'POST /api/v1/identity/register answers 503 IDENTITY_REGISTRY_NOT_CONFIGURED',
+    });
+  }
+}
+
 async function bootstrap(): Promise<void> {
   try {
     validateProductionConfig();
+    logIdentityRegistryConfiguration();
 
     await redis.connect();
     await prisma.$connect();
