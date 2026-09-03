@@ -761,8 +761,39 @@ export interface CircuitMeta {
   publicInputs: string[];
   /** Names of private input signals */
   privateInputs: string[];
-  /** Names of output signals */
+  /**
+   * Names of the circuit's public OUTPUT signals, in the order circom emits
+   * them. circom lays the public-signal vector out as OUTPUTS FIRST, then
+   * public inputs, so these occupy positions `[0, publicOutputCount)`.
+   */
   outputs: string[];
+  /**
+   * Number of public output signals, declared explicitly so the
+   * public-signal split can be asserted rather than inferred. It must equal
+   * `outputs.length`, and `publicOutputCount + publicInputs.length` must equal
+   * the circuit's `nPublic`; a proof whose signal vector disagrees is refused.
+   */
+  publicOutputCount: number;
+  /**
+   * Output signals that MUST equal 1 for the proof to mean what the UI claims
+   * (e.g. `ageVerified` for an age proof). A Groth16 proof is "valid" as soon
+   * as the witness satisfies the constraint system, which for these circuits
+   * includes the case where the predicate bit is 0 — so a valid proof is not
+   * on its own a satisfied predicate.
+   *
+   * `undefined` means the predicate is not known for this circuit; consumers
+   * MUST refuse such proofs rather than accept them. Declare `[]` only for
+   * circuits that assert their predicate in-circuit and expose no outputs.
+   */
+  requiredOutputs?: string[];
+  /**
+   * Whether proving/verification artifacts are published for this circuit.
+   * Circuits without artifacts cannot produce or verify a proof and must not
+   * be offered as if they work.
+   */
+  available: boolean;
+  /** Why the circuit is unavailable, surfaced to the user. */
+  unavailableReason?: string;
   /** Path to the WASM proving artifact */
   wasmPath: string;
   /** Path to the zkey (proving key) */

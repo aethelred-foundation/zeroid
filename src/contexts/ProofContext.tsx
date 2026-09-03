@@ -28,6 +28,8 @@ import type {
 } from "@/types";
 import { generateProof, type ProofProgressCallback } from "@/lib/zk/prover";
 import { verifyProofLocally } from "@/lib/zk/verifier";
+import { checkPredicateOutputs } from "@/lib/zk/signals";
+import { CIRCUITS } from "@/config/constants";
 import { verifyProofPreferCanonical } from "@/lib/aethelred";
 import { apiClient } from "@/lib/api/client";
 import { useIdentity } from "@/contexts/IdentityContext";
@@ -93,6 +95,24 @@ const DEFAULT_PROOF_STATE: ProofState = {
 // ============================================================================
 
 const ProofContext = createContext<ProofContextValue | undefined>(undefined);
+
+/**
+ * Refuse a proof that does not carry the outcome it is being submitted as.
+ *
+ * These circuits publish their verdict as a public output rather than
+ * asserting it, so a cryptographically valid proof can still say
+ * `ageVerified = 0`. Submitting one as a fulfilled verification would tell the
+ * verifier the holder passed when the proof says they did not.
+ */
+function assertPredicateSatisfied(proof: ZKProof): void {
+  const predicate = checkPredicateOutputs(proof, CIRCUITS[proof.circuitId]);
+  if (!predicate.satisfied) {
+    throw new Error(
+      predicate.reason ??
+        "This proof does not satisfy the requirement it was requested for and cannot be submitted.",
+    );
+  }
+}
 
 // ============================================================================
 // Provider
@@ -243,6 +263,8 @@ export function ProofProvider({ children }: { children: React.ReactNode }) {
   const submitProof = useCallback(
     async (proof: ZKProof): Promise<ProofVerification> => {
       try {
+        assertPredicateSatisfied(proof);
+
         const result = await apiClient.submitProof(proof, "");
 
         setState((prev) => ({
@@ -304,6 +326,11 @@ export function ProofProvider({ children }: { children: React.ReactNode }) {
           `Generated proof failed local verification: ${localResult.error || "unknown reason"}`,
         );
       }
+
+      // A verifying proof is not necessarily a satisfied one: refuse to submit
+      // a proof whose published predicate output says the requirement was not
+      // met, rather than reporting it to the verifier as fulfilled.
+      assertPredicateSatisfied(proof);
 
       // Submit to backend
       const result = await apiClient.respondToVerification(

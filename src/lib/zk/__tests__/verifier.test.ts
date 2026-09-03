@@ -27,10 +27,29 @@ jest.mock("@/config/constants", () => ({
       publicInputs: ["ageThreshold", "currentTimestamp"],
       privateInputs: ["dateOfBirth", "nonce"],
       outputs: ["ageVerified"],
+      publicOutputCount: 1,
+      requiredOutputs: ["ageVerified"],
+      available: true,
       wasmPath: "/circuits/age/age.wasm",
       zkeyPath: "/circuits/age/age.zkey",
       vkeyPath: "/circuits/age/vkey.json",
       estimatedProvingTimeMs: 3000,
+    },
+    // A circuit whose predicate has not been declared: everything must refuse
+    // its proofs rather than trust them.
+    "0xundeclared01": {
+      circuitId: "0xundeclared01",
+      name: "Undeclared Predicate Proof",
+      description: "Circuit with no requiredOutputs declaration",
+      publicInputs: ["currentTimestamp"],
+      privateInputs: ["nonce"],
+      outputs: ["somethingVerified"],
+      publicOutputCount: 1,
+      available: true,
+      wasmPath: "/circuits/undeclared/undeclared.wasm",
+      zkeyPath: "/circuits/undeclared/undeclared.zkey",
+      vkeyPath: "/circuits/undeclared/vkey.json",
+      estimatedProvingTimeMs: 1000,
     },
   },
 }));
@@ -85,6 +104,7 @@ import {
   verifyRawProof,
   verifyProofBatch,
   areOutputsTruthy,
+  checkProofPredicate,
   clearVerificationKeyCache,
 } from "../verifier";
 import { withTimeout } from "@/lib/utils";
@@ -204,16 +224,61 @@ describe("verifier", () => {
       expect(snarkjsProof.curve).toBe("bn128");
     });
 
-    it("combines publicInputs and publicOutputs for verification signals", async () => {
+    it("orders verification signals as circom emits them: outputs, then inputs", async () => {
       const proof = makeZKProof({
         publicInputs: ["18", "1710460800"],
-        publicOutputs: ["1", "0"],
+        publicOutputs: ["1"],
       });
 
       await verifyProofLocally(proof);
 
       const [_vkey, signals] = mockVerify.mock.calls[0];
-      expect(signals).toEqual(["18", "1710460800", "1", "0"]);
+      expect(signals).toEqual(["1", "18", "1710460800"]);
+    });
+
+    // --- Predicate enforcement ---
+
+    it("refuses a cryptographically valid proof whose predicate output is 0", async () => {
+      // The defect this guards: age_proof computes ageVerified but never
+      // asserts it, so an under-age holder with a genuine credential produces
+      // a proof that verifies while publishing ageVerified = 0.
+      mockVerify.mockResolvedValue(true);
+
+      const result = await verifyProofLocally(
+        makeZKProof({ publicOutputs: ["0"] }),
+      );
+
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain("ageVerified");
+      expect(mockVerify).toHaveBeenCalledTimes(1);
+    });
+
+    it("refuses a valid proof for a circuit that declares no required outputs", async () => {
+      mockVerify.mockResolvedValue(true);
+
+      const result = await verifyProofLocally(
+        makeZKProof({
+          circuitId: "0xundeclared01" as Bytes32,
+          publicInputs: ["1710460800"],
+          publicOutputs: ["1"],
+        }),
+      );
+
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain(
+        "does not declare which outputs must hold",
+      );
+    });
+
+    it("refuses a valid proof carrying the wrong number of public outputs", async () => {
+      mockVerify.mockResolvedValue(true);
+
+      const result = await verifyProofLocally(
+        makeZKProof({ publicOutputs: ["1", "1"] }),
+      );
+
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain("public output");
     });
 
     it("wraps verify with a 10-second timeout", async () => {
@@ -438,44 +503,50 @@ describe("verifier", () => {
   // areOutputsTruthy
   // =========================================================================
 
-  describe("areOutputsTruthy", () => {
-    it("returns true when all outputs are non-zero and non-empty", () => {
-      const proof = makeZKProof({ publicOutputs: ["1", "42", "999"] });
-      expect(areOutputsTruthy(proof)).toBe(true);
-    });
-
-    it('returns false when an output is "0"', () => {
-      const proof = makeZKProof({ publicOutputs: ["1", "0", "1"] });
-      expect(areOutputsTruthy(proof)).toBe(false);
-    });
-
-    it("returns false when an output is empty string", () => {
-      const proof = makeZKProof({ publicOutputs: ["1", "", "1"] });
-      expect(areOutputsTruthy(proof)).toBe(false);
-    });
-
-    it("returns true for empty outputs array (vacuously true)", () => {
-      const proof = makeZKProof({ publicOutputs: [] });
-      expect(areOutputsTruthy(proof)).toBe(true);
-    });
-
-    it('returns false when all outputs are "0"', () => {
-      const proof = makeZKProof({ publicOutputs: ["0", "0"] });
-      expect(areOutputsTruthy(proof)).toBe(false);
-    });
-
-    it("returns true for single truthy output", () => {
+  describe("areOutputsTruthy / checkProofPredicate", () => {
+    it("accepts a proof whose required output is 1", () => {
       const proof = makeZKProof({ publicOutputs: ["1"] });
       expect(areOutputsTruthy(proof)).toBe(true);
+      expect(checkProofPredicate(proof)).toEqual({ satisfied: true });
     });
 
-    it("treats non-zero numeric strings as truthy", () => {
+    it('refuses a proof whose required output is "0"', () => {
+      const proof = makeZKProof({ publicOutputs: ["0"] });
+      expect(areOutputsTruthy(proof)).toBe(false);
+      expect(checkProofPredicate(proof).reason).toContain("ageVerified");
+    });
+
+    it("refuses a proof whose required output is not exactly 1", () => {
+      // A required output is a boolean predicate bit. Anything other than 1
+      // means the circuit did not report the claim as satisfied, so reading it
+      // as "non-zero is truthy" would accept the wrong proofs.
+      const proof = makeZKProof({ publicOutputs: ["42"] });
+      expect(areOutputsTruthy(proof)).toBe(false);
+    });
+
+    it("refuses a proof whose outputs array is empty", () => {
+      const proof = makeZKProof({ publicOutputs: [] });
+      expect(areOutputsTruthy(proof)).toBe(false);
+    });
+
+    it("refuses a circuit that declares no required outputs", () => {
       const proof = makeZKProof({
-        publicOutputs: [
-          "21888242871839275222246405745257275088696311157297823662689037894645226208583",
-        ],
+        circuitId: "0xundeclared01" as Bytes32,
+        publicOutputs: ["1"],
       });
-      expect(areOutputsTruthy(proof)).toBe(true);
+      expect(areOutputsTruthy(proof)).toBe(false);
+      expect(checkProofPredicate(proof).reason).toContain(
+        "does not declare which outputs must hold",
+      );
+    });
+
+    it("refuses a proof for a circuit that is not in the registry", () => {
+      const proof = makeZKProof({
+        circuitId: "0xnotregistered" as Bytes32,
+        publicOutputs: ["1"],
+      });
+      expect(areOutputsTruthy(proof)).toBe(false);
+      expect(checkProofPredicate(proof).reason).toContain("Unknown circuit");
     });
   });
 

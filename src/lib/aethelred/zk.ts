@@ -12,6 +12,8 @@ import {
   encodePublicInput,
   serializeGroth16ProofUncompressed,
 } from "./encoding";
+import { CIRCUITS } from "@/config/constants";
+import { checkPredicateOutputs, orderPublicSignals } from "@/lib/zk/signals";
 import type { ZKProof, ProofVerification } from "@/types";
 
 export interface ZeroIdProofInput {
@@ -52,15 +54,15 @@ export interface CanonicalVerifyRequest {
 }
 
 /**
- * Map a full ZeroID `ZKProof` to the canonical wire request. Public signals
- * are the concatenation of public inputs and public outputs (Groth16's public
- * signal vector), each encoded as a base64 32-byte field element.
+ * Map a full ZeroID `ZKProof` to the canonical wire request. Public signals are
+ * Groth16's public-signal vector in the order circom emits it — public OUTPUTS
+ * first, then public inputs — each encoded as a base64 32-byte field element.
  */
 export function zkProofToVerifyRequest(
   zkProof: ZKProof,
   verifyingKeyHash: string,
 ): CanonicalVerifyRequest {
-  const publicSignals = [...zkProof.publicInputs, ...zkProof.publicOutputs];
+  const publicSignals = orderPublicSignals(zkProof);
   return {
     proof: serializeGroth16ProofUncompressed(zkProof.proof),
     publicInputs: publicSignals.map(encodePublicInput),
@@ -73,6 +75,12 @@ export function zkProofToVerifyRequest(
  * Verify a full ZeroID `ZKProof` on the canonical Aethelred verifier and
  * return ZeroID's `ProofVerification` shape — a drop-in replacement for the
  * bespoke `verifyProofLocally` (snarkjs) path.
+ *
+ * The chain verifier answers "does this proof verify against the registered
+ * key", which is not the same question as "does the predicate hold": these
+ * circuits publish their outcome as a public output rather than asserting it,
+ * so a proof carrying `ageVerified = 0` verifies on-chain too. The predicate is
+ * enforced here as well, so both verification paths refuse the same proofs.
  */
 export async function verifyZeroIdProofCanonical(
   zkProof: ZKProof,
@@ -81,11 +89,24 @@ export async function verifyZeroIdProofCanonical(
   const now = Math.floor(Date.now() / 1000);
   const request = zkProofToVerifyRequest(zkProof, verifyingKeyHash);
   const res = await getVerificationModule().verifyZKProof(request);
+  if (!res.valid) {
+    return {
+      valid: false,
+      proofHash: zkProof.proofHash,
+      circuitId: zkProof.circuitId,
+      verifiedAt: now,
+      error: res.error,
+    };
+  }
+
+  const predicate = checkPredicateOutputs(zkProof, CIRCUITS[zkProof.circuitId]);
   return {
-    valid: res.valid,
+    valid: predicate.satisfied,
     proofHash: zkProof.proofHash,
     circuitId: zkProof.circuitId,
     verifiedAt: now,
-    error: res.error,
+    error: predicate.satisfied
+      ? res.error
+      : (predicate.reason ?? "Proof predicate not satisfied"),
   };
 }
