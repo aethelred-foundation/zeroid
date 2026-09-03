@@ -16,6 +16,11 @@ import type {
   ProofVerification,
 } from "@/types";
 import { CIRCUITS } from "@/config/constants";
+import {
+  checkPredicateOutputs,
+  orderPublicSignals,
+  type PredicateCheck,
+} from "@/lib/zk/signals";
 import { withTimeout } from "@/lib/utils";
 
 // ============================================================================
@@ -129,8 +134,9 @@ export async function verifyProofLocally(
     // Convert our Groth16Proof into the format snarkjs expects
     const snarkjsProof = toSnarkjsProof(zkProof.proof);
 
-    // Combine public inputs and outputs for verification
-    const publicSignals = [...zkProof.publicInputs, ...zkProof.publicOutputs];
+    // Rebuild the public-signal vector in the order circom emits it:
+    // public OUTPUTS first, then public inputs.
+    const publicSignals = orderPublicSignals(zkProof);
 
     // Run verification with a timeout
     const isValid = await withTimeout(
@@ -143,12 +149,36 @@ export async function verifyProofLocally(
       "Local proof verification timed out",
     );
 
+    if (!isValid) {
+      return {
+        valid: false,
+        proofHash: zkProof.proofHash,
+        circuitId: zkProof.circuitId,
+        verifiedAt: now,
+        error: "Proof verification failed",
+      };
+    }
+
+    // A cryptographically valid proof is not yet a satisfied predicate: these
+    // circuits publish their outcome as a public output instead of asserting
+    // it, so a proof carrying `ageVerified = 0` verifies. Refuse it here.
+    const predicate = checkProofPredicate(zkProof);
+    if (!predicate.satisfied) {
+      return {
+        valid: false,
+        proofHash: zkProof.proofHash,
+        circuitId: zkProof.circuitId,
+        verifiedAt: now,
+        error: predicate.reason ?? "Proof predicate not satisfied",
+      };
+    }
+
     return {
-      valid: isValid,
+      valid: true,
       proofHash: zkProof.proofHash,
       circuitId: zkProof.circuitId,
       verifiedAt: now,
-      error: isValid ? undefined : "Proof verification failed",
+      error: undefined,
     };
   } catch (error) {
     return {
@@ -167,10 +197,15 @@ export async function verifyProofLocally(
  * Lower-level than `verifyProofLocally` — use when you have the raw
  * components rather than a full `ZKProof` object.
  *
+ * This checks the cryptography ONLY. It does not inspect the circuit's
+ * predicate outputs, so a proof publishing `ageVerified = 0` returns `true`
+ * here. Callers making a trust decision must use `verifyProofLocally`, which
+ * enforces the predicate, or pair this with `checkProofPredicate`.
+ *
  * @param circuitId - The circuit identifier
  * @param proof - Raw Groth16 proof
- * @param publicSignals - Array of public input/output signals
- * @returns `true` if the proof is valid
+ * @param publicSignals - Public signals in circom order: outputs, then inputs
+ * @returns `true` if the proof is cryptographically valid
  */
 export async function verifyRawProof(
   circuitId: Bytes32,
@@ -203,16 +238,31 @@ export async function verifyProofBatch(
 }
 
 /**
- * Check whether a proof's public outputs indicate a successful
- * verification (e.g., ageVerified = 1, credentialValid = 1).
+ * Check a proof's published outputs against the predicate its circuit is
+ * supposed to prove — `ageVerified = 1` and `credentialValid = 1` for an age
+ * proof, for example.
+ *
+ * Outputs are resolved by NAME through the circuit descriptor, which pins
+ * circom's outputs-before-inputs layout, so the check reads the signal it
+ * means to read. It fails closed: an unregistered circuit, or one that does
+ * not declare `requiredOutputs`, is refused.
  *
  * @param zkProof - The proof to inspect
- * @returns `true` if all public outputs are truthy (non-zero)
+ * @returns Whether the predicate holds, and why not when it does not
+ */
+export function checkProofPredicate(zkProof: ZKProof): PredicateCheck {
+  return checkPredicateOutputs(zkProof, CIRCUITS[zkProof.circuitId]);
+}
+
+/**
+ * Whether a proof's public outputs satisfy its circuit's predicate.
+ * Thin boolean form of `checkProofPredicate`.
+ *
+ * @param zkProof - The proof to inspect
+ * @returns `true` only if every required output equals 1
  */
 export function areOutputsTruthy(zkProof: ZKProof): boolean {
-  return zkProof.publicOutputs.every(
-    (output) => output !== "0" && output !== "",
-  );
+  return checkProofPredicate(zkProof).satisfied;
 }
 
 // ============================================================================

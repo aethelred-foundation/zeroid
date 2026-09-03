@@ -35,6 +35,9 @@ jest.mock("@/config/constants", () => ({
       publicInputs: ["ageThreshold", "currentTimestamp"],
       privateInputs: ["dateOfBirth", "nonce"],
       outputs: ["ageVerified"],
+      publicOutputCount: 1,
+      requiredOutputs: ["ageVerified"],
+      available: true,
       wasmPath: "/circuits/age/age.wasm",
       zkeyPath: "/circuits/age/age.zkey",
       vkeyPath: "/circuits/age/vkey.json",
@@ -47,10 +50,31 @@ jest.mock("@/config/constants", () => ({
       publicInputs: ["targetCountryHash"],
       privateInputs: ["country", "nonce"],
       outputs: ["residencyVerified"],
+      publicOutputCount: 1,
+      requiredOutputs: ["residencyVerified"],
+      available: true,
       wasmPath: "/circuits/res/res.wasm",
       zkeyPath: "/circuits/res/res.zkey",
       vkeyPath: "/circuits/res/vkey.json",
       estimatedProvingTimeMs: 4000,
+    },
+    // A circuit listed for reference but with no published artifacts: it must
+    // not be offered as if it worked.
+    "0xunavailable01": {
+      circuitId: "0xunavailable01",
+      name: "Unbuilt Proof",
+      description: "Circuit that never went through a trusted setup",
+      publicInputs: ["currentTimestamp"],
+      privateInputs: ["nonce"],
+      outputs: ["somethingVerified"],
+      publicOutputCount: 1,
+      requiredOutputs: ["somethingVerified"],
+      available: false,
+      unavailableReason: "No proving artifacts have been published for it.",
+      wasmPath: "/circuits/unbuilt/unbuilt.wasm",
+      zkeyPath: "/circuits/unbuilt/unbuilt.zkey",
+      vkeyPath: "/circuits/unbuilt/vkey.json",
+      estimatedProvingTimeMs: 5000,
     },
   },
   PROOF_GENERATION_TIMEOUT_MS: 60_000,
@@ -85,6 +109,7 @@ import {
   proofToCalldata,
   estimateProvingTime,
   getAvailableCircuits,
+  getAllCircuits,
   clearArtifactCache,
 } from "../prover";
 import { withTimeout } from "@/lib/utils";
@@ -121,7 +146,15 @@ const SNARKJS_PROOF_RESULT = {
     protocol: "groth16",
     curve: "bn128",
   },
-  publicSignals: ["10", "1710460800", "1"],
+  // circom emits public OUTPUTS first, then public inputs. For the mock age
+  // circuit that is [ageVerified, ageThreshold, currentTimestamp].
+  publicSignals: ["1", "10", "1710460800"],
+};
+
+/** Same shape for the mock residency circuit: 1 output, 1 public input. */
+const SNARKJS_RESIDENCY_RESULT = {
+  ...SNARKJS_PROOF_RESULT,
+  publicSignals: ["1", "0xabc"],
 };
 
 // ---------------------------------------------------------------------------
@@ -175,12 +208,39 @@ describe("prover", () => {
       expect(typeof proof.generatedAt).toBe("number");
     });
 
-    it("splits publicSignals into publicInputs and publicOutputs based on circuit config", async () => {
-      // AGE circuit has 2 publicInputs, so first 2 signals => publicInputs, rest => publicOutputs
+    it("splits publicSignals with OUTPUTS first, then public inputs", async () => {
+      // circom emits public outputs before public inputs. The mock age circuit
+      // declares 1 output and 2 public inputs, so the vector splits 1 + 2.
       const proof = await generateProof(circuitId, privateInputs, publicInputs);
 
-      expect(proof.publicInputs).toEqual(["10", "1710460800"]);
       expect(proof.publicOutputs).toEqual(["1"]);
+      expect(proof.publicInputs).toEqual(["10", "1710460800"]);
+    });
+
+    it("refuses a public-signal vector that does not match the circuit", async () => {
+      // A vector of the wrong length means the descriptor and the shipped
+      // artifact have drifted; no label on the proof can be trusted.
+      mockFullProve.mockResolvedValue({
+        ...SNARKJS_PROOF_RESULT,
+        publicSignals: ["1", "10"],
+      });
+
+      await expect(
+        generateProof(circuitId, privateInputs, publicInputs),
+      ).rejects.toThrow(/Public signal count mismatch for Age Proof/);
+    });
+
+    it("refuses a circuit whose artifacts have not been published", async () => {
+      await expect(
+        generateProof(
+          "0xunavailable01" as `0x${string}`,
+          { nonce: "1" },
+          { currentTimestamp: "1710460800" },
+        ),
+      ).rejects.toThrow(
+        "Circuit Unbuilt Proof is not available: No proving artifacts have been published for it.",
+      );
+      expect(mockFetch).not.toHaveBeenCalled();
     });
 
     it("throws for an unknown circuit ID", async () => {
@@ -355,6 +415,7 @@ describe("prover", () => {
       expect(mockFetch).toHaveBeenCalledTimes(2);
 
       mockFetch.mockClear();
+      mockFullProve.mockResolvedValue(SNARKJS_RESIDENCY_RESULT);
       await generateProof(resCircuitId, resPrivate, resPublic);
       // Different circuit => different artifact paths => fetched again
       expect(mockFetch).toHaveBeenCalledTimes(2);
@@ -449,11 +510,21 @@ describe("prover", () => {
   // =========================================================================
 
   describe("getAvailableCircuits", () => {
-    it("returns all circuit metadata entries", () => {
+    it("returns only circuits whose artifacts are published", () => {
       const circuits = getAvailableCircuits();
       expect(circuits).toHaveLength(2);
       expect(circuits.map((c) => c.name)).toContain("Age Proof");
       expect(circuits.map((c) => c.name)).toContain("Residency Proof");
+      expect(circuits.map((c) => c.name)).not.toContain("Unbuilt Proof");
+    });
+
+    it("getAllCircuits also lists the unavailable ones, with a reason", () => {
+      const all = getAllCircuits();
+      expect(all).toHaveLength(3);
+
+      const unbuilt = all.find((c) => c.name === "Unbuilt Proof");
+      expect(unbuilt?.available).toBe(false);
+      expect(unbuilt?.unavailableReason).toBeTruthy();
     });
 
     it("each circuit has required fields", () => {

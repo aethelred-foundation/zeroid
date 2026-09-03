@@ -14,6 +14,7 @@ import type {
   ProofSystem,
 } from "@/types";
 import { CIRCUITS, PROOF_GENERATION_TIMEOUT_MS } from "@/config/constants";
+import { splitPublicSignals } from "@/lib/zk/signals";
 import { withTimeout } from "@/lib/utils";
 import { keccak256, toBytes, toHex } from "viem";
 
@@ -114,6 +115,15 @@ export async function generateProof(
     );
   }
 
+  if (!circuit.available) {
+    throw new Error(
+      `Circuit ${circuit.name} is not available: ${
+        circuit.unavailableReason ??
+        "no proving artifacts have been published for it"
+      }`,
+    );
+  }
+
   onProgress?.(5, "Loading circuit artifacts");
 
   // 2. Load snarkjs dynamically (it is a large module)
@@ -177,10 +187,12 @@ export async function generateProof(
   );
   const proofHash = keccak256(proofBytes) as Bytes32;
 
-  // 8. Split public signals into inputs and outputs
-  const numPublicInputs = circuit.publicInputs.length;
-  const publicInputValues = result.publicSignals.slice(0, numPublicInputs);
-  const publicOutputValues = result.publicSignals.slice(numPublicInputs);
+  // 8. Split public signals into outputs and inputs.
+  // circom emits public OUTPUTS first, then public inputs; the split point is
+  // the circuit's declared output count and a vector of any other length is
+  // refused, so the halves can never be swapped silently.
+  const { publicOutputs: publicOutputValues, publicInputs: publicInputValues } =
+    splitPublicSignals(circuit, result.publicSignals);
 
   const now = Math.floor(Date.now() / 1000);
 
@@ -246,9 +258,21 @@ export function estimateProvingTime(circuitId: Bytes32): number {
 }
 
 /**
- * List all available circuits with their metadata.
+ * List the circuits that can actually produce a proof — those whose ceremony
+ * artifacts are published. Circuits without artifacts are excluded so nothing
+ * offers them as if they worked; use `getAllCircuits` to enumerate the full
+ * registry, including the unavailable ones and their reasons.
  */
 export function getAvailableCircuits(): CircuitMeta[] {
+  return Object.values(CIRCUITS).filter((circuit) => circuit.available);
+}
+
+/**
+ * List every circuit in the registry, available or not. Callers that show this
+ * to a user must surface `unavailableReason` for entries where
+ * `available` is false.
+ */
+export function getAllCircuits(): CircuitMeta[] {
   return Object.values(CIRCUITS);
 }
 

@@ -371,7 +371,15 @@ export enum KYCLevel {
 // ZK Circuit Configuration
 // ============================================================================
 
-/** Well-known circuit identifiers */
+/**
+ * Well-known circuit identifiers.
+ *
+ * These are local registry keys, not on-chain ids: they are deliberately
+ * mnemonic (and therefore not valid hex) so that they cannot be mistaken for
+ * a registered `bytes32` circuit id. The on-chain id for a circuit is resolved
+ * from the verifying-key registry (`@/lib/aethelred/vkeys`) once its ceremony
+ * output has been registered. Do not invent hex ids here.
+ */
 export const CIRCUIT_IDS = {
   AGE_PROOF:
     "0xage0000000000000000000000000000000000000000000000000000000000001" as Bytes32,
@@ -385,7 +393,19 @@ export const CIRCUIT_IDS = {
     "0xidn0000000000000000000000000000000000000000000000000000000000001" as Bytes32,
 } as const;
 
-/** Circuit metadata for client-side proof generation */
+/**
+ * Circuit metadata for client-side proof generation.
+ *
+ * `outputs` is ordered as circom emits it: the public-signal vector produced by
+ * snarkjs is `[...outputs, ...publicInputs]` — public OUTPUTS come first. The
+ * `publicOutputCount` field pins that split so it cannot be inferred wrongly,
+ * and `requiredOutputs` names the signals that must equal 1 for the proof to
+ * carry the meaning the UI attaches to it.
+ *
+ * Only circuits whose ceremony output is published under `public/circuits/`
+ * are marked `available`. The rest are listed for reference and refused at
+ * proof time rather than offered as if they worked.
+ */
 export const CIRCUITS: Record<string, CircuitMeta> = {
   [CIRCUIT_IDS.AGE_PROOF]: {
     circuitId: CIRCUIT_IDS.AGE_PROOF,
@@ -409,6 +429,13 @@ export const CIRCUITS: Record<string, CircuitMeta> = {
       "signatureS",
     ],
     outputs: ["ageVerified", "credentialValid"],
+    publicOutputCount: 2,
+    // age_proof.circom computes `ageVerified <== 1 - ageCompare.out` but never
+    // asserts it, so an under-age holder with a genuine credential can produce
+    // a cryptographically valid proof carrying ageVerified = 0. The predicate
+    // is therefore enforced here, on the published signal.
+    requiredOutputs: ["ageVerified", "credentialValid"],
+    available: true,
     wasmPath: "/circuits/age/age_proof_js/age_proof.wasm",
     zkeyPath: "/circuits/age/age_proof_final.zkey",
     vkeyPath: "/circuits/age/verification_key.json",
@@ -439,6 +466,11 @@ export const CIRCUITS: Record<string, CircuitMeta> = {
       "signatureS",
     ],
     outputs: ["residencyVerified", "credentialValid"],
+    publicOutputCount: 2,
+    requiredOutputs: ["residencyVerified", "credentialValid"],
+    available: false,
+    unavailableReason:
+      "No proving or verification artifacts have been published for this circuit; it has not been through a trusted setup.",
     wasmPath: "/circuits/residency/residency_proof_js/residency_proof.wasm",
     zkeyPath: "/circuits/residency/residency_proof_final.zkey",
     vkeyPath: "/circuits/residency/verification_key.json",
@@ -463,6 +495,11 @@ export const CIRCUITS: Record<string, CircuitMeta> = {
       "signatureS",
     ],
     outputs: ["tierVerified", "credentialValid"],
+    publicOutputCount: 2,
+    requiredOutputs: ["tierVerified", "credentialValid"],
+    available: false,
+    unavailableReason:
+      "No proving or verification artifacts have been published for this circuit; it has not been through a trusted setup.",
     wasmPath: "/circuits/credit/credit_tier_proof_js/credit_tier_proof.wasm",
     zkeyPath: "/circuits/credit/credit_tier_proof_final.zkey",
     vkeyPath: "/circuits/credit/verification_key.json",
