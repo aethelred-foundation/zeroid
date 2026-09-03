@@ -23,7 +23,7 @@ Eleven `.circom` files exist. Compiled with circom 2.2.3 against circomlib
 | `composite/composite_proof` | yes | 32,284 | no |
 | `accumulator/non_revocation_proof` | yes | 2,783 | no — but see D3 |
 | `bbs/bbs_selective_disclosure` | **no** — T2011 | — | no |
-| `biometric/biometric_match` | **no** — T2008 | — | no |
+| `biometric/biometric_match` | **no** — T2008, then T2011 | — | no |
 | `threshold/threshold_signature_verify` | **no** — T2011 | — | no |
 
 Only `age_proof` has ceremony artifacts on disk
@@ -91,6 +91,12 @@ proofs are verified via an external IZKVerifier (Groth16)" and exposes
 registering them against a gadget that returns true for everything. Revocation
 would then be unenforceable on-chain while appearing to be cryptographically
 checked.
+
+`biometric_match` reports only T2008 because circom aborts at the first
+error. Removing the duplicate `LessEqThan` does **not** make it compile: lines
+104, 111 and 259 declare signals inside loop scopes, so it then fails T2011
+like the other two. Verified by renaming the local template and recompiling.
+Any effort estimate that assumes a one-line fix is wrong.
 
 **B3. `threshold_signature_verify` is unsatisfiable and verifies no
 signature.** Its "pairing check" requires a Poseidon collision, so no honest
@@ -177,10 +183,18 @@ boundary, and reject stale or future-dated public signals. Independent of every
 decision above; can start immediately.
 
 **Phase 2 — repository honesty (small).** Act on D3/D4: remove or quarantine
-the chosen circuits, correct `README.md:32/34/88`, and add a CI step that
-compiles every `.circom` under `circuits/` so an uncompilable circuit can never
-be committed again. That CI gate is what would have caught B1 and B3 at the
-time they were written.
+the chosen circuits and correct `README.md:32/34/88`.
+
+The compile gate itself is done — `scripts/check-circuit-compilation.mjs`,
+`npm run circuits:compile:check` — and holds the three broken circuits in an
+allowlist that may only shrink: it fails if an unlisted circuit stops
+compiling, if a listed one starts compiling, or if a listed one fails for an
+error other than the one recorded against it.
+
+**It is not enforcing anything yet.** GitHub Actions for this organisation has
+been billing-locked since 2026-08-17, so the CI job has never run. Until that
+is settled the gate is a manual local command, and treating a green branch as
+evidence that the circuits compile would be wrong.
 
 **Phase 3 — the circuit revision (the substantial piece).** Implement D1 and
 D2 together across the surviving credential circuits, in one revision:
