@@ -10,6 +10,8 @@ const VALID: Record<string, string> = {
   ...POLICY.zk!.expectedPublicSignals,
   [POLICY.zk!.residency.signal]: "AE",
   [POLICY.zk!.contextSignal]: "0xctx",
+  // Matches the stubbed verifier clock (`now: () => 0`) so the proof is fresh.
+  [POLICY.zk!.freshness.signal]: "0",
 };
 
 const sdJwtDeps = () => ({ verifyIssuerJwt: jest.fn(), verifyKeyBindingJwt: jest.fn(), now: () => 0 });

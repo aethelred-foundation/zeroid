@@ -32,6 +32,27 @@ export interface ClaimRequirement {
 }
 
 /**
+ * Recency requirement for the public signal that carries the moment the circuit
+ * evaluated its predicates (`currentTimestamp` in the eligibility circuit).
+ *
+ * The circuit takes that instant as a public INPUT and evaluates the age and
+ * expiry predicates at it, so the prover chooses it. Without a window the proof
+ * is truthful about the wrong statement: forward-dating it proves "would be old
+ * enough at some later date", and backdating it proves "was not yet expired at
+ * some earlier date". A verifier asking "is eligible NOW" must therefore pin the
+ * evaluation instant to its own clock. This cannot be expressed through
+ * `expectedPublicSignals` — a timestamp has no single expected value.
+ */
+export interface ZkFreshnessBinding {
+  /** Public-signal name carrying the evaluation instant, in Unix seconds. */
+  signal: string;
+  /** How far in the PAST the evaluation instant may sit, in seconds. */
+  maxAgeSeconds: number;
+  /** How far AHEAD of the verifier's clock it may sit, in seconds. */
+  maxSkewAheadSeconds: number;
+}
+
+/**
  * ZK eligibility binding (privacy-moat rung): instead of disclosing claims, the
  * Wallet presents a Groth16 proof. These fields pin a presented proof to this
  * policy. Mirrors `ZEROID_ELIGIBILITY_POLICY_V1.circuitManifest` in
@@ -46,6 +67,12 @@ export interface ZkBinding {
   residency: { signal: string; allowed: string[] };
   /** Public signal carrying the proof's context commitment (binds nonce + audience). */
   contextSignal: string;
+  /**
+   * Required. A ZK binding without a freshness window accepts proofs evaluated
+   * at an attacker-chosen time, so this is not optional: `verifyZkPredicate`
+   * refuses a policy that omits it rather than skipping the check.
+   */
+  freshness: ZkFreshnessBinding;
 }
 
 export interface PresentationPolicy {
@@ -80,6 +107,19 @@ const REGULATED_ELIGIBILITY_V1: PresentationPolicy = {
     },
     residency: { signal: 'residencyCountryCode', allowed: ['AE'] },
     contextSignal: 'contextCommitment',
+    // 300s back / 30s ahead. The backward window matches the proof-context
+    // lifetime the human eligibility path already enforces
+    // (`PROOF_NONCE_TTL_SECONDS` in routes/verification.ts): long enough for a
+    // Wallet to prove and post over a slow mobile link, short enough that a
+    // captured proof stops being usable almost immediately. The forward
+    // allowance is only for honest clock skew between the Wallet and this
+    // verifier — a predicate evaluated genuinely in the future does not exist,
+    // so it is kept an order of magnitude smaller than the backward window.
+    freshness: {
+      signal: 'currentTimestamp',
+      maxAgeSeconds: 300,
+      maxSkewAheadSeconds: 30,
+    },
   },
 };
 
