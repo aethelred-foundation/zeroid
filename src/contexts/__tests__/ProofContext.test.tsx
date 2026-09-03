@@ -664,6 +664,112 @@ describe("ProofContext", () => {
         ),
       ).rejects.toThrow("unknown reason");
     });
+
+    it("refuses to submit a proof whose predicate output is 0", async () => {
+      // A proof can verify cryptographically and still say the holder did not
+      // meet the requirement: age_proof computes ageVerified but never asserts
+      // it. Submitting that as a fulfilled verification would tell the
+      // verifier the opposite of what the proof says.
+      const request = makeProofRequest("req-3");
+      const proof = makeZKProof();
+      proof.publicOutputs = ["0", "1"];
+
+      (apiClient.listProofRequests as jest.Mock).mockResolvedValue([request]);
+      (generateProof as jest.Mock).mockResolvedValue(proof);
+      (verifyProofLocally as jest.Mock).mockResolvedValue({ valid: true });
+
+      mockIdentity.identity.isRegistered = true;
+      mockIdentity.did = mockDID;
+
+      const { result } = renderHook(() => useProofs(), { wrapper });
+
+      await waitFor(() => {
+        expect(result.current.proofState.pendingRequests.length).toBe(1);
+      });
+
+      await expect(
+        act(() =>
+          result.current.fulfillProofRequest("req-3", {
+            dateOfBirth: "946684800",
+          }),
+        ),
+      ).rejects.toThrow(/ageVerified/);
+
+      expect(apiClient.respondToVerification).not.toHaveBeenCalled();
+      // The request stays pending: nothing was fulfilled.
+      expect(result.current.proofState.pendingRequests).toHaveLength(1);
+    });
+
+    it("refuses to submit a proof for a circuit outside the registry", async () => {
+      const request = makeProofRequest("req-4");
+      const proof = makeZKProof();
+      proof.circuitId =
+        "0xnotregistered000000000000000000000000000000000000000000000000001" as Bytes32;
+
+      (apiClient.listProofRequests as jest.Mock).mockResolvedValue([request]);
+      (generateProof as jest.Mock).mockResolvedValue(proof);
+      (verifyProofLocally as jest.Mock).mockResolvedValue({ valid: true });
+
+      mockIdentity.identity.isRegistered = true;
+      mockIdentity.did = mockDID;
+
+      const { result } = renderHook(() => useProofs(), { wrapper });
+
+      await waitFor(() => {
+        expect(result.current.proofState.pendingRequests.length).toBe(1);
+      });
+
+      await expect(
+        act(() =>
+          result.current.fulfillProofRequest("req-4", {
+            dateOfBirth: "946684800",
+          }),
+        ),
+      ).rejects.toThrow(/Unknown circuit/);
+
+      expect(apiClient.respondToVerification).not.toHaveBeenCalled();
+    });
+  });
+
+  // =========================================================================
+  // predicate enforcement on submitProof
+  // =========================================================================
+
+  describe("submitProof predicate enforcement", () => {
+    it("refuses to submit a proof whose predicate output is 0", async () => {
+      const proof = makeZKProof();
+      proof.publicOutputs = ["0", "1"];
+
+      const { result } = renderHook(() => useProofs(), { wrapper });
+
+      await expect(
+        act(() => result.current.submitProof(proof)),
+      ).rejects.toThrow(/ageVerified/);
+
+      expect(apiClient.submitProof).not.toHaveBeenCalled();
+      await waitFor(() => {
+        expect(result.current.proofState.error).toMatch(/ageVerified/);
+      });
+    });
+
+    it("submits a proof whose predicate outputs all hold", async () => {
+      const proof = makeZKProof();
+      const verification: ProofVerification = {
+        valid: true,
+        proofHash: proof.proofHash,
+        circuitId: proof.circuitId,
+        verifiedAt: 1700000000,
+      };
+      (apiClient.submitProof as jest.Mock).mockResolvedValue(verification);
+
+      const { result } = renderHook(() => useProofs(), { wrapper });
+
+      await act(async () => {
+        await result.current.submitProof(proof);
+      });
+
+      expect(apiClient.submitProof).toHaveBeenCalledWith(proof, "");
+    });
   });
 
   // =========================================================================
