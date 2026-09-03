@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import Link from "next/link";
 import {
   Wallet,
   ShieldCheck,
@@ -19,9 +20,10 @@ import {
   isAethelredWallet,
   orderWalletConnectors,
 } from "@/config/wallet-picker";
+import { useIdentity, type RegistrationStage } from "@/hooks/useIdentity";
 import { useUAEPass } from "@/hooks/useUAEPass";
 import { useBiometric } from "@/hooks/useBiometric";
-import { IDENTITY_REGISTRY_VERIFICATION_UNAVAILABLE_MESSAGE } from "@/lib/identity/registration";
+import { IDENTITY_REGISTRY_NOT_CONFIGURED_CODE } from "@/lib/identity/registration";
 import type { IdentityCreationStep } from "@/types";
 
 interface StepConfig {
@@ -59,12 +61,19 @@ const ALL_STEPS: StepConfig[] = [
   },
   {
     id: "register",
-    title: "Identity Registration",
-    subtitle:
-      "Registration is paused until server-side chain verification is ready",
+    title: "Register Identity",
+    subtitle: "Sign in with your wallet and anchor your DID on-chain",
     icon: Globe,
   },
 ];
+
+const REGISTRATION_STAGE_LABELS: Partial<Record<RegistrationStage, string>> = {
+  preflight: "Checking registry...",
+  signing: "Signing...",
+  submitting: "Submitting...",
+  confirming: "Confirming...",
+  verifying: "Verifying...",
+};
 
 // Enterprise identity-assurance steps (government ID via UAE Pass, TEE biometric
 // liveness) require real external credentials and are off unless a deployment
@@ -97,9 +106,17 @@ export default function IdentityCreation() {
   const [stepErrors, setStepErrors] = useState<Record<number, string>>({});
   const [completedSteps, setCompletedSteps] = useState<Set<number>>(new Set());
   const [isProcessing, setIsProcessing] = useState(false);
+  const [registered, setRegistered] = useState(false);
+  // Set only from the API's IDENTITY_REGISTRY_NOT_CONFIGURED refusal: the
+  // deployment has no registry verifier yet, which is an operator condition
+  // rather than something the user can fix by retrying.
+  const [unavailableMessage, setUnavailableMessage] = useState<string | null>(
+    null,
+  );
 
   const { address, isConnected } = useAccount();
   const { connectors, connectAsync } = useConnect();
+  const { createIdentity, registrationStage } = useIdentity();
   const {
     initiateVerification: initiateUAEPass,
     verificationStatus: uaePassStatus,
@@ -178,7 +195,31 @@ export default function IdentityCreation() {
     [startScan, runStep],
   );
 
+  const handleRegister = useCallback(
+    () =>
+      runStep(async () => {
+        try {
+          await createIdentity();
+        } catch (err) {
+          const code = (err as { code?: string } | null)?.code;
+          if (code === IDENTITY_REGISTRY_NOT_CONFIGURED_CODE) {
+            setUnavailableMessage(
+              err instanceof Error
+                ? err.message
+                : "Identity registration is not available on this deployment yet.",
+            );
+            return;
+          }
+          throw err;
+        }
+        setRegistered(true);
+      }, "Identity registration failed"),
+    [createIdentity, runStep],
+  );
+
   const currentError = stepErrors[currentStep];
+  const registerLabel =
+    REGISTRATION_STAGE_LABELS[registrationStage] ?? "Registering...";
 
   const renderStepContent = () => {
     switch (step?.id) {
@@ -353,19 +394,98 @@ export default function IdentityCreation() {
                 animate={{ scale: 1 }}
                 transition={{ type: "spring", stiffness: 200 }}
               >
-                <AlertCircle className="w-8 h-8 text-status-pending" />
+                {registered ? (
+                  <CheckCircle2 className="w-8 h-8 text-status-verified" />
+                ) : unavailableMessage ? (
+                  <AlertCircle className="w-8 h-8 text-status-pending" />
+                ) : (
+                  <Globe className="w-8 h-8 text-brand-500" />
+                )}
               </motion.div>
 
-              <h4 className="font-semibold text-[var(--text-primary)] mb-2">
-                Registration Temporarily Unavailable
-              </h4>
-              <p className="text-sm text-[var(--text-secondary)] mb-6">
-                {IDENTITY_REGISTRY_VERIFICATION_UNAVAILABLE_MESSAGE}
-              </p>
-              <button disabled className="btn-primary" aria-disabled="true">
-                <Globe className="w-4 h-4" />
-                Registration Unavailable
-              </button>
+              {registered ? (
+                <>
+                  <h4 className="font-semibold text-[var(--text-primary)] mb-2">
+                    Identity Registered
+                  </h4>
+                  <p className="text-sm text-[var(--text-secondary)] mb-6">
+                    Your DID is anchored on the Aethelred network, verified by
+                    the ZeroID API against the chain, and your session is
+                    active. You can now request credentials and run proofs.
+                  </p>
+                  <Link href="/" className="btn-primary">
+                    Go to Dashboard
+                    <ArrowRight className="w-4 h-4" />
+                  </Link>
+                </>
+              ) : unavailableMessage ? (
+                <>
+                  <h4 className="font-semibold text-[var(--text-primary)] mb-2">
+                    Registration Temporarily Unavailable
+                  </h4>
+                  <p className="text-sm text-[var(--text-secondary)] mb-6">
+                    {unavailableMessage}
+                  </p>
+                  <div className="flex items-center justify-center gap-3">
+                    <button
+                      disabled
+                      className="btn-primary"
+                      aria-disabled="true"
+                    >
+                      <Globe className="w-4 h-4" />
+                      Registration Unavailable
+                    </button>
+                    <button
+                      onClick={() => setUnavailableMessage(null)}
+                      className="btn-ghost"
+                    >
+                      Check again
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <h4 className="font-semibold text-[var(--text-primary)] mb-2">
+                    Register Your Identity
+                  </h4>
+                  <p className="text-sm text-[var(--text-secondary)] mb-6">
+                    This anchors your decentralized identifier on-chain and
+                    starts your session. Your wallet will prompt you twice —
+                    first to{" "}
+                    <span className="text-[var(--text-primary)]">
+                      sign a message
+                    </span>{" "}
+                    (free), then to confirm one{" "}
+                    <span className="text-[var(--text-primary)]">
+                      on-chain transaction
+                    </span>{" "}
+                    (a little AETHEL for gas). The ZeroID API then verifies that
+                    transaction against the chain before your session starts.
+                  </p>
+                  {!isConnected && (
+                    <p className="text-sm text-status-pending mb-4">
+                      Connect your wallet first (step 1).
+                    </p>
+                  )}
+                  <button
+                    onClick={handleRegister}
+                    disabled={isProcessing || !isConnected}
+                    className="btn-primary"
+                  >
+                    {isProcessing ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        {registerLabel}
+                      </>
+                    ) : (
+                      <>
+                        <Globe className="w-4 h-4" />
+                        Register Identity
+                      </>
+                    )}
+                  </button>
+                </>
+              )}
             </div>
           </div>
         );

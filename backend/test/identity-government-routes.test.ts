@@ -107,6 +107,11 @@ jest.mock("../src/middleware/rateLimit", () => ({
     _res: Response,
     next: NextFunction,
   ): void => next(),
+  identityRegistrationRateLimiter: (
+    _req: AuthenticatedRequest,
+    _res: Response,
+    next: NextFunction,
+  ): void => next(),
 }));
 
 import { identityRoutes } from "../src/routes/identity";

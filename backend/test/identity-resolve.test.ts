@@ -35,6 +35,11 @@ jest.mock('../src/middleware/auth', () => ({
 jest.mock('../src/middleware/rateLimit', () => ({
   apiRateLimiter: (_req: unknown, _res: unknown, next: () => void) => next(),
   authRateLimiter: (_req: unknown, _res: unknown, next: () => void) => next(),
+  identityRegistrationRateLimiter: (
+    _req: unknown,
+    _res: unknown,
+    next: () => void,
+  ) => next(),
 }));
 
 jest.mock('../src/services/government-api', () => ({

@@ -1,4 +1,10 @@
-import { hashMessage, recoverPublicKey, type Hex } from "viem";
+import {
+  hashMessage,
+  keccak256,
+  recoverPublicKey,
+  toBytes,
+  type Hex,
+} from "viem";
 import { activeChain } from "@/config/chains";
 import type { Address, Bytes32 } from "@/types";
 
@@ -13,15 +19,43 @@ const WALLET_DID_PATTERN =
   /^did:aethelred:(mainnet|testnet|devnet):(0x[0-9a-fA-F]{40})$/;
 const BASE64_PATTERN = /^[A-Za-z0-9+/=]+$/;
 const IDENTITY_AUTH_TOKEN_STORAGE_KEY = "zeroid.identity.authToken";
+const PENDING_REGISTRATION_STORAGE_KEY = "zeroid.identity.pendingRegistration";
 const ALLOW_BROWSER_TOKEN_STORAGE_FLAG =
   "NEXT_PUBLIC_ZEROID_ALLOW_BROWSER_TOKEN_STORAGE";
 
-export const IDENTITY_REGISTRY_VERIFICATION_UNAVAILABLE_CODE =
-  "IDENTITY_REGISTRY_VERIFICATION_UNAVAILABLE" as const;
-export const IDENTITY_REGISTRY_VERIFICATION_UNAVAILABLE_MESSAGE =
-  "Identity registration is temporarily unavailable while ZeroID adds server-side verification of the on-chain registry transaction. Your wallet will not be asked to sign or submit a transaction, and no identity or session will be created.";
+/**
+ * The API refuses registration with this code until its registry verifier
+ * has an RPC and a deployed registry address. It is the only failure the
+ * wizard renders as "unavailable" rather than as a retryable error.
+ */
+export const IDENTITY_REGISTRY_NOT_CONFIGURED_CODE =
+  "IDENTITY_REGISTRY_NOT_CONFIGURED" as const;
+
+/**
+ * Codes the API returns when the transaction is real but its own RPC has not
+ * seen it (or not deeply enough) inside the server-side wait window. The
+ * signed proof and the submitted transaction stay valid, so a retry re-POSTs
+ * the same artifacts without asking the wallet for anything.
+ */
+export const RETRYABLE_REGISTRATION_CODES = [
+  "IDENTITY_REGISTRY_TX_NOT_MINED",
+  "IDENTITY_REGISTRY_TX_NOT_CONFIRMED",
+] as const;
+
+export type RetryableRegistrationCode =
+  (typeof RETRYABLE_REGISTRATION_CODES)[number];
+
+export function isRetryableRegistrationCode(
+  code?: string,
+): code is RetryableRegistrationCode {
+  return (
+    typeof code === "string" &&
+    (RETRYABLE_REGISTRATION_CODES as readonly string[]).includes(code)
+  );
+}
 
 let inMemoryIdentityAuthToken: string | undefined;
+const inMemoryPendingRegistrations = new Map<string, PendingRegistration>();
 
 type RegistrationPublicKeyRecord = Record<string, unknown>;
 
@@ -31,8 +65,36 @@ export interface BackendIdentityRegistrationPayload {
   publicKey: string;
   recoveryHash: string;
   signature: Hex;
+  /** Hash of the registerIdentity transaction the wallet submitted. */
+  txHash: Hex;
   displayName?: string;
   metadata?: Record<string, unknown>;
+}
+
+export interface RegistrationArtifacts {
+  /** keccak256 of the UTF-8 DID string — the registry's bytes32 didHash. */
+  didHash: Bytes32;
+  /** bytes32 recovery commitment passed to registerIdentity. */
+  recoveryHashHex: Bytes32;
+  /** The same digest without the 0x prefix, as the API schema expects it. */
+  recoveryHash: string;
+}
+
+/**
+ * Everything a registration needs after the wallet has signed and the
+ * transaction has been submitted. Kept per controller so a retry after a
+ * retryable API refusal re-POSTs exactly these values instead of asking the
+ * wallet to sign again or send a second transaction (which the registry
+ * would revert with ControllerAlreadyBound).
+ */
+export interface PendingRegistration {
+  did: string;
+  didHash: Bytes32;
+  recoveryHash: string;
+  publicKey: string;
+  signature: Hex;
+  txHash: Hex;
+  didDocument: Record<string, unknown>;
 }
 
 export interface RegistrationAuthContext {
@@ -46,16 +108,111 @@ export interface BackendIdentityRegistrationResult {
   sessionId: string;
 }
 
-export function createIdentityRegistrationUnavailableError(): Error & {
-  code: typeof IDENTITY_REGISTRY_VERIFICATION_UNAVAILABLE_CODE;
-  statusCode: 503;
-} {
-  return Object.assign(
-    new Error(IDENTITY_REGISTRY_VERIFICATION_UNAVAILABLE_MESSAGE),
-    {
-      code: IDENTITY_REGISTRY_VERIFICATION_UNAVAILABLE_CODE,
-      statusCode: 503 as const,
-    },
+/**
+ * Derive the on-chain arguments from the DID itself. The contract's
+ * registerIdentity(bytes32 didHash, bytes32 recoveryHash) reverts on a zero
+ * didHash, so didHash must be the real keccak of the DID string (the same
+ * convention createDID and the API's verifier use), and the second argument
+ * must be a bytes32 recovery commitment rather than the recovery address.
+ */
+export function deriveRegistrationArtifacts(
+  did: string,
+  recoveryController: Address,
+): RegistrationArtifacts {
+  const didMatch = did.match(WALLET_DID_PATTERN);
+  if (!didMatch) {
+    throw new Error("Identity DID must contain a canonical wallet address.");
+  }
+  const normalizedDid = `did:aethelred:${didMatch[1]}:${didMatch[2].toLowerCase()}`;
+  const didHash = keccak256(toBytes(normalizedDid)) as Bytes32;
+  const recoveryHashHex = keccak256(
+    toBytes(`${normalizedDid}#recovery:${recoveryController.toLowerCase()}`),
+  ) as Bytes32;
+  return { didHash, recoveryHashHex, recoveryHash: recoveryHashHex.slice(2) };
+}
+
+function pendingRegistrationKey(controller: Address): string {
+  return controller.toLowerCase();
+}
+
+function readStoredPendingRegistrations(): Record<string, PendingRegistration> {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.sessionStorage.getItem(PENDING_REGISTRATION_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed: unknown = JSON.parse(raw);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, PendingRegistration>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeStoredPendingRegistrations(
+  entries: Record<string, PendingRegistration>,
+): void {
+  if (typeof window === "undefined") return;
+  try {
+    if (Object.keys(entries).length === 0) {
+      window.sessionStorage.removeItem(PENDING_REGISTRATION_STORAGE_KEY);
+    } else {
+      window.sessionStorage.setItem(
+        PENDING_REGISTRATION_STORAGE_KEY,
+        JSON.stringify(entries),
+      );
+    }
+  } catch {
+    // Session storage can be unavailable (private mode, quota); the in-memory
+    // slot still covers a retry within the same page.
+  }
+}
+
+export function storePendingRegistration(
+  controller: Address,
+  pending: PendingRegistration,
+): void {
+  const key = pendingRegistrationKey(controller);
+  inMemoryPendingRegistrations.set(key, pending);
+  writeStoredPendingRegistrations({
+    ...readStoredPendingRegistrations(),
+    [key]: pending,
+  });
+}
+
+export function getPendingRegistration(
+  controller: Address,
+): PendingRegistration | undefined {
+  const key = pendingRegistrationKey(controller);
+  const inMemory = inMemoryPendingRegistrations.get(key);
+  if (inMemory) return inMemory;
+  const stored = readStoredPendingRegistrations()[key];
+  return isPendingRegistration(stored) ? stored : undefined;
+}
+
+export function clearPendingRegistration(controller: Address): void {
+  const key = pendingRegistrationKey(controller);
+  inMemoryPendingRegistrations.delete(key);
+  const stored = readStoredPendingRegistrations();
+  if (key in stored) {
+    delete stored[key];
+    writeStoredPendingRegistrations(stored);
+  }
+}
+
+function isPendingRegistration(value: unknown): value is PendingRegistration {
+  if (!value || typeof value !== "object") return false;
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.did === "string" &&
+    typeof record.didHash === "string" &&
+    typeof record.recoveryHash === "string" &&
+    typeof record.publicKey === "string" &&
+    typeof record.signature === "string" &&
+    typeof record.txHash === "string" &&
+    /^0x[0-9a-fA-F]{64}$/.test(record.txHash) &&
+    !!record.didDocument &&
+    typeof record.didDocument === "object"
   );
 }
 

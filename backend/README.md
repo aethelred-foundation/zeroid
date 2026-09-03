@@ -65,6 +65,70 @@ Minimal env to start (see `.env.testnet.example` for the full annotated set):
 | `AETHELRED_CHAIN_ID` | `7332` for wallet registration and sign-in domain separation                    |
 | `CORS_ORIGINS`       | comma-separated, exact frontend origins; wildcards are ignored                  |
 | `ZEROID_AUTH_ORIGIN` | exact frontend origin embedded in wallet sign-in messages                       |
+| `AETHELRED_RPC_URL`  | JSON-RPC node the registration verifier reads; registration answers 503 until set |
+| `IDENTITY_REGISTRY_ADDRESS` | deployed registry from the accepted manifest (same value as the frontend's `NEXT_PUBLIC_IDENTITY_REGISTRY_ADDRESS`); `eth_getCode` must be non-empty |
+| `IDENTITY_REGISTRY_MIN_CONFIRMATIONS` | optional, default `1` (CometBFT per-block finality)                    |
+| `IDENTITY_REGISTRY_RECEIPT_WAIT_MS` | optional, default `15000`; bounded server-side receipt wait              |
+| `AETHELRED_NETWORK_ANCHOR_BLOCK` / `_HASH` | optional pair; when set, the anchor block hash is asserted on every verification |
+| `IDENTITY_REGISTRY_DID_NETWORKS` | optional override of the DID-network-per-chain-id table                     |
+
+## Registry verification
+
+`POST /api/v1/identity/register` requires the hash of the wallet's
+`registerIdentity(bytes32 didHash, bytes32 recoveryHash)` transaction and
+creates no identity and issues no session until the API has verified that
+transaction itself, from `AETHELRED_RPC_URL`. The verifier
+(`src/services/identity-registry-verification.ts`) binds, in order:
+
+1. configuration present and `eth_getCode(IDENTITY_REGISTRY_ADDRESS)` non-empty
+   (else `503 IDENTITY_REGISTRY_NOT_CONFIGURED`);
+2. the DID's network segment allowed for `AETHELRED_CHAIN_ID`
+   (else `400 IDENTITY_DID_NETWORK_MISMATCH`), then the EIP-191 wallet proof;
+3. replay pre-checks: the txHash and the controller are not already bound to a
+   verified identity (`409 IDENTITY_REGISTRY_TX_ALREADY_USED`,
+   `409 IDENTITY_CONTROLLER_EXISTS`) — before any RPC call;
+4. a canonical receipt (double receipt read, receipt/transaction/block hash
+   agreement, `status == 1`, confirmations ≥ minimum) inside a bounded poll of
+   `IDENTITY_REGISTRY_RECEIPT_WAIT_MS`;
+5. `eth_chainId` equals `AETHELRED_CHAIN_ID` and, if configured, the anchor
+   block hash matches (`422 IDENTITY_REGISTRY_CHAIN_MISMATCH`);
+6. `tx.to` is the registry, `tx.from` is the proven controller, the selector is
+   `registerIdentity` (so `batchRegister` is excluded) and the calldata carries
+   `keccak256(utf8(did))` and the request's recovery hash;
+7. exactly one `IdentityRegistered` event from the registry for that didHash,
+   whose controller is the sender and whose timestamp is the block's;
+8. `resolveByController(controller) == didHash` and `resolveIdentity(didHash)`
+   is Active with the same controller and recovery hash
+   (`422 IDENTITY_REGISTRY_STATE_MISMATCH`);
+9. the chain snapshot re-asserted inside the same database transaction as the
+   identity and audit rows; the session token is issued only after commit.
+
+The evidence is persisted in the identity's `registry*` columns. `registryTxHash`,
+`registryDidHash` and `registryController` are unique, so a receipt verifies
+exactly one identity.
+
+Two refusals are **retryable** and expected during normal operation when the
+browser's RPC leads the API's: `409 IDENTITY_REGISTRY_TX_NOT_MINED` and
+`409 IDENTITY_REGISTRY_TX_NOT_CONFIRMED`. The frontend keeps the signed and
+submitted artifacts and re-POSTs them on the next click; no new signature or
+transaction is needed. `503 IDENTITY_REGISTRY_NOT_CONFIGURED`,
+`503 IDENTITY_REGISTRY_RPC_UNAVAILABLE` and
+`503 IDENTITY_REGISTRATION_NOT_CONFIGURED` are returned with their code (not
+masked as `Internal server error`) so the browser can tell "retry later" from a
+server fault.
+
+`GET /ready` reports `checks.identityRegistry` as `ok`, `unavailable` (not
+configured, or no code at the address) or `degraded` (RPC unreachable or wrong
+chain id at probe time). `/register` has its own limiter (5 per 15 minutes per
+client) because each attempt costs roughly ten RPC calls.
+
+Operators can run the exact verification against a real transaction, or just
+prove egress to the RPC, with:
+
+```bash
+node dist/ops/identity-registry-smoke.js --probe
+node dist/ops/identity-registry-smoke.js <txHash> <did> <controller> <recoveryHash> [--dump <dir>]
+```
 
 ## Signing custody (testnet vs production)
 

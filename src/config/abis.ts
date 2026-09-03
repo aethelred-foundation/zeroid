@@ -40,6 +40,15 @@ export const IdentityRegistryABI = [
     inputs: [{ name: "didHash", type: "bytes32" }],
     outputs: [{ name: "", type: "bool" }],
   },
+  // registerIdentity is whenNotPaused; the registration pre-flight reads this
+  // so a paused registry is reported before the wallet is asked to sign or pay.
+  {
+    name: "paused",
+    type: "function",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "bool" }],
+  },
 
   // --- Write Functions ---
   {

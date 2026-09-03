@@ -96,6 +96,21 @@ model Identity {
   governmentVerified Boolean     @default(false)
   governmentRefId String?
   delegatedTo     String[]
+  // Server-verified registry evidence. Populated only by the registration
+  // verifier from a confirmed registerIdentity receipt; never client-writable.
+  // The unique columns mirror the contract's IdentityAlreadyExists /
+  // ControllerAlreadyBound invariants so one receipt verifies exactly one row.
+  registryChainId            Int?
+  registryAddress            String?
+  registryTxHash             String?   @unique
+  registryBlockNumber        Int?
+  registryBlockHash          String?
+  registryDidHash            String?   @unique
+  registryController         String?   @unique
+  registryEventTimestamp     DateTime?
+  registryConfirmations      Int?
+  registryVerifiedAt         DateTime?
+  registryVerificationVersion String?
   createdAt       DateTime       @default(now())
   updatedAt       DateTime       @updatedAt
 

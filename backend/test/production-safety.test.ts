@@ -1,4 +1,5 @@
 import {
+  checkedProductionSafetyControls,
   collectProductionSafetyViolations,
   getAllowedCorsOrigins,
   isProductionRuntime,
@@ -86,6 +87,8 @@ const PROD_BASE_ENV: NodeJS.ProcessEnv = {
   ZK_CIRCUIT_ARTIFACT_DIGESTS_JSON: JSON.stringify(circuitDigestManifest),
   OID4VCI_ISSUER_JWK: JSON.stringify(oid4vciIssuerJwk),
   OID4VCI_STORAGE_HASH_PEPPER: 'o'.repeat(64),
+  AETHELRED_RPC_URL: 'https://rpc.aethelred.example',
+  IDENTITY_REGISTRY_ADDRESS: '0x5FbDB2315678afecb367f032d93F642f64180aa3',
 };
 
 describe('production safety controls', () => {
@@ -936,5 +939,70 @@ describe('OpenID4VCI / OpenID4VP production controls', () => {
       collectProductionSafetyViolations({ ...cleanProdEnv, OID4VP_ISSUER_JWKS: '{broken' }),
     ).toEqual([expect.objectContaining({ control: 'OID4VP_ISSUER_JWKS' })]);
     expect(collectProductionSafetyViolations(cleanProdEnv)).toEqual([]);
+  });
+});
+
+describe('identity registry verifier production controls', () => {
+  const cleanProdEnv: NodeJS.ProcessEnv = {
+    ...PROD_BASE_ENV,
+    METRICS_PUBLIC_DISABLED: 'true',
+  };
+
+  it('accepts an HTTPS RPC and a non-zero registry address', () => {
+    expect(collectProductionSafetyViolations(cleanProdEnv)).toEqual([]);
+  });
+
+  it('blocks production startup when the verifier RPC is missing', () => {
+    const { AETHELRED_RPC_URL: _omit, ...withoutRpc } = cleanProdEnv;
+    expect(collectProductionSafetyViolations(withoutRpc)).toEqual([
+      expect.objectContaining({ control: 'AETHELRED_RPC_URL' }),
+    ]);
+  });
+
+  it.each([
+    ['plain HTTP to a public host', 'http://rpc.aethelred.example:8545'],
+    ['embedded credentials', 'https://user:secret@rpc.aethelred.example'],
+    ['a non-http scheme', 'ws://rpc.aethelred.example'],
+    ['garbage', 'not a url'],
+  ])('rejects %s as the verifier RPC', (_label, url) => {
+    expect(
+      collectProductionSafetyViolations({ ...cleanProdEnv, AETHELRED_RPC_URL: url }),
+    ).toEqual([expect.objectContaining({ control: 'AETHELRED_RPC_URL' })]);
+  });
+
+  it('allows plain HTTP only for private-network hosts', () => {
+    expect(
+      collectProductionSafetyViolations({
+        ...cleanProdEnv,
+        AETHELRED_RPC_URL: 'http://10.0.0.7:8545',
+      }),
+    ).toEqual([]);
+    expect(
+      collectProductionSafetyViolations({
+        ...cleanProdEnv,
+        AETHELRED_RPC_URL: 'http://rpc.internal.localhost:8545',
+      }),
+    ).toEqual([]);
+  });
+
+  it('blocks production startup when the registry address is missing, zero or malformed', () => {
+    const { IDENTITY_REGISTRY_ADDRESS: _omit, ...withoutAddress } = cleanProdEnv;
+    expect(collectProductionSafetyViolations(withoutAddress)).toEqual([
+      expect.objectContaining({ control: 'IDENTITY_REGISTRY_ADDRESS' }),
+    ]);
+    for (const address of [`0x${'0'.repeat(40)}`, '0x1234', 'registry']) {
+      expect(
+        collectProductionSafetyViolations({
+          ...cleanProdEnv,
+          IDENTITY_REGISTRY_ADDRESS: address,
+        }),
+      ).toEqual([expect.objectContaining({ control: 'IDENTITY_REGISTRY_ADDRESS' })]);
+    }
+  });
+
+  it('lists both verifier controls as checked production controls', () => {
+    expect(checkedProductionSafetyControls()).toEqual(
+      expect.arrayContaining(['AETHELRED_RPC_URL', 'IDENTITY_REGISTRY_ADDRESS']),
+    );
   });
 });

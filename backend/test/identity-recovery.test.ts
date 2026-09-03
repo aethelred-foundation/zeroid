@@ -13,6 +13,24 @@ const mockRevokeToken = jest.fn();
 const mockRevokePlatformSession = jest.fn();
 const mockRevokeSubjectSessions = jest.fn();
 const mockPrismaTransaction = jest.fn();
+const mockVerifyIdentityRegistration = jest.fn();
+const mockAssertCanonicalChainSnapshot = jest.fn();
+
+jest.mock('../src/services/identity-registry-verification', () => ({
+  ...jest.requireActual('../src/services/identity-registry-verification'),
+  verifyIdentityRegistration: mockVerifyIdentityRegistration,
+}));
+
+jest.mock('../src/lib/canonical-chain-transaction', () => ({
+  ...jest.requireActual('../src/lib/canonical-chain-transaction'),
+  assertCanonicalChainSnapshot: mockAssertCanonicalChainSnapshot,
+}));
+
+jest.mock('../src/lib/identity-registry-config', () => ({
+  ...jest.requireActual('../src/lib/identity-registry-config'),
+  createIdentityRegistryProvider: jest.fn(() => ({ tag: 'provider' })),
+  destroyProvider: jest.fn(),
+}));
 
 jest.mock('../src/runtime', () => ({
   logger: {
@@ -95,6 +113,27 @@ async function signedRegistration(wallet: Wallet, recoveryHash: string) {
     ),
     recoveryHash,
     signature: await wallet.signMessage(message),
+    txHash: REGISTRY_TX_HASH,
+  };
+}
+
+const REGISTRY_TX_HASH = `0x${'11'.repeat(32)}`;
+const REGISTRY_ADDRESS = '0x5fbdb2315678afecb367f032d93f642f64180aa3';
+
+/** The verifier is exercised in its own suite; here it answers with evidence. */
+function verifiedEvidence(input: { controller: string; did: string }) {
+  return {
+    dataSource: 'CHAIN_IDENTITY_REGISTRY' as const,
+    chainId: 7332,
+    registryAddress: REGISTRY_ADDRESS,
+    txHash: REGISTRY_TX_HASH,
+    blockNumber: 42,
+    blockHash: `0x${'33'.repeat(32)}`,
+    didHash: `0x${'dd'.repeat(32)}`,
+    controller: input.controller,
+    eventTimestamp: new Date('2026-04-28T00:00:00.000Z'),
+    confirmations: 1,
+    verificationVersion: 'zeroid.identity.registry-verification.v1',
   };
 }
 
@@ -118,8 +157,16 @@ function baseIdentity(overrides: Record<string, unknown> = {}) {
 
 describe('IdentityService registration hardening', () => {
   beforeEach(() => {
-    process.env = { ...ORIGINAL_ENV };
+    process.env = {
+      ...ORIGINAL_ENV,
+      AETHELRED_RPC_URL: 'http://127.0.0.1:8545',
+      IDENTITY_REGISTRY_ADDRESS: REGISTRY_ADDRESS,
+    };
     jest.clearAllMocks();
+    mockVerifyIdentityRegistration.mockImplementation(async (input) =>
+      verifiedEvidence(input),
+    );
+    mockAssertCanonicalChainSnapshot.mockResolvedValue(undefined);
     mockSessionFindMany.mockResolvedValue([]);
     mockIdentityCreate.mockResolvedValue(baseIdentity());
     mockAuditLogCreate.mockResolvedValue({});
@@ -196,9 +243,13 @@ describe('IdentityService registration hardening', () => {
       createdAt,
       updatedAt: createdAt,
     });
-    mockIdentityFindUnique
-      .mockResolvedValueOnce(null)
-      .mockResolvedValueOnce(created);
+    // The DID pre-check sees the row only after the first registration
+    // committed; the txHash/controller replay pre-checks stay empty so the
+    // second attempt is refused by the DID conflict exactly as before.
+    let didLookups = 0;
+    mockIdentityFindUnique.mockImplementation(async ({ where }) =>
+      where.did ? (didLookups++ === 0 ? null : created) : null,
+    );
     mockIdentityCreate.mockResolvedValue(created);
     const service = new IdentityService();
 

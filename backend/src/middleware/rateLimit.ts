@@ -148,6 +148,19 @@ export const authRateLimiter = createRateLimiter({
   keyPrefix: 'rl:auth',
 });
 
+/**
+ * Dedicated limiter for identity registration. Each attempt is backed by the
+ * registry verifier (roughly ten JSON-RPC calls plus a bounded receipt wait),
+ * so it must neither share the sign-in budget nor let a retry loop amplify
+ * RPC load. Retryable 409s are expected to be re-submitted by a person, not
+ * by a client loop.
+ */
+export const identityRegistrationRateLimiter = createRateLimiter({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  maxRequests: 5,
+  keyPrefix: 'rl:identity-register',
+});
+
 /** Standard API rate limiter */
 export const apiRateLimiter = createRateLimiter({
   windowMs: 60_000, // 1 minute

@@ -62,8 +62,12 @@ jest.mock("wagmi", () => ({
 }));
 
 const mockCreateIdentity = jest.fn().mockResolvedValue(undefined);
+let mockRegistrationStage = "idle";
 jest.mock("@/hooks/useIdentity", () => ({
-  useIdentity: () => ({ createIdentity: mockCreateIdentity }),
+  useIdentity: () => ({
+    createIdentity: mockCreateIdentity,
+    registrationStage: mockRegistrationStage,
+  }),
 }));
 
 const mockInitiateVerification = jest.fn().mockResolvedValue(undefined);
@@ -105,6 +109,7 @@ beforeEach(() => {
   });
   mockConnectAsync.mockResolvedValue(undefined);
   mockCreateIdentity.mockResolvedValue(undefined);
+  mockRegistrationStage = "idle";
   mockInitiateVerification.mockResolvedValue(undefined);
   mockStartScan.mockResolvedValue(undefined);
 });
@@ -160,8 +165,9 @@ describe("IdentityCreation — default testnet flow", () => {
     render(<IdentityCreation />);
     fireEvent.click(screen.getByText("Next"));
     expect(
-      screen.getByText("Registration Temporarily Unavailable"),
+      screen.getByRole("heading", { name: "Register Identity" }),
     ).toBeInTheDocument();
+    expect(screen.getByText("Register Your Identity")).toBeInTheDocument();
     fireEvent.click(screen.getByText("Back"));
     expect(screen.getByText("Connect Wallet")).toBeInTheDocument();
   });
@@ -186,26 +192,170 @@ describe("IdentityCreation — default testnet flow", () => {
     rerender(<IdentityCreation />);
     expect(screen.getByText("Next").closest("button")).not.toBeDisabled();
     fireEvent.click(screen.getByText("Next"));
+    expect(screen.getByText("Register Your Identity")).toBeInTheDocument();
     expect(
-      screen.getByText("Registration Temporarily Unavailable"),
-    ).toBeInTheDocument();
+      screen.getByRole("button", { name: /register identity/i }),
+    ).not.toBeDisabled();
   });
 
-  it("truthfully disables registration without invoking the wallet flow", () => {
+  it("disables the register button while the wallet is disconnected on the register step", () => {
+    connected();
+    const { rerender } = render(<IdentityCreation />);
+    fireEvent.click(screen.getByText("Next"));
+    mockUseAccount.mockReturnValue({ address: undefined, isConnected: false });
+    rerender(<IdentityCreation />);
+    expect(
+      screen.getByRole("button", { name: /register identity/i }),
+    ).toBeDisabled();
+    expect(
+      screen.getByText("Connect your wallet first (step 1)."),
+    ).toBeInTheDocument();
+    expect(mockCreateIdentity).not.toHaveBeenCalled();
+  });
+
+  it("registers the identity and shows the success state", async () => {
     connected();
     render(<IdentityCreation />);
     fireEvent.click(screen.getByText("Next"));
-    const registrationButton = screen.getByRole("button", {
-      name: /registration unavailable/i,
-    });
-    expect(registrationButton).toBeDisabled();
-    expect(
-      screen.getByText(
-        /wallet will not be asked to sign or submit a transaction/i,
+    await act(async () =>
+      fireEvent.click(
+        screen.getByRole("button", { name: /register identity/i }),
       ),
-    ).toBeInTheDocument();
-    expect(mockCreateIdentity).not.toHaveBeenCalled();
+    );
+    expect(mockCreateIdentity).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("Identity Registered")).toBeInTheDocument();
+    const cta = screen.getByRole("link", { name: /go to dashboard/i });
+    expect(cta).toHaveAttribute("href", "/");
+  });
+
+  it("shows Registering... while the transaction is in flight", async () => {
+    connected();
+    let resolve: () => void;
+    mockCreateIdentity.mockImplementation(
+      () => new Promise<void>((r) => (resolve = r)),
+    );
+    render(<IdentityCreation />);
+    fireEvent.click(screen.getByText("Next"));
+    act(() =>
+      fireEvent.click(
+        screen.getByRole("button", { name: /register identity/i }),
+      ),
+    );
+    expect(screen.getByText("Registering...")).toBeInTheDocument();
+    await act(async () => resolve!());
+  });
+
+  it.each([
+    ["preflight", "Checking registry..."],
+    ["signing", "Signing..."],
+    ["submitting", "Submitting..."],
+    ["confirming", "Confirming..."],
+    ["verifying", "Verifying..."],
+  ])("labels the in-flight button by the %s stage", async (stage, label) => {
+    connected();
+    let resolve: () => void;
+    mockCreateIdentity.mockImplementation(() => {
+      mockRegistrationStage = stage;
+      return new Promise<void>((r) => (resolve = r));
+    });
+    render(<IdentityCreation />);
+    fireEvent.click(screen.getByText("Next"));
+    act(() =>
+      fireEvent.click(
+        screen.getByRole("button", { name: /register identity/i }),
+      ),
+    );
+    expect(screen.getByText(label)).toBeInTheDocument();
+    await act(async () => resolve!());
+  });
+
+  it("surfaces a registration error and stays on the register step", async () => {
+    connected();
+    mockCreateIdentity.mockRejectedValueOnce(new Error("Transaction reverted"));
+    render(<IdentityCreation />);
+    fireEvent.click(screen.getByText("Next"));
+    await act(async () =>
+      fireEvent.click(
+        screen.getByRole("button", { name: /register identity/i }),
+      ),
+    );
+    expect(screen.getByText("Transaction reverted")).toBeInTheDocument();
     expect(screen.queryByText("Identity Registered")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /register identity/i }),
+    ).not.toBeDisabled();
+  });
+
+  it("falls back to a generic message on a non-Error registration failure", async () => {
+    connected();
+    mockCreateIdentity.mockRejectedValueOnce(null);
+    render(<IdentityCreation />);
+    fireEvent.click(screen.getByText("Next"));
+    await act(async () =>
+      fireEvent.click(
+        screen.getByRole("button", { name: /register identity/i }),
+      ),
+    );
+    expect(
+      screen.getByText("Identity registration failed"),
+    ).toBeInTheDocument();
+  });
+
+  it("renders the honest unavailable state only for the API's IDENTITY_REGISTRY_NOT_CONFIGURED refusal", async () => {
+    connected();
+    mockCreateIdentity.mockRejectedValueOnce(
+      Object.assign(new Error("The registration service is not ready."), {
+        code: "IDENTITY_REGISTRY_NOT_CONFIGURED",
+        statusCode: 503,
+      }),
+    );
+    render(<IdentityCreation />);
+    fireEvent.click(screen.getByText("Next"));
+    await act(async () =>
+      fireEvent.click(
+        screen.getByRole("button", { name: /register identity/i }),
+      ),
+    );
+
+    expect(
+      screen.getByText("Registration Temporarily Unavailable"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("The registration service is not ready."),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /registration unavailable/i }),
+    ).toBeDisabled();
+    expect(screen.queryByText("Identity Registered")).not.toBeInTheDocument();
+
+    // "Check again" returns to the live register step.
+    fireEvent.click(screen.getByRole("button", { name: /check again/i }));
+    expect(
+      screen.getByRole("button", { name: /register identity/i }),
+    ).not.toBeDisabled();
+  });
+
+  it("treats other 503s as ordinary retryable errors, not the unavailable state", async () => {
+    connected();
+    mockCreateIdentity.mockRejectedValueOnce(
+      Object.assign(new Error("RPC is unreachable; retry later."), {
+        code: "IDENTITY_REGISTRY_RPC_UNAVAILABLE",
+        statusCode: 503,
+      }),
+    );
+    render(<IdentityCreation />);
+    fireEvent.click(screen.getByText("Next"));
+    await act(async () =>
+      fireEvent.click(
+        screen.getByRole("button", { name: /register identity/i }),
+      ),
+    );
+    expect(
+      screen.getByText("RPC is unreachable; retry later."),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("Registration Temporarily Unavailable"),
+    ).not.toBeInTheDocument();
   });
 
   it("clicking a completed step indicator navigates back", () => {

@@ -26,12 +26,15 @@ describe('walletDidSchema', () => {
     expect(() => walletDidSchema.parse('did:aethelred:alice')).toThrow();
   });
 
+  const txHash = `0x${'AB'.repeat(32)}`;
+
   it('is enforced by registerIdentitySchema', () => {
     const base = {
       controller: address,
       publicKey: Buffer.from('a-valid-public-key-that-is-long-enough').toString('base64'),
       recoveryHash: 'a'.repeat(64),
       signature: `0x${'0'.repeat(128)}1b`,
+      txHash,
     };
     expect(() =>
       registerIdentitySchema.parse({ ...base, did: 'did:aethelred:pending' }),
@@ -43,6 +46,25 @@ describe('walletDidSchema', () => {
     expect(ok.did).toBe(`did:aethelred:testnet:${address.toLowerCase()}`);
     expect(ok.controller).toBe(address.toLowerCase());
     expect(ok.signature).toBe(`0x${'0'.repeat(128)}1b`);
+    expect(ok.txHash).toBe(txHash.toLowerCase());
+  });
+
+  it('requires the registry transaction hash and lowercases it', () => {
+    const base = {
+      did: `did:aethelred:testnet:${address}`,
+      controller: address,
+      publicKey: Buffer.from('a-valid-public-key-that-is-long-enough').toString('base64'),
+      recoveryHash: 'a'.repeat(64),
+      signature: `0x${'0'.repeat(128)}1b`,
+    };
+
+    expect(() => registerIdentitySchema.parse(base)).toThrow();
+    for (const bad of ['', '0x1234', `0x${'a'.repeat(63)}`, `${'a'.repeat(64)}`, `0x${'g'.repeat(64)}`]) {
+      expect(() => registerIdentitySchema.parse({ ...base, txHash: bad })).toThrow();
+    }
+    expect(registerIdentitySchema.parse({ ...base, txHash }).txHash).toBe(
+      txHash.toLowerCase(),
+    );
   });
 
   it('requires an explicit canonical wallet signature', () => {
@@ -51,6 +73,7 @@ describe('walletDidSchema', () => {
       controller: address,
       publicKey: Buffer.from('a-valid-public-key-that-is-long-enough').toString('base64'),
       recoveryHash: 'a'.repeat(64),
+      txHash,
     };
 
     expect(() => registerIdentitySchema.parse(base)).toThrow();
@@ -83,6 +106,7 @@ describe('walletDidSchema', () => {
       publicKey: Buffer.from('a-valid-public-key-that-is-long-enough').toString('base64'),
       recoveryHash: 'a'.repeat(64),
       signature: `0x${'0'.repeat(128)}1b`,
+      txHash,
       metadata: {
         [reservedKey]: { name: 'attacker-controlled' },
       },
@@ -92,26 +116,41 @@ describe('walletDidSchema', () => {
   });
 
   it('accepts the explicit client metadata allowlist', () => {
-    const hash = `0x${'a'.repeat(64)}`;
     const parsed = registerIdentitySchema.parse({
       did: `did:aethelred:testnet:${address}`,
       controller: address,
       publicKey: Buffer.from('a-valid-public-key-that-is-long-enough').toString('base64'),
       recoveryHash: 'a'.repeat(64),
       signature: `0x${'0'.repeat(128)}1b`,
+      txHash,
       metadata: {
         avatarUri: 'https://example.test/avatar.png',
         didDocument: { id: `did:aethelred:testnet:${address.toLowerCase()}` },
-        didHash: hash,
-        txHash: hash,
       },
     });
 
     expect(parsed.metadata).toEqual({
       avatarUri: 'https://example.test/avatar.png',
       didDocument: { id: `did:aethelred:testnet:${address.toLowerCase()}` },
-      didHash: hash,
-      txHash: hash,
     });
   });
+
+  it.each(['didHash', 'txHash'])(
+    'no longer accepts registry evidence key %s in client metadata',
+    (key) => {
+      // Registry evidence is derived server-side by the verifier from the
+      // top-level txHash; a client value would be unverified.
+      expect(() =>
+        registerIdentitySchema.parse({
+          did: `did:aethelred:testnet:${address}`,
+          controller: address,
+          publicKey: Buffer.from('a-valid-public-key-that-is-long-enough').toString('base64'),
+          recoveryHash: 'a'.repeat(64),
+          signature: `0x${'0'.repeat(128)}1b`,
+          txHash,
+          metadata: { [key]: `0x${'a'.repeat(64)}` },
+        }),
+      ).toThrow();
+    },
+  );
 });

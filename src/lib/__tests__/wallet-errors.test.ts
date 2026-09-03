@@ -64,3 +64,100 @@ describe("friendlyRegistrationError", () => {
     expect(friendly.message).toMatch(/could not sign/i);
   });
 });
+
+describe("friendlyRegistrationError — registry verifier codes", () => {
+  const withCode = (code: string, statusCode: number) =>
+    Object.assign(new Error(`refused: ${code}`), { code, statusCode });
+
+  it.each([
+    "IDENTITY_REGISTRY_TX_NOT_MINED",
+    "IDENTITY_REGISTRY_TX_NOT_CONFIRMED",
+  ])(
+    "tells the user to click Register again for %s (no new signature or tx)",
+    (code) => {
+      const friendly = friendlyRegistrationError(withCode(code, 409));
+      expect(friendly.message).toMatch(/click Register again/i);
+      expect(friendly.message).toMatch(/no new signature or transaction/i);
+      expect(friendly).toMatchObject({ code, statusCode: 409 });
+    },
+  );
+
+  it.each(["IDENTITY_REGISTRY_TX_ALREADY_USED", "IDENTITY_CONTROLLER_EXISTS"])(
+    "maps %s to already-registered guidance",
+    (code) => {
+      const friendly = friendlyRegistrationError(withCode(code, 409));
+      expect(friendly.message).toMatch(/already registered/i);
+      expect(friendly).toMatchObject({ code });
+    },
+  );
+
+  it("explains a reverted registry transaction", () => {
+    const friendly = friendlyRegistrationError(
+      withCode("IDENTITY_REGISTRY_TX_REVERTED", 422),
+    );
+    expect(friendly.message).toMatch(/reverted on-chain/i);
+    expect(friendly.message).toMatch(/paused|already bound/i);
+    expect(friendly.message).toMatch(/no session/i);
+  });
+
+  it("explains a DID network / chain id mismatch as an environment problem", () => {
+    const friendly = friendlyRegistrationError(
+      withCode("IDENTITY_DID_NETWORK_MISMATCH", 400),
+    );
+    expect(friendly.message).toMatch(/NEXT_PUBLIC_CHAIN_ENV/);
+    expect(friendly.message).toMatch(/AETHELRED_CHAIN_ID/);
+  });
+
+  it.each([
+    "IDENTITY_REGISTRY_NOT_CONFIGURED",
+    "IDENTITY_REGISTRY_RPC_UNAVAILABLE",
+    "IDENTITY_REGISTRATION_NOT_CONFIGURED",
+  ])(
+    "maps the %s 503 to a service-not-ready message that keeps the code",
+    (code) => {
+      const friendly = friendlyRegistrationError(withCode(code, 503));
+      expect(friendly.message).toMatch(/not ready/i);
+      expect(friendly.message).toMatch(/nothing was lost/i);
+      expect(friendly).toMatchObject({ code, statusCode: 503 });
+    },
+  );
+
+  it.each([
+    "IDENTITY_REGISTRY_CHAIN_MISMATCH",
+    "IDENTITY_REGISTRY_WRONG_TARGET",
+    "IDENTITY_REGISTRY_SENDER_MISMATCH",
+    "IDENTITY_REGISTRY_WRONG_FUNCTION",
+    "IDENTITY_REGISTRY_ARGUMENT_MISMATCH",
+    "IDENTITY_REGISTRY_EVENT_MISSING",
+    "IDENTITY_REGISTRY_EVENT_MISMATCH",
+    "IDENTITY_REGISTRY_STATE_MISMATCH",
+  ])("maps the %s 422 to operator guidance quoting the tx hash", (code) => {
+    const friendly = friendlyRegistrationError(withCode(code, 422));
+    expect(friendly.message).toMatch(/could not match your transaction/i);
+    expect(friendly.message).toMatch(/transaction hash/i);
+    expect(friendly).toMatchObject({ code, statusCode: 422 });
+  });
+
+  it("keeps the API code on wallet-mapped errors that carry one", () => {
+    const friendly = friendlyRegistrationError(
+      Object.assign(new Error("User rejected the request."), {
+        code: "WALLET_REJECTED",
+        statusCode: 400,
+      }),
+    );
+    expect(friendly.message).toMatch(/declined/i);
+    expect(friendly).toMatchObject({ code: "WALLET_REJECTED" });
+  });
+});
+
+describe("pre-flight messages", () => {
+  it("exports the paused and already-bound guidance used before signing", () => {
+    const {
+      REGISTRY_PAUSED_MESSAGE,
+      CONTROLLER_ALREADY_BOUND_MESSAGE,
+    } = require("@/lib/wallet-errors");
+    expect(REGISTRY_PAUSED_MESSAGE).toMatch(/registry is paused/i);
+    expect(REGISTRY_PAUSED_MESSAGE).toMatch(/nothing was signed/i);
+    expect(CONTROLLER_ALREADY_BOUND_MESSAGE).toMatch(/already bound/i);
+  });
+});

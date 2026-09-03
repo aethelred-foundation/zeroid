@@ -2,7 +2,7 @@
  * Tests for IdentityContext — provider and useIdentity hook.
  *
  * Covers: DID derivation, profile fetching on connect, credential polling,
- * state cleanup on disconnect, registerIdentity, refreshProfile,
+ * state cleanup on disconnect, refreshProfile,
  * refreshCredentials, getCredential, getCredentialsByStatus, clearIdentity,
  * and the useIdentity guard for missing provider.
  */
@@ -35,8 +35,6 @@ const mockUseAccount = jest.fn<
   []
 >();
 const mockSignMessageAsync = jest.fn();
-const validRecoveryHash =
-  "0x1111111111111111111111111111111111111111111111111111111111111111" as Bytes32;
 
 jest.mock("wagmi", () => ({
   useAccount: () => mockUseAccount(),
@@ -52,13 +50,6 @@ jest.mock("@/lib/api/client", () => ({
     loginWithWallet: jest.fn(),
     getCurrentIdentity: jest.fn(),
   },
-}));
-
-jest.mock("@/lib/identity/registration", () => ({
-  ...jest.requireActual("@/lib/identity/registration"),
-  recoverRegistrationPublicKey: jest.fn(() =>
-    Promise.resolve("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="),
-  ),
 }));
 
 jest.mock("@/lib/utils", () => ({
@@ -727,16 +718,16 @@ describe("IdentityContext", () => {
   });
 
   // =========================================================================
-  // registerIdentity
+  // registration lives in the wizard (useIdentity().createIdentity), not here
   // =========================================================================
 
-  describe("registerIdentity", () => {
-    it("fails closed without asking for a signature or calling the API", async () => {
-      (apiClient.getIdentityByAddress as jest.Mock).mockResolvedValue(null);
+  describe("registration surface", () => {
+    it("exposes no registerIdentity member — the wizard owns registration", async () => {
       mockUseAccount.mockReturnValue({
         address: mockAddress,
         isConnected: true,
       });
+      (apiClient.getIdentityByAddress as jest.Mock).mockResolvedValue(null);
 
       const { result } = renderHook(() => useIdentity(), { wrapper });
 
@@ -744,44 +735,9 @@ describe("IdentityContext", () => {
         expect(result.current.identity.isLoading).toBe(false);
       });
 
-      let caught: unknown;
-      await act(async () => {
-        try {
-          await result.current.registerIdentity(validRecoveryHash);
-        } catch (error) {
-          caught = error;
-        }
-      });
-
-      expect(caught).toMatchObject({
-        code: "IDENTITY_REGISTRY_VERIFICATION_UNAVAILABLE",
-        statusCode: 503,
-      });
-      expect(mockSignMessageAsync).not.toHaveBeenCalled();
+      expect(result.current).not.toHaveProperty("registerIdentity");
       expect(apiClient.registerIdentity).not.toHaveBeenCalled();
-      expect(getIdentityAuthToken()).toBeUndefined();
-      expect(result.current.identity.isRegistered).toBe(false);
-      expect(result.current.identity.isLoading).toBe(false);
-      expect(result.current.identity.error).toContain(
-        "server-side verification of the on-chain registry transaction",
-      );
-    });
-
-    it("throws when wallet is not connected (no DID)", async () => {
-      mockUseAccount.mockReturnValue({
-        address: undefined,
-        isConnected: false,
-      });
-
-      const { result } = renderHook(() => useIdentity(), { wrapper });
-
-      const recoveryHash = validRecoveryHash;
-
-      await expect(
-        act(() => result.current.registerIdentity(recoveryHash)),
-      ).rejects.toThrow("Wallet must be connected to register");
       expect(mockSignMessageAsync).not.toHaveBeenCalled();
-      expect(apiClient.registerIdentity).not.toHaveBeenCalled();
     });
   });
 
