@@ -13,6 +13,7 @@ env:
   NODE_VERSION: "20"
   RUST_VERSION: "1.85"
   GO_VERSION: "1.25.12"
+  CIRCOM_VERSION: "2.2.3"
   # Immutable Aethelred main SHA. ZeroID consumes the SDK as a sibling
   # workspace package until @aethelred/sdk has a signed registry release.
   AETHELRED_REF: 20d6060adc91860736f4ba619fe29cbda54b2cf7
@@ -113,6 +114,57 @@ jobs:
       - run: npm run lint
       - run: npm run type-check
       - run: npm run format:check
+
+  # ===========================================================================
+  # ZK CIRCUIT COMPILATION
+  # ===========================================================================
+  # Three circuits reached main uncompilable and documented as working features
+  # because nothing compiled them. This job compiles all of them and fails on
+  # any change to the recorded known-broken set, in either direction.
+  #
+  # GitHub Actions for this organisation has been billing-locked since
+  # 2026-08-17, so this job has never executed and proves nothing yet. Until
+  # that is lifted the gate is enforced by running `npm run circuits:compile:check`
+  # locally; the script exits 2 (not 1) when circom is absent, so a run that
+  # skipped the toolchain can never be mistaken for a clean gate.
+  circuits-compile:
+    name: ZK Circuit Compilation
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - name: Checkout canonical Aethelred SDK source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          repository: aethelred-foundation/aethelred
+          ref: ${{ env.AETHELRED_REF }}
+          path: .aethelred-source
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "npm"
+      - name: Build canonical Aethelred SDK
+        working-directory: ./.aethelred-source/sdk/typescript
+        run: |
+          npm ci
+          npm run build
+      - name: Expose canonical SDK as the lockfile-pinned sibling package
+        run: ln -sfn "$GITHUB_WORKSPACE/.aethelred-source" "$GITHUB_WORKSPACE/../aethelred"
+      # circomlib is a declared dependency; the check resolves it from node_modules.
+      - run: npm ci
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+      - name: Install circom
+        run: |
+          cargo install --locked --git https://github.com/iden3/circom \
+            --tag v${{ env.CIRCOM_VERSION }} circom
+          circom --version
+      - name: Test the circuit compilation gate
+        run: npm run circuits:compile:test
+      - name: Compile every ZK circuit
+        run: npm run circuits:compile:check
 
   # ===========================================================================
   # FRONTEND TESTS
@@ -309,6 +361,7 @@ jobs:
       [
         security-scan,
         lint-format,
+        circuits-compile,
         test-frontend,
         test-backend,
         test-contracts,
