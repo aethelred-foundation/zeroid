@@ -7,6 +7,12 @@
  * resolves the circuit by id and reorders the signals, so the OpenID4VP path
  * runs end-to-end on the current proof system (the actual cryptographic
  * verification still depends on the registered circuit artifacts — gate W2c).
+ *
+ * `publicSignalOrder` is circom's order — public OUTPUTS first, then public
+ * inputs. `verifyProof` returns `valid` only when the proof both verifies
+ * cryptographically AND satisfies the circuit's declared predicate outputs, so
+ * returning `result.valid` here does not accept a proof that published a
+ * failing verdict.
  */
 import { ServiceError } from '../errors';
 import type { SnarkProof, VerificationResult } from '../zkproof';
@@ -15,7 +21,11 @@ import type { ZkPredicateVerifyDeps } from './zk-predicate';
 interface CircuitMapping {
   /** Key in the backend CIRCUIT_REGISTRY. */
   circuitName: string;
-  /** Public-signal names in the exact order the circuit emits them. */
+  /**
+   * Public-signal names in the exact order the circuit emits them: public
+   * OUTPUTS first, then public inputs. Must match the registry entry's
+   * `publicSignals` for the same circuit.
+   */
   publicSignalOrder: string[];
 }
 
@@ -59,6 +69,8 @@ export function createZkProofServiceVerifier(
       }
       return value;
     });
+    // `valid` folds in the circuit's predicate outputs, not just Groth16
+    // validity: a proof publishing a failing verdict comes back false.
     const result = await svc.verifyProof(proof as SnarkProof, ordered, circuit.circuitName);
     return result.valid;
   };

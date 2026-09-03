@@ -36,6 +36,14 @@ export interface VerificationResult {
   circuitName: string;
   publicSignals: string[];
   verifiedAt: Date;
+  /** Why the proof was rejected, when `valid` is false. */
+  reason?: string;
+}
+
+/** Outcome of checking a proof's published predicate outputs. */
+export interface PredicateCheck {
+  satisfied: boolean;
+  reason?: string;
 }
 
 interface CircuitConfig {
@@ -44,7 +52,27 @@ interface CircuitConfig {
   vkeyPath: string;
   maxInputs: number;
   description: string;
+  /**
+   * Public-signal names in the exact order the circuit emits them. circom
+   * emits public OUTPUTS first, then public inputs, so `publicOutputs` is a
+   * prefix of this list.
+   */
   publicSignals: string[];
+  /**
+   * Names of the circuit's public OUTPUT signals, occupying the first
+   * positions of the public-signal vector. Empty for circuits that assert
+   * their predicate in-circuit and publish no outputs.
+   */
+  publicOutputs: string[];
+  /**
+   * Output signals that must equal 1 for the proof to carry the meaning the
+   * caller attaches to it. A Groth16 proof is valid whenever the witness
+   * satisfies the constraint system — which, for a circuit that computes its
+   * verdict into an output instead of asserting it, includes the case where
+   * the verdict is 0. `undefined` means the circuit's predicate is not known;
+   * such proofs are refused rather than accepted.
+   */
+  requiredOutputs?: string[];
   contextBound: boolean;
 }
 
@@ -97,6 +125,11 @@ const CIRCUIT_REGISTRY: Record<string, CircuitConfig> = {
       'currentTimestamp',
       'credentialHashPublic',
     ],
+    // No circuit source or ceremony artifacts exist for this entry, so its
+    // public-signal layout and predicate are unknown. `requiredOutputs` is
+    // deliberately left undeclared: verification fails closed until the
+    // circuit is built and its symbol table pins the real layout.
+    publicOutputs: [],
     contextBound: false,
   },
   age_verification_context_v2: {
@@ -125,6 +158,12 @@ const CIRCUIT_REGISTRY: Record<string, CircuitConfig> = {
       'currentTimestamp',
       'contextCommitment',
     ],
+    // Verified against the circuit's symbol table: every public signal is an
+    // input, and the predicate (expiry, date-of-birth sanity, age threshold,
+    // context binding) is asserted in-circuit with `=== `, so there is no
+    // output bit a prover could publish as 0.
+    publicOutputs: [],
+    requiredOutputs: [],
     contextBound: true,
   },
   eligibility_policy_context_v1: {
@@ -155,6 +194,12 @@ const CIRCUIT_REGISTRY: Record<string, CircuitConfig> = {
       'policyVersionHash',
       'contextCommitment',
     ],
+    // Verified against the circuit's symbol table: every public signal is an
+    // input, and the predicate (expiry, date-of-birth sanity, age threshold,
+    // context binding) is asserted in-circuit with `=== `, so there is no
+    // output bit a prover could publish as 0.
+    publicOutputs: [],
+    requiredOutputs: [],
     contextBound: true,
   },
   nationality_check: {
@@ -183,6 +228,11 @@ const CIRCUIT_REGISTRY: Record<string, CircuitConfig> = {
       'merkleRoot',
       'useMerkleMode',
     ],
+    // No circuit source or ceremony artifacts exist for this entry, so its
+    // public-signal layout and predicate are unknown. `requiredOutputs` is
+    // deliberately left undeclared: verification fails closed until the
+    // circuit is built and its symbol table pins the real layout.
+    publicOutputs: [],
     contextBound: false,
   },
   income_range: {
@@ -196,6 +246,11 @@ const CIRCUIT_REGISTRY: Record<string, CircuitConfig> = {
     maxInputs: 4,
     description: 'Prove income falls within a specified range',
     publicSignals: [],
+    // No circuit source or ceremony artifacts exist for this entry, so its
+    // public-signal layout and predicate are unknown. `requiredOutputs` is
+    // deliberately left undeclared: verification fails closed until the
+    // circuit is built and its symbol table pins the real layout.
+    publicOutputs: [],
     contextBound: false,
   },
   credential_ownership: {
@@ -218,6 +273,11 @@ const CIRCUIT_REGISTRY: Record<string, CircuitConfig> = {
     description:
       'Prove ownership of a credential without revealing its contents',
     publicSignals: [],
+    // No circuit source or ceremony artifacts exist for this entry, so its
+    // public-signal layout and predicate are unknown. `requiredOutputs` is
+    // deliberately left undeclared: verification fails closed until the
+    // circuit is built and its symbol table pins the real layout.
+    publicOutputs: [],
     contextBound: false,
   },
   selective_disclosure: {
@@ -240,9 +300,78 @@ const CIRCUIT_REGISTRY: Record<string, CircuitConfig> = {
     description:
       'Selectively reveal specific fields of a credential while hiding others',
     publicSignals: [],
+    // No circuit source or ceremony artifacts exist for this entry, so its
+    // public-signal layout and predicate are unknown. `requiredOutputs` is
+    // deliberately left undeclared: verification fails closed until the
+    // circuit is built and its symbol table pins the real layout.
+    publicOutputs: [],
     contextBound: false,
   },
 };
+
+// ---------------------------------------------------------------------------
+// Predicate enforcement
+// ---------------------------------------------------------------------------
+
+/**
+ * Check a proof's published outputs against the predicate its circuit claims
+ * to prove.
+ *
+ * circom emits public OUTPUTS first and public inputs after, so a required
+ * output's index within `circuit.publicOutputs` is also its index in the
+ * public-signal vector.
+ *
+ * Fails closed. A circuit that does not declare `requiredOutputs` has no known
+ * predicate, so its proofs are refused; a circuit whose declared schema does
+ * not match the vector it was handed has drifted from its artifacts, so no
+ * position in that vector can be trusted.
+ */
+export function evaluateCircuitPredicate(
+  circuitName: string,
+  circuit: Pick<CircuitConfig, 'publicSignals' | 'publicOutputs' | 'requiredOutputs'>,
+  publicSignals: string[],
+): PredicateCheck {
+  const required = circuit.requiredOutputs;
+  if (!required) {
+    return {
+      satisfied: false,
+      reason: `Circuit ${circuitName} does not declare which outputs must hold, so the proof cannot be shown to satisfy its predicate`,
+    };
+  }
+
+  if (
+    circuit.publicSignals.length > 0 &&
+    publicSignals.length !== circuit.publicSignals.length
+  ) {
+    return {
+      satisfied: false,
+      reason: `Circuit ${circuitName} declares ${circuit.publicSignals.length} public signal(s) but the proof carries ${publicSignals.length}`,
+    };
+  }
+
+  const unmet: string[] = [];
+  for (const name of required) {
+    const index = circuit.publicOutputs.indexOf(name);
+    if (index === -1) {
+      return {
+        satisfied: false,
+        reason: `Circuit ${circuitName} does not publish a required output named ${name}`,
+      };
+    }
+    if (publicSignals[index] !== '1') {
+      unmet.push(name);
+    }
+  }
+
+  if (unmet.length > 0) {
+    return {
+      satisfied: false,
+      reason: `Circuit ${circuitName} predicate not satisfied: ${unmet.join(', ')} is not 1`,
+    };
+  }
+
+  return { satisfied: true };
+}
 
 // ---------------------------------------------------------------------------
 // ZK Proof Service
@@ -411,20 +540,35 @@ export class ZKProofService {
       const vkey = JSON.parse(vkeyContent);
 
       // Verify the proof
-      const valid = await snarkjs.groth16.verify(vkey, publicSignals, proof);
+      const cryptographicallyValid = await snarkjs.groth16.verify(
+        vkey,
+        publicSignals,
+        proof,
+      );
+
+      // Cryptographic validity is not the predicate. A circuit that computes
+      // its verdict into a public output instead of asserting it produces a
+      // perfectly valid proof for a subject who does NOT satisfy the claim, so
+      // the published outputs have to be checked too.
+      const predicate = cryptographicallyValid
+        ? evaluateCircuitPredicate(circuitName, circuit, publicSignals)
+        : { satisfied: false, reason: 'Proof verification failed' };
 
       const result: VerificationResult = {
-        valid,
+        valid: cryptographicallyValid && predicate.satisfied,
         proofId,
         circuitName,
         publicSignals,
         verifiedAt: new Date(),
+        reason: predicate.satisfied ? undefined : predicate.reason,
       };
 
       logger.info('zk_proof_verification_complete', {
         proofId,
         circuitName,
-        valid,
+        valid: result.valid,
+        cryptographicallyValid,
+        predicateSatisfied: predicate.satisfied,
       });
       return result;
     } catch (err) {
@@ -483,6 +627,17 @@ export class ZKProofService {
   getCircuitPublicSignalSchema(circuitName: string): string[] | null {
     const circuit = CIRCUIT_REGISTRY[circuitName];
     return circuit ? [...circuit.publicSignals] : null;
+  }
+
+  /**
+   * The output signals that must equal 1 for a proof from this circuit to
+   * carry the meaning the caller attaches to it. `null` means the circuit is
+   * unknown or its predicate has not been declared, in which case its proofs
+   * are refused.
+   */
+  getCircuitRequiredOutputs(circuitName: string): string[] | null {
+    const required = CIRCUIT_REGISTRY[circuitName]?.requiredOutputs;
+    return required ? [...required] : null;
   }
 
   validateContextBoundPublicSignals(
