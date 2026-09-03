@@ -41,16 +41,23 @@ export const EXIT_TOOLCHAIN_MISSING = 2;
 export const KNOWN_COMPILE_FAILURES = Object.freeze([
   Object.freeze({
     circuit: "circuits/bbs/bbs_selective_disclosure.circom",
+    code: "T2011",
     error:
       "error[T2011] signal/component declared inside a while scope (selected, accum, revealedCheck, eqChecks)",
   }),
   Object.freeze({
     circuit: "circuits/biometric/biometric_match.circom",
+    // circom aborts at the first error, so T2008 is all it reports. Removing
+    // the duplicate symbol does NOT make this compile: lines 104, 111 and 259
+    // are loop-scoped signal declarations, so it then fails T2011 like the
+    // other two. Verified by renaming the local template and recompiling.
+    code: "T2008",
     error:
-      "error[T2008] duplicated callable symbol: it defines LessEqThan, which circomlib/circuits/comparators.circom also defines",
+      "error[T2008] duplicated callable symbol: it defines LessEqThan, which circomlib/circuits/comparators.circom also defines. Also fails T2011 once that is resolved (loop-scoped signals at :104, :111, :259)",
   }),
   Object.freeze({
     circuit: "circuits/threshold/threshold_signature_verify.circom",
+    code: "T2011",
     error:
       "error[T2011] signal declared inside a while scope (numFactor, diff, denomFactor)",
   }),
@@ -180,18 +187,35 @@ export function compileCircuit({
 
 /** Grade results against the allowlist. Both mismatch directions are failures. */
 export function evaluateResults(results, allowlist) {
-  const allowed = new Set(allowlist.map((entry) => entry.circuit));
+  const allowed = new Map(allowlist.map((entry) => [entry.circuit, entry]));
   const compiled = [];
   const allowlistedFailures = [];
   const unexpectedFailures = [];
   const unexpectedPasses = [];
 
   for (const result of results) {
+    const entry = allowed.get(result.circuit);
     if (result.compiled) {
       compiled.push(result);
-      if (allowed.has(result.circuit)) unexpectedPasses.push(result);
-    } else if (allowed.has(result.circuit)) {
-      allowlistedFailures.push(result);
+      if (entry) unexpectedPasses.push(result);
+    } else if (entry) {
+      /*
+       * Allowlisted on path AND on the error it was allowlisted for. Matching
+       * the path alone would swallow a NEW breakage in a circuit that already
+       * happened to be listed: a fresh T2011 in a circuit listed for T2008
+       * would read as "known broken" and pass the gate. The recorded code has
+       * to still be the reason it fails.
+       */
+      if (entry.code && !stripAnsi(result.output ?? "").includes(`error[${entry.code}]`)) {
+        unexpectedFailures.push({
+          ...result,
+          reason:
+            `allowlisted for ${entry.code}, but it now fails for a different reason. ` +
+            `Re-check the circuit and update its KNOWN_COMPILE_FAILURES entry.`,
+        });
+      } else {
+        allowlistedFailures.push(result);
+      }
     } else {
       unexpectedFailures.push(result);
     }
@@ -311,7 +335,9 @@ export function renderReport({
 
   for (const failure of evaluation.unexpectedFailures) {
     lines.push(
-      `FAIL ${failure.circuit} does not compile and is not on the allowlist. Fix the circuit rather than adding it to the list.`,
+      failure.reason
+        ? `FAIL ${failure.circuit} ${failure.reason}`
+        : `FAIL ${failure.circuit} does not compile and is not on the allowlist. Fix the circuit rather than adding it to the list.`,
     );
   }
   for (const pass of evaluation.unexpectedPasses) {
