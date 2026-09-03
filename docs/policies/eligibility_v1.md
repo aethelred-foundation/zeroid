@@ -21,6 +21,7 @@ Required checks:
 - Risk tier: `LOW` or `MEDIUM`.
 - Credential status: active, unexpired, and non-revoked.
 - TEE evidence: issuer or identity attestation must be present.
+- Proof recency: the instant the circuit evaluated the predicates must sit within 300 seconds behind, and 30 seconds ahead of, the verifier's clock.
 
 ## Intended public signals
 
@@ -34,6 +35,8 @@ The source manifest declares only:
 - `contextCommitment`
 
 Raw date of birth, nationality, sanctions details, risk tier, revocation nonce, issuer signature, and context witnesses remain private inputs.
+
+`currentTimestamp` is a public *input*: the circuit evaluates the age and expiry predicates at whatever instant the prover supplies. A relying party asking "is eligible now" must therefore pin that instant to its own clock, which is what the recency check above does. Without it, a proof forward-dated towards the credential's expiry would establish only that the holder *would* pass at some later date, and a backdated one only that the credential *had* not yet expired.
 
 ## Activation requirements
 

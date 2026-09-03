@@ -11,6 +11,9 @@ const VALID_SIGNALS: Record<string, string> = {
   ...POLICY.zk!.expectedPublicSignals,
   [POLICY.zk!.residency.signal]: "AE",
   [POLICY.zk!.contextSignal]: "0xctx",
+  // The circuit evaluates its predicates at this instant; it must sit inside
+  // the policy's freshness window around the verifier clock stubbed below.
+  [POLICY.zk!.freshness.signal]: "1770000000",
 };
 
 function sdJwtDeps() {

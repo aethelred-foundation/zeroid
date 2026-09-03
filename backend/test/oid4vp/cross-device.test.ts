@@ -143,6 +143,8 @@ describe("cross-device ZK predicate routing", () => {
       ...policy.zk!.expectedPublicSignals,
       [policy.zk!.residency.signal]: "AE",
       [policy.zk!.contextSignal]: "0xctx",
+      // Matches the stubbed verifier clock (`now: () => 0`) so the proof is fresh.
+      [policy.zk!.freshness.signal]: "0",
     };
     let issuedNonce = "";
     const zk = {
