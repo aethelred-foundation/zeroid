@@ -27,6 +27,8 @@
     "test:changed": "jest --changedSince=main",
     "test:e2e": "playwright test",
     "circuits:compile": "circom circuits/age/age_proof.circom --r1cs --wasm --sym -o build/circuits/age && circom circuits/age/age_context_proof.circom --r1cs --wasm --sym -o build/circuits/age_context_v2 && circom circuits/residency/residency_proof.circom --r1cs --wasm --sym -o build/circuits/residency && circom circuits/credit/credit_tier_proof.circom --r1cs --wasm --sym -o build/circuits/credit",
+    "circuits:compile:check": "node scripts/check-circuit-compilation.mjs",
+    "circuits:compile:test": "node --test scripts/check-circuit-compilation.test.mjs",
     "circuits:eligibility:build": "node scripts/build-eligibility-artifacts.mjs",
     "circuits:validate": "node scripts/validate-circuit-artifacts.mjs",
     "circuits:validate:artifacts": "node scripts/validate-circuit-artifacts.mjs --require-artifacts",
