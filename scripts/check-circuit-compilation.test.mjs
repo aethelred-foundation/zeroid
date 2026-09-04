@@ -8,7 +8,10 @@ import {
   EXIT_GATE_FAILED,
   EXIT_OK,
   EXIT_TOOLCHAIN_MISSING,
+  CIRCUITS_DIRECTORY,
+  EXPECTED_CIRCUITS,
   KNOWN_COMPILE_FAILURES,
+  REPO_ROOT,
   detectCircomVersion,
   discoverCircuits,
   evaluateResults,
@@ -70,10 +73,22 @@ function makeFixtureRoot(t, circuits) {
   return rootDirectory;
 }
 
-function runOnFixtures(rootDirectory, allowlist) {
+/**
+ * Run the gate over a fixture root.
+ *
+ * `expected` defaults to whatever the fixtures contain, which makes the
+ * inventory assertion vacuous — deliberately, so the allowlist cases below stay
+ * about the allowlist. The inventory cases pass a list that disagrees on
+ * purpose.
+ */
+function runOnFixtures(rootDirectory, allowlist, expected) {
+  const circuitsRoot = path.join(rootDirectory, "circuits");
   return runCircuitCompilationCheck({
     rootDirectory,
     allowlist,
+    expected:
+      expected ??
+      discoverCircuits(circuitsRoot).map((circuit) => `circuits/${circuit}`),
     circomBin: CIRCOM_BIN,
     // The fixtures include nothing, so no circomlib lookup is needed.
     includePaths: [],
@@ -89,7 +104,7 @@ test("compiles a healthy circuit and reports its constraint counts", { skip: nee
   assert.equal(results[0].circuit, "circuits/ok/ok.circom");
   assert.equal(results[0].stats.nonLinearConstraints, 1);
   assert.match(report, /circuits\/ok\/ok\.circom {2}compiled/);
-  assert.match(report, /PASS every circuit compiles and the allowlist is empty\./);
+  assert.match(report, /PASS every circuit compiles, the discovered set matches the 1-circuit inventory, and the allowlist is empty\./);
 });
 
 test("passes an allowlisted failure and still prints the verbatim circom error", { skip: needsCircom }, (t) => {
@@ -110,7 +125,7 @@ test("passes an allowlisted failure and still prints the verbatim circom error",
   assert.match(report, /signal scratch;/);
   assert.match(
     report,
-    /PASS the compilable circuits compile and the known-broken set is unchanged\./,
+    /PASS the compilable circuits compile, the discovered set matches the 2-circuit inventory, and the known-broken set is unchanged\./,
   );
 });
 
@@ -154,6 +169,62 @@ test("fails when an allowlist entry names a circuit that no longer exists", { sk
   assert.match(
     report,
     /FAIL circuits\/gone\/gone\.circom is on the known-broken allowlist but no such circuit was discovered\./,
+  );
+});
+
+test("fails when an expected circuit is no longer discovered", { skip: needsCircom }, (t) => {
+  // Deleted, renamed, or moved under a dot-directory the walk skips: the run
+  // would otherwise compile what is left and report PASS while covering less.
+  const rootDirectory = makeFixtureRoot(t, { "ok/ok.circom": COMPILING_CIRCUIT });
+  const { exitCode, report } = runOnFixtures(rootDirectory, [], [
+    "circuits/ok/ok.circom",
+    "circuits/gone/gone.circom",
+  ]);
+
+  assert.equal(exitCode, EXIT_GATE_FAILED);
+  assert.match(report, /1 circuits discovered of 2 expected/);
+  assert.match(
+    report,
+    /FAIL circuits\/gone\/gone\.circom is in EXPECTED_CIRCUITS but was not discovered/,
+  );
+  // Actionable in this direction: say what happened to it and what to edit.
+  assert.match(report, /deleted, renamed, or moved somewhere the walk skips/);
+});
+
+test("fails when a discovered circuit is not in the expected inventory", { skip: needsCircom }, (t) => {
+  // A new circuit arriving unannounced is the other direction: it compiled, but
+  // nobody recorded that the repository now contains it.
+  const rootDirectory = makeFixtureRoot(t, {
+    "ok/ok.circom": COMPILING_CIRCUIT,
+    "extra/extra.circom": COMPILING_CIRCUIT,
+  });
+  const { exitCode, report } = runOnFixtures(rootDirectory, [], ["circuits/ok/ok.circom"]);
+
+  assert.equal(exitCode, EXIT_GATE_FAILED);
+  assert.match(report, /2 circuits discovered of 1 expected/);
+  assert.match(
+    report,
+    /FAIL circuits\/extra\/extra\.circom was discovered but is not in EXPECTED_CIRCUITS/,
+  );
+  assert.match(report, /add it there deliberately/);
+});
+
+test("a circuit hidden under a dot-directory is reported missing, not ignored", { skip: needsCircom }, (t) => {
+  // discoverCircuits skips dot-directories, so before the inventory existed a
+  // circuit moved into one vanished from the gate in complete silence.
+  const rootDirectory = makeFixtureRoot(t, {
+    "ok/ok.circom": COMPILING_CIRCUIT,
+    ".attic/hidden.circom": COMPILING_CIRCUIT,
+  });
+  const { exitCode, report } = runOnFixtures(rootDirectory, [], [
+    "circuits/ok/ok.circom",
+    "circuits/.attic/hidden.circom",
+  ]);
+
+  assert.equal(exitCode, EXIT_GATE_FAILED);
+  assert.match(
+    report,
+    /FAIL circuits\/\.attic\/hidden\.circom is in EXPECTED_CIRCUITS but was not discovered/,
   );
 });
 
@@ -214,6 +285,7 @@ test("grades both mismatch directions as gate failures", () => {
       { circuit: "circuits/c.circom", compiled: false },
     ],
     [{ circuit: "circuits/a.circom" }, { circuit: "circuits/b.circom" }],
+    ["circuits/a.circom", "circuits/b.circom", "circuits/c.circom"],
   );
 
   assert.deepEqual(
@@ -229,6 +301,52 @@ test("grades both mismatch directions as gate failures", () => {
     ["circuits/c.circom"],
   );
   assert.deepEqual(evaluation.missingAllowlistEntries, []);
+  assert.deepEqual(evaluation.unexpectedCircuits, []);
+  assert.deepEqual(evaluation.missingCircuits, []);
+});
+
+test("grades both inventory-drift directions without needing the toolchain", () => {
+  const evaluation = evaluateResults(
+    [
+      { circuit: "circuits/a.circom", compiled: true },
+      { circuit: "circuits/new.circom", compiled: true },
+    ],
+    [],
+    ["circuits/a.circom", "circuits/gone.circom"],
+  );
+
+  assert.deepEqual(evaluation.unexpectedCircuits, ["circuits/new.circom"]);
+  assert.deepEqual(evaluation.missingCircuits, ["circuits/gone.circom"]);
+  // Inventory drift is orthogonal to how the circuits compiled.
+  assert.deepEqual(evaluation.unexpectedFailures, []);
+  assert.deepEqual(evaluation.unexpectedPasses, []);
+});
+
+test("the expected inventory holds the eleven circuits in the repository", () => {
+  assert.equal(EXPECTED_CIRCUITS.length, 11);
+  assert.deepEqual(
+    [...EXPECTED_CIRCUITS].sort(),
+    [...EXPECTED_CIRCUITS],
+    "keep EXPECTED_CIRCUITS sorted so additions are readable in a diff",
+  );
+  for (const circuit of EXPECTED_CIRCUITS) {
+    assert.match(circuit, /^circuits\/[^/]+\/[^/]+\.circom$/);
+  }
+  // Every allowlisted circuit must be a circuit the repository claims to have.
+  for (const entry of KNOWN_COMPILE_FAILURES) {
+    assert.ok(
+      EXPECTED_CIRCUITS.includes(entry.circuit),
+      `${entry.circuit} is allowlisted but not in EXPECTED_CIRCUITS`,
+    );
+  }
+});
+
+test("the expected inventory matches what is actually on disk", () => {
+  const discovered = discoverCircuits(
+    path.join(REPO_ROOT, CIRCUITS_DIRECTORY),
+  ).map((circuit) => `${CIRCUITS_DIRECTORY}/${circuit}`);
+
+  assert.deepEqual(discovered, [...EXPECTED_CIRCUITS]);
 });
 
 test("the shipped allowlist holds only the three recorded circuits", () => {
