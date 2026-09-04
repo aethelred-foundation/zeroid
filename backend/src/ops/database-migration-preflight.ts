@@ -300,7 +300,36 @@ export async function inspectDatabaseSchema(
           WHERE index_namespace.nspname = current_schema()
             AND index_relation.relname = 'audit_logs_previousHash_key'
             AND index_metadata.indisunique
-        ) AS linear_audit_index
+        ) AS linear_audit_index,
+        EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = current_schema()
+            AND table_name = 'identities'
+            AND column_name = 'registryTxHash'
+        ) AS registry_evidence_tx_hash,
+        EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = current_schema()
+            AND table_name = 'identities'
+            AND column_name = 'registryDidHash'
+        ) AS registry_evidence_did_hash,
+        EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = current_schema()
+            AND table_name = 'identities'
+            AND column_name = 'registryController'
+        ) AS registry_evidence_controller,
+        EXISTS (
+          SELECT 1
+          FROM pg_catalog.pg_class index_relation
+          JOIN pg_catalog.pg_namespace index_namespace
+            ON index_namespace.oid = index_relation.relnamespace
+          JOIN pg_catalog.pg_index index_metadata
+            ON index_metadata.indexrelid = index_relation.oid
+          WHERE index_namespace.nspname = current_schema()
+            AND index_relation.relname = 'identities_registryTxHash_key'
+            AND index_metadata.indisunique
+        ) AS registry_evidence_replay_index
     )
     SELECT
       '20260718000000_zeroid_baseline' AS "migrationName",
@@ -342,6 +371,18 @@ export async function inspectDatabaseSchema(
       '20260718041000_audit_chain_linearization',
       linear_audit_index,
       linear_audit_index
+    FROM effects
+    UNION ALL
+    SELECT
+      '20260902120000_identity_registry_evidence',
+      (
+        registry_evidence_tx_hash OR registry_evidence_did_hash
+        OR registry_evidence_controller OR registry_evidence_replay_index
+      ),
+      (
+        registry_evidence_tx_hash AND registry_evidence_did_hash
+        AND registry_evidence_controller AND registry_evidence_replay_index
+      )
     FROM effects
   `);
 
