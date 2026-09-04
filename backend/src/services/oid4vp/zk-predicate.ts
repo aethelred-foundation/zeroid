@@ -37,6 +37,21 @@ export interface ZkPredicateVerifyDeps {
   /** Compute the expected context commitment that binds a proof to nonce + audience. */
   computeContextCommitment(nonce: string, audience: string): Promise<string>;
   /**
+   * The public-signal names the circuit registry declares for this presentation
+   * `circuitId`, or `null` when the id resolves to no registered circuit.
+   *
+   * Injected rather than imported: the registry lives in `services/zkproof`,
+   * which pulls in the whole runtime (Prisma, redis, snarkjs). This module is
+   * deliberately free of that weight, and the adapter that already maps a
+   * presentation `circuitId` onto a registry entry supplies the lookup.
+   *
+   * Required, not optional: a deps object that forgets it would silently take
+   * the policy's word for which signals the circuit publishes, which is exactly
+   * the binding this exists to enforce. Making it mandatory turns that omission
+   * into a compile error.
+   */
+  declaredPublicSignals(circuitId: string): string[] | null;
+  /**
    * Verifier clock, in Unix SECONDS (the unit the circuit's evaluation-time
    * signal uses). Injected rather than read from `Date.now()` inline so the
    * freshness window is deterministic under test.
@@ -169,6 +184,42 @@ export async function verifyZkPredicate(
     );
   }
   const freshness = zk.freshness;
+
+  // The freshness signal is named by the policy but PUBLISHED by the circuit,
+  // and until here nothing tied the two together: a policy naming a signal the
+  // circuit never emits would read as "absent" and refuse (fail-closed but
+  // unexplained), while a signal that merely happens to be present in the
+  // holder-supplied map would be trusted as an evaluation instant on the
+  // strength of its name alone. Resolve the circuit and require that it
+  // declares the signal, so the window is checked against something the
+  // constraint system actually commits to.
+  //
+  // `circuitId` is the policy's own circuit here — the binding check above
+  // already refused a proof for any other — so both failures below are
+  // server-side configuration defects rather than anything the holder did.
+  // They are reported like the malformed-binding case: an INTERNAL_ERROR the
+  // holder cannot provoke, provoke a retry of, or learn anything from.
+  const declared = deps.declaredPublicSignals(circuitId);
+  if (declared === null) {
+    // Deliberate: an unresolvable circuitId is NOT covered by the earlier
+    // check. That check only proves the proof matches the POLICY's circuitId;
+    // it says nothing about whether that id names a circuit this deployment
+    // knows. Verifying a freshness window against an unknown circuit's signals
+    // would be verifying it against nothing, so refuse.
+    throw new ServiceError(
+      `policy ZK binding names a circuit this verifier does not know: ${circuitId}`,
+      'INTERNAL_ERROR',
+      500,
+    );
+  }
+  if (!declared.includes(freshness.signal)) {
+    throw new ServiceError(
+      `circuit ${circuitId} does not declare the policy's freshness signal ${freshness.signal}`,
+      'INTERNAL_ERROR',
+      500,
+    );
+  }
+
   const evaluatedAt = parseUnixSeconds(publicSignals[freshness.signal]);
   if (evaluatedAt === null) {
     throw new ServiceError(

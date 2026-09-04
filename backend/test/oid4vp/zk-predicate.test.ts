@@ -22,6 +22,9 @@ const VALID_SIGNALS: Record<string, string> = {
   currentTimestamp: "1770000000",
 };
 
+/** The public-signal names the eligibility circuit declares in the registry. */
+const DECLARED_SIGNALS = Object.keys(VALID_SIGNALS);
+
 function makeDeps(over: Partial<ZkPredicateVerifyDeps> = {}): ZkPredicateVerifyDeps {
   return {
     verifyHolderJwt: jest.fn(async () => ({
@@ -37,6 +40,9 @@ function makeDeps(over: Partial<ZkPredicateVerifyDeps> = {}): ZkPredicateVerifyD
     })),
     verifyGroth16: jest.fn(async () => true),
     computeContextCommitment: jest.fn(async () => "0xctx"),
+    // The circuit registry's schema for this circuit, so the policy's freshness
+    // signal resolves to a signal the circuit really publishes.
+    declaredPublicSignals: jest.fn(() => [...DECLARED_SIGNALS]),
     now: () => 1_770_000_100,
     ...over,
   };
