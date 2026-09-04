@@ -107,8 +107,8 @@ mistaken for registered on-chain ids.
 
 ## What remains launch-blocking
 
-None of the following is fixed by this change. Each needs circuit changes plus
-a **new trusted setup**, so they belong to a separate program.
+Neither of the following is fixed. Each needs circuit changes plus a **new
+trusted setup**, so they belong to a separate program.
 
 1. **The circuits still do not assert their own predicates.** `age_proof.circom`
    was deliberately left untouched: `ageVerified` and `credentialValid` are
@@ -128,10 +128,48 @@ a **new trusted setup**, so they belong to a separate program.
    key (or a commitment to an issuer registry root) promoted to a public
    signal, and a new setup.
 
-3. **The OID4VP path does not check `currentTimestamp` against wall-clock time
-   (ZK-02).** A proof can carry an arbitrary `currentTimestamp` public signal.
-   The context-bound circuits bind nonce and audience, but nothing rejects a
-   stale or future timestamp.
+## Closed since this document was written
+
+**ZK-02 — the OID4VP path did not check `currentTimestamp` against wall-clock
+time. FIXED.** A proof could carry an arbitrary `currentTimestamp` public
+signal: the context-bound circuits bind nonce and audience, but nothing
+rejected a stale or forward-dated evaluation instant. Because the circuit
+evaluates the age and expiry predicates *at* that prover-supplied instant, such
+a proof is truthful about a statement the verifier never asked — "was eligible
+then" rather than "is eligible now".
+
+`verifyZkPredicate` in `backend/src/services/oid4vp/zk-predicate.ts` now checks
+the evaluation instant against the verifier's own clock before verifying
+anything, and refuses outside the window. The declared window lives on the
+policy's ZK binding (`freshness` in
+`backend/src/services/oid4vp/policy-presentation.ts`): **300 s backwards, 30 s
+ahead**. The backward window matches the proof-context lifetime the human
+eligibility path already enforces; the forward allowance covers honest clock
+skew only, and is deliberately an order of magnitude smaller because a
+predicate evaluated genuinely in the future does not exist.
+
+Three properties make it a real closure rather than a nominal one, each pinned
+by `backend/test/oid4vp/zk-predicate-freshness.test.ts`:
+
+- The refusal is a **binding error, not a DENIED decision**. A replayed or
+  forward-dated proof must not be audited as a legitimate policy evaluation, so
+  it is rejected before `verifyGroth16` is called.
+- Every unusable shape of the signal fails closed — absent, empty, signed,
+  fractional, exponent or hex notation, and values past `Number.MAX_SAFE_INTEGER`.
+- A policy that declares **no** freshness binding is itself refused
+  (`INTERNAL_ERROR`), rather than having the check quietly skipped.
+
+Residual dependency: the check is only as strong as the link between the signal
+name the policy writes down and the signal the circuit actually publishes.
+`verifyZkPredicate` therefore resolves the presented `circuitId` against the
+backend circuit registry and refuses unless the circuit declares that signal —
+including when the `circuitId` resolves to no known circuit. What that binding
+still rests on is the registry itself: each entry's `publicSignals` list is
+hand-recorded from the circuit's symbol table (see the note under *Artifact
+coverage* below), not derived from the compiled artifact. It must be
+re-verified whenever a circuit is rebuilt, and the freshness window is
+meaningful only for circuits whose predicates really are evaluated at that
+signal.
 
 ## Artifact coverage
 
