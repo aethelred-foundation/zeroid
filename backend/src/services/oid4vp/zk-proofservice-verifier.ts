@@ -53,6 +53,14 @@ export interface ProofVerifier {
   ): Promise<Pick<VerificationResult, 'valid'>>;
 }
 
+/**
+ * Minimal slice of ZKProofService needed to read a circuit's declared
+ * public-signal names out of the backend CIRCUIT_REGISTRY.
+ */
+export interface CircuitSchemaSource {
+  getCircuitPublicSignalSchema(circuitName: string): string[] | null;
+}
+
 export function createZkProofServiceVerifier(
   svc: ProofVerifier,
   resolveCircuit: (circuitId: string) => CircuitMapping | undefined = (id) => KNOWN_CIRCUITS[id],
@@ -73,5 +81,26 @@ export function createZkProofServiceVerifier(
     // validity: a proof publishing a failing verdict comes back false.
     const result = await svc.verifyProof(proof as SnarkProof, ordered, circuit.circuitName);
     return result.valid;
+  };
+}
+
+/**
+ * Resolve the public-signal names a presentation `circuitId` publishes, read
+ * from the backend circuit registry rather than from the policy that names
+ * them. `verifyZkPredicate` uses this to refuse a policy whose freshness signal
+ * the circuit does not actually declare.
+ *
+ * Returns `null` — meaning "no such circuit" — both when the id maps to no
+ * backend circuit and when the registry has no schema for it, so the caller
+ * fails closed on either.
+ */
+export function createZkProofServiceSignalResolver(
+  svc: CircuitSchemaSource,
+  resolveCircuit: (circuitId: string) => CircuitMapping | undefined = (id) => KNOWN_CIRCUITS[id],
+): ZkPredicateVerifyDeps['declaredPublicSignals'] {
+  return (circuitId) => {
+    const circuit = resolveCircuit(circuitId);
+    if (!circuit) return null;
+    return svc.getCircuitPublicSignalSchema(circuit.circuitName);
   };
 }

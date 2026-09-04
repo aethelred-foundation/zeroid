@@ -1,4 +1,7 @@
-import { createZkProofServiceVerifier } from "@/services/oid4vp/zk-proofservice-verifier";
+import {
+  createZkProofServiceSignalResolver,
+  createZkProofServiceVerifier,
+} from "@/services/oid4vp/zk-proofservice-verifier";
 
 const circuitId = "zkc_eligibility_policy_context_v1";
 const proof = { pi_a: ["1"], pi_b: [["1"]], pi_c: ["1"], protocol: "groth16", curve: "bn128" };
@@ -42,5 +45,32 @@ describe("createZkProofServiceVerifier", () => {
     await expect(
       verify({ circuitId, vkeyId: "v", proof, publicSignals: partial }),
     ).rejects.toMatchObject({ statusCode: 400 });
+  });
+});
+
+describe("createZkProofServiceSignalResolver", () => {
+  it("returns the registry schema for the circuit the presentation names", () => {
+    const getCircuitPublicSignalSchema = jest.fn(() => Object.keys(signals));
+    const resolve = createZkProofServiceSignalResolver({ getCircuitPublicSignalSchema });
+
+    expect(resolve(circuitId)).toEqual(Object.keys(signals));
+    // Resolved through the registry KEY, not the presentation id.
+    expect(getCircuitPublicSignalSchema).toHaveBeenCalledWith("eligibility_policy_context_v1");
+  });
+
+  it("returns null for a circuitId no mapping knows, without asking the registry", () => {
+    const getCircuitPublicSignalSchema = jest.fn(() => Object.keys(signals));
+    const resolve = createZkProofServiceSignalResolver({ getCircuitPublicSignalSchema });
+
+    expect(resolve("other")).toBeNull();
+    expect(getCircuitPublicSignalSchema).not.toHaveBeenCalled();
+  });
+
+  it("returns null when the registry itself has no schema for the mapped circuit", () => {
+    const resolve = createZkProofServiceSignalResolver({
+      getCircuitPublicSignalSchema: jest.fn(() => null),
+    });
+
+    expect(resolve(circuitId)).toBeNull();
   });
 });

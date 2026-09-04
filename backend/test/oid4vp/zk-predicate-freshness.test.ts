@@ -45,6 +45,20 @@ function signals(currentTimestamp: unknown): Record<string, unknown> {
   return out;
 }
 
+/**
+ * The public-signal names the backend circuit registry declares for the
+ * eligibility circuit (`eligibility_policy_context_v1`). The freshness signal
+ * is checked against THIS list, not against the policy that names it.
+ */
+const DECLARED_SIGNALS = [
+  "claimsHash",
+  "ageThresholdYears",
+  "residencyCountryCode",
+  "currentTimestamp",
+  "policyVersionHash",
+  "contextCommitment",
+];
+
 function makeDeps(
   currentTimestamp: unknown,
   over: Partial<ZkPredicateVerifyDeps> = {},
@@ -63,6 +77,7 @@ function makeDeps(
     })),
     verifyGroth16: jest.fn(async () => true),
     computeContextCommitment: jest.fn(async () => "0xctx"),
+    declaredPublicSignals: jest.fn(() => [...DECLARED_SIGNALS]),
     now: () => NOW,
     ...over,
   };
@@ -170,6 +185,69 @@ describe("verifyZkPredicate — evaluation-time freshness (ZK-02)", () => {
           policy: policyWithFreshness(freshness),
         }),
       ).rejects.toMatchObject({ code: "INTERNAL_ERROR", statusCode: 500 });
+    });
+  });
+
+  describe("the freshness signal is bound to the circuit, not just to the policy", () => {
+    /**
+     * The signal name is policy text; the signal itself is published by the
+     * circuit. Without this binding a policy could name any key at all and the
+     * verifier would read whatever the holder happened to put under it — or,
+     * for a name the circuit never emits, refuse every presentation for a
+     * reason no operator could see. Both directions are configuration defects,
+     * so both are refused the way a malformed freshness binding is: an
+     * INTERNAL_ERROR 500, never a holder-facing 401 and never a DENIED verdict.
+     */
+    it("refuses a policy whose freshness signal the circuit does not declare", async () => {
+      const policy = {
+        ...POLICY,
+        zk: { ...ZK, freshness: { ...FRESHNESS, signal: "wallClockSeconds" } },
+      } as PresentationPolicy;
+      // The holder even supplies a perfectly fresh value under that name, so
+      // only the circuit binding stands between the policy and trusting it.
+      const deps = makeDeps(String(NOW), {
+        verifyHolderJwt: jest.fn(async () => ({
+          header: { typ: ZK_ELIGIBILITY_FORMAT, alg: "ES256" },
+          payload: {
+            aud: "rp",
+            nonce: "n1",
+            circuitId: ZK.circuitId,
+            vkeyId: ZK.vkeyId,
+            proof: { pi_a: 1 },
+            publicSignals: { ...signals(String(NOW)), wallClockSeconds: String(NOW) },
+          },
+        })),
+      });
+
+      await expect(verifyZkPredicate(deps, { ...params, policy })).rejects.toMatchObject({
+        code: "INTERNAL_ERROR",
+        statusCode: 500,
+      });
+      expect(deps.verifyGroth16).not.toHaveBeenCalled();
+    });
+
+    it("refuses a circuitId the registry does not resolve, rather than treating it as covered by the policy binding", async () => {
+      // The proof matches the policy's circuitId, so the earlier binding check
+      // passes; what fails is that the id names no circuit this deployment
+      // knows, which makes the declared-signal set unknowable. Verifying a
+      // freshness window against an unknown circuit verifies nothing, so the
+      // deliberate choice is to fail closed here rather than to assume the
+      // earlier check already covered it.
+      const deps = makeDeps(String(NOW), { declaredPublicSignals: jest.fn(() => null) });
+
+      await expect(verifyZkPredicate(deps, params)).rejects.toMatchObject({
+        code: "INTERNAL_ERROR",
+        statusCode: 500,
+      });
+      expect(deps.verifyGroth16).not.toHaveBeenCalled();
+    });
+
+    it("resolves the schema by the presented circuitId", async () => {
+      const declaredPublicSignals = jest.fn(() => [...DECLARED_SIGNALS]);
+      const res = await verifyZkPredicate(makeDeps(String(NOW), { declaredPublicSignals }), params);
+
+      expect(declaredPublicSignals).toHaveBeenCalledWith(ZK.circuitId);
+      expect(res.status).toBe("ALLOWED");
     });
   });
 

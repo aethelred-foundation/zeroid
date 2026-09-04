@@ -31,6 +31,7 @@ function zkDeps(over: Record<string, unknown> = {}) {
     })),
     verifyGroth16: jest.fn(async () => true),
     computeContextCommitment: jest.fn(async () => "0xctx"),
+    declaredPublicSignals: jest.fn(() => Object.keys(VALID_SIGNALS)),
     now: () => 1_770_000_000,
     ...over,
   };

@@ -157,6 +157,7 @@ describe("cross-device ZK predicate routing", () => {
       })),
       verifyGroth16: jest.fn(async () => true),
       computeContextCommitment: jest.fn(async () => "0xctx"),
+      declaredPublicSignals: jest.fn(() => Object.keys(VALID)),
       now: () => 0,
     };
     const recordDecision = jest.fn().mockResolvedValue(undefined);

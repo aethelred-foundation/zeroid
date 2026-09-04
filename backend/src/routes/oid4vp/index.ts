@@ -23,12 +23,20 @@ import { validate } from '../../middleware/validation';
 import { ServiceError, sendServiceError } from '../../services/errors';
 import { createJoseSdJwtDeps, type IssuerKeyResolver } from '../../services/oid4vp/sd-jwt-jose';
 import { createJoseZkDeps } from '../../services/oid4vp/zk-predicate-jose';
-import { createZkProofServiceVerifier } from '../../services/oid4vp/zk-proofservice-verifier';
+import {
+  createZkProofServiceSignalResolver,
+  createZkProofServiceVerifier,
+} from '../../services/oid4vp/zk-proofservice-verifier';
 import { zkProofService } from '../../services/zkproof';
 
 /** ZK eligibility deps backed by the real backend Groth16 verifier (ZKProofService). */
 function buildZkDeps() {
-  return createJoseZkDeps({ verifyGroth16: createZkProofServiceVerifier(zkProofService) });
+  return createJoseZkDeps({
+    verifyGroth16: createZkProofServiceVerifier(zkProofService),
+    // The same service also owns the circuit registry, so the policy's
+    // freshness signal is checked against the circuit's declared schema.
+    declaredPublicSignals: createZkProofServiceSignalResolver(zkProofService),
+  });
 }
 import {
   createPresentationRequest,
