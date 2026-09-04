@@ -538,6 +538,37 @@ export function runCircuitCompilationCheck({
   };
 }
 
+/**
+ * Describe a test run whose circom-dependent cases could not execute.
+ *
+ * Half this gate's own cases need the circom binary. Skipping them quietly and
+ * still exiting 0 means "tests passed" can mean "five of ten tests ran" — the
+ * same class of silent under-coverage the gate exists to prevent. So the skip
+ * is announced in a form nobody scrolls past, and in CI it is not a skip at
+ * all: a machine that cannot run the cases must not report green.
+ *
+ * Kept here, beside the exit codes and the install instruction, because it is
+ * gate policy rather than test scaffolding — and because a pure function is
+ * testable without a machine that happens to be missing circom.
+ */
+export function reportSkippedCircomCases({ skipped, total, reason, ci }) {
+  const rule = "!".repeat(78);
+  const banner = [
+    "",
+    rule,
+    `!! ${skipped} of ${total} circuit-compilation gate test cases DID NOT RUN.`,
+    `!! Reason: circom is unavailable — ${reason}`,
+    "!! Everything those cases cover (compiling, allowlist grading, inventory",
+    "!! drift) is UNVERIFIED by this run. A green result here means less than",
+    "!! it looks like.",
+    `!! ${CIRCOM_INSTALL_INSTRUCTION}`,
+    rule,
+    "",
+  ].join("\n");
+
+  return { banner, failed: skipped > 0 && Boolean(ci) };
+}
+
 export function main() {
   const { exitCode, report } = runCircuitCompilationCheck();
   if (exitCode === EXIT_OK) {
